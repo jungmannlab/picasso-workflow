@@ -1,0 +1,484 @@
+"""
+confluence.py
+
+Interaction with Confluence
+"""
+import logging
+import os
+import requests
+
+from picasso_automate.util import AbstractPipeline
+
+
+logger = logging.getLogger(__name__)
+
+
+
+class ConfluenceReporter(AbstractPipeline):
+    """A class to upload reports of automated picasso evaluations
+    to confluence
+    """
+
+    def __init__(self, base_url, space_key, parent_page_title, report_name):
+        self.ci = ConfluenceInterface(base_url, space_key, parent_page_title)
+
+        # create page
+        self.report_page_name = report_name
+        for i in range(1, 30):
+            try:
+                self.report_page_id = self.ci.create_page(self.report_page_name, body_text='')
+                print(f'Created page {self.report_page_name}')
+                break
+            except KeyError:
+                self.report_page_name = report_name + '_{:02d}'.format(i)
+
+    def load(self, pars_load, results_load):
+        """Describes the loading
+        Args:
+            localize_params : dict
+                net_gradient : the net gradient used
+                frames : the number of frames
+        """
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Load</strong></p>
+        <ul>
+        <li>Picasso Version: {results_load['picasso version']}</li>
+        <li>Movie Location: {pars_load['filename']}</li>
+        <li>Analysis Location: {pars_load['save_directory']}</li>
+        <li>Movie Size: Frames: {results_load['movie.shape'][0]}, Width: {results_load['movie.shape'][1]}, Height: {results_load['movie.shape'][2]}</li>
+        <li>Duration: {results_load['duration']} s</li>
+        </ul>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(self.report_page_name, self.report_page_id, text)
+        if (sample_mov_res := results_load.get('sample_movie')) is not None:
+            text = f"""
+            <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+            <p>Subsampled Frames</p>
+            <ul>
+            <li> {len(sample_mov_res['sample_frame_idx'])} frames:
+             {str(sample_mov_res['sample_frame_idx'])}</li>
+            </ul>
+            </ac:layout-cell></ac:layout-section></ac:layout>
+            """
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text)
+            # print('uploading graph')
+            self.ci.upload_attachment(
+                self.report_page_id, sample_mov_res['filename'])
+            self.ci.update_page_content_with_movie_attachment(
+                self.report_page_name, self.report_page_id,
+                os.path.split(sample_mov_res['filename'])[1])
+        return  # document nothing
+
+    def identify(self, pars_identify, results_identify):
+        """Describes the identify step
+        Args:
+            localize_params : dict
+                net_gradient : the net gradient used
+                frames : the number of frames
+            fn_movie : str
+                the filename to the movie generated
+            fn_hist : str
+                the filename to the histogram plot generated
+        """
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Identify</strong></p>
+        <ul>
+        <li>Min Net Gradient: {pars_identify['min_grad']:,.0f}</li>
+        <li>Box Size: {pars_identify['box_size']} px</li>
+        <li>Duration: {results_identify['duration']} s</li>
+        <li>Identifications found: {results_identify['num_identifications']:,}</li>
+        </ul>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(self.report_page_name, self.report_page_id, text)
+        if (res_autonetgrad := results_identify.get('auto_netgrad')) is not None:
+            # print('uploading graph')
+            self.ci.upload_attachment(
+                self.report_page_id, res_autonetgrad['filename'])
+            self.ci.update_page_content_with_image_attachment(
+                self.report_page_name, self.report_page_id,
+                os.path.split(res_autonetgrad['filename'])[1])
+        if (res := results_identify.get('ids_vs_frame')) is not None:
+            # print('uploading graph')
+            self.ci.upload_attachment(
+                self.report_page_id, res['filename'])
+            self.ci.update_page_content_with_image_attachment(
+                self.report_page_name, self.report_page_id,
+                os.path.split(res['filename'])[1])
+
+    def localize(self, pars_localize, results_localize):
+        """Describes the Localize section of picasso
+        Args:
+            localize_params : dict
+                net_gradient : the net gradient used
+                frames : the number of frames
+        """
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Localize</strong></p>
+        <ul><li>Duration: {results_localize['duration']}</li>
+        <li>Locs Column names: {results_localize['locs_columns']}</li></ul>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        # text = "<p><strong>Localize</strong></p>"
+        self.ci.update_page_content(self.report_page_name, self.report_page_id, text)
+
+        if (res := results_localize.get('locs_vs_frame')) is not None:
+            # print('uploading graph')
+            self.ci.upload_attachment(
+                self.report_page_id, res['filename'])
+            self.ci.update_page_content_with_image_attachment(
+                self.report_page_name, self.report_page_id,
+                os.path.split(res['filename'])[1])
+
+    def undrift_mutualnearestneighbors(self, pars_undrift, res_undrift):
+        """Describes the Localize section of picasso
+        Args:
+            localize_params : dict
+                net_gradient : the net gradient used
+                frames : the number of frames
+        """
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Undrifting</strong></p>
+        <ul><li>Dimensions: {pars_undrift['dimensions']}</li>
+        <li>Method: {pars_undrift['method']}</li>
+        <li>max_dist: {pars_undrift['max_dist']} pixels</li>
+        <li>Multiprocessing used: {pars_undrift['use_multiprocessing']}</li>
+        <li>Duration: {res_undrift['duration']} s</li></ul>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(self.report_page_name, self.report_page_id, text)
+
+        self.ci.upload_attachment(
+            self.report_page_id, pars_undrift['drift_image'])
+        self.ci.update_page_content_with_image_attachment(
+            self.report_page_name, self.report_page_id,
+            os.path.split(pars_undrift['drift_image'])[1])
+
+    def undrift_rcc(self, pars_undrift, res_undrift):
+        """Describes the Localize section of picasso
+        Args:
+            localize_params : dict
+                net_gradient : the net gradient used
+                frames : the number of frames
+        """
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Undrifting via RCC</strong></p>
+        <ul><li>Dimensions: {pars_undrift.get('dimensions')}</li>
+        <li>Segmentation: {pars_undrift.get('segmentation')}</li>
+        """
+        if (msg := res_undrift.get('message')):
+            text += f"""<li>Note: {msg}</li>"""
+        text += f"""
+        <li>Duration: {res_undrift.get('duration')} s</li></ul>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text)
+
+        if (driftimg_fn := pars_undrift.get('drift_image')):
+            self.ci.upload_attachment(
+                self.report_page_id, driftimg_fn)
+            self.ci.update_page_content_with_image_attachment(
+                self.report_page_name, self.report_page_id,
+                os.path.split(driftimg_fn)[1])
+
+    def describe(self, pars_describe, res_describe):
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Descriptive Statistics</strong></p>"""
+        for meth, meth_pars in pars_describe['methods'].items():
+            if meth.lower() == 'nena':
+                meth_res = res_describe['nena']
+                text += f"""
+                    <p>NeNa</p>
+                    <ul><li>Segmentation: {meth_pars['segmentation']}</li>
+                    <li>Best Values: {str(meth_res['best_vals'])}</li>
+                    <li>Result: {str(meth_res['res'])}</li>
+                    </ul>"""
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(self.report_page_name, self.report_page_id, text)
+
+
+class UndriftError(Exception):
+    pass
+
+
+def get_cfrep():
+    base_url = 'https://mibwiki.biochem.mpg.de'
+    space_key = "~hgrabmayr"
+    parent_page_title = 'test page'
+    report_name = 'my report'
+    cr = ConfluenceReporter(base_url, space_key, parent_page_title, report_name)
+    return cr
+
+
+class ConfluenceInterface():
+    """A Interface class to access Confluence
+
+    For access to the Confluence API, create an API token in confluence,
+    and store it as an environment variable:
+    $ setx CONFLUENCE_BEARER "your_confluence_api_token"
+    """
+
+    def __init__(self, base_url, space_key, parent_page_title):
+        self.bearer_token = self.get_bearer_token()
+        self.base_url = base_url
+        self.space_key = space_key
+        self.parent_page_id, _ = self.get_page_properties(parent_page_title)
+
+    def get_bearer_token(self):
+        '''Set this by setting the environment variable in the windows command
+        line on the server:
+        $ setx CONFLUENCE_BEARER <your_confluence_api_token>
+        The confluence api token can be generated and copied in the personal
+        details of confluence.
+        '''
+        return os.environ.get('CONFLUENCE_BEARER')
+
+    def get_page_properties(self, page_title='', page_id=''):
+        """
+        Returns:
+            id : str
+                the page id
+            title : str
+                the page title
+        """
+        if page_title != '':
+            url = self.base_url + "/rest/api/content"
+            params = {
+                "spaceKey": self.space_key,
+                "title": page_title
+            }
+        elif page_id != '':
+            url = self.base_url + f"/rest/api/content/{page_id}"
+            params = {
+                "spaceKey": self.space_key,
+            }
+        else:
+            logger.error('One of page_title and page_id must be given.')
+        headers = {
+            "Authorization": f"Bearer {self.bearer_token}"
+        }
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            logger.warn('Failed to get page content.')
+        results = response.json()['results'][0]
+        return results['id'], results['title']
+
+    def get_page_version(self, page_title='', page_id=''):
+        """
+        Returns:
+            data : dict
+                results
+                    id, title, version
+        """
+        if page_title != '':
+            url = self.base_url + "/rest/api/content"
+            params = {
+                "spaceKey": self.space_key,
+                "title": page_title,
+            }
+        elif page_id != '':
+            url = self.base_url + f"/rest/api/content/{page_id}"
+            params = {}
+        else:
+            logger.error('One of page_title and page_id must be given.')
+        params['expand'] = ['version']
+        headers = {
+            "Authorization": f"Bearer {self.bearer_token}"
+        }
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            logger.warn('Failed to get page content.')
+        return response.json()['results'][0]['version']['number']
+
+    def get_page_body(self, page_title='', page_id=''):
+        """
+        Returns:
+            data : dict
+                results
+                    id, title, version
+        """
+        if page_title != '':
+            url = self.base_url + "/rest/api/content"
+            params = {
+                "spaceKey": self.space_key,
+                "title": page_title,
+            }
+        elif page_id != '':
+            url = self.base_url + f"/rest/api/content/{page_id}"
+            params = {}
+        else:
+            logger.error('One of page_title and page_id must be given.')
+        params['expand'] = ['body.storage']
+        headers = {
+            "Authorization": f"Bearer {self.bearer_token}"
+        }
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            logger.warn('Failed to get page content.')
+        return response.json()['results'][0]['body']['storage']['value']
+
+    # def get_page_properties(self, page_id):
+    #     url = self.base_url + f"/wiki/api/v2/pages/{page_id}/properties"
+    #     headers = {
+    #         "Authorization": "Bearer {:s}".format(self.bearer_token),
+    #         "Accept": "application/json"
+    #     }
+    #     response = requests.get(url, headers=headers)
+    #     return response
+    #     if response.status_code == 200:
+    #         data = response.json()
+    #         if data.get("results"):
+    #             page_id = data["results"][0]["id"]
+    #             logger.debug(f"Page ID: {page_id}")
+    #             return page_id
+    #         else:
+    #             logger.warn("Page not found.")
+    #     else:
+    #         logger.warn("Failed to retrieve page ID.")
+
+    # def get_spaces(self):
+    #     url = self.base_url + f"/wiki/api/v2/spaces"
+    #     headers = {
+    #         "Authorization": "Bearer {:s}".format(self.bearer_token),
+    #         "Accept": "application/json"
+    #     }
+    #     # auth = requests.auth.HTTPBasicAuth("Heinrich Grabmayr", self.bearer_token)
+    #     # response = requests.get(url, headers=headers, auth=auth)
+    #     response = requests.get(url, headers=headers)
+    #     return response
+    #     if response.status_code != 200:
+    #         logger.warn("Could not retrieve spaces.")
+    #     data = response.json()
+    #     return data
+
+    def create_page(self, page_title, body_text, parent_id='rootparent'):
+        """
+        Args:
+            page_title : str
+                the title of the page to be created
+            body_text : str
+                the content of the page, with the confuence markdown / html
+            parent_id : str
+                the id of the parent page. If 'rootparent', the parent_page_id
+                of this ConfluenceInterface is used
+        Returns:
+            page_id : str
+                the id of the newly created page
+        """
+        if parent_id == 'rootparent':
+            parent_id = self.parent_page_id
+        url = self.base_url + "/rest/api/content"
+        headers = {
+            "Authorization": "Bearer {:s}".format(self.bearer_token),
+            "Content-Type": "application/json"
+        }
+        data = {
+            "type": "page",
+            "title": page_title,
+            "space": {"key": self.space_key},
+            "ancestors": [{"id": parent_id}],
+            "body": {
+                "storage": {
+                    "value": body_text,
+                    "representation": "storage"
+                }
+            }
+        }
+        response = requests.post(url, headers=headers, json=data)
+        if response.status_code != 200:
+            logger.warning(f"Failed to create page {page_title}.")
+            raise KeyError()
+
+        return response.json()["id"]
+
+    def upload_attachment(self, page_id, filename):
+        """Uploads an attachment to a page
+        Args:
+            page_id : str
+                the page id the attachment should be saved to.
+            filename : str
+                the local filename of the file to attach
+        Returns:
+            attachment_id : str
+                the id of the attachment
+        """
+        url = self.base_url + f"/rest/api/content/{page_id}/child/attachment"
+        headers = {
+            "Authorization": "Bearer {:s}".format(self.bearer_token),
+            'X-Atlassian-Token': 'nocheck'
+        }
+        files = {
+            "file": open(filename, "rb")
+        }
+        response = requests.post(url, headers=headers, files=files)
+        if response.status_code != 200:
+            logger.warning("Failed to upload attachment.")
+            return
+
+        attachment_id = response.json()["results"][0]["id"]
+        return attachment_id
+
+    def update_page_content(self, page_name, page_id, body_update):
+        prev_version = self.get_page_version(page_name)
+        prev_body = self.get_page_body(page_name)
+        _, prev_title = self.get_page_properties(page_name)
+
+        url = self.base_url + f"/rest/api/content/{page_id}"
+        headers = {
+            "Authorization": "Bearer {:s}".format(self.bearer_token),
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "version": {
+                "number": prev_version + 1,
+                "message": "version update"
+            },
+            "type": "page",
+            "title": prev_title,
+            "body": {
+                "storage": {
+                    "value": prev_body + body_update,
+                    "representation": "storage"
+                }
+            }
+        }
+        response = requests.put(url, headers=headers, json=data)
+        if response.status_code != 200:
+            logger.warning("Failed to update page content.")
+
+
+    def update_page_content_with_movie_attachment(self, page_name, page_id, filename):
+        # body_update = f"""<ac:structured-macro ac:name="multimedia" ac:schema-version="1" ac:macro-id="12345678-90ab-cdef-1234-567890abcdef">
+        body_update = f"""<ac:structured-macro ac:name="multimedia" ac:schema-version="1">
+              <ac:parameter ac:name="autoplay">false</ac:parameter>
+              <ac:parameter ac:name="name"><ri:attachment ri:filename=\"{filename}\" /></ac:parameter>
+              <ac:parameter ac:name="loop">false</ac:parameter>
+              <ac:parameter ac:name="width">30%</ac:parameter>
+              <ac:parameter ac:name="height">30%</ac:parameter>
+            </ac:structured-macro>
+            """
+        self.update_page_content(page_name, page_id, body_update)
+
+
+    def update_page_content_with_image_attachment(self, page_name, page_id, filename):
+        body_update = f"<ac:image><ri:attachment ri:filename=\"{filename}\" /></ac:image>"
+        self.update_page_content(page_name, page_id, body_update)
+
+
+def get_cfd():
+    base_url = 'https://mibwiki.biochem.mpg.de'
+    space_key = "~hgrabmayr"
+    parent_page_title = 'test page'
+    return ConfluenceInterface(base_url, space_key, parent_page_title)
