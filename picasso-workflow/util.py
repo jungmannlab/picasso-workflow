@@ -1,58 +1,64 @@
+#!/usr/bin/env python
 """
-Utility functions for the package
-
-
+Module Name: util.py
+Author: Heinrich Grabmayr
+Initial Date: March 7, 2024
+Description: Utility functions for the package
 """
 import abc
-from moviepy.editor import ImageSequenceClip
 import logging
 
 
 logger = logging.getLogger(__name__)
 
 
-class AbstractWorkflow(abc.ABC):
-	"""Describes what an analysis and reporting pipeline
-	must be able to do. This needs to be implemented
-	in classes in pipeline, analyse and confluence,
-	such that the pipeline class can call the other's methods
+class AbstractModuleCollection(abc.ABC):
+    """Describes the modules an analysis and reporting pipeline
+    must support. This needs to be implemented
+    in classes in workflow.py, analyse.py and confluence.py,
+    such that the workflow class can call the other's methods
+    """
+    def __init__(self):
+        pass
+
+    @classmethod
+    def load_dataset(self):
+        """Loads a DNA-PAINT dataset in a format supported by picasso.
+        """
+        pass
+
+    @classmethod
+    def identify(self):
+        """Identifies localizations in a loaded dataset.
+        """
+        pass
+
+    @classmethod
+    def localize(self):
+        """Localizes Spots previously identified.
+        """
+        pass
+
+    @classmethod
+    def undrift_rcc(self):
+        """Undrifts localized data using redundant cross correlation.
+        """
+       pass
+
+    @classmethod
+    def undrift(self):
+        pass
+
+
+def correct_path_separators(file_path):
+	"""Ensure correct path separators ('/' or '\') in a file path.
+	Args:
+		file_path : str
+			input file path with any of the two separators
+	Returns:
+		file_path : str
+			the file path with separators according to operating system
 	"""
-	def __init__(self):
-		pass
-
-	@classmethod
-	def load(self):
-		pass
-
-	@classmethod
-	def identify(self):
-		pass
-
-	@classmethod
-	def localize(self):
-		pass
-
-	@classmethod
-	def undrift(self):
-		pass
-
-
-# Function to adjust contrast
-def adjust_contrast(img, min_quantile, max_quantile):
-    min_val = np.quantile(img, min_quantile)
-    max_val = np.quantile(img, max_quantile)
-    img = img.astype(np.float32) - min_val
-    img = img * 255 / (max_val - min_val)
-    img[img > 255] = 255
-    img[img < 0] = 0
-    img = img.astype(np.uint8)
-    return np.rollaxis(np.array([img, img, img], dtype=np.uint8), 0, 3)
-
-
-def save_movie(fname, movie, max_quantile=1, fps=1):
-    # Assuming 'array_3d' is your 3D numpy array and 'contrast_factors' is a list of contrast factors for each frame
-    adjusted_images = [adjust_contrast(frame, 0, max_quantile)[..., np.newaxis] for frame in movie]
-
-    # Create movie file
-    clip = ImageSequenceClip(adjusted_images, fps=fps)
-    clip.write_videofile(fname, verbose=False)#, codec='mpeg4')
+    path_components = re.split(r'[\\/]', file_path)
+    file_path = os.path.join(*path_components)
+    return file_path

@@ -1,7 +1,9 @@
+#!/usr/bin/env python
 """
-analyse.py
-
-This is the picasso interface of picasso-workflow
+Module Name: analyse.py
+Author: Heinrich Grabmayr
+Initial Date: March 7, 2024
+Description: This is the picasso interface of picasso-workflow
 """
 from picasso import io, localize, gausslq, postprocess
 from picasso import __version__ as picassoversion
@@ -14,43 +16,90 @@ from scipy.signal import find_peaks
 import matplotlib.pyplot as plt
 import logging
 
-from picasso_workflow.util import AbstractPipeline
+from picasso_workflow.util import AbstractModuleCollection
 
 
 logger = logging.getLogger(__name__)
 
 
-class AutoPicasso(AbstractPipeline):
-    """A class to automatically evaluate datasets
+class AutoPicasso(AbstractModuleCollection):
+    """A class to automatically evaluate datasets.
+    Each module that runs saves their results into a separate folder.
     """
+    self.movie = None
+    self.info = None
+    self.identifications = None
+    self.locs = None
+    self.drift = None
 
-    def __init__(self, filename, id_params, camera_info, gpufit_installed, fit_parallel):
-        self.filename = filename
-        self.id_params = id_params
-        self.camera_info = camera_info
-        self.gpufit_installed = gpufit_installed
-        self.fit_parallel = fit_parallel
-        pass
+    def __init__(self, results_folder, analysis_config):
+        """
+        Args:
+            results_folder : str
+                the folder all analysis modules save their respective results to
+            analysis_config : dict
+                the general configuration. necessary items:
+                    camera_info : dict
+                        as used by picasso
+                    gpufit_installed : bool
+                        whether the machine has gpufit installed
+        """
+        self.results_folder = results_folder
+        self.analysis_config = analysis_config
 
-    def load(self, load_pars):
+    #################################################################################
+    #### MODULES
+    #################################################################################
+
+    def load_dataset(self, parameters):
+        """Loads a DNA-PAINT dataset in a format supported by picasso.
+        The data is saved in
+            self.movie
+            self.info
+        Args:
+            parameters : dict
+                necessary items:
+                    filename : str
+                        the (main) file name to load
+                optional items:
+                    sample_movie : dict, used for creating a subsampled movie
+                        keywords as used in method create_sample_movie
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        # create results folder
+        method_name = sys._getframe().f_code.co_name
+        module_result_dir = os.path.join(self.results_folder, method_name)
+        os.mkdir(module_result_dir)
+
         results = {}
         results['picasso version'] = picassoversion
         t00 = time.time()
-        self.movie, self.info = io.load_movie(self.filename)
+        self.movie, self.info = io.load_movie(parameters['filename'])
         results['movie.shape'] = self.movie.shape
 
         # create sample movie
-        if (samplemov_pars := load_pars.get('sample_movie')) is not None:
-            res = self.create_sample_movie(**samplemov_pars)
+        if (samplemov_pars := parameters.get('sample_movie')) is not None:
+            samplemov_pars['saveas'] = os.path.join(
+                module_result_dir, samplemov_pars['saveas'])
+            res = self._create_sample_movie(**samplemov_pars)
             results['sample_movie'] = res
 
         dt = np.round(time.time() - t00, 2)
         results['duration'] = dt
-        self.results_load = results
-        return results
+        return parameters, results
 
-    def create_sample_movie(self, filename, n_sample=30, max_quantile=.9998, fps=1):
-        """Create a subsampled movie of the movie loaded
+    def _create_sample_movie(self, 
+            saveas, n_sample=30, min_quantile=0, max_quantile=.9998, fps=1):
+        """Create a subsampled movie of the movie loaded. The movie is saved
+        to disk and referenced by filename.
+        Args:
+            saveas : str
+                the file name to save the subsamled movie as (.mp4)
+            rest: as in save_movie
         """
         results = {}
         # frame_numbers = np.random.choice(np.arange(len(self.movie)), n_sample)
@@ -62,31 +111,40 @@ class AutoPicasso(AbstractPipeline):
         results['sample_frame_idx'] = frame_numbers
 
         subsampled_frames = np.array([self.movie[i] for i in frame_numbers])
-        fn_movie = filename
         save_movie(
-            fn_movie, subsampled_frames,
-            max_quantile=max_quantile, fps=fps)
+            saveas, subsampled_frames,
+            min_quantile=min_quantile, max_quantile=max_quantile, fps=fps)
         results['filename'] = fn_movie
         return results
 
-    def get_netgrad_hist(self, filename, frame_numbers, start_ng=-3000, zscore=5, bins=None):
-        """Get histograms of the net gradient at local maxima of n randomly
-        chosen frames
-        Call after loading
+    def _auto_min_netgrad(self, plot_fn, box_size, frame_numbers, start_ng=-3000, zscore=5, bins=None):
+        """Calculate histograms of the net gradient at local maxima of n frames.
+        For the automatic calculation of a threshold net_gradient for localizations,
+        assume the background (of random local maxima without a localization signal)
+        to be Gaussian distributed. Assume the background peak in the histogram
+        is the highest value. The threshold net_gradient will be determined as
+        zscore bacground standard deviations above the peak. 
+
         Args:
+            plot_fn : str
+                the file name of the plot to be created
+            box_size : int
+                the box size for evaluation
             frame_numbers : list
-                the frame indexess to analyze
+                the frame indexes to analyze
             start_ng : float
                 the minimum net gradient to accept for the histogram.
                 this should be below zero, to capture all net gradient
                 values that exist in the data
             zscore : float
-                the number of sigmas above the bakground net gradient peak
+                the number of sigmas above the background net gradient peak
                 to set as the estimated min net gradient threshold
+            bins : None, int or array
+                specify the bins of the histogram
         Returns:
-            fn : string
+            filename : string
                 filename of the generated plot
-            ng_est : float
+            estd_net_grad : float
                 the estimated min net gradient
         """
         results = {}
@@ -95,34 +153,30 @@ class AutoPicasso(AbstractPipeline):
         for frame_number in frame_numbers:
             identifications.append(
                 localize.identify_by_frame_number(
-                    self.movie, start_ng,
-                    self.id_params['box_size'], frame_number))
+                    self.movie, start_ng, box_size, frame_number))
         # id_list = identifications
         identifications = np.hstack(identifications).view(np.recarray)
         identifications.sort(kind="mergesort", order="frame")
 
+        # calculate histogram
         if bins is None:
             hi = np.quantile(identifications['net_gradient'], .9995)
             bins = np.linspace(start_ng, hi, num=200)
         hist, edges = np.histogram(
             identifications['net_gradient'], bins=bins, density=True)
 
-        # # find the background peak
-        # peaks, properties = find_peaks(hist, height=height, width=width)
-        # print(peaks)
-        # print(properties)
-        # ng_est = 2 * int(edges[int(properties['right_ips'][0])])
-
-        # alternatively, assume gaussian, find max and FWHM
+        # find the background peak, assume Gaussian, find max and FWHM
+        # FWHM as the most robust detection for peak width
         bkg_peak_height, bkg_peak_pos = np.max(hist), np.argmax(hist)
         bkg_halfclose = np.argsort(np.abs(hist - bkg_peak_height / 2))
         bkg_fwhm = np.abs(bkg_halfclose[1] - bkg_halfclose[0])
         bkg_sigma = bkg_fwhm / np.sqrt(4 * np.log(2))
-        ng_est_idx = int(zscore * bkg_sigma) + bkg_peak_pos  # cut off at zscore * bkg_sigma
+        ng_est_idx = int(zscore * bkg_sigma) + bkg_peak_pos  # threshold at zscore * bkg_sigma
         if ng_est_idx >= len(edges):
             ng_est_idx = len(edges) - 1
         results['estd_net_grad'] = edges[ng_est_idx]
 
+        # plot results
         fig, ax = plt.subplots()
         ax.plot(edges[:-1], hist, color='b', label='combined histogram')
         # for i, frame_number in enumerate(frame_numbers):
@@ -139,24 +193,53 @@ class AutoPicasso(AbstractPipeline):
             color='gray', label='detected background peak')
         ax.legend()
         # plt.show()
-        results['filename'] = filename
+        results['filename'] = plot_fn
         fig.savefig(results['filename'])
         return results
 
-    def identify(self, pars_identify):
+    def identify(self, parameters):
+        """Identifies localizations in a loaded dataset.
+        The data is saved in
+            self.identifications
+        Args:
+            parameters : dict
+                necessary items:
+                    box_size : as always
+                    min_gradient : only if not auto_netgrad
+                optional items:
+                    auto_netgrad : dict, in case the min net_gradient
+                        shall be automatically detected.
+                        Items correspond to arguments of _auto_min_netgrad
+                    ids_vs_frame : dict
+                        for plotting identifications vs time
+                        items correspond to arguments of _plot_ids_vs_frame
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        # create results folder
+        method_name = sys._getframe().f_code.co_name
+        module_result_dir = os.path.join(self.results_folder, method_name)
+        os.mkdir(module_result_dir)
+
         t00 = time.time()
         results = {}
 
         # auto-detect net grad if required:
-        if (autograd_pars := pars_identify.get('auto_netgrad')) is not None:
-            res = self.get_netgrad_hist(**autograd_pars)
+        if (autograd_pars := parameters.get('auto_netgrad')) is not None:
+            if 'filename' in autograd_pars.keys():
+                autograd_pars['filename'] = os.path.join(
+                    module_result_dir, autograd_pars['filename'])
+            res = self._auto_min_netgrad(**autograd_pars)
             results['auto_netgrad'] = res
-            pars_identify['min_grad'] = res['estd_net_grad']
+            parameters['min_gradient'] = res['estd_net_grad']
 
         curr, futures = localize.identify_async(
             self.movie,
-            pars_identify['min_grad'],
-            pars_identify['box_size'],
+            parameters['min_gradient'],
+            parameters['box_size'],
             roi=None,
         )
         self.identifications = localize.identifications_from_futures(futures)
@@ -164,11 +247,16 @@ class AutoPicasso(AbstractPipeline):
         results['duration'] = dt
         results['num_identifications'] = len(self.identifications)
 
-        if (pars := pars_identify.get('ids_vs_frame')) is not None:
-            results['ids_vs_frame'] = self.plot_ids_vs_frame(**pars)
-        return pars_identify, results
+        if (pars := parameters.get('ids_vs_frame')) is not None:
+            if 'filename' in pars.keys():
+                pars['filename'] = os.path.join(
+                    module_result_dir, pars['filename'])
+            results['ids_vs_frame'] = self._plot_ids_vs_frame(**pars)
+        return parameters, results
 
-    def plot_ids_vs_frame(self, filename):
+    def _plot_ids_vs_frame(self, filename):
+        """Plot identifications vs frame index
+        """
         results = {}
         frames = np.arange(len(self.movie))
         bins = np.arange(len(self.movie) + 1) - .5
@@ -182,19 +270,46 @@ class AutoPicasso(AbstractPipeline):
         plt.close(fig)
         return results
 
-    def localize(self, pars_localize):
+    def localize(self, parameters):
+        """Localizes Spots previously identified.
+        The data is saved in
+            self.locs
+        Args:
+            parameters : dict
+                necessary items:
+                    box_size : as always
+                    fit_parallel : bool
+                        whether to fit on multiple cores
+                optional items:
+                    locs_vs_frame : dict
+                        for plotting locs vs time
+                        items correspond to arguments of _plot_locs_vs_frame
+                    save_locs : dict
+                        if saving localizations is requested.
+                        Items correpsond to arguments of save_locs
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        # create results folder
+        method_name = sys._getframe().f_code.co_name
+        module_result_dir = os.path.join(self.results_folder, method_name)
+        os.mkdir(module_result_dir)
+
         results = {}
         t00 = time.time()
-        em = self.camera_info["gain"] > 1
+        em = self.analysis_config['camera_info']["gain"] > 1
         spots = localize.get_spots(
-            self.movie, self.identifications, pars_localize['box_size'],
-            self.camera_info)
-        if self.gpufit_installed:
+            self.movie, self.identifications, parameters['box_size'],
+            self.analysis_config['camera_info'])
+        if self.analysis_config['gpufit_installed']:
             theta = gausslq.fit_spots_gpufit(spots)
             self.locs = gausslq.locs_from_fits_gpufit(
-                self.identifications, theta, pars_localize['box_size'], em)
+                self.identifications, theta, parameters['box_size'], em)
         else:
-            if self.fit_parallel:
+            if parameters['fit_parallel']:
                 # theta = gausslq.fit_spots_parallel(spots, asynch=False)
                 fs = gausslq.fit_spots_parallel(spots, asynch=True)
                 n_tasks = len(fs)
@@ -206,9 +321,9 @@ class AutoPicasso(AbstractPipeline):
                     for f in _futures.as_completed(fs):
                         progress_bar.update()
                 theta = gausslq.fits_from_futures(fs)
-                em = self.camera_info["gain"] > 1
+                em = self.analysis_config['camera_info']["gain"] > 1
                 self.locs = gausslq.locs_from_fits(
-                    self.identifications, theta, pars_localize['box_size'], em
+                    self.identifications, theta, parameters['box_size'], em
                 )
             else:
                 theta = np.empty((len(spots), 6), dtype=np.float32)
@@ -217,22 +332,28 @@ class AutoPicasso(AbstractPipeline):
                     theta[i] = gausslq.fit_spot(spots[i])
 
                 self.locs = gausslq.locs_from_fits(
-                    self.identifications, theta, pars_localize['box_size'], em
+                    self.identifications, theta, parameters['box_size'], em
                 )
 
-        if (pars := pars_localize.get('locs_vs_frame')):
-            results['locs_vs_frame'] = self.plot_locs_vs_frame(pars['filename'])
+        if (pars := parameters.get('locs_vs_frame')):
+            if 'filename' in pars.keys():
+                pars['filename'] = os.path.join(
+                    module_result_dir, pars['filename'])
+            results['locs_vs_frame'] = self._plot_locs_vs_frame(pars['filename'])
 
         # save locs
-        if (pars := pars_localize.get('save_locs')):
+        if (pars := parameters.get('save_locs')):
+            if 'filename' in pars.keys():
+                pars['filename'] = os.path.join(
+                    module_result_dir, pars['filename'])
             self.save_locs(pars['filename'])
 
         dt = np.round(time.time() - t00, 2)
         results['duration'] = dt
         results['locs_columns'] = self.locs.dtype.names
-        return pars_localize, results
+        return parameters, results
 
-    def plot_locs_vs_frame(self, filename):
+    def _plot_locs_vs_frame(self, filename):
         results = {}
         frames = np.arange(len(self.movie))
         bins = np.arange(len(self.movie) + 1) - .5
@@ -268,63 +389,55 @@ class AutoPicasso(AbstractPipeline):
         plt.close(fig)
         return results
 
-    def undrift_mutualnearestneighbors(self, pars_undrift):
+    def undrift_rcc(self, parameters):
+        """Undrifts localized data using redundant cross correlation.
+        """
+        # create results folder
+        method_name = sys._getframe().f_code.co_name
+        module_result_dir = os.path.join(self.results_folder, method_name)
+        os.mkdir(module_result_dir)
+
         results = {}
         t00 = time.time()
 
-        self.locs, self.drift = undrift(
-            self.locs, dimensions=pars_undrift['dimensions'],
-            method=pars_undrift['method'], max_dist=pars_undrift['max_dist'],
-            use_multiprocessing=pars_undrift['use_multiprocessing'])
-
-        np.savetxt(pars_undrift['drift_file'], self.drift, delimiter=',')
-        pars_undrift['drift_image'] = os.path.splitext(pars_undrift['drift_file'])[0] + '.png'
-        self.plot_drift(pars_undrift['drift_image'], pars_undrift['dimensions'])
-
-        # save locs
-        if (pars := pars_undrift.get('save_locs')):
-            self.save_locs(pars['filename'])
-
-        dt = np.round(time.time() - t00, 2)
-        results['duration'] = dt
-
-        return pars_undrift, results
-
-    def undrift_rcc(self, pars_undrift):
-        results = {}
-        t00 = time.time()
-
-        seg_init = pars_undrift['segmentation']
-        for i in range(pars_undrift.get('max_iter_segmentations', 3)):
+        seg_init = parameters['segmentation']
+        for i in range(parameters.get('max_iter_segmentations', 3)):
             # if the segmentation is too low, the process raises an error
             # adaptively increase the value.
             try:
                 self.drift, self.locs = postprocess.undrift(
-                    self.locs, self.info, segmentation=pars_undrift['segmentation'],
+                    self.locs, self.info, segmentation=parameters['segmentation'],
                     display=False)
                 break
             except ValueError:
-                pars_undrift['segmentation'] = 2 * pars_undrift['segmentation']
+                parameters['segmentation'] = 2 * parameters['segmentation']
+                logger.debug(f'RCC with segmentation {parameters['segmentation']} raised an error. Doubling.')
                 results['message'] = f'Initial Segmentation of {seg_init} was too low.'
         else:  # did not work until the end
+            logger.error(f'RCC failed up to segmentation {parameters['segmentation']}. Aborting.')
             raise UndriftError()
 
-        pars_undrift['dimensions'] = ['x', 'y']
+        parameters['dimensions'] = ['x', 'y']
 
-        np.savetxt(pars_undrift['drift_file'], self.drift, delimiter=',')
-        pars_undrift['drift_image'] = os.path.splitext(pars_undrift['drift_file'])[0] + '.png'
-        self.plot_drift(pars_undrift['drift_image'], pars_undrift['dimensions'])
+        parameters['filename'] = os.path.join(
+                    module_result_dir, parameters['filename'])
+        np.savetxt(parameters['filename'], self.drift, delimiter=',')
+        parameters['filename'] = os.path.splitext(parameters['filename'])[0] + '.png'
+        self._plot_drift(parameters['drift_image'], parameters['dimensions'])
 
         # save locs
-        if (pars := pars_undrift.get('save_locs')):
+        if (pars := parameters.get('save_locs')):
+            if 'filename' in pars.keys():
+                pars['filename'] = os.path.join(
+                    module_result_dir, pars['filename'])
             self.save_locs(pars['filename'])
 
         dt = np.round(time.time() - t00, 2)
         results['duration'] = dt
 
-        return pars_undrift, results
+        return parameters, results
 
-    def plot_drift(self, filename, dimensions):
+    def _plot_drift(self, filename, dimensions):
         fig, ax = plt.subplots()
         frames = np.arange(self.drift.shape[0])
         for i, dim in enumerate(dimensions):
@@ -339,16 +452,16 @@ class AutoPicasso(AbstractPipeline):
         fig.savefig(filename)
         plt.close(fig)
 
-    def describe(self, pars_describe):
+    def describe(self, parameters):
         results = {}
-        for meth, meth_pars in pars_describe['methods'].items():
+        for meth, meth_pars in parameters['methods'].items():
             if meth.lower() == 'nena':
                 res, best_vals = postprocess.nena(self.locs, self.info)
                 results['nena'] = {'res': res, 'best_vals': best_vals}
             else:
                 raise NotImplementedError('Description method ' + meth + ' not implemented.')
 
-        return pars_describe, results
+        return parameters, results
 
     def save_locs(self, filename):
         t00 = time.time()
@@ -359,7 +472,7 @@ class AutoPicasso(AbstractPipeline):
         }
         info = {
             "Generated by": "AutoPicasso: Localize",
-            "Pixelsize": self.camera_info['pixelsize'],
+            "Pixelsize": self.analysis_config['camera_info']['pixelsize'],
         }
         info = [base_info] + [info]
 
@@ -373,7 +486,8 @@ class AutoPicasso(AbstractPipeline):
         # os.chdir(previous_dir)
 
         dt = np.round(time.time() - t00, 2)
-        self.results_save = {'duration': dt}
+        results_save = {'duration': dt}
+        return results_save
 
 
 def get_ap():

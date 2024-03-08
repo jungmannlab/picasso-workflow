@@ -1,44 +1,49 @@
+#!/usr/bin/env python
 """
-confluence.py
-
-Interaction with Confluence
+Module Name: confluence.py
+Author: Heinrich Grabmayr
+Initial Date: March 7, 2024
+Description: Interaction with Confluence
 """
 import logging
 import os
 import requests
 
-from picasso_automate.util import AbstractPipeline
+from picasso_automate.util import AbstractModuleCollection
 
 
 logger = logging.getLogger(__name__)
 
 
 
-class ConfluenceReporter(AbstractPipeline):
+class ConfluenceReporter(AbstractModuleCollection):
     """A class to upload reports of automated picasso evaluations
     to confluence
     """
 
     def __init__(self, base_url, space_key, parent_page_title, report_name):
+        logger.debug('Initializing ConfluenceReporter.')
         self.ci = ConfluenceInterface(base_url, space_key, parent_page_title)
 
         # create page
         self.report_page_name = report_name
+        # in case the page already exists, add an iteration
         for i in range(1, 30):
             try:
                 self.report_page_id = self.ci.create_page(self.report_page_name, body_text='')
-                print(f'Created page {self.report_page_name}')
+                logger.debug(f'Created page {self.report_page_name}')
                 break
             except KeyError:
                 self.report_page_name = report_name + '_{:02d}'.format(i)
 
-    def load(self, pars_load, results_load):
+    def load_dataset(self, pars_load, results_load):
         """Describes the loading
         Args:
             localize_params : dict
                 net_gradient : the net gradient used
                 frames : the number of frames
         """
+        logger.debug('Reporting a loaded dataset.')
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Load</strong></p>
@@ -64,13 +69,13 @@ class ConfluenceReporter(AbstractPipeline):
             """
             self.ci.update_page_content(
                 self.report_page_name, self.report_page_id, text)
-            # print('uploading graph')
+            logger.debug(f'Uploading movie of subsampled images.')
             self.ci.upload_attachment(
                 self.report_page_id, sample_mov_res['filename'])
             self.ci.update_page_content_with_movie_attachment(
                 self.report_page_name, self.report_page_id,
                 os.path.split(sample_mov_res['filename'])[1])
-        return  # document nothing
+        return
 
     def identify(self, pars_identify, results_identify):
         """Describes the identify step
@@ -83,6 +88,7 @@ class ConfluenceReporter(AbstractPipeline):
             fn_hist : str
                 the filename to the histogram plot generated
         """
+        logger.debug('Reporting Identification.')
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Identify</strong></p>
@@ -96,14 +102,14 @@ class ConfluenceReporter(AbstractPipeline):
         """
         self.ci.update_page_content(self.report_page_name, self.report_page_id, text)
         if (res_autonetgrad := results_identify.get('auto_netgrad')) is not None:
-            # print('uploading graph')
+            logger.debug(f'Uploading graph for auto_netgrad.')
             self.ci.upload_attachment(
                 self.report_page_id, res_autonetgrad['filename'])
             self.ci.update_page_content_with_image_attachment(
                 self.report_page_name, self.report_page_id,
                 os.path.split(res_autonetgrad['filename'])[1])
         if (res := results_identify.get('ids_vs_frame')) is not None:
-            # print('uploading graph')
+            logger.debug(f'uploading graph for identifications vs frame.')
             self.ci.upload_attachment(
                 self.report_page_id, res['filename'])
             self.ci.update_page_content_with_image_attachment(
@@ -117,6 +123,7 @@ class ConfluenceReporter(AbstractPipeline):
                 net_gradient : the net gradient used
                 frames : the number of frames
         """
+        logger.debug('Reporting Localization of spots.')
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Localize</strong></p>
@@ -135,31 +142,6 @@ class ConfluenceReporter(AbstractPipeline):
                 self.report_page_name, self.report_page_id,
                 os.path.split(res['filename'])[1])
 
-    def undrift_mutualnearestneighbors(self, pars_undrift, res_undrift):
-        """Describes the Localize section of picasso
-        Args:
-            localize_params : dict
-                net_gradient : the net gradient used
-                frames : the number of frames
-        """
-        text = f"""
-        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Undrifting</strong></p>
-        <ul><li>Dimensions: {pars_undrift['dimensions']}</li>
-        <li>Method: {pars_undrift['method']}</li>
-        <li>max_dist: {pars_undrift['max_dist']} pixels</li>
-        <li>Multiprocessing used: {pars_undrift['use_multiprocessing']}</li>
-        <li>Duration: {res_undrift['duration']} s</li></ul>
-        </ac:layout-cell></ac:layout-section></ac:layout>
-        """
-        self.ci.update_page_content(self.report_page_name, self.report_page_id, text)
-
-        self.ci.upload_attachment(
-            self.report_page_id, pars_undrift['drift_image'])
-        self.ci.update_page_content_with_image_attachment(
-            self.report_page_name, self.report_page_id,
-            os.path.split(pars_undrift['drift_image'])[1])
-
     def undrift_rcc(self, pars_undrift, res_undrift):
         """Describes the Localize section of picasso
         Args:
@@ -167,6 +149,7 @@ class ConfluenceReporter(AbstractPipeline):
                 net_gradient : the net gradient used
                 frames : the number of frames
         """
+        logger.debug('Reporting undrifting via RCC.')
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Undrifting via RCC</strong></p>
@@ -190,6 +173,7 @@ class ConfluenceReporter(AbstractPipeline):
                 os.path.split(driftimg_fn)[1])
 
     def describe(self, pars_describe, res_describe):
+        logger.debug('Reporting dataset description.')
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Descriptive Statistics</strong></p>"""
