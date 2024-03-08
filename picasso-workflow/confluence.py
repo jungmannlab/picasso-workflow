@@ -21,9 +21,9 @@ class ConfluenceReporter(AbstractModuleCollection):
     to confluence
     """
 
-    def __init__(self, base_url, space_key, parent_page_title, report_name):
+    def __init__(self, base_url, space_key, parent_page_title, report_name, token=None):
         logger.debug('Initializing ConfluenceReporter.')
-        self.ci = ConfluenceInterface(base_url, space_key, parent_page_title)
+        self.ci = ConfluenceInterface(base_url, space_key, parent_page_title, token=token)
 
         # create page
         self.report_page_name = report_name
@@ -213,8 +213,11 @@ class ConfluenceInterface():
     $ setx CONFLUENCE_BEARER "your_confluence_api_token"
     """
 
-    def __init__(self, base_url, space_key, parent_page_title):
-        self.bearer_token = self.get_bearer_token()
+    def __init__(self, base_url, space_key, parent_page_title, token=None):
+        if token is None:
+            self.bearer_token = self.get_bearer_token()
+        else:
+            self.bearer_token = token
         self.base_url = base_url
         self.space_key = space_key
         self.parent_page_id, _ = self.get_page_properties(parent_page_title)
@@ -385,6 +388,18 @@ class ConfluenceInterface():
             raise KeyError()
 
         return response.json()["id"]
+
+    def delete_page(self, page_id):
+        url = self.base_url + "/rest/api/content/{page_id}"
+        headers = {
+            "Authorization": "Bearer {:s}".format(self.bearer_token),
+            "Content-Type": "application/json"
+        }
+        response = requests.delete(url, headers=headers)
+        if response.status_code == 204:
+            logger.debug("Page deleted successfully.")
+        else:
+            logger.error("Failed to delete the page.")
 
     def upload_attachment(self, page_id, filename):
         """Uploads an attachment to a page

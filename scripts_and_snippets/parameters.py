@@ -19,11 +19,11 @@ analysis_config = {
 }
 
 # e.g. for single dataset evaluation
-workflow_modules = [
+workflow_modules_sgl = [
     ('load', {
         'filename': 'resiround1/test1.ome.tif',
         'sample_movie' : {
-            'saveas': 'selected_frames.mp4',
+            'filename': 'selected_frames.mp4',
             'n_sample': 40,
             'max_quantile': .9998,
             'fps': 2,
@@ -60,30 +60,51 @@ workflow_modules = [
     ('undrift_rcc', {
         'segmentation': 1000,
         'max_iter_segmentations': 4,
-        'filename': os.path.join(self.savedir, self.prefix + 'drift.csv'),
-        'save_locs': {'filename': os.path.join(self.savedir, self.prefix + 'locs_undrift.hdf5')}
+        'filename': 'drift.csv',
+        'save_locs': {'filename': 'locs_undrift.hdf5'}
         
         })
-    ('segmentation', {
-        'method': 'brightfield',
-        'parameters': {
-            'filename': 'BF.png'}
-        },
-    ),
-    ('smlm', {
-        'min_locs': 10,
-        'cluster_radius': 4
-        },
-    ),
+    # ('segmentation', {
+    #     'method': 'brightfield',
+    #     'parameters': {
+    #         'filename': 'BF.png'}
+    #     },
+    # ),
+    # ('cluster_smlm', {
+    #     'min_locs': 10,
+    #     'cluster_radius': 4
+    #     },
+    # ),
 ]
 
 # for dataset aggregation, after they have been analyzed separately
-workflow_modules = [
-    'RESI': {
-        'evaldirs': [
-            'resiround1/eval',
-            'resiround2/eval',
-            ] 
-    }
+workflow_modules_agg = [
+    ('RESI', {
+            'evaldirs': [
+                'resiround1/eval',
+                'resiround2/eval',
+                ] 
+        })
 ]
 
+
+# e.g. for multi dataset evaluation and aggregation
+workflow_modules_multi = {
+    'filename': ['fn1', 'fn2'],
+    'single_dataset_modules': [
+        ('load', {
+            'filename': ('$map', 'filename'),
+            'sample_movie' : {
+                'filename': 'selected_frames.mp4',
+                'n_sample': 40,
+                'max_quantile': .9998,
+                'fps': 2,
+                },
+            },
+        ),],
+    'aggregation_modules': [
+        ('RESI', {
+            'evaldirs': ('$get_prior_results', 'all_results, $all, results_undrift_rcc, locs_undrift.hdf5')
+            })
+        ]
+}

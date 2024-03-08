@@ -14,7 +14,7 @@ import inspect
 
 from picasso_workflow.analyse import AutoPicasso
 from picasso_workflow.confluence import ConfluenceReporter
-from picasso_workflow.util import AbstractModuleCollection, correct_path_separators
+from picasso_workflow.util import AbstractModuleCollection, correct_path_separators, ParameterCommandExecutor
 
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ class WorkflowRunner(AbstractModuleCollection):
     """
     def __init__(self):
         self.prefix = datetime.now().strftime('%y%m%d-%H%M_')
+        self.parameter_command_executor = ParameterCommandExecutor(self)
 
     @classmethod
     def config_from_dicts(cls, reporter_config, analysis_config, workflow_modules):
@@ -87,7 +88,7 @@ class WorkflowRunner(AbstractModuleCollection):
             module_fun = getattr(self, module_name)
             logger.debug(f'Running module {module_name}.')
             # all modules are called with one dict as argument
-            module_parameters = self.execute_parameter_commands(module_parameters)
+            module_parameters = self.parameter_command_executor.run(module_parameters)
             module_fun(module_parameters)
 
     #################################################################################
@@ -98,80 +99,6 @@ class WorkflowRunner(AbstractModuleCollection):
         """
         """
         return os.path.join(self.savedir, self.prefix + filename)
-
-    def execute_parameter_commands(self, parameters):
-        """Scan a parameter set for commands to execute prior to module
-        execution.
-        commands: '$get_prior_result'
-        Args:
-            parameters : dict
-                the parameters for a module
-        """
-        return scan_dict(parameters)
-
-    def scan_dict(self, d):
-        for k, v in d.items():
-            if isinstance(v, dict):
-                d[k] = scan_dict(v)
-            elif isinstance(v, list):
-                d[k] = scan_list(v)
-            elif isinstance(v, tuple):
-                d[k] = scan_tuple(v)
-        return d
-
-    def scan_list(self, l):
-        for i, it in enumerate(l):
-            if isinstance(it, dict):
-                l[i] = scan_dict(it)
-            elif isinstance(it, list):
-                l[i] = scan_list(it)
-            elif isinstance(it, tuple):
-                l[i] = scan_tuple(it)
-        return l
-
-    def scan_tuple(self, t):
-        if len(t) == 2 and isinstance(t[0], str) and t[0][0]=='$':
-            # this is a parameter command
-            if t[0] == '$get_prior_result':
-                logger.debug(f'Getting prior result from {t[1]}.')
-                res = self.get_prior_result(t[1])
-                logger.debug(f'Prior result is {res}.')
-            # elif add more parameter commands
-            return res
-        else:
-            # it's just a normal tuple
-            tout = []
-            for i, it in enumerate(t):
-                if isinstance(it, dict):
-                    tout[i] = scan_dict(it)
-                elif isinstance(it, list):
-                    tout[i] = scan_list(it)
-                elif isinstance(it, tuple):
-                    tout[i] = scan_tuple(it)
-            return tuple(tout)
-
-
-    def get_prior_result(self, locator):
-        """In some cases, input parameters for a module should be taken from
-        prior results. This is performed here
-        Args:
-            locator : str
-                the chain of attributes for finding the prior result, comma separated.
-                They all need to be obtainable with getattr, starting from this class
-                e.g. "results_load, sample_movie, sample_frame_idx"
-                obtains self.results_load['sample_movie']['sample_frame_idx']
-        Returns:
-            the last attribute in the chain.
-        """
-        root_att = self
-        for att_name in locator.split(','):
-            try:
-                root_att = getattr(root_att, att_name.strip())
-            except AttributeError as e:
-                logger.error(f'Could not get attribute {att_name} from {str(root_att)}.')
-                raise e
-        return root_att
-
 
     #################################################################################
     #### MODULES

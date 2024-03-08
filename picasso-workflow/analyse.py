@@ -83,8 +83,8 @@ class AutoPicasso(AbstractModuleCollection):
 
         # create sample movie
         if (samplemov_pars := parameters.get('sample_movie')) is not None:
-            samplemov_pars['saveas'] = os.path.join(
-                module_result_dir, samplemov_pars['saveas'])
+            samplemov_pars['filename'] = os.path.join(
+                module_result_dir, samplemov_pars['filename'])
             res = self._create_sample_movie(**samplemov_pars)
             results['sample_movie'] = res
 
