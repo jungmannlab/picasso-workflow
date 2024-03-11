@@ -33,7 +33,7 @@ workflow_modules_sgl = [
     ('identify', {
         'auto_netgrad': {
             'filename': 'ng_histogram.png',
-            'frame_numbers': ('$get_prior_result', "results_load, sample_movie, sample_frame_idx"), # get from prior results
+            'frame_numbers': ('$get_prior_result', "results, load, sample_movie, sample_frame_idx"), # get from prior results
             'start_ng': -3000,
             'zscore': 5,
             },
@@ -63,7 +63,9 @@ workflow_modules_sgl = [
         'filename': 'drift.csv',
         'save_locs': {'filename': 'locs_undrift.hdf5'}
         
-        })
+        }
+    ),
+    ('manual', {}),
     # ('segmentation', {
     #     'method': 'brightfield',
     #     'parameters': {
@@ -90,7 +92,9 @@ workflow_modules_agg = [
 
 # e.g. for multi dataset evaluation and aggregation
 workflow_modules_multi = {
-    'filename': ['fn1', 'fn2'],
+    'single_dataset_tileparameters':{
+        '$tags': ['A', 'B'],
+        'filename': ['fn1', 'fn2'],},
     'single_dataset_modules': [
         ('load', {
             'filename': ('$map', 'filename'),
@@ -101,10 +105,10 @@ workflow_modules_multi = {
                 'fps': 2,
                 },
             },
-        ),],
+        ),...],
     'aggregation_modules': [
         ('RESI', {
-            'evaldirs': ('$get_prior_results', 'all_results, $all, results_undrift_rcc, locs_undrift.hdf5')
+            'evaldirs': ('$get_prior_results', 'all_results, $all, undrift_rcc, locs_undrift.hdf5')
             })
         ]
 }

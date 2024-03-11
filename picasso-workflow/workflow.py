@@ -20,6 +20,137 @@ from picasso_workflow.util import AbstractModuleCollection, correct_path_separat
 logger = logging.getLogger(__name__)
 
 
+class AggregationWorkflowRunner():
+    """Often, workflows have to be separated into separate
+    'sub' workflows, e.g. when multiple DNA-PAINT datasets
+    are to be evaluated, and then aggregated. This is what this
+    class aims to do
+    """
+    def __init__(self, use_prefix=True):
+        if use_prefix:
+            self.prefix = datetime.now().strftime('%y%m%d-%H%M')
+        else:
+            self.prefix = ''
+        self.continue_workflow = False
+
+    @classmethod
+    def config_from_dicts(cls, reporter_config, analysis_config, aggregation_workflow):
+        """To keep flexibility for initialization methods, this is not
+        done in __init__. This way in the future, we can instantiate
+        by providing config file names, retrieving config and parameters
+        via a web API, or such.
+        Args:
+            reporter_config : dict
+                configuration of the reporter, for now Confluence reporter
+            analysis_config : dict
+                general analysis configuration
+            aggregation_workflow : dict
+                the workflow modules to run, which need to be separated into
+                individual runs. Keys:
+                single_dataset_tileparameters : dict
+                    describes the parameters that need to be adjusted for every
+                    individual single data set analysis
+                single_dataset_modules : list of tuples (workflow_modules of WorkflowRunner)
+                    describes the modules run for the analysis of the
+                    individual datasets
+                aggregation_modules : list of tuples (workflow_modules of WorkflowRunner)
+                    describes the modules run for the aggregation analysis
+                    (e.g. labeling efficiency, RESI, ..)
+        """
+        if sgltilepars := aggregation_workflow.get('single_dataset_tileparameters') == None:
+            raise KeyError('aggregation_workflow missing "single_dataset_tileparameters".')
+        instance = cls()
+        instance.parameter_tiler = ParameterTiler(instance, sgltilepars)
+        instance.all_results = {
+            'single_dataset': [None] * instance.parameter_tiler.ntiles,
+            'aggregation': None}
+        instance.reporter_config = reporter_config
+        instance.analysis_config = analysis_config
+        # set date and time to report name
+        if instance.use_prefix:
+            report_name = reporter_config['report_name'] + '_' + instance.prefix[:-1]
+        else:
+            report_name = reporter_config['report_name']
+        # reporter_config['report_name'] = report_name
+        # create analysis result directory
+        instance.result_folder = os.path.join(
+            analysis_config['result_location'], report_name)
+        try:
+            os.mkdir(instance.result_folder)
+        except:
+            pass
+
+        instance.aggregation_workflow = aggregation_workflow
+        return instance
+
+    def run(self):
+        """individualize the aggregation workflow and run.
+        """
+        # First, run the individual analysis
+        sgl_ds_workflow_parameters = self.aggregation_workflow['single_dataset_modules']
+        individual_parametersets, tags = self.parameter_tiler.run(sgl_ds_workflow_parameters)
+        report_name = self.reporter_config['report_name']
+        reporter_config = self.reporter_config.copy()
+        for i, (parameter_set, tag) in enuemrate(zip(individual_parametersets, tags)):
+            reporter_config['report_name'] = report_name + f'_{i}_{tag}'
+            if self.continue_workflow:
+                try:
+                    wr = WorkflowRunner.load(os.path.join(self.result_folder, reporter_config['report_name']))
+                except:
+                    wr = WorkflowRunner.config_from_dicts(
+                        reporter_config, self.analysis_config.copy(), parameter_set)
+            else:
+                wr = WorkflowRunner.config_from_dicts(
+                    reporter_config, self.analysis_config.copy(), parameter_set)
+            wr.run(contd=self.continue_workflow)
+            self.all_results['single_dataset'][i] = wr.results
+            self.save_results(self.result_folder)
+
+        # Then, run the aggregation workflow
+        pce = ParameterCommandExecutor(self)
+        parameters = pce.run(self.aggregation_workflow['aggregation_modules'])
+        reporter_config = self.reporter_config.copy()
+        reporter_config['report_name'] = reporter_config['report_name'] + '_aggregation'
+        wr = WorkflowRunner.config_from_dicts(
+            reporter_config, self.analysis_config, parameters)
+        wr.run()
+        self.all_results['aggregation'] = wr.results
+
+    def save(self, dirn='.'):
+        """Save the current config and results into 'WorkflowRunnerResults.yaml'
+        in the given directory.
+        Args:
+            dirn : str
+                the directory to save into
+        """
+        fn = os.path.join(dirn, 'WorkflowRunnerResults.yaml')
+        data = {
+            'all_results': self.all_results,
+            'prefix': self.prefix,
+            'reporter_config': self.reporter_config,
+            'analysis_config': self.analysis_config,
+            'aggregation_workflow': self.aggregation_workflow,
+        }
+        with open(fn, 'w') as f:
+            yaml.dump(data, f)
+
+    def load(self, dirn='.'):
+        """Load instance from a "WorkflowRunnerResults.yaml" file.
+        Args:
+            dirn : str
+                the directory to load from
+        """
+        fn = os.path.join(dirn, 'WorkflowRunnerResults.yaml')
+        with open(fn, 'w') as f:
+            data = yaml.loads(f)
+        self.prefix = data['prefix']
+        self.all_results = data['all_results']
+        self.reporter_config = data['reporter_config']
+        self.analysis_config = data['analysis_config']
+        self.aggregation_workflow = data['aggregation_workflow']
+        self.continue_workflow = True
+
+
 class WorkflowRunner(AbstractModuleCollection):
     """Runs a workflow, defined as a sequence of modules, which
     are worked on and their results published on Confluence.
@@ -31,9 +162,14 @@ class WorkflowRunner(AbstractModuleCollection):
     wr = WorkflowRunner.config_from_dicts(rc, ac, wm)
     wr.run()
     """
-    def __init__(self):
-        self.prefix = datetime.now().strftime('%y%m%d-%H%M_')
+    def __init__(self, use_prefix=True):
+        if self.use_prefix := use_prefix:
+            self.prefix = datetime.now().strftime('%y%m%d-%H%M')
+        else:
+            self.prefix = ''
+
         self.parameter_command_executor = ParameterCommandExecutor(self)
+        self.results = {}
 
     @classmethod
     def config_from_dicts(cls, reporter_config, analysis_config, workflow_modules):
@@ -41,12 +177,24 @@ class WorkflowRunner(AbstractModuleCollection):
         done in __init__. This way in the future, we can instantiate
         by providing config file names, retrieving config and parameters
         via a web API, or such.
+        Args:
+            reporter_config : dict
+                configuration of the reporter, for now Confluence reporter
+            analysis_config : dict
+                general analysis configuration
+            workflow_modules : list of tuples
+                the workflow modules to run
         """
         instance = cls()
         # set date and time to report name
-        report_name = reporter_config['report_name'] + '_' + self.prefix[:-1]
+        if instance.use_prefix:
+            report_name = reporter_config['report_name'] + '_' + instance.prefix[:-1]
+        else:
+            report_name = reporter_config['report_name']
         reporter_config['report_name'] = report_name
 
+        instance.reporter_config = reporter_config
+        instance.analysis_config = analysis_config
         instance._initialize_reporter(reporter_config)
         instance._initialize_analysis(analysis_config, report_name)
         instance.workflow_modules = workflow_modules
@@ -59,7 +207,10 @@ class WorkflowRunner(AbstractModuleCollection):
         # create analysis result directory
         self.result_folder = os.path.join(
             analysis_config.pop('result_location'), report_name)
-        os.mkdir(self.result_folder)
+        try:
+            os.mkdir(self.result_folder)
+        except:
+            pass
 
         self.autopicasso = AutoPicasso(
             self.result_folder, analysis_config)
@@ -72,12 +223,19 @@ class WorkflowRunner(AbstractModuleCollection):
         if init_kwargs := reporter_config.get('ConfluenceReporter'):
             self.confluencereporter = ConfluenceReporter(**init_kwargs)
 
-    def run(self):
+    def run(self, contd=False):
+        """
+        Args:
+            contd : bool
+                set this True after loading results from file and continuing with
+                after the last previously executed module
+        """
         # first, check whether all modules are actually implemented
         available_modules = members = inspect.getmembers(AbstractModuleCollection)
         availbable_modules = [
             name for name, _ in available_modules
             if inspect.ismethod(_) or inspect.isfunction(_)]
+        available_modules.append('manual')
         logger.debug(f'Available modules: {str(available_modules)}')
         for module_name, module_parameters in self.workflow_modules:
             if module_name not in available_modules:
@@ -85,6 +243,10 @@ class WorkflowRunner(AbstractModuleCollection):
 
         # now, run the modules
         for module_name, module_parameters in self.workflow_modules:
+            if module_name == 'manual':
+                # break here, this is a manual step
+                # check whether the manual step has been done
+                raise NotImplementedError('Think about what to do here...')
             module_fun = getattr(self, module_name)
             logger.debug(f'Running module {module_name}.')
             # all modules are called with one dict as argument
@@ -100,29 +262,66 @@ class WorkflowRunner(AbstractModuleCollection):
         """
         return os.path.join(self.savedir, self.prefix + filename)
 
+    def save(self, dirn='.'):
+        """Save the current results into 'WorkflowRunnerResults.yaml' in the
+        given directory.
+        Args:
+            dirn : str
+                the directory to save into
+        """
+        fn = os.path.join(dirn, 'WorkflowRunnerResults.yaml')
+        data = {
+            'results': self.results,
+            'reporter_config': self.reporter_config,
+            'analysis_config': self.analysis_config,
+            'workflow_modules': self.workflow_modules
+        }
+        with open(fn, 'w') as f:
+            yaml.dump(self.results, f)
+
+    @classmethod
+    def load(cls, dirn='.'):
+        """Load the results from a "WorkflowRunnerResults.yaml" file.
+        Args:
+            dirn : str
+                the directory to load from
+        """
+        fn = os.path.join(dirn, 'WorkflowRunnerResults.yaml')
+        with open(fn, 'w') as f:
+            data = yaml.loads(f)
+        instance = cls()
+        instance.results = data['results']
+        instance.reporter_config = data['reporter_config']
+        instance.analysis_config = data['analysis_config']
+        instance.workflow_modules = data['workflow_modules']
+        report_name = instance.reporter_config['report_nape']
+        instance._initialize_analysis(instance.analysis_config, report_name)
+        instance._initialize_reporter(instance.reporter_config)
+        return instance
+        
     #################################################################################
     #### MODULES
     #################################################################################
 
     def load(self, parameters):
-        parameters, self.results_load = self.autopicasso.load(parameters)
-        self.confluencereporter.load(parameters, self.results_load)
+        parameters, self.results['load'] = self.autopicasso.load(parameters)
+        self.confluencereporter.load(parameters, self.results['load'])
         logger.debug('Loaded DNA-PAINT image data.')
 
     def identify(self, parameters):
-        parameters, self.results_identify = self.autopicasso.identify(parameters)
-        self.confluencereporter.identify(parameters, self.results_identify)
+        parameters, self.results['identify'] = self.autopicasso.identify(parameters)
+        self.confluencereporter.identify(parameters, self.results['identify'])
         logger.debug('Identified spots.')
 
     def localize(self, parameters):
-        parameters, self.results_localize = self.autopicasso.localize(parameters)
-        self.confluencereporter.localize(parameters, self.results_localize)
+        parameters, self.results['localize'] = self.autopicasso.localize(parameters)
+        self.confluencereporter.localize(parameters, self.results['localize'])
         logger.debug('Localized spots')
 
     def undrift_rcc(self, parameters):
         try:
-            parameters, self.results_undrift_rcc = self.autopicasso.undrift_rcc(parameters)
-            self.confluencereporter.undrift_rcc(parameters, self.results_undrift_rcc)
+            parameters, self.results['undrift_rcc'] = self.autopicasso.undrift_rcc(parameters)
+            self.confluencereporter.undrift_rcc(parameters, self.results['undrift_rcc'])
             logger.debug('undrifted dataset')
         except UndriftError:
             max_segmentation = pars_undrift['segmentation']
@@ -138,8 +337,8 @@ class WorkflowRunner(AbstractModuleCollection):
             logger.error('Error in dataset undrifting')
 
     def describe(self, parameters):
-        parameters, self.results_describe = self.autopicasso.describe(parameters)
-        self.confluencereporter.describe(parameters, self.results_describe)
+        parameters, self.results['describe'] = self.autopicasso.describe(parameters)
+        self.confluencereporter.describe(parameters, self.results['describe'])
         logger.debug('Described dataset.')
 
     def save(self, parameters):
