@@ -65,7 +65,10 @@ workflow_modules_sgl = [
         
         }
     ),
-    ('manual', {}),
+    ('manual', {
+        'prompt': 'Please manually undrift.',
+        'filename': 'locs_undrift.hdf5',
+        }),
     # ('segmentation', {
     #     'method': 'brightfield',
     #     'parameters': {

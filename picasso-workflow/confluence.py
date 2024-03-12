@@ -36,7 +36,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             except KeyError:
                 self.report_page_name = report_name + '_{:02d}'.format(i)
 
-    def load_dataset(self, pars_load, results_load):
+    def load_dataset(self, i, pars_load, results_load):
         """Describes the loading
         Args:
             localize_params : dict
@@ -77,7 +77,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(sample_mov_res['filename'])[1])
         return
 
-    def identify(self, pars_identify, results_identify):
+    def identify(self, i, pars_identify, results_identify):
         """Describes the identify step
         Args:
             localize_params : dict
@@ -116,7 +116,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_name, self.report_page_id,
                 os.path.split(res['filename'])[1])
 
-    def localize(self, pars_localize, results_localize):
+    def localize(self, i, pars_localize, results_localize):
         """Describes the Localize section of picasso
         Args:
             localize_params : dict
@@ -142,7 +142,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_name, self.report_page_id,
                 os.path.split(res['filename'])[1])
 
-    def undrift_rcc(self, pars_undrift, res_undrift):
+    def undrift_rcc(self, i, pars_undrift, res_undrift):
         """Describes the Localize section of picasso
         Args:
             localize_params : dict
@@ -172,7 +172,21 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_name, self.report_page_id,
                 os.path.split(driftimg_fn)[1])
 
-    def describe(self, pars_describe, res_describe):
+    def manual(self, i, parameters, results):
+        """
+        """
+        logger.debug('Reporting manual step')
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Manual step</strong></p>
+        <ul><li>prompt: {parameters.get('prompt')}</li>
+        <ul><li>filename: {parameters.get('filename')}</li>
+        <ul><li>file present: {results.get('success')}</li>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text)
+
+    def describe(self, i, pars_describe, res_describe):
         logger.debug('Reporting dataset description.')
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>

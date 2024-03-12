@@ -16,7 +16,7 @@ from scipy.signal import find_peaks
 import matplotlib.pyplot as plt
 import logging
 
-from picasso_workflow.util import AbstractModuleCollection
+from picasso_workflow.util import AbstractModuleCollection, get_caller_name
 
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,8 @@ class AutoPicasso(AbstractModuleCollection):
     #### MODULES
     #################################################################################
 
-    def load_dataset(self, parameters):
+    @module_decorator
+    def load_dataset(self, i, parameters, results):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
         The data is saved in
             self.movie
@@ -70,13 +71,7 @@ class AutoPicasso(AbstractModuleCollection):
             results : dict
                 the analysis results
         """
-        # create results folder
-        method_name = sys._getframe().f_code.co_name
-        module_result_dir = os.path.join(self.results_folder, method_name)
-        os.mkdir(module_result_dir)
-
-        results = {}
-        results['picasso version'] = picassoversion
+        results['picasso version'] = picassoversion,
         t00 = time.time()
         self.movie, self.info = io.load_movie(parameters['filename'])
         results['movie.shape'] = self.movie.shape
@@ -197,7 +192,8 @@ class AutoPicasso(AbstractModuleCollection):
         fig.savefig(results['filename'])
         return results
 
-    def identify(self, parameters):
+    @module_decorator
+    def identify(self, i, parameters, results):
         """Identifies localizations in a loaded dataset.
         The data is saved in
             self.identifications
@@ -219,13 +215,7 @@ class AutoPicasso(AbstractModuleCollection):
             results : dict
                 the analysis results
         """
-        # create results folder
-        method_name = sys._getframe().f_code.co_name
-        module_result_dir = os.path.join(self.results_folder, method_name)
-        os.mkdir(module_result_dir)
-
         t00 = time.time()
-        results = {}
 
         # auto-detect net grad if required:
         if (autograd_pars := parameters.get('auto_netgrad')) is not None:
@@ -270,7 +260,8 @@ class AutoPicasso(AbstractModuleCollection):
         plt.close(fig)
         return results
 
-    def localize(self, parameters):
+    @module_decorator
+    def localize(self, i, parameters, results):
         """Localizes Spots previously identified.
         The data is saved in
             self.locs
@@ -293,12 +284,6 @@ class AutoPicasso(AbstractModuleCollection):
             results : dict
                 the analysis results
         """
-        # create results folder
-        method_name = sys._getframe().f_code.co_name
-        module_result_dir = os.path.join(self.results_folder, method_name)
-        os.mkdir(module_result_dir)
-
-        results = {}
         t00 = time.time()
         em = self.analysis_config['camera_info']["gain"] > 1
         spots = localize.get_spots(
@@ -389,15 +374,10 @@ class AutoPicasso(AbstractModuleCollection):
         plt.close(fig)
         return results
 
-    def undrift_rcc(self, parameters):
+    @module_decorator
+    def undrift_rcc(self, i, parameters, results):
         """Undrifts localized data using redundant cross correlation.
         """
-        # create results folder
-        method_name = sys._getframe().f_code.co_name
-        module_result_dir = os.path.join(self.results_folder, method_name)
-        os.mkdir(module_result_dir)
-
-        results = {}
         t00 = time.time()
 
         seg_init = parameters['segmentation']
@@ -408,6 +388,7 @@ class AutoPicasso(AbstractModuleCollection):
                 self.drift, self.locs = postprocess.undrift(
                     self.locs, self.info, segmentation=parameters['segmentation'],
                     display=False)
+                results['success'] = True
                 break
             except ValueError:
                 parameters['segmentation'] = 2 * parameters['segmentation']
@@ -415,7 +396,14 @@ class AutoPicasso(AbstractModuleCollection):
                 results['message'] = f'Initial Segmentation of {seg_init} was too low.'
         else:  # did not work until the end
             logger.error(f'RCC failed up to segmentation {parameters['segmentation']}. Aborting.')
-            raise UndriftError()
+            max_segmentation = parameters['segmentation']
+            # initial segmentation
+            parameters['segmentation'] = int(
+                parameters['segmentation'] / 2**parameters['max_iter_segmentations'])
+            results['message'] = f'''
+                    Undrifting did not work in {parameters['max_iter_segmentations']} iterations
+                    up to a segmentation of {max_segmentation}.'''
+            results['success'] = False
 
         parameters['dimensions'] = ['x', 'y']
 
@@ -452,15 +440,46 @@ class AutoPicasso(AbstractModuleCollection):
         fig.savefig(filename)
         plt.close(fig)
 
-    def describe(self, parameters):
-        results = {}
+    @module_decorator
+    def manual(self, i, parameters, results):
+        """Handles a manual step: if the files required are not
+        present, prompt the user to provide them. if they are, move
+        to the next step.
+        Args:
+            i : int
+                the index of the module 
+            parameters: dict
+                with required keys:
+                    prompt : str
+                        the user prompt
+                    filename : str
+                        the file the user should provide.
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        filepath = os.path.join(module_result_dir, parameters['filename'])
+        if os.path.exists(filepath):
+            results['filepath'] = filepath
+            results['success'] = True
+        else:
+            msg = 'This is a manual step. Please provide input. '
+            msg += parameters['prompt']
+            msg += f' The resulting file should be {filepath}.'
+            logger.debug(msg)
+            print(msg)
+            results['success'] = False
+            raise ManualInputLackingError(f'{filepath} missing.')
+        return parameters, results
+
+    @module_decorator
+    def describe(self, i, parameters, results):
         for meth, meth_pars in parameters['methods'].items():
             if meth.lower() == 'nena':
                 res, best_vals = postprocess.nena(self.locs, self.info)
                 results['nena'] = {'res': res, 'best_vals': best_vals}
             else:
-                raise NotImplementedError('Description method ' + meth + ' not implemented.')
-
+                raise NotImplementedError(f'Description method {meth} not implemented.')
         return parameters, results
 
     def save_locs(self, filename):
@@ -488,6 +507,29 @@ class AutoPicasso(AbstractModuleCollection):
         dt = np.round(time.time() - t00, 2)
         results_save = {'duration': dt}
         return results_save
+
+
+class ManualInputLackingError(Exception):
+    pass
+
+
+def module_decorator(method):
+    def module_wrapper(self, *args, **kwargs):
+        # create the results direcotry
+        method_name = get_caller_name(2)
+        module_result_dir = os.path.join(self.results_folder, f'{i:02d}_' + method_name)
+        try:
+            os.mkdir(module_result_dir)
+        except:
+            pass
+
+        results = {
+            'folder': module_result_dir,
+        }
+        kwargs['results'] = results
+        parameters, results = method(self, *args, **kwargs)
+        return parameters, results
+    return module_wrapper
 
 
 def get_ap():

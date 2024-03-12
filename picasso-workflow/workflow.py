@@ -92,7 +92,7 @@ class AggregationWorkflowRunner():
         report_name = self.reporter_config['report_name']
         reporter_config = self.reporter_config.copy()
         for i, (parameter_set, tag) in enuemrate(zip(individual_parametersets, tags)):
-            reporter_config['report_name'] = report_name + f'_{i}_{tag}'
+            reporter_config['report_name'] = report_name + f'_{i:02d}_{tag}'
             if self.continue_workflow:
                 try:
                     wr = WorkflowRunner.load(os.path.join(self.result_folder, reporter_config['report_name']))
@@ -235,23 +235,17 @@ class WorkflowRunner(AbstractModuleCollection):
         availbable_modules = [
             name for name, _ in available_modules
             if inspect.ismethod(_) or inspect.isfunction(_)]
-        available_modules.append('manual')
         logger.debug(f'Available modules: {str(available_modules)}')
         for module_name, module_parameters in self.workflow_modules:
             if module_name not in available_modules:
                 raise NotImplementedError(f'Requested module {module_name} not implemented.')
 
         # now, run the modules
-        for module_name, module_parameters in self.workflow_modules:
-            if module_name == 'manual':
-                # break here, this is a manual step
-                # check whether the manual step has been done
-                raise NotImplementedError('Think about what to do here...')
-            module_fun = getattr(self, module_name)
-            logger.debug(f'Running module {module_name}.')
-            # all modules are called with one dict as argument
+        for i, (module_name, module_parameters) in enumerate(self.workflow_modules):
+            # all modules are called with iteration and parameter dict as arguments
             module_parameters = self.parameter_command_executor.run(module_parameters)
-            module_fun(module_parameters)
+            self.call_module(module_name, i, module_parameters)
+            self.save()
 
     #################################################################################
     #### UTIL FUNCTIONS
@@ -269,14 +263,14 @@ class WorkflowRunner(AbstractModuleCollection):
             dirn : str
                 the directory to save into
         """
-        fn = os.path.join(dirn, 'WorkflowRunnerResults.yaml')
+        filepath = os.path.join(dirn, 'WorkflowRunnerResults.yaml')
         data = {
             'results': self.results,
             'reporter_config': self.reporter_config,
             'analysis_config': self.analysis_config,
             'workflow_modules': self.workflow_modules
         }
-        with open(fn, 'w') as f:
+        with open(filepath, 'w') as f:
             yaml.dump(self.results, f)
 
     @classmethod
@@ -286,8 +280,8 @@ class WorkflowRunner(AbstractModuleCollection):
             dirn : str
                 the directory to load from
         """
-        fn = os.path.join(dirn, 'WorkflowRunnerResults.yaml')
-        with open(fn, 'w') as f:
+        filepath = os.path.join(dirn, 'WorkflowRunnerResults.yaml')
+        with open(filepath, 'w') as f:
             data = yaml.loads(f)
         instance = cls()
         instance.results = data['results']
@@ -303,47 +297,30 @@ class WorkflowRunner(AbstractModuleCollection):
     #### MODULES
     #################################################################################
 
-    def load(self, parameters):
-        parameters, self.results['load'] = self.autopicasso.load(parameters)
-        self.confluencereporter.load(parameters, self.results['load'])
-        logger.debug('Loaded DNA-PAINT image data.')
+    def call_module(self, fun_name, i, parameters):
+        """At the level of the WorkflowRunner, all modules are processed the same way:
+        first, the analysis is performed (by calling the module in autopicasso),
+        and then the results are reported (by calling the module in confluencereporter).
+        Therefore, this unified call_module function can do the job, instead
+        of writing separate methods here for all modules.
 
-    def identify(self, parameters):
-        parameters, self.results['identify'] = self.autopicasso.identify(parameters)
-        self.confluencereporter.identify(parameters, self.results['identify'])
-        logger.debug('Identified spots.')
-
-    def localize(self, parameters):
-        parameters, self.results['localize'] = self.autopicasso.localize(parameters)
-        self.confluencereporter.localize(parameters, self.results['localize'])
-        logger.debug('Localized spots')
-
-    def undrift_rcc(self, parameters):
+        Args:
+            fun_name : str
+                the function (module) name.
+            i : int
+                the index of the module in the workflow
+            parameters : dict
+                the module parameters
+        """
+        key = f'{i:02d}_{fun_name}'
+        logger.debug(f'Working on {key}')
+        fun_ap = getattr(self.autopicasso, fun_name)
         try:
-            parameters, self.results['undrift_rcc'] = self.autopicasso.undrift_rcc(parameters)
-            self.confluencereporter.undrift_rcc(parameters, self.results['undrift_rcc'])
-            logger.debug('undrifted dataset')
-        except UndriftError:
-            max_segmentation = pars_undrift['segmentation']
-            # initial segmentation
-            pars_undrift['segmentation'] = int(
-                pars_undrift['segmentation'] / 2**pars_undrift['max_iter_segmentations'])
-            res_undrift = {
-                'message': f'''
-                    Undrifting did not work in {pars_undrift['max_iter_segmentations']} iterations
-                    up to a segmentation of {max_segmentation}.''',
-            }
-            self.confluencereporter.undrift_rcc(pars_undrift, res_undrift)
-            logger.error('Error in dataset undrifting')
-
-    def describe(self, parameters):
-        parameters, self.results['describe'] = self.autopicasso.describe(parameters)
-        self.confluencereporter.describe(parameters, self.results['describe'])
-        logger.debug('Described dataset.')
-
-    def save(self, parameters):
-        self.autopicasso.save_locs()
-        self.confluencereporter.save()
+            parameters, self.results[key] = fun_ap(i, parameters)
+        except AutoPicassoError as e:
+            logger.error(e)
+        fun_cr = getattr(self.confluencereporter, fun_name)
+        fun_cr(i, parameters, self.results[key])
 
 
 def get_ra():

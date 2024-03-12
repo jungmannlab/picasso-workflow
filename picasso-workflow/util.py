@@ -7,6 +7,7 @@ Description: Utility functions for the package
 """
 import abc
 import logging
+import inspect
 
 
 logger = logging.getLogger(__name__)
@@ -21,32 +22,34 @@ class AbstractModuleCollection(abc.ABC):
     def __init__(self):
         pass
 
-    @classmethod
+    @abc.abstractmethod
     def load_dataset(self):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
         """
         pass
 
-    @classmethod
+    @abc.abstractmethod
     def identify(self):
         """Identifies localizations in a loaded dataset.
         """
         pass
 
-    @classmethod
+    @abc.abstractmethod
     def localize(self):
         """Localizes Spots previously identified.
         """
         pass
 
-    @classmethod
+    @abc.abstractmethod
     def undrift_rcc(self):
         """Undrifts localized data using redundant cross correlation.
         """
        pass
 
-    @classmethod
-    def undrift(self):
+    @abc.abstractmethod
+    def manual(self):
+        """Describes a manual step, for which the workflow is paused.
+        """
         pass
 
 
@@ -74,6 +77,7 @@ class ParameterTiler():
             map_dict : dict
                 a dictionary to map values using the $map command
         """
+        logger.debug('Initializeing ParameterTiler')
         self.tile_entries = tile_entries
         self.ntiles = tile_entries[tile_entries.keys()[0]]
         self.map_dict = map_dict
@@ -92,6 +96,7 @@ class ParameterTiler():
                 returned (supposed to be tags to use for naming),
                 otherwise list of empty strings
         """
+        logger.debug('Running ParameterTiler.')
         result_parameters = []
         for i in range(self.ntiles):
             # set the tile parameters according to the iteration
@@ -131,6 +136,7 @@ class ParameterCommandExecutor():
             parameters : dict
                 the parameters for a module
         """
+        logger.debug('Running ParameterCommandExecutor')
         return scan_dict(parameters)
 
     def scan_dict(self, d):
@@ -162,6 +168,7 @@ class ParameterCommandExecutor():
                 logger.debug(f'Prior result is {res}.')
             elif t[0] == '$map':
                 res = self.map[t[1]]
+                logger.debug(f'Mapping {t[1]}: {res}')
             # elif add more parameter commands
             return res
         else:
@@ -200,6 +207,7 @@ class ParameterCommandExecutor():
                     root_att = [self.get_attribute(list_att, att_name) for list_att in root_att]
                 else:
                     root_att = self.get_attribute(root_att, att_name)
+        logger.debug(f'Prior Result of {locator} is {root_att}')
         return root_att
 
     def get_attribute(self, root_att, att_name):
@@ -223,3 +231,26 @@ def correct_path_separators(file_path):
     path_components = re.split(r'[\\/]', file_path)
     file_path = os.path.join(*path_components)
     return file_path
+
+def get_caller_name(levels_back=1):
+    """Get the name of a function in the trackeback (the caller,
+    or the caller of the caller, ..).
+    Args:
+        levels_back : int
+            the number of levels in the trace back.
+            e.g. if you want a function name within that function,
+            call: get_caller_name(1)
+            if you want a the name of the caller, use
+            get_caller_name(2)
+    Returns:
+        function_name : str
+            the function name
+    """
+    # Get the current frame
+    frame = inspect.currentframe()
+    # Get the frames of the caller function enough levels back
+    for i in range(levels_back):
+        frame = frame.f_back
+    # Get the name of that function
+    function_name = frame.f_code.co_name
+    return function_name
