@@ -6,9 +6,9 @@ Initial Date: March 7, 2024
 Description: This module implements functionality for processing non-DNA-PAINT
 images.
 """
-from moviepy.editor import ImageSequenceClip
 import logging
-
+from moviepy.editor import ImageSequenceClip
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,6 @@ def adjust_contrast(img, min_quantile, max_quantile):
     return np.rollaxis(np.array([img, img, img], dtype=np.uint8), 0, 3)
 
 
-
 def save_movie(fname, movie, min_quantile=0, max_quantile=1, fps=1):
     """Save a grayscale movie to file.
     Args:
@@ -61,4 +60,4 @@ def save_movie(fname, movie, min_quantile=0, max_quantile=1, fps=1):
 
     # Create movie file
     clip = ImageSequenceClip(adjusted_images, fps=fps)
-    clip.write_videofile(fname, verbose=False)#, codec='mpeg4')
+    clip.write_videofile(fname, verbose=False)  # , codec='mpeg4')

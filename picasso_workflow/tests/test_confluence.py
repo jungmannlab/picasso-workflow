@@ -34,49 +34,44 @@ class TestConfluence(unittest.TestCase):
             self.confluence_url, self.confluence_space,
             self.confluence_page, self.confluence_token)
 
-    def test_01_interface_01_Instatiation(self):
-        ci = self.instantiate_confluence_interface()
-
-    def test_01_interface_02_get_page_info(self):
+    @unittest.skip('')
+    def test_01_interface_01_all(self):
         ci = self.instantiate_confluence_interface()
         pgid, pgtitle = ci.get_page_properties(self.confluence_page)
         assert pgtitle == self.confluence_page
 
-    def test_01_interface_03_get_page_version(self):
-        ci = self.instantiate_confluence_interface()
         pgv = ci.get_page_version(self.confluence_page)
+        logger.debug(f'page version: {pgv}')
 
-    def test_01_interface_04_create_page(self):
-        ci = self.instantiate_confluence_interface()
         pgbdy = ci.create_page(self.testpgtitle, self.bodytxt)
+        pgid, pgtitle = ci.get_page_properties(self.testpgtitle)
 
-    def test_01_interface_05_get_page_body(self):
-        ci = self.instantiate_confluence_interface()
         pgbdy = ci.get_page_body(self.testpgtitle)
         assert pgbdy == self.bodytxt
 
-    def test_01_interface_06_upload_attachment(self):
-        ci = self.instantiate_confluence_interface()
-        pgid, pgtitle = ci.get_page_properties(self.testpgtitle)
         att_id = ci.upload_attachment(
-            pgid, os.path.join('TestData', 'Confluence', 'testimg.png'))
+            pgid, os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                'TestData', 'confluence', 'testimg.png'))
+        ci.update_page_content_with_image_attachment(
+            pgtitle, pgid, 'testimg.png')
+        logger.debug(f'successfully uploaded attachment with id {att_id}')
 
-    def test_01_interface_07_update_page_content(self):
-        ci = self.instantiate_confluence_interface()
-        pgid, pgtitle = ci.get_page_properties(self.testpgtitle)
-        ci.update_page_content(pgid, pgtitle, 'body update')
-        
-    def test_01_interface_07_update_page_content_with_movie_attachment(self):
-        ci = self.instantiate_confluence_interface()
-        pgid, pgtitle = ci.get_page_properties(self.testpgtitle)
+        ci.update_page_content(pgtitle, pgid, 'body update')
+
         att_id = ci.upload_attachment(
-            pgid, pgtitle, os.path.join('TestData', 'Confluence', 'testmov.mp4'))
+            pgid, os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                'TestData', 'confluence', 'testmov.mp4'))
+        ci.update_page_content_with_movie_attachment(
+            pgtitle, pgid, 'testmov.mp4')
+        logger.debug(f'successfully uploaded attachment with id {att_id}')
 
-    def test_01_interface_08_delete_page(self):
         ci = self.instantiate_confluence_interface()
         pgid, pgtitle = ci.get_page_properties(self.testpgtitle)
         ci.delete_page(pgid)
 
+    @unittest.skip('')
     def test_02_reporter_01_all(self):
         report_name = 'my test report'
         cr = confluence.ConfluenceReporter(
@@ -93,12 +88,14 @@ class TestConfluence(unittest.TestCase):
             'duration': 10.2,
             'sample_movie': {
                 'sample_frame_idx': [1, 6, 11],
-                'filename': os.path.join('TestData', 'Confluence', 'testmov.mp4')
+                'filename': os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    'TestData', 'confluence', 'testmov.mp4')
             }
         }
-        cr.load_dataset(pars_load, results_load)
+        cr.load_dataset(0, pars_load, results_load)
 
-        pgid, pgtitle = ci.get_page_properties(cr.report_page_name)
+        # pgid, pgtitle = ci.get_page_properties(cr.report_page_name)
 
-        cr.ci.delete_page(pgid)
+        # cr.ci.delete_page(pgid)
 

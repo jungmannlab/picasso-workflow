@@ -8,6 +8,9 @@ Description: Utility functions for the package
 import abc
 import logging
 import inspect
+import re
+import os
+import copy
 
 
 logger = logging.getLogger(__name__)
@@ -44,7 +47,7 @@ class AbstractModuleCollection(abc.ABC):
     def undrift_rcc(self):
         """Undrifts localized data using redundant cross correlation.
         """
-       pass
+        pass
 
     @abc.abstractmethod
     def manual(self):
@@ -71,15 +74,19 @@ class ParameterTiler():
                 have identical length. One parameter set will be
                 generated for each item in the list. The keys should
                 be used in a $map command in the parameters in 'run'.
+                In addtition to the mapped variables, tile_entries
+                may comprise '$tags', which are keyword tags for the
+                list of parameter sets.
                 for example:
                     tile_entries = {'file_name': ['a1.tiff', 'a2.tiff']}
                     parameters = {'load': {'filename': ('$map', 'file_name')}}
             map_dict : dict
                 a dictionary to map values using the $map command
+                the tile_entries will be added to the map_dict
         """
         logger.debug('Initializeing ParameterTiler')
         self.tile_entries = tile_entries
-        self.ntiles = tile_entries[tile_entries.keys()[0]]
+        self.ntiles = len(list(tile_entries.values())[0])
         self.map_dict = map_dict
         self.parent_object = parent_object
 
@@ -100,11 +107,13 @@ class ParameterTiler():
         result_parameters = []
         for i in range(self.ntiles):
             # set the tile parameters according to the iteration
-            for k, v in self.tile_entries:
+            for k, v in self.tile_entries.items():
                 self.map_dict[k] = v[i]
+            logger.debug(f'Map for tile {i}: {self.map_dict}')
             pce = ParameterCommandExecutor(self.parent_object, self.map_dict)
-            result_parameters.append(pce.run(parameters))
-        if not tags := self.map_dict.get('$tags'):
+            logger.debug(f'running with parameters {parameters}')
+            result_parameters.append(pce.run(copy.deepcopy(parameters)))
+        if (tags := self.tile_entries.get('$tags')) is None:
             tags = [''] * len(result_parameters)
 
         return result_parameters, tags
@@ -137,26 +146,26 @@ class ParameterCommandExecutor():
                 the parameters for a module
         """
         logger.debug('Running ParameterCommandExecutor')
-        return scan_dict(parameters)
+        return self.scan_dict(parameters)
 
     def scan_dict(self, d):
         for k, v in d.items():
             if isinstance(v, dict):
-                d[k] = scan_dict(v)
+                d[k] = self.scan_dict(v)
             elif isinstance(v, list):
-                d[k] = scan_list(v)
+                d[k] = self.scan_list(v)
             elif isinstance(v, tuple):
-                d[k] = scan_tuple(v)
+                d[k] = self.scan_tuple(v)
         return d
 
     def scan_list(self, l):
         for i, it in enumerate(l):
             if isinstance(it, dict):
-                l[i] = scan_dict(it)
+                l[i] = self.scan_dict(it)
             elif isinstance(it, list):
-                l[i] = scan_list(it)
+                l[i] = self.scan_list(it)
             elif isinstance(it, tuple):
-                l[i] = scan_tuple(it)
+                l[i] = self.scan_tuple(it)
         return l
 
     def scan_tuple(self, t):
@@ -176,11 +185,11 @@ class ParameterCommandExecutor():
             tout = []
             for i, it in enumerate(t):
                 if isinstance(it, dict):
-                    tout[i] = scan_dict(it)
+                    tout[i] = self.scan_dict(it)
                 elif isinstance(it, list):
-                    tout[i] = scan_list(it)
+                    tout[i] = self.scan_list(it)
                 elif isinstance(it, tuple):
-                    tout[i] = scan_tuple(it)
+                    tout[i] = self.scan_tuple(it)
             return tuple(tout)
 
 
@@ -191,8 +200,8 @@ class ParameterCommandExecutor():
             locator : str
                 the chain of attributes for finding the prior result, comma separated.
                 They all need to be obtainable with getattr, starting from this class
-                e.g. "results_load, sample_movie, sample_frame_idx"
-                obtains self.results_load['sample_movie']['sample_frame_idx']
+                e.g. "results, load, sample_movie, sample_frame_idx"
+                obtains self.results['load']['sample_movie']['sample_frame_idx']
         Returns:
             the last attribute in the chain.
         """
@@ -202,7 +211,7 @@ class ParameterCommandExecutor():
                 # root_att is a list, and all items should be equally processed
                 # in the next rounds
                 pass
-            else
+            else:
                 if isinstance(root_att, list):
                     root_att = [self.get_attribute(list_att, att_name) for list_att in root_att]
                 else:
@@ -211,25 +220,31 @@ class ParameterCommandExecutor():
         return root_att
 
     def get_attribute(self, root_att, att_name):
-        try:
-            att = getattr(root_att, att_name.strip())
-        except AttributeError as e:
-            logger.error(f'Could not get attribute {att_name} from {str(root_att)}.')
-            raise e
+        if isinstance(root_att, dict):
+            att = root_att.get(att_name.strip())
+        elif isinstance(root_att, object):
+            try:
+                att = getattr(root_att, att_name.strip())
+            except AttributeError as e:
+                logger.error(f'Could not get attribute {att_name} from {str(root_att)}.')
+                raise e
+        # logger.debug(f'From {root_att}, extracting "{att_name}": {att}')
         return att
 
 
 def correct_path_separators(file_path):
-	"""Ensure correct path separators ('/' or '\') in a file path.
-	Args:
-		file_path : str
-			input file path with any of the two separators
-	Returns:
-		file_path : str
-			the file path with separators according to operating system
-	"""
+    """Ensure correct path separators ('/' or '\') in a file path.
+    Args:
+        file_path : str
+            input file path with any of the two separators
+    Returns:
+        file_path : str
+            the file path with separators according to operating system
+    """
     path_components = re.split(r'[\\/]', file_path)
     file_path = os.path.join(*path_components)
+    if path_components[0] == '':
+        file_path = os.sep + file_path
     return file_path
 
 def get_caller_name(levels_back=1):

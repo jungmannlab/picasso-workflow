@@ -3,18 +3,20 @@
 Module Name: workflow.py
 Author: Heinrich Grabmayr
 Initial Date: March 7, 2024
-Description: This module implements the class ReportingAnalyzer, which orchestrates
-    picasso analysis and confluence reporting
+Description: This module implements the class ReportingAnalyzer,
+    which orchestrates picasso analysis and confluence reporting
 """
 import os
-import re
 from datetime import datetime
 import logging
 import inspect
+import yaml
 
-from picasso_workflow.analyse import AutoPicasso
+from picasso_workflow.analyse import AutoPicasso, AutoPicassoError
 from picasso_workflow.confluence import ConfluenceReporter
-from picasso_workflow.util import AbstractModuleCollection, correct_path_separators, ParameterCommandExecutor
+from picasso_workflow.util import (
+    AbstractModuleCollection, correct_path_separators,
+    ParameterCommandExecutor, ParameterTiler)
 
 
 logger = logging.getLogger(__name__)
@@ -26,15 +28,19 @@ class AggregationWorkflowRunner():
     are to be evaluated, and then aggregated. This is what this
     class aims to do
     """
+
     def __init__(self, use_prefix=True):
         if use_prefix:
             self.prefix = datetime.now().strftime('%y%m%d-%H%M')
         else:
             self.prefix = ''
         self.continue_workflow = False
+        self.sgl_workflow_locations = []
 
     @classmethod
-    def config_from_dicts(cls, reporter_config, analysis_config, aggregation_workflow):
+    def config_from_dicts(
+            cls, reporter_config, analysis_config, aggregation_workflow,
+            use_prefix=True):
         """To keep flexibility for initialization methods, this is not
         done in __init__. This way in the future, we can instantiate
         by providing config file names, retrieving config and parameters
@@ -50,16 +56,23 @@ class AggregationWorkflowRunner():
                 single_dataset_tileparameters : dict
                     describes the parameters that need to be adjusted for every
                     individual single data set analysis
-                single_dataset_modules : list of tuples (workflow_modules of WorkflowRunner)
+                single_dataset_modules : list of tuples
+                    (workflow_modules of WorkflowRunner)
                     describes the modules run for the analysis of the
                     individual datasets
-                aggregation_modules : list of tuples (workflow_modules of WorkflowRunner)
+                aggregation_modules : list of tuples
+                    (workflow_modules of WorkflowRunner)
                     describes the modules run for the aggregation analysis
                     (e.g. labeling efficiency, RESI, ..)
+            use_prefix : bool
+                whether to add the date-time tag to the results folder.
         """
-        if sgltilepars := aggregation_workflow.get('single_dataset_tileparameters') == None:
-            raise KeyError('aggregation_workflow missing "single_dataset_tileparameters".')
-        instance = cls()
+        if (sgltilepars := aggregation_workflow.get(
+                'single_dataset_tileparameters')) is None:
+            raise KeyError(
+                '''aggregation_workflow missing
+                "single_dataset_tileparameters".''')
+        instance = cls(use_prefix)
         instance.parameter_tiler = ParameterTiler(instance, sgltilepars)
         instance.all_results = {
             'single_dataset': [None] * instance.parameter_tiler.ntiles,
@@ -68,7 +81,8 @@ class AggregationWorkflowRunner():
         instance.analysis_config = analysis_config
         # set date and time to report name
         if instance.use_prefix:
-            report_name = reporter_config['report_name'] + '_' + instance.prefix[:-1]
+            report_name = (
+                reporter_config['report_name'] + '_' + instance.prefix[:-1])
         else:
             report_name = reporter_config['report_name']
         # reporter_config['report_name'] = report_name
@@ -77,7 +91,7 @@ class AggregationWorkflowRunner():
             analysis_config['result_location'], report_name)
         try:
             os.mkdir(instance.result_folder)
-        except:
+        except FileExistsError:
             pass
 
         instance.aggregation_workflow = aggregation_workflow
@@ -87,44 +101,59 @@ class AggregationWorkflowRunner():
         """individualize the aggregation workflow and run.
         """
         # First, run the individual analysis
-        sgl_ds_workflow_parameters = self.aggregation_workflow['single_dataset_modules']
-        individual_parametersets, tags = self.parameter_tiler.run(sgl_ds_workflow_parameters)
+        sgl_ds_workflow_parameters = self.aggregation_workflow[
+            'single_dataset_modules']
+        individual_parametersets, tags = self.parameter_tiler.run(
+            sgl_ds_workflow_parameters)
         report_name = self.reporter_config['report_name']
-        reporter_config = self.reporter_config.copy()
-        for i, (parameter_set, tag) in enuemrate(zip(individual_parametersets, tags)):
-            reporter_config['report_name'] = report_name + f'_{i:02d}_{tag}'
+        sgl_wkfl_reporter_config = self.reporter_config.copy()
+        sgl_wkfl_analysis_config = self.analysis_config.copy()
+        for i, (parameter_set, tag) in enumerate(
+                zip(individual_parametersets, tags)):
+            sgl_wkfl_reporter_config['report_name'] = report_name + f'_{i:02d}'
+            if tag:
+                sgl_wkfl_reporter_config['report_name'] += f'_{tag}'
+            # sgl_wkfl_analysis_config['result_location'] = os.path.join(
+            #     self.result_folder, sgl_wkfl_reporter_config['report_name'])
             if self.continue_workflow:
                 try:
-                    wr = WorkflowRunner.load(os.path.join(self.result_folder, reporter_config['report_name']))
+                    wr = WorkflowRunner.load(os.path.join(
+                        self.result_folder,
+                        sgl_wkfl_reporter_config['report_name']))
                 except:
                     wr = WorkflowRunner.config_from_dicts(
-                        reporter_config, self.analysis_config.copy(), parameter_set)
+                        sgl_wkfl_reporter_config, sgl_wkfl_analysis_config,
+                        parameter_set, use_prefix=False)
             else:
                 wr = WorkflowRunner.config_from_dicts(
-                    reporter_config, self.analysis_config.copy(), parameter_set)
+                    sgl_wkfl_reporter_config, self.analysis_config.copy(),
+                    parameter_set, use_prefix=False)
             wr.run(contd=self.continue_workflow)
             self.all_results['single_dataset'][i] = wr.results
+            self.sgl_workflow_locations.append(wr.result_folder)
             self.save_results(self.result_folder)
 
         # Then, run the aggregation workflow
         pce = ParameterCommandExecutor(self)
         parameters = pce.run(self.aggregation_workflow['aggregation_modules'])
         reporter_config = self.reporter_config.copy()
-        reporter_config['report_name'] = reporter_config['report_name'] + '_aggregation'
+        reporter_config['report_name'] = (
+            reporter_config['report_name'] + '_aggregation')
         wr = WorkflowRunner.config_from_dicts(
             reporter_config, self.analysis_config, parameters)
         wr.run()
         self.all_results['aggregation'] = wr.results
 
     def save(self, dirn='.'):
-        """Save the current config and results into 'WorkflowRunnerResults.yaml'
-        in the given directory.
+        """Save the current config and results into
+        'WorkflowRunnerResults.yaml' in the given directory.
         Args:
             dirn : str
                 the directory to save into
         """
         fn = os.path.join(dirn, 'WorkflowRunnerResults.yaml')
         data = {
+            'sgl_workflow_locations': self.sgl_workflow_locations,
             'all_results': self.all_results,
             'prefix': self.prefix,
             'reporter_config': self.reporter_config,
@@ -148,22 +177,23 @@ class AggregationWorkflowRunner():
         self.reporter_config = data['reporter_config']
         self.analysis_config = data['analysis_config']
         self.aggregation_workflow = data['aggregation_workflow']
+        self.sgl_workflow_locations = data['sgl_workflow_locations']
         self.continue_workflow = True
 
 
-class WorkflowRunner(AbstractModuleCollection):
+class WorkflowRunner():
     """Runs a workflow, defined as a sequence of modules, which
     are worked on and their results published on Confluence.
-    Inherits AbstractModuleCollection to ensure all implemented 
-    modules are supported. 
 
     Currently supported usage:
     ra, ac, wm = {}, {}, {}
     wr = WorkflowRunner.config_from_dicts(rc, ac, wm)
     wr.run()
     """
+
     def __init__(self, use_prefix=True):
-        if self.use_prefix := use_prefix:
+        self.use_prefix = use_prefix
+        if use_prefix:
             self.prefix = datetime.now().strftime('%y%m%d-%H%M')
         else:
             self.prefix = ''
@@ -172,7 +202,9 @@ class WorkflowRunner(AbstractModuleCollection):
         self.results = {}
 
     @classmethod
-    def config_from_dicts(cls, reporter_config, analysis_config, workflow_modules):
+    def config_from_dicts(
+            cls, reporter_config, analysis_config, workflow_modules,
+            use_prefix=True):
         """To keep flexibility for initialization methods, this is not
         done in __init__. This way in the future, we can instantiate
         by providing config file names, retrieving config and parameters
@@ -184,11 +216,14 @@ class WorkflowRunner(AbstractModuleCollection):
                 general analysis configuration
             workflow_modules : list of tuples
                 the workflow modules to run
+            use_prefix : bool
+                whether to add the date-time tag to the results folder.
         """
-        instance = cls()
+        instance = cls(use_prefix)
         # set date and time to report name
         if instance.use_prefix:
-            report_name = reporter_config['report_name'] + '_' + instance.prefix[:-1]
+            report_name = (
+                reporter_config['report_name'] + '_' + instance.prefix)
         else:
             report_name = reporter_config['report_name']
         reporter_config['report_name'] = report_name
@@ -209,7 +244,7 @@ class WorkflowRunner(AbstractModuleCollection):
             analysis_config.pop('result_location'), report_name)
         try:
             os.mkdir(self.result_folder)
-        except:
+        except FileExistsError:
             pass
 
         self.autopicasso = AutoPicasso(
@@ -219,7 +254,7 @@ class WorkflowRunner(AbstractModuleCollection):
         """Initializes the reporter, documenting the analysis.
         """
         logger.debug('Initializing Reporter.')
-        self.report_name = report_name
+        self.report_name = reporter_config['report_name']
         if init_kwargs := reporter_config.get('ConfluenceReporter'):
             self.confluencereporter = ConfluenceReporter(**init_kwargs)
 
@@ -227,29 +262,33 @@ class WorkflowRunner(AbstractModuleCollection):
         """
         Args:
             contd : bool
-                set this True after loading results from file and continuing with
-                after the last previously executed module
+                set this True after loading results from file and continuing
+                with after the last previously executed module
         """
         # first, check whether all modules are actually implemented
-        available_modules = members = inspect.getmembers(AbstractModuleCollection)
-        availbable_modules = [
+        available_modules = inspect.getmembers(AbstractModuleCollection)
+        available_modules = [
             name for name, _ in available_modules
             if inspect.ismethod(_) or inspect.isfunction(_)]
         logger.debug(f'Available modules: {str(available_modules)}')
         for module_name, module_parameters in self.workflow_modules:
             if module_name not in available_modules:
-                raise NotImplementedError(f'Requested module {module_name} not implemented.')
+                raise NotImplementedError(
+                    f'Requested module {module_name} not implemented.')
 
         # now, run the modules
-        for i, (module_name, module_parameters) in enumerate(self.workflow_modules):
-            # all modules are called with iteration and parameter dict as arguments
-            module_parameters = self.parameter_command_executor.run(module_parameters)
+        for i, (module_name, module_parameters
+                ) in enumerate(self.workflow_modules):
+            # all modules are called with iteration and parameter dict
+            # as arguments
+            module_parameters = self.parameter_command_executor.run(
+                module_parameters)
             self.call_module(module_name, i, module_parameters)
             self.save()
 
-    #################################################################################
-    #### UTIL FUNCTIONS
-    #################################################################################
+    ##########################################################################
+    # UTIL FUNCTIONS
+    ##########################################################################
 
     def get_prefixed_filename(self, filename):
         """
@@ -271,7 +310,7 @@ class WorkflowRunner(AbstractModuleCollection):
             'workflow_modules': self.workflow_modules
         }
         with open(filepath, 'w') as f:
-            yaml.dump(self.results, f)
+            yaml.dump(data, f)
 
     @classmethod
     def load(cls, dirn='.'):
@@ -292,17 +331,19 @@ class WorkflowRunner(AbstractModuleCollection):
         instance._initialize_analysis(instance.analysis_config, report_name)
         instance._initialize_reporter(instance.reporter_config)
         return instance
-        
-    #################################################################################
-    #### MODULES
-    #################################################################################
+
+    ##########################################################################
+    # MODULES
+    ##########################################################################
 
     def call_module(self, fun_name, i, parameters):
-        """At the level of the WorkflowRunner, all modules are processed the same way:
-        first, the analysis is performed (by calling the module in autopicasso),
-        and then the results are reported (by calling the module in confluencereporter).
-        Therefore, this unified call_module function can do the job, instead
-        of writing separate methods here for all modules.
+        """At the level of the WorkflowRunner, all modules are processed the
+        same way:
+        first, the analysis is performed (by calling the module in
+        autopicasso), and then the results are reported (by calling the module
+        in confluencereporter). Therefore, this unified call_module function
+        can do the job, instead of writing separate methods here for all
+        modules.
 
         Args:
             fun_name : str

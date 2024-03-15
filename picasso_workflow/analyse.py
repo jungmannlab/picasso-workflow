@@ -10,33 +10,54 @@ from picasso import __version__ as picassoversion
 import os
 import time
 from concurrent import futures as _futures
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
-from scipy.signal import find_peaks
 import matplotlib.pyplot as plt
 import logging
 
 from picasso_workflow.util import AbstractModuleCollection, get_caller_name
+from picasso_workflow import process_brightfield
 
 
 logger = logging.getLogger(__name__)
+
+
+def module_decorator(method):
+    def module_wrapper(self, i, parameters):
+        # create the results direcotry
+        method_name = get_caller_name(2)
+        module_result_dir = os.path.join(
+            self.results_folder, f'{i:02d}_' + method_name)
+        try:
+            os.mkdir(module_result_dir)
+        except FileExistsError:
+            pass
+
+        results = {
+            'folder': module_result_dir,
+        }
+        parameters, results = method(self, i, parameters, results)
+        return parameters, results
+    return module_wrapper
 
 
 class AutoPicasso(AbstractModuleCollection):
     """A class to automatically evaluate datasets.
     Each module that runs saves their results into a separate folder.
     """
-    self.movie = None
-    self.info = None
-    self.identifications = None
-    self.locs = None
-    self.drift = None
+    movie = None
+    info = None
+    identifications = None
+    locs = None
+    drift = None
 
     def __init__(self, results_folder, analysis_config):
         """
         Args:
             results_folder : str
-                the folder all analysis modules save their respective results to
+                the folder all analysis modules save their respective results
+                to.
             analysis_config : dict
                 the general configuration. necessary items:
                     camera_info : dict
@@ -47,9 +68,9 @@ class AutoPicasso(AbstractModuleCollection):
         self.results_folder = results_folder
         self.analysis_config = analysis_config
 
-    #################################################################################
-    #### MODULES
-    #################################################################################
+    ##########################################################################
+    # MODULES
+    ##########################################################################
 
     @module_decorator
     def load_dataset(self, i, parameters, results):
@@ -79,7 +100,7 @@ class AutoPicasso(AbstractModuleCollection):
         # create sample movie
         if (samplemov_pars := parameters.get('sample_movie')) is not None:
             samplemov_pars['filename'] = os.path.join(
-                module_result_dir, samplemov_pars['filename'])
+                results['folder'], samplemov_pars['filename'])
             res = self._create_sample_movie(**samplemov_pars)
             results['sample_movie'] = res
 
@@ -87,17 +108,17 @@ class AutoPicasso(AbstractModuleCollection):
         results['duration'] = dt
         return parameters, results
 
-    def _create_sample_movie(self, 
-            saveas, n_sample=30, min_quantile=0, max_quantile=.9998, fps=1):
+    def _create_sample_movie(
+            self, filename, n_sample=30, min_quantile=0, max_quantile=.9998,
+            fps=1):
         """Create a subsampled movie of the movie loaded. The movie is saved
         to disk and referenced by filename.
         Args:
-            saveas : str
+            filename : str
                 the file name to save the subsamled movie as (.mp4)
             rest: as in save_movie
         """
         results = {}
-        # frame_numbers = np.random.choice(np.arange(len(self.movie)), n_sample)
         if len(self.movie) < n_sample:
             n_sample = len(self.movie)
 
@@ -106,27 +127,31 @@ class AutoPicasso(AbstractModuleCollection):
         results['sample_frame_idx'] = frame_numbers
 
         subsampled_frames = np.array([self.movie[i] for i in frame_numbers])
-        save_movie(
-            saveas, subsampled_frames,
+        process_brightfield.save_movie(
+            filename, subsampled_frames,
             min_quantile=min_quantile, max_quantile=max_quantile, fps=fps)
-        results['filename'] = fn_movie
+        results['filename'] = filename
         return results
 
-    def _auto_min_netgrad(self, plot_fn, box_size, frame_numbers, start_ng=-3000, zscore=5, bins=None):
-        """Calculate histograms of the net gradient at local maxima of n frames.
-        For the automatic calculation of a threshold net_gradient for localizations,
-        assume the background (of random local maxima without a localization signal)
-        to be Gaussian distributed. Assume the background peak in the histogram
-        is the highest value. The threshold net_gradient will be determined as
-        zscore bacground standard deviations above the peak. 
+    def _auto_min_netgrad(
+            self, box_size, frame_numbers, filename=None, start_ng=-3000,
+            zscore=5, bins=None):
+        """Calculate histograms of the net gradient at local maxima of n
+        frames. For the automatic calculation of a threshold net_gradient for
+        localizations, assume the background (of random local maxima without a
+        localization signal) to be Gaussian distributed. Assume the background
+        peak in the histogram is the highest value. The threshold net_gradient
+        will be determined as zscore bacground standard deviations above the
+        peak.
 
         Args:
-            plot_fn : str
-                the file name of the plot to be created
             box_size : int
                 the box size for evaluation
             frame_numbers : list
                 the frame indexes to analyze
+            filename : str, default None
+                the file name of the plot to be created
+                no plot generated if None
             start_ng : float
                 the minimum net gradient to accept for the histogram.
                 this should be below zero, to capture all net gradient
@@ -137,10 +162,11 @@ class AutoPicasso(AbstractModuleCollection):
             bins : None, int or array
                 specify the bins of the histogram
         Returns:
-            filename : string
-                filename of the generated plot
-            estd_net_grad : float
-                the estimated min net gradient
+            results : dict; with
+                filename : string
+                    filename of the generated plot
+                estd_net_grad : float
+                    the estimated min net gradient
         """
         results = {}
         identifications = []
@@ -160,36 +186,43 @@ class AutoPicasso(AbstractModuleCollection):
         hist, edges = np.histogram(
             identifications['net_gradient'], bins=bins, density=True)
 
-        # find the background peak, assume Gaussian, find max and FWHM
+        # find the background peak, assume it to be Gaussian and the
+        # highest peak in the histogram: find max and FWHM
         # FWHM as the most robust detection for peak width
         bkg_peak_height, bkg_peak_pos = np.max(hist), np.argmax(hist)
         bkg_halfclose = np.argsort(np.abs(hist - bkg_peak_height / 2))
         bkg_fwhm = np.abs(bkg_halfclose[1] - bkg_halfclose[0])
         bkg_sigma = bkg_fwhm / np.sqrt(4 * np.log(2))
-        ng_est_idx = int(zscore * bkg_sigma) + bkg_peak_pos  # threshold at zscore * bkg_sigma
+        # threshold at zscore * bkg_sigma
+        ng_est_idx = int(zscore * bkg_sigma) + bkg_peak_pos
         if ng_est_idx >= len(edges):
             ng_est_idx = len(edges) - 1
         results['estd_net_grad'] = edges[ng_est_idx]
 
         # plot results
-        fig, ax = plt.subplots()
-        ax.plot(edges[:-1], hist, color='b', label='combined histogram')
-        # for i, frame_number in enumerate(frame_numbers):
-        #     hi, ed = np.histogram(id_list[i]['net_gradient'], bins=bins, density=True)
-        #     ax.plot(ed[:-1], hi, color='gray')
-        ylims = ax.get_ylim()
-        ax.set_title('Net Gradient histogram of subsampled frames')
-        ax.set_xlabel('net gradient')
-        ax.set_yscale('log')
-        ax.plot(
-            [results['estd_net_grad'], results['estd_net_grad']], ylims, color='r',
-            label='estimated min net gradient: {:.0f}'.format(results['estd_net_grad']))
-        ax.plot([edges[bkg_peak_pos], edges[bkg_peak_pos]], ylims,
-            color='gray', label='detected background peak')
-        ax.legend()
-        # plt.show()
-        results['filename'] = plot_fn
-        fig.savefig(results['filename'])
+        if filename:
+            fig, ax = plt.subplots()
+            ax.plot(edges[:-1], hist, color='b', label='combined histogram')
+            # for i, frame_number in enumerate(frame_numbers):
+            #     hi, ed = np.histogram(
+            #         id_list[i]['net_gradient'], bins=bins, density=True)
+            #     ax.plot(ed[:-1], hi, color='gray')
+            ylims = ax.get_ylim()
+            ax.set_title('Net Gradient histogram of subsampled frames')
+            ax.set_xlabel('net gradient')
+            ax.set_yscale('log')
+            ax.plot(
+                [results['estd_net_grad'], results['estd_net_grad']],
+                ylims, color='r',
+                label='estimated min net gradient: {:.0f}'.format(
+                    results['estd_net_grad']))
+            ax.plot(
+                [edges[bkg_peak_pos], edges[bkg_peak_pos]], ylims,
+                color='gray', label='detected background peak')
+            ax.legend()
+            # plt.show()
+            results['filename'] = filename
+            fig.savefig(results['filename'])
         return results
 
     @module_decorator
@@ -221,7 +254,7 @@ class AutoPicasso(AbstractModuleCollection):
         if (autograd_pars := parameters.get('auto_netgrad')) is not None:
             if 'filename' in autograd_pars.keys():
                 autograd_pars['filename'] = os.path.join(
-                    module_result_dir, autograd_pars['filename'])
+                    results['folder'], autograd_pars['filename'])
             res = self._auto_min_netgrad(**autograd_pars)
             results['auto_netgrad'] = res
             parameters['min_gradient'] = res['estd_net_grad']
@@ -240,7 +273,7 @@ class AutoPicasso(AbstractModuleCollection):
         if (pars := parameters.get('ids_vs_frame')) is not None:
             if 'filename' in pars.keys():
                 pars['filename'] = os.path.join(
-                    module_result_dir, pars['filename'])
+                    results['folder'], pars['filename'])
             results['ids_vs_frame'] = self._plot_ids_vs_frame(**pars)
         return parameters, results
 
@@ -266,6 +299,8 @@ class AutoPicasso(AbstractModuleCollection):
         The data is saved in
             self.locs
         Args:
+            i : int
+                the module index in the protocol
             parameters : dict
                 necessary items:
                     box_size : as always
@@ -278,6 +313,8 @@ class AutoPicasso(AbstractModuleCollection):
                     save_locs : dict
                         if saving localizations is requested.
                         Items correpsond to arguments of save_locs
+            results : dict
+                the results dict, created by the module_decorator
         Returns:
             parameters : dict
                 as input, potentially changed values, for consistency
@@ -298,10 +335,6 @@ class AutoPicasso(AbstractModuleCollection):
                 # theta = gausslq.fit_spots_parallel(spots, asynch=False)
                 fs = gausslq.fit_spots_parallel(spots, asynch=True)
                 n_tasks = len(fs)
-                # N = len(identifications)
-                # while lib.n_futures_done(fs) < n_tasks:
-                #     print('progress made:', round(N * lib.n_futures_done(fs) / n_tasks), N)
-                #     time.sleep(0.2)
                 with tqdm(total=n_tasks, unit="task") as progress_bar:
                     for f in _futures.as_completed(fs):
                         progress_bar.update()
@@ -323,14 +356,15 @@ class AutoPicasso(AbstractModuleCollection):
         if (pars := parameters.get('locs_vs_frame')):
             if 'filename' in pars.keys():
                 pars['filename'] = os.path.join(
-                    module_result_dir, pars['filename'])
-            results['locs_vs_frame'] = self._plot_locs_vs_frame(pars['filename'])
+                    results['folder'], pars['filename'])
+            results['locs_vs_frame'] = self._plot_locs_vs_frame(
+                pars['filename'])
 
         # save locs
         if (pars := parameters.get('save_locs')):
             if 'filename' in pars.keys():
                 pars['filename'] = os.path.join(
-                    module_result_dir, pars['filename'])
+                    results['folder'], pars['filename'])
             self.save_locs(pars['filename'])
 
         dt = np.round(time.time() - t00, 2)
@@ -341,7 +375,7 @@ class AutoPicasso(AbstractModuleCollection):
     def _plot_locs_vs_frame(self, filename):
         results = {}
         frames = np.arange(len(self.movie))
-        bins = np.arange(len(self.movie) + 1) - .5
+        # bins = np.arange(len(self.movie) + 1) - .5
 
         df_locs = pd.DataFrame(self.locs)
         gbframe = df_locs.groupby('frame')
@@ -355,16 +389,21 @@ class AutoPicasso(AbstractModuleCollection):
         fig, ax = plt.subplots(nrows=2, sharex=True)
         ax[0].plot(frames, photons_mean, color='b', label='mean photons')
         xhull = np.concatenate([frames, frames[::-1]])
-        yhull = np.concatenate([photons_mean + photons_std, photons_mean[::-1] - photons_std[::-1]])
-        ax[0].fill_between(xhull, yhull, color='b', alpha=.2, label='std photons')
+        yhull = np.concatenate(
+            [photons_mean + photons_std,
+             photons_mean[::-1] - photons_std[::-1]])
+        ax[0].fill_between(
+            xhull, yhull, color='b', alpha=.2, label='std photons')
         ax[0].set_xlabel('frame')
         ax[0].set_ylabel('photons')
         ax[0].legend()
         ax[1].plot(frames, sx_mean, color='c', label='mean sx')
-        yhull = np.concatenate([sx_mean + sx_std, sx_mean[::-1] - sx_std[::-1]])
+        yhull = np.concatenate(
+            [sx_mean + sx_std, sx_mean[::-1] - sx_std[::-1]])
         ax[1].fill_between(xhull, yhull, color='c', alpha=.2, label='std sx')
         ax[1].plot(frames, sy_mean, color='m', label='mean sy')
-        yhull = np.concatenate([sy_mean + sy_std, sy_mean[::-1] - sy_std[::-1]])
+        yhull = np.concatenate(
+            [sy_mean + sy_std, sy_mean[::-1] - sy_std[::-1]])
         ax[1].fill_between(xhull, yhull, color='m', alpha=.2, label='std sy')
         ax[1].set_xlabel('frame')
         ax[1].set_ylabel('width')
@@ -377,6 +416,33 @@ class AutoPicasso(AbstractModuleCollection):
     @module_decorator
     def undrift_rcc(self, i, parameters, results):
         """Undrifts localized data using redundant cross correlation.
+        drift is saved in
+        self.drift
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    segmentation : the number of frames segmented for RCC
+                    dimensions : list
+                        the dimensions undrifted. For picasso RCC, this
+                        is always ['x', 'y']
+                optional items:
+                    locs_vs_frame : dict
+                        for plotting locs vs time
+                        items correspond to arguments of _plot_locs_vs_frame
+                    save_locs : dict
+                        if saving localizations is requested.
+                        Items correpsond to arguments of save_locs
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+
         """
         t00 = time.time()
 
@@ -386,38 +452,49 @@ class AutoPicasso(AbstractModuleCollection):
             # adaptively increase the value.
             try:
                 self.drift, self.locs = postprocess.undrift(
-                    self.locs, self.info, segmentation=parameters['segmentation'],
+                    self.locs, self.info,
+                    segmentation=parameters['segmentation'],
                     display=False)
                 results['success'] = True
                 break
             except ValueError:
                 parameters['segmentation'] = 2 * parameters['segmentation']
-                logger.debug(f'RCC with segmentation {parameters['segmentation']} raised an error. Doubling.')
-                results['message'] = f'Initial Segmentation of {seg_init} was too low.'
+                logger.debug(
+                    f'''RCC with segmentation {parameters["segmentation"]}
+                    raised an error. Doubling.''')
+                results['message'] = f'''Initial Segmentation of {seg_init}
+                    was too low.'''
         else:  # did not work until the end
-            logger.error(f'RCC failed up to segmentation {parameters['segmentation']}. Aborting.')
+            logger.error(
+                f'''RCC failed up to segmentation {parameters["segmentation"]}.
+                Aborting.''')
             max_segmentation = parameters['segmentation']
             # initial segmentation
             parameters['segmentation'] = int(
-                parameters['segmentation'] / 2**parameters['max_iter_segmentations'])
+                parameters['segmentation']
+                / 2**parameters['max_iter_segmentations'])
             results['message'] = f'''
-                    Undrifting did not work in {parameters['max_iter_segmentations']} iterations
+                    Undrifting did not work in
+                    {parameters['max_iter_segmentations']} iterations
                     up to a segmentation of {max_segmentation}.'''
             results['success'] = False
 
         parameters['dimensions'] = ['x', 'y']
 
-        parameters['filename'] = os.path.join(
-                    module_result_dir, parameters['filename'])
-        np.savetxt(parameters['filename'], self.drift, delimiter=',')
-        parameters['filename'] = os.path.splitext(parameters['filename'])[0] + '.png'
-        self._plot_drift(parameters['drift_image'], parameters['dimensions'])
+        if parameters.get('filename'):
+            results['filepath_driftfile'] = os.path.join(
+                results['folder'], parameters['filename'])
+            np.savetxt(parameters['filepath'], self.drift, delimiter=',')
+            results['filepath_plot'] = (
+                os.path.splitext(results['filepath_driftfile'])[0] + '.png')
+            self._plot_drift(
+                results['filepath_plot'], parameters['dimensions'])
 
         # save locs
         if (pars := parameters.get('save_locs')):
             if 'filename' in pars.keys():
                 pars['filename'] = os.path.join(
-                    module_result_dir, pars['filename'])
+                    results['folder'], pars['filename'])
             self.save_locs(pars['filename'])
 
         dt = np.round(time.time() - t00, 2)
@@ -447,7 +524,7 @@ class AutoPicasso(AbstractModuleCollection):
         to the next step.
         Args:
             i : int
-                the index of the module 
+                the index of the module
             parameters: dict
                 with required keys:
                     prompt : str
@@ -458,7 +535,7 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        filepath = os.path.join(module_result_dir, parameters['filename'])
+        filepath = os.path.join(results['folder'], parameters['filename'])
         if os.path.exists(filepath):
             results['filepath'] = filepath
             results['success'] = True
@@ -479,7 +556,8 @@ class AutoPicasso(AbstractModuleCollection):
                 res, best_vals = postprocess.nena(self.locs, self.info)
                 results['nena'] = {'res': res, 'best_vals': best_vals}
             else:
-                raise NotImplementedError(f'Description method {meth} not implemented.')
+                raise NotImplementedError(
+                    f'Description method {meth} not implemented.')
         return parameters, results
 
     def save_locs(self, filename):
@@ -509,27 +587,12 @@ class AutoPicasso(AbstractModuleCollection):
         return results_save
 
 
-class ManualInputLackingError(Exception):
+class AutoPicassoError(Exception):
     pass
 
 
-def module_decorator(method):
-    def module_wrapper(self, *args, **kwargs):
-        # create the results direcotry
-        method_name = get_caller_name(2)
-        module_result_dir = os.path.join(self.results_folder, f'{i:02d}_' + method_name)
-        try:
-            os.mkdir(module_result_dir)
-        except:
-            pass
-
-        results = {
-            'folder': module_result_dir,
-        }
-        kwargs['results'] = results
-        parameters, results = method(self, *args, **kwargs)
-        return parameters, results
-    return module_wrapper
+class ManualInputLackingError(AutoPicassoError):
+    pass
 
 
 def get_ap():

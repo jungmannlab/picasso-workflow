@@ -9,7 +9,7 @@ classifiers = [
 ]
  
 setup(
-  name='picasso-workflow',
+  name='picasso_workflow',
   version='0.0.1',
   description='Automation and documentation of DNA-PAINT analysis workflows',
   long_description=open('README.md').read() + '\n\n' + open('CHANGELOG.txt').read(),

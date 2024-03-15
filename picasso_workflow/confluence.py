@@ -9,7 +9,7 @@ import logging
 import os
 import requests
 
-from picasso_automate.util import AbstractModuleCollection
+from picasso_workflow.util import AbstractModuleCollection
 
 
 logger = logging.getLogger(__name__)
@@ -431,10 +431,11 @@ class ConfluenceInterface():
             "Authorization": "Bearer {:s}".format(self.bearer_token),
             'X-Atlassian-Token': 'nocheck'
         }
-        files = {
-            "file": open(filename, "rb")
-        }
-        response = requests.post(url, headers=headers, files=files)
+        with open(filename, "rb") as f:
+            files = {
+                "file": f
+            }
+            response = requests.post(url, headers=headers, files=files)
         if response.status_code != 200:
             logger.warning("Failed to upload attachment.")
             return
