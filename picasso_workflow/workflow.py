@@ -270,6 +270,9 @@ class WorkflowRunner():
         available_modules = [
             name for name, _ in available_modules
             if inspect.ismethod(_) or inspect.isfunction(_)]
+        available_modules = [
+            name for name in available_modules
+            if name != '__init__']
         logger.debug(f'Available modules: {str(available_modules)}')
         for module_name, module_parameters in self.workflow_modules:
             if module_name not in available_modules:
@@ -284,7 +287,7 @@ class WorkflowRunner():
             module_parameters = self.parameter_command_executor.run(
                 module_parameters)
             self.call_module(module_name, i, module_parameters)
-            self.save()
+            self.save(self.result_folder)
 
     ##########################################################################
     # UTIL FUNCTIONS
@@ -302,7 +305,7 @@ class WorkflowRunner():
             dirn : str
                 the directory to save into
         """
-        filepath = os.path.join(dirn, 'WorkflowRunnerResults.yaml')
+        filepath = os.path.join(dirn, 'WorkflowRunner.yaml')
         data = {
             'results': self.results,
             'reporter_config': self.reporter_config,
@@ -319,15 +322,16 @@ class WorkflowRunner():
             dirn : str
                 the directory to load from
         """
-        filepath = os.path.join(dirn, 'WorkflowRunnerResults.yaml')
-        with open(filepath, 'w') as f:
-            data = yaml.loads(f)
+        filepath = os.path.join(dirn, 'WorkflowRunner.yaml')
+        with open(filepath, 'r') as f:
+            data = yaml.load(f, Loader=yaml.SafeLoader)
         instance = cls()
         instance.results = data['results']
         instance.reporter_config = data['reporter_config']
         instance.analysis_config = data['analysis_config']
+        instance.analysis_config['result_location'] = dirn
         instance.workflow_modules = data['workflow_modules']
-        report_name = instance.reporter_config['report_nape']
+        report_name = instance.reporter_config['report_name']
         instance._initialize_analysis(instance.analysis_config, report_name)
         instance._initialize_reporter(instance.reporter_config)
         return instance
