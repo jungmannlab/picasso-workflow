@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import logging
 from logging import handlers
+from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
 
 
 # Load the environment variables from the .env file
@@ -28,3 +29,11 @@ def config_logger():
 
 config_logger()
 logger = logging.getLogger(__name__)
+
+
+if __name__ == "__main__":
+    # this is just to use the classes and not get PEP errors.
+    wr = WorkflowRunner()
+    logger.debug(wr)
+    awr = AggregationWorkflowRunner()
+    logger.debug(awr)
