@@ -146,30 +146,32 @@ class ParameterCommandExecutor():
                 the parameters for a module
         """
         logger.debug('Running ParameterCommandExecutor')
-        return self.scan_dict(parameters)
+        logger.debug(parameters)
+        return self.scan(parameters)
+
+    def scan(self, itrbl):
+        if isinstance(itrbl, dict):
+            res = self.scan_dict(itrbl)
+        elif isinstance(itrbl, list):
+            res = self.scan_list(itrbl)
+        elif isinstance(itrbl, tuple):
+            res = self.scan_tuple(itrbl)
+        else:
+            res = itrbl
+        return res
 
     def scan_dict(self, d):
         for k, v in d.items():
-            if isinstance(v, dict):
-                d[k] = self.scan_dict(v)
-            elif isinstance(v, list):
-                d[k] = self.scan_list(v)
-            elif isinstance(v, tuple):
-                d[k] = self.scan_tuple(v)
+            d[k] = self.scan(v)
         return d
 
-    def scan_list(self, l):
-        for i, it in enumerate(l):
-            if isinstance(it, dict):
-                l[i] = self.scan_dict(it)
-            elif isinstance(it, list):
-                l[i] = self.scan_list(it)
-            elif isinstance(it, tuple):
-                l[i] = self.scan_tuple(it)
-        return l
+    def scan_list(self, li):
+        for i, it in enumerate(li):
+            li[i] = self.scan(it)
+        return li
 
     def scan_tuple(self, t):
-        if len(t) == 2 and isinstance(t[0], str) and t[0][0]=='$':
+        if len(t) == 2 and isinstance(t[0], str) and t[0][0] == '$':
             # this is a parameter command
             if t[0] == '$get_prior_result':
                 logger.debug(f'Getting prior result from {t[1]}.')
@@ -184,14 +186,9 @@ class ParameterCommandExecutor():
             # it's just a normal tuple
             tout = []
             for i, it in enumerate(t):
-                if isinstance(it, dict):
-                    tout[i] = self.scan_dict(it)
-                elif isinstance(it, list):
-                    tout[i] = self.scan_list(it)
-                elif isinstance(it, tuple):
-                    tout[i] = self.scan_tuple(it)
+                logger.debug(f'{i}: {it}')
+                tout.append(self.scan(it))
             return tuple(tout)
-
 
     def get_prior_result(self, locator):
         """In some cases, input parameters for a module should be taken from

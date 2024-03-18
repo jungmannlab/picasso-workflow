@@ -85,10 +85,10 @@ class TestAnalyse(unittest.TestCase):
         parameters, results = tc.my_method(0, pars)
         logger.debug(f'results: {results}')
         assert results['folder'] == os.path.join(
-            self.results_folder, '00_test_01_module_decorator')
+            self.results_folder, '00_my_method')
 
         shutil.rmtree(os.path.join(
-            self.results_folder, '00_test_01_module_decorator'))
+            self.results_folder, '00_my_method'))
 
     def test_02_AutoPicasso_create_sample_movie(self):
         self.ap.movie = np.random.randint(
@@ -120,7 +120,7 @@ class TestAnalyse(unittest.TestCase):
         parameters, results = self.ap.load_dataset(0, parameters)
 
         shutil.rmtree(os.path.join(
-            self.results_folder, '00_test_03_AutoPicasso_load_dataset'))
+            self.results_folder, '00_load_dataset'))
 
     def test_04_AutoPicasso_auto_min_netgrad(self):
         fn = os.path.join(self.results_folder, 'autominnet.png')
@@ -141,7 +141,7 @@ class TestAnalyse(unittest.TestCase):
         # logger.debug(self.ap.identifications)
 
         shutil.rmtree(os.path.join(
-            self.results_folder, '00_test_05_AutoPicasso_identify'))
+            self.results_folder, '00_identify'))
 
     @patch('picasso_workflow.analyse.gausslq.locs_from_fits')
     @patch('picasso_workflow.analyse.gausslq.fit_spot')
@@ -166,7 +166,7 @@ class TestAnalyse(unittest.TestCase):
         parameters, results = self.ap.localize(0, parameters)
 
         shutil.rmtree(os.path.join(
-            self.results_folder, '00_test_06_AutoPicasso_localize'))
+            self.results_folder, '00_localize'))
 
     def test_07_AutoPicasso_plot_locs_vs_frame(self):
         locs_dtype = [
@@ -201,7 +201,7 @@ class TestAnalyse(unittest.TestCase):
         self.ap.undrift_rcc(0, parameters)
 
         shutil.rmtree(os.path.join(
-            self.results_folder, '00_test_08_AutoPicasso_undrift_rcc'))
+            self.results_folder, '00_undrift_rcc'))
 
     def test_09_AutoPicasso_manual(self):
         parameters = {
@@ -209,8 +209,10 @@ class TestAnalyse(unittest.TestCase):
             'filename': 'myfile.mf'
         }
 
-        with self.assertRaises(analyse.ManualInputLackingError):
-            self.ap.manual(0, parameters)
+        # with self.assertRaises(analyse.ManualInputLackingError):
+        #     self.ap.manual(0, parameters)
+        parameters, results = self.ap.manual(0, parameters)
+        assert results['success'] == False
 
         shutil.rmtree(os.path.join(
-            self.results_folder, '00_test_09_AutoPicasso_manual'))
+            self.results_folder, '00_manual'))

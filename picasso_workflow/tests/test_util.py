@@ -15,7 +15,7 @@ from picasso_workflow import util
 logger = logging.getLogger(__name__)
 
 
-@unittest.skip('')
+# @unittest.skip('')
 class TestUtil(unittest.TestCase):
 
     def setUp(self):
@@ -41,16 +41,15 @@ class TestUtil(unittest.TestCase):
         pce = util.ParameterCommandExecutor(self)
         self.result = {
             'load': {'sample_movie': {'sample_frame_idx': [0, 1, 2]}}}
-        di = {
-            'a': {'1': 1, '2': 2, '3': 3},
-            'b': {'z': 42, 'y': 84,
-                  'x': ('$get_prior_result',
-                        'result, load, sample_movie, sample_frame_idx')}
-        }
-        di_exp = {
-            'a': {'1': 1, '2': 2, '3': 3},
-            'b': {'z': 42, 'y': 84, 'x': [0, 1, 2]}
-        }
+        di = [
+            ('a', {'1': 1, '2': 2, '3': 3}),
+            ('b', {'z': 42, 'y': 84,
+                   'x': ('$get_prior_result',
+                         'result, load, sample_movie, sample_frame_idx')})]
+        di_exp = [
+            ('a', {'1': 1, '2': 2, '3': 3}),
+            ('b', {'z': 42, 'y': 84, 'x': [0, 1, 2]})
+        ]
         di_out = pce.run(di)
         # logger.debug(f'dictionary expected: {di_exp}')
         # logger.debug(f'dictionary received: {di_out}')
@@ -59,15 +58,15 @@ class TestUtil(unittest.TestCase):
     def test_04_ParameterCommandExecutor_map(self):
         mymap = {'key1': 'value1', 'key2': 'value2'}
         pce = util.ParameterCommandExecutor(self, mymap)
-        di = {
-            'a': {'1': 1, '2': 2, '3': 3},
-            'b': {'z': 42, 'y': 84,
-                  'x': ('$map', 'key2')}
-        }
-        di_exp = {
-            'a': {'1': 1, '2': 2, '3': 3},
-            'b': {'z': 42, 'y': 84, 'x': 'value2'}
-        }
+        di = [
+            ('a', {'1': 1, '2': 2, '3': 3}),
+            ('b', {'z': 42, 'y': 84,
+                   'x': ('$map', 'key2')})
+        ]
+        di_exp = [
+            ('a', {'1': 1, '2': 2, '3': 3}),
+            ('b', {'z': 42, 'y': 84, 'x': 'value2'})
+        ]
         di_out = pce.run(di)
         # logger.debug(f'dictionary expected: {di_exp}')
         # logger.debug(f'dictionary received: {di_out}')
@@ -79,15 +78,15 @@ class TestUtil(unittest.TestCase):
             'file_name': ['a.tiff', 'b.tiff'],
             '$tags': ['RESI-1', 'RESI-2']}
         pce = util.ParameterTiler(self, tile_entries, mymap)
-        di = {
-            'load': {'filename': ('$map', 'file_name')},
-            'localize': {'min_ng': 20000}
-        }
+        di = [
+            ('load', {'filename': ('$map', 'file_name')}),
+            ('localize', {'min_ng': 20000})
+        ]
         res_exp = [
-            {'load': {'filename': 'a.tiff'},
-             'localize': {'min_ng': 20000}},
-            {'load': {'filename': 'b.tiff'},
-             'localize': {'min_ng': 20000}},
+            [('load', {'filename': 'a.tiff'}),
+             ('localize', {'min_ng': 20000})],
+            [('load', {'filename': 'b.tiff'}),
+             ('localize', {'min_ng': 20000})],
         ]
         res_out, tags = pce.run(di)
         logger.debug(f'result expected: {res_exp}')

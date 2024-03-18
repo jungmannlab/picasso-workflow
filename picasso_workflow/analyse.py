@@ -16,7 +16,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import logging
 
-from picasso_workflow.util import AbstractModuleCollection, get_caller_name
+from picasso_workflow.util import AbstractModuleCollection
 from picasso_workflow import process_brightfield
 
 
@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 def module_decorator(method):
     def module_wrapper(self, i, parameters):
         # create the results direcotry
-        method_name = get_caller_name(2)
+        # method_name = get_caller_name(2)
+        method_name = method.__name__
         module_result_dir = os.path.join(
             self.results_folder, f'{i:02d}_' + method_name)
         try:
@@ -38,6 +39,9 @@ def module_decorator(method):
             'folder': module_result_dir,
         }
         parameters, results = method(self, i, parameters, results)
+        # modules only need to specifically set an error.
+        if results.get('success') is None:
+            results['success'] = True
         return parameters, results
     return module_wrapper
 
@@ -546,7 +550,7 @@ class AutoPicasso(AbstractModuleCollection):
             logger.debug(msg)
             print(msg)
             results['success'] = False
-            raise ManualInputLackingError(f'{filepath} missing.')
+            # raise ManualInputLackingError(f'{filepath} missing.')
         return parameters, results
 
     @module_decorator
