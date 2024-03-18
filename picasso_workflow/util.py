@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class AbstractModuleCollection(abc.ABC):
     """Describes the modules an analysis and reporting pipeline
     must support. This needs to be implemented
-    in classes in workflow.py, analyse.py and confluence.py,
+    in classes in analyse.py and confluence.py,
     such that the workflow class can call the other's methods
     """
 
