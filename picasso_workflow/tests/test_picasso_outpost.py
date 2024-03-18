@@ -20,3 +20,6 @@ class TestPicassoOutpost(unittest.TestCase):
 
     def tearDown(self):
         pass
+
+    def test_01(self):
+        logger.debug(picasso_outpost)

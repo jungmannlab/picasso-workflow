@@ -56,7 +56,8 @@ def save_movie(fname, movie, min_quantile=0, max_quantile=1, fps=1):
     """
     adjusted_images = [
         adjust_contrast(frame, min_quantile, max_quantile)[..., np.newaxis]
-        for frame in movie]
+        for frame in movie
+    ]
 
     # Create movie file
     clip = ImageSequenceClip(adjusted_images, fps=fps)

@@ -22,47 +22,44 @@ class AbstractModuleCollection(abc.ABC):
     in classes in workflow.py, analyse.py and confluence.py,
     such that the workflow class can call the other's methods
     """
+
     def __init__(self):
         pass
 
     @abc.abstractmethod
     def load_dataset(self):
-        """Loads a DNA-PAINT dataset in a format supported by picasso.
-        """
+        """Loads a DNA-PAINT dataset in a format supported by picasso."""
         pass
 
     @abc.abstractmethod
     def identify(self):
-        """Identifies localizations in a loaded dataset.
-        """
+        """Identifies localizations in a loaded dataset."""
         pass
 
     @abc.abstractmethod
     def localize(self):
-        """Localizes Spots previously identified.
-        """
+        """Localizes Spots previously identified."""
         pass
 
     @abc.abstractmethod
     def undrift_rcc(self):
-        """Undrifts localized data using redundant cross correlation.
-        """
+        """Undrifts localized data using redundant cross correlation."""
         pass
 
     @abc.abstractmethod
     def manual(self):
-        """Describes a manual step, for which the workflow is paused.
-        """
+        """Describes a manual step, for which the workflow is paused."""
         pass
 
 
-class ParameterTiler():
+class ParameterTiler:
     """Multiplies a set of parameters according to a tile command.
     This has the usecase of e.g. doing multiple analogue analyses
     for different datasets, which are then aggregated.
     Uses the ParameterCommandExecutor, so the same commands will
     be used.
     """
+
     def __init__(self, parent_object, tile_entries, map_dict={}):
         """
         Args:
@@ -84,7 +81,7 @@ class ParameterTiler():
                 a dictionary to map values using the $map command
                 the tile_entries will be added to the map_dict
         """
-        logger.debug('Initializeing ParameterTiler')
+        logger.debug("Initializeing ParameterTiler")
         self.tile_entries = tile_entries
         self.ntiles = len(list(tile_entries.values())[0])
         self.map_dict = map_dict
@@ -103,28 +100,29 @@ class ParameterTiler():
                 returned (supposed to be tags to use for naming),
                 otherwise list of empty strings
         """
-        logger.debug('Running ParameterTiler.')
+        logger.debug("Running ParameterTiler.")
         result_parameters = []
         for i in range(self.ntiles):
             # set the tile parameters according to the iteration
             for k, v in self.tile_entries.items():
                 self.map_dict[k] = v[i]
-            logger.debug(f'Map for tile {i}: {self.map_dict}')
+            logger.debug(f"Map for tile {i}: {self.map_dict}")
             pce = ParameterCommandExecutor(self.parent_object, self.map_dict)
-            logger.debug(f'running with parameters {parameters}')
+            logger.debug(f"running with parameters {parameters}")
             result_parameters.append(pce.run(copy.deepcopy(parameters)))
-        if (tags := self.tile_entries.get('$tags')) is None:
-            tags = [''] * len(result_parameters)
+        if (tags := self.tile_entries.get("$tags")) is None:
+            tags = [""] * len(result_parameters)
 
         return result_parameters, tags
 
 
-class ParameterCommandExecutor():
+class ParameterCommandExecutor:
     """Scans parameter sets for commands and executes them.
     This is useful e.g. in the picasso-workflow.workflow.WorkflowRunner
     where some parameters of later modules depend on results of previous
     modules. These can be retrieved with this ParameterCommandExecutor.
     """
+
     def __init__(self, parent_object, map_dict={}):
         """
         Args:
@@ -145,7 +143,7 @@ class ParameterCommandExecutor():
             parameters : dict
                 the parameters for a module
         """
-        logger.debug('Running ParameterCommandExecutor')
+        logger.debug("Running ParameterCommandExecutor")
         logger.debug(parameters)
         return self.scan(parameters)
 
@@ -171,22 +169,22 @@ class ParameterCommandExecutor():
         return li
 
     def scan_tuple(self, t):
-        if len(t) == 2 and isinstance(t[0], str) and t[0][0] == '$':
+        if len(t) == 2 and isinstance(t[0], str) and t[0][0] == "$":
             # this is a parameter command
-            if t[0] == '$get_prior_result':
-                logger.debug(f'Getting prior result from {t[1]}.')
+            if t[0] == "$get_prior_result":
+                logger.debug(f"Getting prior result from {t[1]}.")
                 res = self.get_prior_result(t[1])
-                logger.debug(f'Prior result is {res}.')
-            elif t[0] == '$map':
+                logger.debug(f"Prior result is {res}.")
+            elif t[0] == "$map":
                 res = self.map[t[1]]
-                logger.debug(f'Mapping {t[1]}: {res}')
+                logger.debug(f"Mapping {t[1]}: {res}")
             # elif add more parameter commands
             return res
         else:
             # it's just a normal tuple
             tout = []
             for i, it in enumerate(t):
-                logger.debug(f'{i}: {it}')
+                logger.debug(f"{i}: {it}")
                 tout.append(self.scan(it))
             return tuple(tout)
 
@@ -195,25 +193,29 @@ class ParameterCommandExecutor():
         prior results. This is performed here
         Args:
             locator : str
-                the chain of attributes for finding the prior result, comma separated.
-                They all need to be obtainable with getattr, starting from this class
-                e.g. "results, load, sample_movie, sample_frame_idx"
-                obtains self.results['load']['sample_movie']['sample_frame_idx']
+                the chain of attributes for finding the prior result, comma
+                separated. They all need to be obtainable with getattr,
+                starting from this class e.g. "results, load, sample_movie,
+                sample_frame_idx" obtains
+                self.results['load']['sample_movie']['sample_frame_idx']
         Returns:
             the last attribute in the chain.
         """
         root_att = self.parent_object
-        for att_name in locator.split(','):
-            if att_name == '$all':
+        for att_name in locator.split(","):
+            if att_name == "$all":
                 # root_att is a list, and all items should be equally processed
                 # in the next rounds
                 pass
             else:
                 if isinstance(root_att, list):
-                    root_att = [self.get_attribute(list_att, att_name) for list_att in root_att]
+                    root_att = [
+                        self.get_attribute(list_att, att_name)
+                        for list_att in root_att
+                    ]
                 else:
                     root_att = self.get_attribute(root_att, att_name)
-        logger.debug(f'Prior Result of {locator} is {root_att}')
+        logger.debug(f"Prior Result of {locator} is {root_att}")
         return root_att
 
     def get_attribute(self, root_att, att_name):
@@ -223,7 +225,10 @@ class ParameterCommandExecutor():
             try:
                 att = getattr(root_att, att_name.strip())
             except AttributeError as e:
-                logger.error(f'Could not get attribute {att_name} from {str(root_att)}.')
+                logger.error(
+                    f"Could not get attribute {att_name} "
+                    + f"from {str(root_att)}."
+                )
                 raise e
         # logger.debug(f'From {root_att}, extracting "{att_name}": {att}')
         return att
@@ -238,11 +243,12 @@ def correct_path_separators(file_path):
         file_path : str
             the file path with separators according to operating system
     """
-    path_components = re.split(r'[\\/]', file_path)
+    path_components = re.split(r"[\\/]", file_path)
     file_path = os.path.join(*path_components)
-    if path_components[0] == '':
+    if path_components[0] == "":
         file_path = os.sep + file_path
     return file_path
+
 
 def get_caller_name(levels_back=1):
     """Get the name of a function in the trackeback (the caller,

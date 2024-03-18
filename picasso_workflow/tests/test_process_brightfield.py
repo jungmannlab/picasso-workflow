@@ -24,8 +24,7 @@ class TestProcessBrightfield(unittest.TestCase):
 
     def test_01_adjust_contrast(self):
         img = np.random.randint(0, 1000, size=(32, 48))
-        img_adj = pb.adjust_contrast(
-            img, min_quantile=.05, max_quantile=.95)
+        img_adj = pb.adjust_contrast(img, min_quantile=0.05, max_quantile=0.95)
         logger.debug(img_adj.shape)
         logger.debug(img.shape)
         assert img_adj.shape == tuple(list(img.shape) + [3])

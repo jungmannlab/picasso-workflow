@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "picasso_workflow"
+version = "0.0.1"
+description = "Automation and documentation of DNA-PAINT analysis workflows"
+author = "Heinrich Grabmayr"
+author_email = "hgrabmayr@biochem.mpg.de"
+license = "MIT"
+keywords = ["picasso"]
+
+[tool.black]
+line-length = 79
+include = "\\.pyi?$"
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+strict = true
+
+#[tool.isort]
+
+[tool.flake8]
+max-line-length = 88
+exclude = ".tox,.git,__pycache__,docs"
+ignore = "E203,W503"
+select = "C,E,F,W,B,B9,I"
+# C: complexity
+# E: pycodestyle errors
+# F: pyflakes errors
+# W: pycodestyle warnings
+# B: bugbear errors
+# B9: bugbear warnings
+# I: isort errors
+# Plugins
+require-code = "True"
+ban-relative-imports = "True"
+docstring-convention = "google"
+# flake8-bugbear
+# flake8-eradicate
+# flake8-docstrings
+
+[tool.bandit]
+exclude = "/tests"
+skips = "B105,B404"
+baseline = "bandit-baseline.json"
+format = "txt"
+
+[tool.pytest-cov]
+[pytest-cov.run]
+branch = "True"
+[pytest-cov.report]
+fail_under = 80
