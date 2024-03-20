@@ -30,7 +30,7 @@ class MockPicassoMovie:
         return np.random.randint(0, 1000, size=self.shape[1:], dtype=np.uint16)
 
 
-@unittest.skip("")
+# @unittest.skip("")
 class TestAnalyse(unittest.TestCase):
 
     locs_dtype = [

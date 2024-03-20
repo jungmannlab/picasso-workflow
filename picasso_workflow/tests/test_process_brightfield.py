@@ -15,6 +15,7 @@ from picasso_workflow import process_brightfield as pb
 logger = logging.getLogger(__name__)
 
 
+# @unittest.skip('')
 class TestProcessBrightfield(unittest.TestCase):
     def setUp(self):
         pass

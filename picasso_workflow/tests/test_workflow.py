@@ -20,7 +20,7 @@ from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
 logger = logging.getLogger(__name__)
 
 
-@unittest.skip("")
+# @unittest.skip("")
 class TestWorkflow(unittest.TestCase):
     def setUp(self):
         self.results_folder = os.path.join(
@@ -35,6 +35,7 @@ class TestWorkflow(unittest.TestCase):
         wr = WorkflowRunner()
         assert wr.results == {}
 
+    # @unittest.skip('')
     @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
     @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
     @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
@@ -56,6 +57,7 @@ class TestWorkflow(unittest.TestCase):
         # created a folder upon initialization. remove it.
         shutil.rmtree(wr.result_folder)
 
+    # @unittest.skip('')
     @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
     @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
     @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
@@ -83,7 +85,7 @@ class TestWorkflow(unittest.TestCase):
     @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
     @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
     @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
-    def test_a04_WorkflowRunner_save_load(self):
+    def test_a04_WorkflowRunner_call_module(self):
         reporter_config = {
             "report_name": "myreport",
             "ConfluenceReporter": {"a": 0},
@@ -94,7 +96,7 @@ class TestWorkflow(unittest.TestCase):
         wr = WorkflowRunner.config_from_dicts(
             reporter_config, analysis_config, workflow_modules
         )
-        wr.autopicasso.my_module = lambda i, p: ({}, {})
+        wr.autopicasso.my_module = lambda i, p: ({}, {"success": True})
 
         wr.call_module("my_module", 0, {"parameter0": 1})
 
@@ -125,6 +127,8 @@ class TestWorkflow(unittest.TestCase):
         awr = AggregationWorkflowRunner()
         assert awr.sgl_workflow_locations == []
 
+    # @unittest.skip('')
+    @patch("picasso_workflow.workflow.ConfluenceInterface", MagicMock)
     @patch("picasso_workflow.workflow.WorkflowRunner", MagicMock)
     @patch("picasso_workflow.workflow.ParameterTiler")
     def test_b01_AggregationWR_fromdicts(self, mock_parameter_tiler):
@@ -132,7 +136,11 @@ class TestWorkflow(unittest.TestCase):
         mock_parameter_tiler.ntiles = 3
         reporter_config = {
             "report_name": "myreport",
-            "ConfluenceReporter": {"a": 0},
+            "ConfluenceReporter": {
+                "base_url": "",
+                "space_key": "",
+                "parent_page_title": "",
+            },
         }
         analysis_config = {"result_location": self.results_folder}
         aggregation_workflow = {
@@ -149,6 +157,7 @@ class TestWorkflow(unittest.TestCase):
         shutil.rmtree(awr.result_folder)
 
     # @unittest.skip('')
+    @patch("picasso_workflow.workflow.ConfluenceInterface", MagicMock)
     @patch("picasso_workflow.workflow.WorkflowRunner")
     @patch("picasso_workflow.workflow.ParameterTiler")
     def test_b02_AggregationWR_save_load(self, mock_parameter_tiler, mock_WR):
@@ -159,7 +168,11 @@ class TestWorkflow(unittest.TestCase):
         mock_WR.results = {}
         reporter_config = {
             "report_name": "myreport",
-            "ConfluenceReporter": {"a": 0},
+            "ConfluenceReporter": {
+                "base_url": "",
+                "space_key": "",
+                "parent_page_title": "",
+            },
         }
         analysis_config = {"result_location": self.results_folder}
         aggregation_workflow = {

@@ -55,7 +55,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul>
         <li>Picasso Version: {results_load['picasso version']}</li>
         <li>Movie Location: {pars_load['filename']}</li>
-        <li>Analysis Location: {pars_load['save_directory']}</li>
         <li>Movie Size: Frames: {results_load['movie.shape'][0]},
         Width: {results_load['movie.shape'][1]},
         Height: {results_load['movie.shape'][2]}</li>
@@ -106,7 +105,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Identify</strong></p>
         <ul>
-        <li>Min Net Gradient: {pars_identify['min_grad']:,.0f}</li>
+        <li>Min Net Gradient: {pars_identify['min_gradient']:,.0f}</li>
         <li>Box Size: {pars_identify['box_size']} px</li>
         <li>Duration: {results_identify['duration']} s</li>
         <li>Identifications found: {results_identify['num_identifications']:,}
@@ -206,8 +205,13 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Manual step</strong></p>
         <ul><li>prompt: {parameters.get('prompt')}</li>
-        <ul><li>filename: {parameters.get('filename')}</li>
-        <ul><li>file present: {results.get('success')}</li>
+        <li>filename: {parameters.get('filename')}</li>
+        <li>file present: {results.get('success')}</li>
+        </ul>"""
+        if not results.get("success"):
+            text += "<p>" + results["message"] + "</p>"
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
@@ -223,7 +227,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 meth_res = res_describe["nena"]
                 text += f"""
                     <p>NeNa</p>
-                    <ul><li>Segmentation: {meth_pars['segmentation']}</li>
+                    <ul><li>Input Parameter: {meth_pars['inputpar']}</li>
                     <li>Best Values: {str(meth_res['best_vals'])}</li>
                     <li>Result: {str(meth_res['res'])}</li>
                     </ul>"""
@@ -283,10 +287,15 @@ class ConfluenceInterface:
             }
         else:
             logger.error("One of page_title and page_id must be given.")
+            raise ConfluenceInterfaceError(
+                "Cannot get page properties. "
+                + "One of page_title and page_id must be given."
+            )
         headers = {"Authorization": f"Bearer {self.bearer_token}"}
         response = requests.get(url, headers=headers, params=params)
         if response.status_code != 200:
-            logger.warn("Failed to get page content.")
+            logger.error("Failed to get page content.")
+            raise ConfluenceInterfaceError("Failed to get page content.")
         results = response.json()["results"][0]
         return results["id"], results["title"]
 
@@ -312,7 +321,8 @@ class ConfluenceInterface:
         headers = {"Authorization": f"Bearer {self.bearer_token}"}
         response = requests.get(url, headers=headers, params=params)
         if response.status_code != 200:
-            logger.warn("Failed to get page content.")
+            logger.error("Failed to get page content.")
+            raise ConfluenceInterfaceError("Failed to get page content.")
         return response.json()["results"][0]["version"]["number"]
 
     def get_page_body(self, page_title="", page_id=""):
@@ -372,13 +382,18 @@ class ConfluenceInterface:
         }
         response = requests.post(url, headers=headers, json=data)
         if response.status_code != 200:
-            logger.warning(f"Failed to create page {page_title}.")
-            raise KeyError()
+            logger.error(f"Failed to create page {page_title}.")
+            raise ConfluenceInterfaceError(
+                f"Failed to create page {page_title}."
+            )
 
         return response.json()["id"]
 
     def delete_page(self, page_id):
-        url = self.base_url + "/rest/api/content/{page_id}"
+        # allow the page name to be used instead of page_id
+        if isinstance(page_id, str) and not page_id.isnumeric():
+            page_id, pgname = self.get_page_properties(page_id)
+        url = self.base_url + f"/rest/api/content/{page_id}"
         headers = {
             "Authorization": "Bearer {:s}".format(self.bearer_token),
             "Content-Type": "application/json",
@@ -388,6 +403,7 @@ class ConfluenceInterface:
             logger.debug("Page deleted successfully.")
         else:
             logger.error("Failed to delete the page.")
+            raise ConfluenceInterfaceError("Failed to delete page.")
 
     def upload_attachment(self, page_id, filename):
         """Uploads an attachment to a page
@@ -409,8 +425,8 @@ class ConfluenceInterface:
             files = {"file": f}
             response = requests.post(url, headers=headers, files=files)
         if response.status_code != 200:
-            logger.warning("Failed to upload attachment.")
-            return
+            logger.error("Failed to upload attachment.")
+            raise ConfluenceInterfaceError("Failed to upload attachment.")
 
         attachment_id = response.json()["results"][0]["id"]
         return attachment_id
@@ -442,7 +458,8 @@ class ConfluenceInterface:
         }
         response = requests.put(url, headers=headers, json=data)
         if response.status_code != 200:
-            logger.warning("Failed to update page content.")
+            logger.error("Failed to update page content.")
+            raise ConfluenceInterfaceError("Failed to update page content.")
 
     def update_page_content_with_movie_attachment(
         self, page_name, page_id, filename
@@ -467,3 +484,7 @@ class ConfluenceInterface:
             + "</ac:image>"
         )
         self.update_page_content(page_name, page_id, body_update)
+
+
+class ConfluenceInterfaceError(Exception):
+    pass

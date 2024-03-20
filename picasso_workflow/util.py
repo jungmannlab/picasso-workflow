@@ -184,7 +184,7 @@ class ParameterCommandExecutor:
             # it's just a normal tuple
             tout = []
             for i, it in enumerate(t):
-                logger.debug(f"{i}: {it}")
+                # logger.debug(f"{i}: {it}")
                 tout.append(self.scan(it))
             return tuple(tout)
 

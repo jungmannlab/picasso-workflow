@@ -14,7 +14,7 @@ import yaml
 import copy
 
 from picasso_workflow.analyse import AutoPicasso, AutoPicassoError
-from picasso_workflow.confluence import ConfluenceReporter
+from picasso_workflow.confluence import ConfluenceReporter, ConfluenceInterface
 from picasso_workflow.util import (
     AbstractModuleCollection,
     ParameterCommandExecutor,
@@ -32,20 +32,21 @@ class AggregationWorkflowRunner:
     class aims to do
     """
 
-    def __init__(self, prefix=None):
+    def __init__(self, postfix=None):
         """
         Args:
-            prefix : str, default None
-                The prefix to use (for loading prior analyses).
+            postfix : str, default None
+                The postfix to use (for loading prior analyses).
                 Format: %y%m%d-%H%M.
-                If None, a new prefix is generated
+                If None, a new postfix is generated
         """
-        if prefix:
-            self.prefix = prefix
+        if postfix:
+            self.postfix = postfix
         else:
-            self.prefix = datetime.now().strftime("%y%m%d-%H%M")
+            self.postfix = datetime.now().strftime("%y%m%d-%H%M")
         self.continue_workflow = False
         self.sgl_workflow_locations = []
+        self.cpage_names = []
 
     @classmethod
     def config_from_dicts(
@@ -53,7 +54,7 @@ class AggregationWorkflowRunner:
         reporter_config,
         analysis_config,
         aggregation_workflow,
-        prefix=None,
+        postfix=None,
     ):
         """To keep flexibility for initialization methods, this is not
         done in __init__. This way in the future, we can instantiate
@@ -78,10 +79,10 @@ class AggregationWorkflowRunner:
                     (workflow_modules of WorkflowRunner)
                     describes the modules run for the aggregation analysis
                     (e.g. labeling efficiency, RESI, ..)
-            prefix : str
-                The prefix to use (for loading prior analyses).
+            postfix : str
+                The postfix to use (for loading prior analyses).
                 Format: %y%m%d-%H%M.
-                If None, a new prefix is generated
+                If None, a new postfix is generated
         """
         if (
             sgltilepars := aggregation_workflow.get(
@@ -92,21 +93,30 @@ class AggregationWorkflowRunner:
                 """aggregation_workflow missing
                 "single_dataset_tileparameters"."""
             )
-        instance = cls(prefix)
+        instance = cls(postfix)
         instance.parameter_tiler = ParameterTiler(instance, sgltilepars)
         instance.all_results = {
             "single_dataset": [None] * instance.parameter_tiler.ntiles,
             "aggregation": None,
         }
-        instance.reporter_config = reporter_config
-        instance.analysis_config = analysis_config
         # set date and time to report name
-        if instance.prefix:
+        if instance.postfix:
             report_name = (
-                reporter_config["report_name"] + "_" + instance.prefix
+                reporter_config["report_name"] + "_" + instance.postfix
             )
         else:
             report_name = reporter_config["report_name"]
+        if confluence_config := reporter_config.get("ConfluenceReporter"):
+            instance._initialize_confluence_interface(**confluence_config)
+            body_text = """<b>Aggregation analysis reslts</b>"""
+            instance.ci.create_page(report_name, body_text)
+            reporter_config["ConfluenceReporter"][
+                "parent_page_title"
+            ] = report_name
+            instance.cpage_names.append(report_name)
+
+        instance.reporter_config = reporter_config
+        instance.analysis_config = analysis_config
         # reporter_config['report_name'] = report_name
         # create analysis result directory
         instance.result_folder = os.path.join(
@@ -119,6 +129,16 @@ class AggregationWorkflowRunner:
 
         instance.aggregation_workflow = aggregation_workflow
         return instance
+
+    def _initialize_confluence_interface(
+        self, base_url, space_key, parent_page_title, token=None
+    ):
+        self.ci = ConfluenceInterface(
+            base_url=base_url,
+            space_key=space_key,
+            parent_page_title=parent_page_title,
+            token=token,
+        )
 
     def run(self):
         """individualize the aggregation workflow and run."""
@@ -156,15 +176,16 @@ class AggregationWorkflowRunner:
                         sgl_wkfl_reporter_config,
                         sgl_wkfl_analysis_config,
                         parameter_set,
-                        use_prefix=False,
+                        postfix=self.postfix,
                     )
             else:
                 wr = WorkflowRunner.config_from_dicts(
                     sgl_wkfl_reporter_config,
                     sgl_wkfl_analysis_config,
                     parameter_set,
-                    use_prefix=False,
+                    postfix=self.postfix,
                 )
+            self.cpage_names.append(wr.reporter_config["report_name"])
             wr.run(contd=self.continue_workflow)
             self.all_results["single_dataset"][i] = wr.results
             self.sgl_workflow_locations.append(wr.result_folder)
@@ -180,8 +201,12 @@ class AggregationWorkflowRunner:
         agg_analysis_config = copy.deepcopy(self.analysis_config)
         agg_analysis_config["result_location"] = self.result_folder
         wr = WorkflowRunner.config_from_dicts(
-            agg_reporter_config, agg_analysis_config, parameters
+            agg_reporter_config,
+            agg_analysis_config,
+            parameters,
+            postfix=self.postfix,
         )
+        self.cpage_names.append(wr.reporter_config["report_name"])
         wr.run()
         self.all_results["aggregation"] = wr.results
 
@@ -196,7 +221,7 @@ class AggregationWorkflowRunner:
         data = {
             "sgl_workflow_locations": self.sgl_workflow_locations,
             "all_results": self.all_results,
-            "prefix": self.prefix,
+            "postfix": self.postfix,
             "reporter_config": self.reporter_config,
             "analysis_config": self.analysis_config,
             "aggregation_workflow": self.aggregation_workflow,
@@ -220,7 +245,7 @@ class AggregationWorkflowRunner:
             data["reporter_config"],
             data["analysis_config"],
             data["aggregation_workflow"],
-            data["prefix"],
+            data["postfix"],
         )
         instance.all_results = data["all_results"]
         instance.sgl_workflow_locations = data["sgl_workflow_locations"]
@@ -238,12 +263,18 @@ class WorkflowRunner:
     wr.run()
     """
 
-    def __init__(self, use_prefix=True):
-        self.use_prefix = use_prefix
-        if use_prefix:
-            self.prefix = datetime.now().strftime("%y%m%d-%H%M")
+    def __init__(self, postfix=None):
+        """
+        Args:
+            postfix : str, default None
+                The postfix to use (for loading prior analyses).
+                Format: %y%m%d-%H%M.
+                If None, a new postfix is generated
+        """
+        if postfix:
+            self.postfix = postfix
         else:
-            self.prefix = ""
+            self.postfix = datetime.now().strftime("%y%m%d-%H%M")
 
         self.parameter_command_executor = ParameterCommandExecutor(self)
         self.results = {}
@@ -254,7 +285,7 @@ class WorkflowRunner:
         reporter_config,
         analysis_config,
         workflow_modules,
-        use_prefix=True,
+        postfix=None,
     ):
         """To keep flexibility for initialization methods, this is not
         done in __init__. This way in the future, we can instantiate
@@ -267,17 +298,14 @@ class WorkflowRunner:
                 general analysis configuration
             workflow_modules : list of tuples
                 the workflow modules to run
-            use_prefix : bool
-                whether to add the date-time tag to the results folder.
+            postfix : str, default None
+                The postfix to use (for loading prior analyses).
+                Format: %y%m%d-%H%M.
+                If None, a new postfix is generated
         """
-        instance = cls(use_prefix)
+        instance = cls(postfix)
         # set date and time to report name
-        if instance.use_prefix:
-            report_name = (
-                reporter_config["report_name"] + "_" + instance.prefix
-            )
-        else:
-            report_name = reporter_config["report_name"]
+        report_name = reporter_config["report_name"] + "_" + instance.postfix
         reporter_config["report_name"] = report_name
 
         instance.reporter_config = reporter_config
@@ -352,9 +380,9 @@ class WorkflowRunner:
     # UTIL FUNCTIONS
     ##########################################################################
 
-    def get_prefixed_filename(self, filename):
+    def get_postfixed_filename(self, filename):
         """ """
-        return os.path.join(self.savedir, self.prefix + filename)
+        return os.path.join(self.savedir, self.postfix + filename)
 
     def save(self, dirn="."):
         """Save the current results into 'WorkflowRunnerResults.yaml' in the
@@ -426,6 +454,7 @@ class WorkflowRunner:
         except AutoPicassoError as e:
             logger.error(e)
             raise e
+        logger.debug(f"RESULTS: {self.results[key]}")
         fun_cr = getattr(self.confluencereporter, fun_name)
         fun_cr(i, parameters, self.results[key])
         return self.results[key]["success"]

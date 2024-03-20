@@ -7,6 +7,7 @@ Description: Test the module confluence.py
 """
 import logging
 import unittest
+from unittest.mock import patch, MagicMock
 import os
 
 from picasso_workflow import confluence
@@ -15,7 +16,7 @@ from picasso_workflow import confluence
 logger = logging.getLogger(__name__)
 
 
-class TestConfluence(unittest.TestCase):
+class Test_A_ConfluenceInterface(unittest.TestCase):
 
     def setUp(self):
         self.confluence_url = os.getenv("TEST_CONFLUENCE_URL")
@@ -37,8 +38,9 @@ class TestConfluence(unittest.TestCase):
             self.confluence_token,
         )
 
-    @unittest.skip("")
+    # @unittest.skip("")
     def test_01_interface_01_all(self):
+        logger.debug("testing all inferface")
         ci = self.instantiate_confluence_interface()
         pgid, pgtitle = ci.get_page_properties(self.confluence_page)
         assert pgtitle == self.confluence_page
@@ -84,18 +86,43 @@ class TestConfluence(unittest.TestCase):
 
         ci = self.instantiate_confluence_interface()
         pgid, pgtitle = ci.get_page_properties(self.testpgtitle)
+        logger.debug(f"Deleting page {pgid}, {pgtitle}")
         ci.delete_page(pgid)
 
-    @unittest.skip("")
-    def test_02_reporter_01_all(self):
+
+# @unittest.skip('')
+class Test_B_ConfluenceReporter(unittest.TestCase):
+
+    @patch("picasso_workflow.confluence.ConfluenceInterface")
+    def setUp(self, mock_cfi):
+        self.confluence_url = os.getenv("TEST_CONFLUENCE_URL")
+        self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
+        self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
+        self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+
         report_name = "my test report"
-        cr = confluence.ConfluenceReporter(
+
+        # Mock the ConfluenceInterface to avoid Confluence interaction
+        mock_instance = MagicMock()
+        mock_instance.create_page.return_value = 534
+        mock_instance.update_page_content.return_value = None
+        mock_instance.get_page_properties.return_value = 123, "titleofhtepage"
+        mock_cfi.return_value = mock_instance
+
+        self.cr = confluence.ConfluenceReporter(
             self.confluence_url,
             self.confluence_space,
             self.confluence_page,
             report_name,
             self.confluence_token,
         )
+        # self.cr.ci.upda
+
+    def tearDown(self):
+        pass
+
+    # @unittest.skip("")
+    def test_01_load_dataset(self):
 
         pars_load = {
             "filename": "my test file location",
@@ -115,8 +142,112 @@ class TestConfluence(unittest.TestCase):
                 ),
             },
         }
-        cr.load_dataset(0, pars_load, results_load)
+        self.cr.load_dataset(0, pars_load, results_load)
 
-        # pgid, pgtitle = ci.get_page_properties(cr.report_page_name)
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
 
-        # cr.ci.delete_page(pgid)
+    # @unittest.skip("")
+    def test_02_identify(self):
+        parameters = {
+            "min_gradient": 10000,
+            "box_size": 7,
+        }
+        results = {
+            "duration": 16.4,
+            "num_identifications": 23237,
+        }
+        self.cr.identify(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def test_03_localize(self):
+        parameters = {}
+        results = {
+            "duration": 16.4,
+            "locs_columns": ("x", "y", "photons"),
+        }
+        self.cr.localize(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def test_04_undrift_rcc(self):
+        parameters = {
+            "dimensions": ["x", "y"],
+            "segmentation": 1000,
+        }
+        results = {
+            "message": "This is my message to you.",
+            "duration": 27.4,
+        }
+        self.cr.undrift_rcc(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def test_05_manual(self):
+        parameters = {
+            "prompt": "Do something.",
+            "filename": "abc.png",
+            "success": False,
+        }
+        results = {
+            "message": "This is my message to you.",
+        }
+        self.cr.manual(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def test_06_describe(self):
+        parameters = {"methods": {"nena": {"inputpar": "a"}}}
+        results = {"nena": {"best_vals": (3, 5, 7), "res": 1.23}}
+        self.cr.describe(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+
+# @unittest.skip('')
+class Test_C_ConfluenceReporter(Test_B_ConfluenceReporter):
+    """This time really use the ConfluenceInterface, no mocking."""
+
+    def setUp(self):
+        self.confluence_url = os.getenv("TEST_CONFLUENCE_URL")
+        self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
+        self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
+        self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+
+        report_name = "my test report"
+
+        self.cr = confluence.ConfluenceReporter(
+            self.confluence_url,
+            self.confluence_space,
+            self.confluence_page,
+            report_name,
+            self.confluence_token,
+        )

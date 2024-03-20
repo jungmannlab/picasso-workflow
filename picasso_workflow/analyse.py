@@ -7,6 +7,7 @@ Description: This is the picasso interface of picasso-workflow
 """
 from picasso import io, localize, gausslq, postprocess
 from picasso import __version__ as picassoversion
+from picasso import CONFIG as pCONFIG
 import os
 import time
 from concurrent import futures as _futures
@@ -43,6 +44,7 @@ def module_decorator(method):
         # modules only need to specifically set an error.
         if results.get("success") is None:
             results["success"] = True
+        logger.debug(f"RESULTS: {results}")
         return parameters, results
 
     return module_wrapper
@@ -67,10 +69,11 @@ class AutoPicasso(AbstractModuleCollection):
                 to.
             analysis_config : dict
                 the general configuration. necessary items:
-                    camera_info : dict
-                        as used by picasso
                     gpufit_installed : bool
                         whether the machine has gpufit installed
+                    camera_info : dict
+                        as used by picasso. Only necessary if not loaded by
+                        module load_dataset
         """
         self.results_folder = results_folder
         self.analysis_config = analysis_config
@@ -93,16 +96,60 @@ class AutoPicasso(AbstractModuleCollection):
                 optional items:
                     sample_movie : dict, used for creating a subsampled movie
                         keywords as used in method create_sample_movie
+                    load_camera_info : bool
+                        whether to load the camera information for the camera
+                        used from picasso.CONFIG
         Returns:
             parameters : dict
                 as input, potentially changed values, for consistency
             results : dict
                 the analysis results
         """
-        results["picasso version"] = (picassoversion,)
+        results["picasso version"] = picassoversion
         t00 = time.time()
         self.movie, self.info = io.load_movie(parameters["filename"])
         results["movie.shape"] = self.movie.shape
+
+        if parameters.get("load_camera_info"):
+            cam_name = self.info["Camera"]
+            if cam_config := pCONFIG.get("Cameras", {}).get(cam_name):
+                # # find quantum efficiency
+                # filter_name = cam_config.get("Channel Device", {}).get(
+                #     "Name")
+                # filter_used = self.info.get(filter_name)
+                # emission_wavelength = cam_config.get(
+                #     "Channel Device", {}).get(
+                #     "Emission Wavelengths", {}).get(filter_used)
+                # qe = cam_config.get("Quantum Efficiency", {}).get(
+                #     emission_wavelength, 1)
+
+                # find camera sensitivity
+                sensitivity = cam_config.get("Sensitivity")
+                # sensitivity starts being a dict, and ends as a value
+                cat_vals = ""
+                for category in cam_config.get("Sensitivity Categories"):
+                    category_value = self.info.get(f"{cam_name}-{category}")
+                    cat_vals += f"{category}: {category_value}; "
+                    sensitivity = sensitivity.get(category_value, {})
+                if isinstance(sensitivity, dict):
+                    raise PicassoConfigError(
+                        f"""Could not find sensitivity value for camera
+                        {cam_name} with category values {cat_vals} in picasso
+                        CONFIG."""
+                    )
+
+                camera_info = {
+                    "baseline": cam_config["Baseline"],
+                    "gain": cam_config.get("Gain", 1),
+                    "sensitivity": sensitivity,
+                    "qe": 1,  # relevant are detected, not incident photons
+                    "pixelsize": cam_config["Pixelsize"],
+                }
+                self.analysis_config["camera_info"] = camera_info
+            else:
+                raise PicassoConfigError(
+                    f"Cannot load camera {cam_name} from picasso CONFIG."
+                )
 
         # create sample movie
         if (samplemov_pars := parameters.get("sample_movie")) is not None:
@@ -597,6 +644,7 @@ class AutoPicasso(AbstractModuleCollection):
             msg = "This is a manual step. Please provide input. "
             msg += parameters["prompt"]
             msg += f" The resulting file should be {filepath}."
+            results["message"] = msg
             logger.debug(msg)
             print(msg)
             results["success"] = False
@@ -647,4 +695,8 @@ class AutoPicassoError(Exception):
 
 
 class ManualInputLackingError(AutoPicassoError):
+    pass
+
+
+class PicassoConfigError(AutoPicassoError):
     pass
