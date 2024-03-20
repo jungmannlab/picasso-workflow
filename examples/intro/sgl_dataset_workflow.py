@@ -27,13 +27,15 @@ Description: This module shows an example of how to use a single dataset
             as an alternative to TextEdit, and on linux, you can use vi
             to open the file within the terminal.
     - For quick tests, add the field 'token': '<your_confluence_api_token>'
-        in reporter_config/ConfluenceReporter.
+        in reporter_config/ConfluenceReporter. However, saving tokens in plain
+        text is not recommended.
     - enter the values required below.
     - in terminal, with the conda environment active, go to the examples
         folder and execute
         python 240318_aggregation_workflow.py
     - see your confluence page for the results.
 """
+import os
 from picasso_workflow import WorkflowRunner
 
 
@@ -44,20 +46,40 @@ confluence_space = ""
 # the page under which the report should be generated
 parent_page_title = ""
 # the name under which the report should be generated
-report_name = ""
+report_name = "test_report"
 
 
 # the directory where the analysis files should be stored
-result_location = ""
+result_location = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
+)
+
+# alternatively to loading
+confluence_url = os.getenv("TEST_CONFLUENCE_URL")
+confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
+confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
+parent_page_title = os.getenv("TEST_CONFLUENCE_PAGE")
+
+
+data_location = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..",
+    "..",
+    "picasso_workflow",
+    "tests",
+    "TestData",
+    "integration",
+)
 
 
 reporter_config = {
+    "report_name": report_name,
     "ConfluenceReporter": {
         "base_url": confluence_url,
         "space_key": confluence_space,
         "parent_page_title": parent_page_title,
-        "report_name": report_name,
-    }
+        "token": confluence_token,
+    },
 }
 
 analysis_config = {
@@ -75,9 +97,14 @@ analysis_config = {
 # e.g. for single dataset evaluation
 workflow_modules_sgl = [
     (
-        "load",
+        "load_dataset",
         {
-            "filename": "resiround1/test1.ome.tif",
+            "filename": os.path.join(
+                data_location,
+                "3C_30px_1kframes_1",
+                "3C_30px_1kframes_MMStack_Pos0.ome.tif",
+            ),
+            # "load_camera_info": True,
             "sample_movie": {
                 "filename": "selected_frames.mp4",
                 "n_sample": 40,
@@ -93,8 +120,9 @@ workflow_modules_sgl = [
                 "filename": "ng_histogram.png",
                 "frame_numbers": (
                     "$get_prior_result",  # get from prior results
-                    "results, load, sample_movie, sample_frame_idx",
+                    "results, 00_load_dataset, sample_movie, sample_frame_idx",
                 ),
+                "box_size": 7,
                 "start_ng": -3000,
                 "zscore": 5,
             },
@@ -111,15 +139,15 @@ workflow_modules_sgl = [
     #     },
     # ),
     ("localize", {"fit_method": "lsq", "box_size": 7, "fit_parallel": True}),
-    (
-        "undrift_rcc",
-        {
-            "segmentation": 1000,
-            "max_iter_segmentations": 4,
-            "filename": "drift.csv",
-            "save_locs": {"filename": "locs_undrift.hdf5"},
-        },
-    ),
+    # (
+    #     "undrift_rcc",
+    #     {
+    #         "segmentation": 1000,
+    #         "max_iter_segmentations": 4,
+    #         "filename": "drift.csv",
+    #         "save_locs": {"filename": "locs_undrift.hdf5"},
+    #     },
+    # ),
     (
         "manual",
         {
@@ -146,4 +174,4 @@ if __name__ == "__main__":
         reporter_config, analysis_config, workflow_modules_sgl
     )
     wr.run()
-    wr.save()
+    # wr.save()
