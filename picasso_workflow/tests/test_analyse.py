@@ -103,7 +103,7 @@ class TestAnalyse(unittest.TestCase):
         os.remove(os.path.join(self.results_folder, "samplemov.mp4"))
 
     @patch("picasso_workflow.analyse.io.load_movie")
-    def test_03_AutoPicasso_load_dataset(self, mock_load_movie):
+    def test_03_AutoPicasso_load_dataset_movie(self, mock_load_movie):
         mock_load_movie.return_value = (
             MockPicassoMovie(),
             {"info": "picasso-info"},
@@ -111,7 +111,7 @@ class TestAnalyse(unittest.TestCase):
 
         parameters = {"filename": "a.tiff"}
 
-        parameters, results = self.ap.load_dataset(0, parameters)
+        parameters, results = self.ap.load_dataset_movie(0, parameters)
         # logger.debug(f'parameters: {parameters}')
         # logger.debug(f'results: {results}')
         assert results["duration"] > -1
@@ -120,9 +120,11 @@ class TestAnalyse(unittest.TestCase):
             "filename": "a.tiff",
             "sample_movie": {"filename": "smplmv.mp4"},
         }
-        parameters, results = self.ap.load_dataset(0, parameters)
+        parameters, results = self.ap.load_dataset_movie(0, parameters)
 
-        shutil.rmtree(os.path.join(self.results_folder, "00_load_dataset"))
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_load_dataset_movie")
+        )
 
     def test_04_AutoPicasso_auto_min_netgrad(self):
         fn = os.path.join(self.results_folder, "autominnet.png")

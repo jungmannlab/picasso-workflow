@@ -11,6 +11,7 @@ import inspect
 import re
 import os
 import copy
+import numpy as np
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,12 @@ class AbstractModuleCollection(abc.ABC):
     ##########################################################################
 
     @abc.abstractmethod
-    def load_dataset(self):
+    def load_dataset_movie(self):
+        """Loads a DNA-PAINT dataset in a format supported by picasso."""
+        pass
+
+    @abc.abstractmethod
+    def load_dataset_localizations(self):
         """Loads a DNA-PAINT dataset in a format supported by picasso."""
         pass
 
@@ -81,6 +87,178 @@ class AbstractModuleCollection(abc.ABC):
         """Saves the locs and info of a single dataset; makes loading
         for the aggregation workflow more straightforward."""
         pass
+
+
+class DictSimpleTyper:
+    """Scans a complex dictionary and converts numpy arrays and
+    tuples to lists"""
+
+    def __init__(self, to_simple_type=True):
+        """
+        Args:
+            to_simple_type : bool
+                converts numpy arrays and tuples to lists, numpy scalars to
+                python scalars
+        """
+        self.to_simple_type = True
+
+    def run(self, parameters):
+        """Scan a parameter set for commands to execute prior to module
+        execution.
+        commands: '$get_prior_result'
+        Args:
+            parameters : dict
+                the parameters for a module
+        """
+        logger.debug("Running DictSimpleTyper")
+        return self.scan(parameters)
+
+    def scan(self, itrbl):
+        if isinstance(itrbl, dict):
+            res = self.scan_dict(itrbl)
+        elif isinstance(itrbl, list):
+            res = self.scan_list(itrbl)
+        elif isinstance(itrbl, tuple):
+            res = self.scan_tuple(itrbl)
+        elif isinstance(itrbl, np.ndarray):
+            res = self.scan_ndarray(itrbl)
+        elif isinstance(itrbl, np.generic):
+            if self.to_simple_type:
+                res = float(itrbl)
+        else:
+            res = itrbl
+        return res
+
+    def scan_dict(self, d):
+        for k, v in d.items():
+            d[k] = self.scan(v)
+        return d
+
+    def scan_list(self, li):
+        for i, it in enumerate(li):
+            li[i] = self.scan(it)
+        return li
+
+    def scan_ndarray(self, itrbl):
+        if self.to_simple_type:
+            return itrbl.tolist()
+        else:
+            return itrbl
+
+    def scan_tuple(self, t):
+        # it's just a normal tuple
+        tout = []
+        for i, it in enumerate(t):
+            # logger.debug(f"{i}: {it}")
+            tout.append(self.scan(it))
+        return tuple(tout)
+        # if self.to_simple_type:
+        #     return tout
+        # else:
+        #     return tuple(tout)
+
+
+class ParameterCommandExecutor(DictSimpleTyper):
+    """Scans parameter sets for commands and executes them.
+    This is useful e.g. in the picasso-workflow.workflow.WorkflowRunner
+    where some parameters of later modules depend on results of previous
+    modules. These can be retrieved with this ParameterCommandExecutor.
+    """
+
+    def __init__(self, parent_object=None, map_dict={}, to_simple_type=False):
+        """
+        Args:
+            parent_object : object
+                the object to execute the command on.
+                e.g. the WorkflowRunner itself
+            map_dict : dict
+                a dictionary to map values using the $map command
+            to_simple_type : bool
+                converts numpy arrays and tuples to lists, numpy scalars to
+                python scalars
+        """
+        self.parent_object = parent_object
+        self.map = map_dict
+        self.to_simple_type = to_simple_type
+
+    def run(self, parameters):
+        """Scan a parameter set for commands to execute prior to module
+        execution.
+        commands: '$get_prior_result'
+        Args:
+            parameters : dict
+                the parameters for a module
+        """
+        logger.debug("Running ParameterCommandExecutor")
+        return self.scan(parameters)
+
+    def scan_tuple(self, t):
+        if len(t) == 2 and isinstance(t[0], str) and t[0][0] == "$":
+            # this is a parameter command
+            if t[0] == "$get_prior_result":
+                logger.debug(f"Getting prior result from {t[1]}.")
+                res = self.get_prior_result(t[1])
+                logger.debug(f"Prior result is {res}.")
+            elif t[0] == "$map":
+                res = self.map[t[1]]
+                logger.debug(f"Mapping {t[1]}: {res}")
+            # elif add more parameter commands
+            return res
+        else:
+            # it's just a normal tuple
+            tout = []
+            for i, it in enumerate(t):
+                # logger.debug(f"{i}: {it}")
+                tout.append(self.scan(it))
+            if self.to_simple_type:
+                return tout
+            else:
+                return tuple(tout)
+
+    def get_prior_result(self, locator):
+        """In some cases, input parameters for a module should be taken from
+        prior results. This is performed here
+        Args:
+            locator : str
+                the chain of attributes for finding the prior result, comma
+                separated. They all need to be obtainable with getattr,
+                starting from this class e.g. "results, load, sample_movie,
+                sample_frame_idx" obtains
+                self.results['load']['sample_movie']['sample_frame_idx']
+        Returns:
+            the last attribute in the chain.
+        """
+        root_att = self.parent_object
+        for att_name in locator.split(","):
+            if att_name == "$all":
+                # root_att is a list, and all items should be equally processed
+                # in the next rounds
+                pass
+            else:
+                if isinstance(root_att, list):
+                    root_att = [
+                        self.get_attribute(list_att, att_name)
+                        for list_att in root_att
+                    ]
+                else:
+                    root_att = self.get_attribute(root_att, att_name)
+        logger.debug(f"Prior Result of {locator} is {root_att}")
+        return root_att
+
+    def get_attribute(self, root_att, att_name):
+        if isinstance(root_att, dict):
+            att = root_att.get(att_name.strip())
+        elif isinstance(root_att, object):
+            try:
+                att = getattr(root_att, att_name.strip())
+            except AttributeError as e:
+                logger.error(
+                    f"Could not get attribute {att_name} "
+                    + f"from {str(root_att)}."
+                )
+                raise e
+        # logger.debug(f'From {root_att}, extracting "{att_name}": {att}')
+        return att
 
 
 class ParameterTiler:
@@ -145,124 +323,6 @@ class ParameterTiler:
             tags = [""] * len(result_parameters)
 
         return result_parameters, tags
-
-
-class ParameterCommandExecutor:
-    """Scans parameter sets for commands and executes them.
-    This is useful e.g. in the picasso-workflow.workflow.WorkflowRunner
-    where some parameters of later modules depend on results of previous
-    modules. These can be retrieved with this ParameterCommandExecutor.
-    """
-
-    def __init__(self, parent_object, map_dict={}):
-        """
-        Args:
-            parent_object : object
-                the object to execute the command on.
-                e.g. the WorkflowRunner itself
-            map_dict : dict
-                a dictionary to map values using the $map command
-        """
-        self.parent_object = parent_object
-        self.map = map_dict
-
-    def run(self, parameters):
-        """Scan a parameter set for commands to execute prior to module
-        execution.
-        commands: '$get_prior_result'
-        Args:
-            parameters : dict
-                the parameters for a module
-        """
-        logger.debug("Running ParameterCommandExecutor")
-        logger.debug(parameters)
-        return self.scan(parameters)
-
-    def scan(self, itrbl):
-        if isinstance(itrbl, dict):
-            res = self.scan_dict(itrbl)
-        elif isinstance(itrbl, list):
-            res = self.scan_list(itrbl)
-        elif isinstance(itrbl, tuple):
-            res = self.scan_tuple(itrbl)
-        else:
-            res = itrbl
-        return res
-
-    def scan_dict(self, d):
-        for k, v in d.items():
-            d[k] = self.scan(v)
-        return d
-
-    def scan_list(self, li):
-        for i, it in enumerate(li):
-            li[i] = self.scan(it)
-        return li
-
-    def scan_tuple(self, t):
-        if len(t) == 2 and isinstance(t[0], str) and t[0][0] == "$":
-            # this is a parameter command
-            if t[0] == "$get_prior_result":
-                logger.debug(f"Getting prior result from {t[1]}.")
-                res = self.get_prior_result(t[1])
-                logger.debug(f"Prior result is {res}.")
-            elif t[0] == "$map":
-                res = self.map[t[1]]
-                logger.debug(f"Mapping {t[1]}: {res}")
-            # elif add more parameter commands
-            return res
-        else:
-            # it's just a normal tuple
-            tout = []
-            for i, it in enumerate(t):
-                # logger.debug(f"{i}: {it}")
-                tout.append(self.scan(it))
-            return tuple(tout)
-
-    def get_prior_result(self, locator):
-        """In some cases, input parameters for a module should be taken from
-        prior results. This is performed here
-        Args:
-            locator : str
-                the chain of attributes for finding the prior result, comma
-                separated. They all need to be obtainable with getattr,
-                starting from this class e.g. "results, load, sample_movie,
-                sample_frame_idx" obtains
-                self.results['load']['sample_movie']['sample_frame_idx']
-        Returns:
-            the last attribute in the chain.
-        """
-        root_att = self.parent_object
-        for att_name in locator.split(","):
-            if att_name == "$all":
-                # root_att is a list, and all items should be equally processed
-                # in the next rounds
-                pass
-            else:
-                if isinstance(root_att, list):
-                    root_att = [
-                        self.get_attribute(list_att, att_name)
-                        for list_att in root_att
-                    ]
-                else:
-                    root_att = self.get_attribute(root_att, att_name)
-        logger.debug(f"Prior Result of {locator} is {root_att}")
-        return root_att
-
-    def get_attribute(self, root_att, att_name):
-        if isinstance(root_att, dict):
-            att = root_att.get(att_name.strip())
-        elif isinstance(root_att, object):
-            try:
-                att = getattr(root_att, att_name.strip())
-            except AttributeError as e:
-                logger.error(
-                    f"Could not get attribute {att_name} "
-                    + f"from {str(root_att)}."
-                )
-                raise e
-        # logger.debug(f'From {root_att}, extracting "{att_name}": {att}')
-        return att
 
 
 def correct_path_separators(file_path):

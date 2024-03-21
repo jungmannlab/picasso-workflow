@@ -19,6 +19,19 @@ from picasso_workflow.util import (
     AbstractModuleCollection,
     ParameterCommandExecutor,
     ParameterTiler,
+    DictSimpleTyper,
+)
+
+
+# For loading yaml files
+# Custom constructor for handling 'tag:yaml.org,2002:python/tuple'
+def python_tuple_constructor(loader, node):
+    return tuple(loader.construct_sequence(node))
+
+
+# # Register the custom constructors
+yaml.constructor.SafeConstructor.add_constructor(
+    "tag:yaml.org,2002:python/tuple", python_tuple_constructor
 )
 
 
@@ -186,7 +199,7 @@ class AggregationWorkflowRunner:
                     postfix=self.postfix,
                 )
             self.cpage_names.append(wr.reporter_config["report_name"])
-            wr.run(contd=self.continue_workflow)
+            wr.run()
             self.all_results["single_dataset"][i] = wr.results
             self.sgl_workflow_locations.append(wr.result_folder)
             self.save(self.result_folder)
@@ -286,6 +299,7 @@ class WorkflowRunner:
         analysis_config,
         workflow_modules,
         postfix=None,
+        continue_previous_runner=False,
     ):
         """To keep flexibility for initialization methods, this is not
         done in __init__. This way in the future, we can instantiate
@@ -302,7 +316,21 @@ class WorkflowRunner:
                 The postfix to use (for loading prior analyses).
                 Format: %y%m%d-%H%M.
                 If None, a new postfix is generated
+            continue_previous_runner : bool, default False
+                continue a previous analysis that aborted (e.g. because of a
+                manual step). If no previous analysis exists in that folder,
+                create a new one.
         """
+        if continue_previous_runner:
+            folder = analysis_config["result_location"]
+            report_name = reporter_config["report_name"]
+            postfix = cls._check_previous_runner(folder, report_name)
+            if postfix is not None:
+                report_name = report_name + "_" + postfix
+                runner_folder = os.path.join(folder, report_name)
+                instance = cls.load(runner_folder)
+                return instance
+
         instance = cls(postfix)
         # set date and time to report name
         report_name = reporter_config["report_name"] + "_" + instance.postfix
@@ -314,6 +342,41 @@ class WorkflowRunner:
         instance._initialize_analysis(analysis_config, report_name)
         instance.workflow_modules = workflow_modules
         return instance
+
+    @classmethod
+    def _check_previous_runner(cls, folder, report_name):
+        """Check for a previous runner instance in the given location
+        Args:
+            folder : str
+                the folder to look in
+            report_name : str
+                the name of the report
+        Returns:
+            postfix : str
+                the postfix of the latest previous runner in that location
+                if none are found, postfix is None
+        """
+        dirs = [
+            it
+            for it in os.listdir(folder)
+            if os.path.isdir(os.path.join(folder, it))
+        ]
+        dirs = [it for it in dirs if report_name in it]
+        # find the latest runner
+        latest_datetime = None
+        latest_postfix = None
+        for d in dirs:
+            try:
+                # cut out the postfix
+                postfix_start = len(report_name) + 1
+                postfix = d[postfix_start:]
+                dt = datetime.strptime(postfix, "%y%m%d-%H%M")
+            except Exception:
+                continue
+            if latest_datetime is None or latest_datetime < dt:
+                latest_datetime = dt
+                latest_postfix = postfix
+        return latest_postfix
 
     def _initialize_analysis(self, analysis_config, report_name):
         """Initializes the Analysis worker."""
@@ -338,13 +401,8 @@ class WorkflowRunner:
             logger.debug(init_kwargs)
             self.confluencereporter = ConfluenceReporter(**init_kwargs)
 
-    def run(self, contd=False):
-        """
-        Args:
-            contd : bool
-                set this True after loading results from file and continuing
-                with after the last previously executed module
-        """
+    def run(self):
+        """Run the analysis of the worfklow modules."""
         # first, check whether all modules are actually implemented
         available_modules = inspect.getmembers(AbstractModuleCollection)
         available_modules = [
@@ -366,6 +424,15 @@ class WorkflowRunner:
         for i, (module_name, module_parameters) in enumerate(
             self.workflow_modules
         ):
+            # check whether the next module has been analysed already
+            if self.module_previously_analyzed(i + 1):
+                # if it has, skip this. This way an aborted module
+                # will be re-analyzed.
+                logger.debug(
+                    f"""Module {i}, {module_name} has been previously
+                    analyzed. Skipping."""
+                )
+                continue
             # all modules are called with iteration and parameter dict
             # as arguments
             module_parameters = self.parameter_command_executor.run(
@@ -391,40 +458,57 @@ class WorkflowRunner:
             dirn : str
                 the directory to save into
         """
+        pce = DictSimpleTyper(to_simple_type=True)
         filepath = os.path.join(dirn, "WorkflowRunner.yaml")
         data = {
-            "results": self.results,
-            "reporter_config": self.reporter_config,
-            "analysis_config": self.analysis_config,
-            "workflow_modules": self.workflow_modules,
+            "results": pce.run(self.results),
+            "reporter_config": pce.run(self.reporter_config),
+            "analysis_config": pce.run(self.analysis_config),
+            "workflow_modules": pce.run(self.workflow_modules),
         }
         with open(filepath, "w") as f:
             yaml.dump(data, f)
 
     @classmethod
     def load(cls, dirn="."):
-        """Load the results from a "WorkflowRunnerResults.yaml" file.
+        """Load the results from a "WorkflowRunner.yaml" file.
         Args:
             dirn : str
                 the directory to load from
         """
         filepath = os.path.join(dirn, "WorkflowRunner.yaml")
         with open(filepath, "r") as f:
-            data = yaml.load(f, Loader=yaml.FullLoader)
+            data = yaml.safe_load(f)
         instance = cls()
         instance.results = data["results"]
         instance.reporter_config = data["reporter_config"]
         instance.analysis_config = data["analysis_config"]
-        instance.analysis_config["result_location"] = dirn
+        instance.analysis_config["result_location"] = os.path.join(dirn, "..")
         instance.workflow_modules = data["workflow_modules"]
         report_name = instance.reporter_config["report_name"]
         instance._initialize_analysis(instance.analysis_config, report_name)
         instance._initialize_reporter(instance.reporter_config)
         return instance
 
-    ##########################################################################
-    # MODULES
-    ##########################################################################
+    def module_previously_analyzed(self, i):
+        """Checks whether the module with index i has been analysed previously.
+        If it has, a folder with its index prefixed has been created.
+        Args:
+            i : int
+                the module index
+        Returns:
+            module_found : bool
+                whether the folder corresponding to the module index was found
+        """
+        dirs = os.listdir(self.result_folder)
+        dirs = [
+            d
+            for d in dirs
+            if os.path.isdir(os.path.join(self.result_folder, d))
+        ]
+        prefix = f"{i:02d}_"
+        module_found = any([d.startswith(prefix) for d in dirs])
+        return module_found
 
     def call_module(self, fun_name, i, parameters):
         """At the level of the WorkflowRunner, all modules are processed the

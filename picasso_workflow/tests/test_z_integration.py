@@ -14,7 +14,7 @@ import unittest
 
 from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
 from picasso_workflow.confluence import ConfluenceInterface
-import picasso_workflow.predefined_singledataset_workflows as psw
+import picasso_workflow.standard_singledataset_workflows as ssw
 
 
 logger = logging.getLogger(__name__)
@@ -177,7 +177,7 @@ class Test_B_CompleteIntegration(unittest.TestCase):
             },
             "gpufit_installed": False,
         }
-        workflow_modules = psw.minimal(
+        workflow_modules = ssw.minimal(
             filepath=os.path.join(
                 self.data_folder,
                 "3C_30px_1kframes_1",

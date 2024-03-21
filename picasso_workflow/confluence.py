@@ -30,18 +30,32 @@ class ConfluenceReporter(AbstractModuleCollection):
 
         # create page
         self.report_page_name = report_name
-        # in case the page already exists, add an iteration
-        for i in range(1, 30):
-            try:
-                self.report_page_id = self.ci.create_page(
-                    self.report_page_name, body_text=""
-                )
-                logger.debug(f"Created page {self.report_page_name}")
-                break
-            except KeyError:
-                self.report_page_name = report_name + "_{:02d}".format(i)
+        # # option A: create new pages if the old one exists
+        # for i in range(1, 30):
+        #     try:
+        #         self.report_page_id = self.ci.create_page(
+        #             self.report_page_name, body_text=""
+        #         )
+        #         logger.debug(f"Created page {self.report_page_name}")
+        #         break
+        #     except ConfluenceInterfaceError:
+        #         self.report_page_name = report_name + "_{:02d}".format(i)
+        # option B: if page creation fails, use the already existing page.
+        try:
+            self.report_page_id = self.ci.create_page(
+                self.report_page_name, body_text=""
+            )
+            logger.debug(f"Created page {self.report_page_name}")
+        except ConfluenceInterfaceError:
+            self.report_page_id, pgname = self.ci.get_page_properties(
+                self.report_page_name
+            )
+            logger.debug(
+                f"""Failed to create page {self.report_page_name}.
+                Continuing on the pre-existing page"""
+            )
 
-    def load_dataset(self, i, pars_load, results_load):
+    def load_dataset_movie(self, i, pars_load, results_load):
         """Describes the loading
         Args:
             localize_params : dict
@@ -51,13 +65,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting a loaded dataset.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Load</strong></p>
+        <p><strong>Load Movie</strong></p>
         <ul>
         <li>Picasso Version: {results_load['picasso version']}</li>
         <li>Movie Location: {pars_load['filename']}</li>
         <li>Movie Size: Frames: {results_load['movie.shape'][0]},
         Width: {results_load['movie.shape'][1]},
         Height: {results_load['movie.shape'][2]}</li>
+        <li>Start Time: {results_load['start time']}</li>
         <li>Duration: {results_load['duration']} s</li>
         </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -87,7 +102,30 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_id,
                 os.path.split(sample_mov_res["filename"])[1],
             )
-        return
+
+    def load_dataset_localizations(self, i, parameters, results):
+        """Describes the loading
+        Args:
+            i : int
+            parameters : dict
+            results : dict
+        """
+        logger.debug("Reporting a loaded dataset.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Load localizations</strong></p>
+        <ul>
+        <li>Picasso Version: {results['picasso version']}</li>
+        <li>Movie Location: {parameters['filename']}</li>
+        <li>Number of localizations: {results['nlocs']}</li>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results['duration']} s</li>
+        </ul>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
 
     def identify(self, i, pars_identify, results_identify):
         """Describes the identify step
@@ -107,10 +145,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul>
         <li>Min Net Gradient: {pars_identify['min_gradient']:,.0f}</li>
         <li>Box Size: {pars_identify['box_size']} px</li>
+        <li>Start Time: {results_identify['start time']}</li>
         <li>Duration: {results_identify['duration']} s</li>
         <li>Identifications found: {results_identify['num_identifications']:,}
         </li>
         </ul>
+        TODO: DISPLAY SPOTS AROUND THE AUTO-IDENTIFIED MIN GRADIENT
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(
@@ -148,7 +188,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Localize</strong></p>
-        <ul><li>Duration: {results_localize['duration']}</li>
+        <ul><li>Start Time: {results_localize['start time']}</li>
+        <li>Duration: {results_localize['duration']}</li>
         <li>Locs Column names: {results_localize['locs_columns']}</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -183,6 +224,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         if msg := res_undrift.get("message"):
             text += f"""<li>Note: {msg}</li>"""
         text += f"""
+        <li>Start Time: {res_undrift['start time']}</li>
         <li>Duration: {res_undrift.get('duration')} s</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -207,6 +249,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>prompt: {parameters.get('prompt')}</li>
         <li>filename: {parameters.get('filename')}</li>
         <li>file present: {results.get('success')}</li>
+        <li>Start Time: {results['start time']}</li>
         </ul>"""
         if not results.get("success"):
             text += "<p>" + results["message"] + "</p>"
@@ -243,7 +286,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Saving Resulting Dataset</strong></p>
-        <ul><li>filepath: {results.get('filepath')}</li>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>filepath: {results.get('filepath')}</li>
         </ul>"""
 
         text += """
@@ -263,6 +307,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Loading Datasets to aggregate</strong></p>
         <ul><li>filepaths: {results.get('filepaths')}</li>
+        <li>Start Time: {results['start time']}</li>
         <li>tags: {results.get('tags')}</li>
         </ul>"""
 
@@ -291,6 +336,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>Shifts in x: {results.get('shifts')[0, :]}</li>
         <li>Shifts in y: {results.get('shifts')[1, :]}</li>
         <li>Shifts in z: {results.get('shifts')[2, :]}</li>
+        <li>Start Time: {results['start time']}</li>
         </ul>"""
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>

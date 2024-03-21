@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """
-Module Name: 240318_aggregation_workflow.py
+Module Name: 01_sgl_dataset_workflow.py
 Author: Heinrich Grabmayr
 Initial Date: March 18, 2024
-Description: This module shows an example of how to use an aggregation
+Description: This module shows an example of how to use a single dataset
     workflow of picasso-workflow. It uses the test data of the package.
     In order to get the example to work, do the following:
     - install the package picasso-workflow and its dependencies, e.g.
@@ -27,14 +27,21 @@ Description: This module shows an example of how to use an aggregation
             as an alternative to TextEdit, and on linux, you can use vi
             to open the file within the terminal.
     - For quick tests, add the field 'token': '<your_confluence_api_token>'
-        in reporter_config/ConfluenceReporter.
+        in reporter_config/ConfluenceReporter. However, saving tokens in plain
+        text is not recommended.
     - enter the values required below.
     - in terminal, with the conda environment active, go to the examples
         folder and execute
         python 240318_aggregation_workflow.py
     - see your confluence page for the results.
+
+    Analysis is performed according to the modules listed in the
+    workflow_modules, together with the respective parameters.
+    For a list of available modules, check out
+    util.AbstractModuleCollection
 """
-from picasso_workflow import AggregationWorkflowRunner
+import os
+from picasso_workflow import WorkflowRunner
 
 
 # the URL of your confluence instance
@@ -44,20 +51,42 @@ confluence_space = ""
 # the page under which the report should be generated
 parent_page_title = ""
 # the name under which the report should be generated
-report_name = ""
+report_name = "test_report"
 
 
 # the directory where the analysis files should be stored
-result_location = ""
+result_location = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
+)
+
+# if you have the .env file set up (copy from .env_template),
+# you can use its information instead of manually inputting it here
+# if not, comment this out
+confluence_url = os.getenv("TEST_CONFLUENCE_URL")
+confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
+confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
+parent_page_title = os.getenv("TEST_CONFLUENCE_PAGE")
+
+
+data_location = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..",
+    "..",
+    "picasso_workflow",
+    "tests",
+    "TestData",
+    "integration",
+)
 
 
 reporter_config = {
+    "report_name": report_name,
     "ConfluenceReporter": {
         "base_url": confluence_url,
         "space_key": confluence_space,
         "parent_page_title": parent_page_title,
-        "report_name": report_name,
-    }
+        "token": confluence_token,
+    },
 }
 
 analysis_config = {
@@ -75,9 +104,14 @@ analysis_config = {
 # e.g. for single dataset evaluation
 workflow_modules_sgl = [
     (
-        "load",
+        "load_dataset_movie",
         {
-            "filename": ("$map", "filename"),
+            "filename": os.path.join(
+                data_location,
+                "3C_30px_1kframes_1",
+                "3C_30px_1kframes_MMStack_Pos0.ome.tif",
+            ),
+            # "load_camera_info": True,
             "sample_movie": {
                 "filename": "selected_frames.mp4",
                 "n_sample": 40,
@@ -93,8 +127,10 @@ workflow_modules_sgl = [
                 "filename": "ng_histogram.png",
                 "frame_numbers": (
                     "$get_prior_result",  # get from prior results
-                    "results, load, sample_movie, sample_frame_idx",
+                    "results, 00_load_dataset_movie, sample_movie, "
+                    + "sample_frame_idx",
                 ),
+                "box_size": 7,
                 "start_ng": -3000,
                 "zscore": 5,
             },
@@ -112,12 +148,9 @@ workflow_modules_sgl = [
     # ),
     ("localize", {"fit_method": "lsq", "box_size": 7, "fit_parallel": True}),
     (
-        "undrift_rcc",
+        "save_single_dataset",
         {
-            "segmentation": 1000,
-            "max_iter_segmentations": 4,
-            "filename": "drift.csv",
-            "save_locs": {"filename": "locs_undrift.hdf5"},
+            "filename": "locs.hdf5",
         },
     ),
     (
@@ -127,57 +160,30 @@ workflow_modules_sgl = [
             "filename": "locs_undrift.hdf5",
         },
     ),
-    # ('segmentation', {
-    #     'method': 'brightfield',
-    #     'parameters': {
-    #         'filename': 'BF.png'}
-    #     },
-    # ),
-    # ('cluster_smlm', {
-    #     'min_locs': 10,
-    #     'cluster_radius': 4
-    #     },
-    # ),
-]
-
-
-# for dataset aggregation, after they have been analyzed separately
-workflow_modules_agg = [
     (
-        "load_datasets_to_aggregate",
+        "load_dataset_localizations",
         {
-            "tags": ("$map", "#tags"),
-            "evaldirs": ["resiround1/eval", "resiround2/eval"],
+            "filename": (
+                "$get_prior_result",  # get from prior results
+                "results, 04_manual, filepath",
+            ),
         },
     ),
-    ("RESI", {"evaldirs": ["resiround1/eval", "resiround2/eval"]}),
+    (
+        "save_single_dataset",
+        {
+            "filename": "locs.hdf5",
+        },
+    ),
 ]
-
-
-# e.g. for multi dataset evaluation and aggregation
-workflow_modules_multi = {
-    "single_dataset_tileparameters": {
-        "#tags": ["RESIround1", "RESIround2"],
-        "filename": ["fn1", "fn2"],
-    },
-    "single_dataset_modules": workflow_modules_sgl,
-    "aggregation_modules": [
-        (
-            "load",
-            {
-                "evaldirs": (
-                    "$get_prior_results",
-                    "all_results, $all, undrift_rcc, locs_undrift.hdf5",
-                )
-            },
-        )
-    ],
-}
 
 
 if __name__ == "__main__":
-    awr = AggregationWorkflowRunner.config_from_dicts(
-        reporter_config, analysis_config, workflow_modules_multi
+    wr = WorkflowRunner.config_from_dicts(
+        reporter_config,
+        analysis_config,
+        workflow_modules_sgl,
+        continue_previous_runner=True,
     )
-    awr.run()
-    awr.save()
+    wr.run()
+    # wr.save()

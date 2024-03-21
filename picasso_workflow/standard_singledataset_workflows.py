@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Module Name: predefined_singledataset_workflows.py
+Module Name: standard_singledataset_workflows.py
 Author: Heinrich Grabmayr
 Initial Date: March 20, 2024
 Description: This module provides predefined standard workflows for
@@ -22,7 +22,7 @@ def minimal(filepath, box_size=7):
     """
     workflow_modules = [
         (
-            "load_dataset",
+            "load_dataset_movie",
             {
                 "filename": filepath,
                 # "load_camera_info": True,
@@ -41,7 +41,7 @@ def minimal(filepath, box_size=7):
                     "filename": "ng_histogram.png",
                     "frame_numbers": (
                         "$get_prior_result",  # get from prior results
-                        "results, 00_load_dataset, "
+                        "results, 00_load_dataset_movie, "
                         + "sample_movie, sample_frame_idx",
                     ),
                     "box_size": box_size,

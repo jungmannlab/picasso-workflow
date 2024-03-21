@@ -123,13 +123,14 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
         pass
 
     # @unittest.skip("")
-    def test_01_load_dataset(self):
+    def test_01_load_dataset_movie(self):
 
         pars_load = {
             "filename": "my test file location",
             "save_directory": "my test save directory",
         }
         results_load = {
+            "start time": "now",
             "picasso version": "0.0.0",
             "movie.shape": (40000, 2048, 1024),
             "duration": 10.2,
@@ -143,7 +144,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
                 ),
             },
         }
-        self.cr.load_dataset(0, pars_load, results_load)
+        self.cr.load_dataset_movie(0, pars_load, results_load)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -158,6 +159,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
             "box_size": 7,
         }
         results = {
+            "start time": "now",
             "duration": 16.4,
             "num_identifications": 23237,
         }
@@ -173,6 +175,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
     def test_03_localize(self):
         parameters = {}
         results = {
+            "start time": "now",
             "duration": 16.4,
             "locs_columns": ("x", "y", "photons"),
         }
@@ -191,6 +194,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
             "segmentation": 1000,
         }
         results = {
+            "start time": "now",
             "message": "This is my message to you.",
             "duration": 27.4,
         }
@@ -210,6 +214,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
             "success": False,
         }
         results = {
+            "start time": "now",
             "message": "This is my message to you.",
         }
         self.cr.manual(0, parameters, results)
@@ -234,7 +239,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
 
     def test_07_save_single_dataset(self):
         parameters = {}
-        results = {"filepath": "/path/to/my/file"}
+        results = {"start time": "now", "filepath": "/path/to/my/file"}
         self.cr.save_single_dataset(0, parameters, results)
 
         # clean up
@@ -246,6 +251,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
     def test_08_load_datasets_to_aggregate(self):
         parameters = {}
         results = {
+            "start time": "now",
             "filepaths": ["/path/to/my/file", "/and/the/other"],
             "tags": ["a", "b"],
         }
@@ -259,7 +265,10 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
 
     def test_09_align_channels(self):
         parameters = {}
-        results = {"shifts": np.array([[3, 4], [2, 3], [1, 2]])}
+        results = {
+            "start time": "now",
+            "shifts": np.array([[3, 4], [2, 3], [1, 2]]),
+        }
         self.cr.align_channels(0, parameters, results)
 
         # clean up

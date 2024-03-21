@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 """
-Module Name: predefined_aggregation_workflows.py
+Module Name: stanard_aggregation_workflows.py
 Author: Heinrich Grabmayr
 Initial Date: March 20, 2024
 Description: This module provides predefined standard workflows for
     analyzing multiple datasets
 """
-import picasso_workflow.predefined_singledataset_workflows as psw
+import picasso_workflow.standard_singledataset_workflows as ssw
 
 
 def minimal_channel_align(filepaths, box_size=7):
@@ -23,7 +23,7 @@ def minimal_channel_align(filepaths, box_size=7):
         box_size : uneven int
             the analysis box size
     """
-    sgl_dataset_workflow = psw.minimal(
+    sgl_dataset_workflow = ssw.minimal(
         filepath=("$map", "filename"), box_size=box_size
     )
     workflow_modules_agg = [

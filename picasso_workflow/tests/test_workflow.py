@@ -113,7 +113,7 @@ class TestWorkflow(unittest.TestCase):
             "ConfluenceReporter": {"a": 0},
         }
         analysis_config = {"result_location": self.results_folder}
-        workflow_modules = [("load_dataset", {"b": 3})]
+        workflow_modules = [("load_dataset_movie", {"b": 3})]
 
         wr = WorkflowRunner.config_from_dicts(
             reporter_config, analysis_config, workflow_modules
