@@ -1,0 +1,688 @@
+{
+  "encoding": "UTF-8",
+  "format": "Micro-Manager Property Map",
+  "major_version": 2,
+  "minor_version": 0,
+  "map": {
+    "AutoscaleIgnoredQuantile": {
+      "type": "DOUBLE",
+      "scalar": 1.0E-4
+    },
+    "Autostretch": {
+      "type": "BOOLEAN",
+      "scalar": true
+    },
+    "ChannelSettings": {
+      "type": "PROPERTY_MAP",
+      "array": [
+        {
+          "Channel": {
+            "type": "STRING",
+            "scalar": "1-R640"
+          },
+          "ChannelGroup": {
+            "type": "STRING",
+            "scalar": "Filter turret"
+          },
+          "Color": {
+            "type": "COLOR",
+            "scalar": {
+              "ColorSpace": "sRGB",
+              "Components": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "Alpha": 1.0
+            }
+          },
+          "ComponentSettings": {
+            "type": "PROPERTY_MAP",
+            "array": [
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 1023
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 518
+                }
+              },
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              }
+            ]
+          },
+          "HistogramBitDepth": {
+            "type": "INTEGER",
+            "scalar": 16
+          },
+          "UniformComponentScaling": {
+            "type": "BOOLEAN",
+            "scalar": false
+          },
+          "UseCameraBitDepth": {
+            "type": "BOOLEAN",
+            "scalar": true
+          },
+          "Visible": {
+            "type": "BOOLEAN",
+            "scalar": true
+          }
+        },
+        {
+          "Channel": {
+            "type": "STRING",
+            "scalar": "2-G561"
+          },
+          "ChannelGroup": {
+            "type": "STRING",
+            "scalar": "Filter turret"
+          },
+          "Color": {
+            "type": "COLOR",
+            "scalar": {
+              "ColorSpace": "sRGB",
+              "Components": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "Alpha": 1.0
+            }
+          },
+          "ComponentSettings": {
+            "type": "PROPERTY_MAP",
+            "array": [
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 22851
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 398
+                }
+              },
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              }
+            ]
+          },
+          "HistogramBitDepth": {
+            "type": "INTEGER",
+            "scalar": 16
+          },
+          "UniformComponentScaling": {
+            "type": "BOOLEAN",
+            "scalar": false
+          },
+          "UseCameraBitDepth": {
+            "type": "BOOLEAN",
+            "scalar": true
+          },
+          "Visible": {
+            "type": "BOOLEAN",
+            "scalar": true
+          }
+        },
+        {
+          "Channel": {
+            "type": "STRING",
+            "scalar": "Zyla_3"
+          },
+          "ChannelGroup": {
+            "type": "STRING",
+            "scalar": "Camera"
+          },
+          "Color": {
+            "type": "COLOR",
+            "scalar": {
+              "ColorSpace": "sRGB",
+              "Components": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "Alpha": 1.0
+            }
+          },
+          "ComponentSettings": {
+            "type": "PROPERTY_MAP",
+            "array": [
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 144
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 89
+                }
+              },
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              }
+            ]
+          },
+          "HistogramBitDepth": {
+            "type": "INTEGER",
+            "scalar": 16
+          },
+          "UniformComponentScaling": {
+            "type": "BOOLEAN",
+            "scalar": false
+          },
+          "UseCameraBitDepth": {
+            "type": "BOOLEAN",
+            "scalar": true
+          },
+          "Visible": {
+            "type": "BOOLEAN",
+            "scalar": true
+          }
+        },
+        {
+          "Channel": {
+            "type": "STRING",
+            "scalar": "Zyla_2-Zyla_1"
+          },
+          "ChannelGroup": {
+            "type": "STRING",
+            "scalar": "Camera"
+          },
+          "Color": {
+            "type": "COLOR",
+            "scalar": {
+              "ColorSpace": "sRGB",
+              "Components": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "Alpha": 1.0
+            }
+          },
+          "ComponentSettings": {
+            "type": "PROPERTY_MAP",
+            "array": [
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              },
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              }
+            ]
+          },
+          "HistogramBitDepth": {
+            "type": "INTEGER",
+            "scalar": 8
+          },
+          "UniformComponentScaling": {
+            "type": "BOOLEAN",
+            "scalar": false
+          },
+          "UseCameraBitDepth": {
+            "type": "BOOLEAN",
+            "scalar": true
+          },
+          "Visible": {
+            "type": "BOOLEAN",
+            "scalar": true
+          }
+        },
+        {
+          "Channel": {
+            "type": "STRING",
+            "scalar": "Zyla_2-Zyla_2"
+          },
+          "ChannelGroup": {
+            "type": "STRING",
+            "scalar": "Camera"
+          },
+          "Color": {
+            "type": "COLOR",
+            "scalar": {
+              "ColorSpace": "sRGB",
+              "Components": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "Alpha": 1.0
+            }
+          },
+          "ComponentSettings": {
+            "type": "PROPERTY_MAP",
+            "array": [
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              },
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              }
+            ]
+          },
+          "HistogramBitDepth": {
+            "type": "INTEGER",
+            "scalar": 8
+          },
+          "UniformComponentScaling": {
+            "type": "BOOLEAN",
+            "scalar": false
+          },
+          "UseCameraBitDepth": {
+            "type": "BOOLEAN",
+            "scalar": true
+          },
+          "Visible": {
+            "type": "BOOLEAN",
+            "scalar": true
+          }
+        },
+        {
+          "Channel": {
+            "type": "STRING",
+            "scalar": "Zyla_2-Zyla_3"
+          },
+          "ChannelGroup": {
+            "type": "STRING",
+            "scalar": "Camera"
+          },
+          "Color": {
+            "type": "COLOR",
+            "scalar": {
+              "ColorSpace": "sRGB",
+              "Components": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "Alpha": 1.0
+            }
+          },
+          "ComponentSettings": {
+            "type": "PROPERTY_MAP",
+            "array": [
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              },
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              }
+            ]
+          },
+          "HistogramBitDepth": {
+            "type": "INTEGER",
+            "scalar": 8
+          },
+          "UniformComponentScaling": {
+            "type": "BOOLEAN",
+            "scalar": false
+          },
+          "UseCameraBitDepth": {
+            "type": "BOOLEAN",
+            "scalar": true
+          },
+          "Visible": {
+            "type": "BOOLEAN",
+            "scalar": true
+          }
+        },
+        {
+          "Channel": {
+            "type": "STRING",
+            "scalar": "Zyla_3-Zyla_1"
+          },
+          "ChannelGroup": {
+            "type": "STRING",
+            "scalar": "Camera"
+          },
+          "Color": {
+            "type": "COLOR",
+            "scalar": {
+              "ColorSpace": "sRGB",
+              "Components": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "Alpha": 1.0
+            }
+          },
+          "ComponentSettings": {
+            "type": "PROPERTY_MAP",
+            "array": [
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              },
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              }
+            ]
+          },
+          "HistogramBitDepth": {
+            "type": "INTEGER",
+            "scalar": 8
+          },
+          "UniformComponentScaling": {
+            "type": "BOOLEAN",
+            "scalar": false
+          },
+          "UseCameraBitDepth": {
+            "type": "BOOLEAN",
+            "scalar": true
+          },
+          "Visible": {
+            "type": "BOOLEAN",
+            "scalar": true
+          }
+        },
+        {
+          "Channel": {
+            "type": "STRING",
+            "scalar": "Zyla_3-Zyla_2"
+          },
+          "ChannelGroup": {
+            "type": "STRING",
+            "scalar": "Camera"
+          },
+          "Color": {
+            "type": "COLOR",
+            "scalar": {
+              "ColorSpace": "sRGB",
+              "Components": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "Alpha": 1.0
+            }
+          },
+          "ComponentSettings": {
+            "type": "PROPERTY_MAP",
+            "array": [
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              },
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              }
+            ]
+          },
+          "HistogramBitDepth": {
+            "type": "INTEGER",
+            "scalar": 8
+          },
+          "UniformComponentScaling": {
+            "type": "BOOLEAN",
+            "scalar": false
+          },
+          "UseCameraBitDepth": {
+            "type": "BOOLEAN",
+            "scalar": true
+          },
+          "Visible": {
+            "type": "BOOLEAN",
+            "scalar": true
+          }
+        },
+        {
+          "Channel": {
+            "type": "STRING",
+            "scalar": "Zyla_3-Zyla_3"
+          },
+          "ChannelGroup": {
+            "type": "STRING",
+            "scalar": "Camera"
+          },
+          "Color": {
+            "type": "COLOR",
+            "scalar": {
+              "ColorSpace": "sRGB",
+              "Components": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "Alpha": 1.0
+            }
+          },
+          "ComponentSettings": {
+            "type": "PROPERTY_MAP",
+            "array": [
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              },
+              {
+                "Gamma": {
+                  "type": "DOUBLE",
+                  "scalar": 1.0
+                },
+                "ScalingMax": {
+                  "type": "LONG",
+                  "scalar": 9223372036854775807
+                },
+                "ScalingMin": {
+                  "type": "LONG",
+                  "scalar": 0
+                }
+              }
+            ]
+          },
+          "HistogramBitDepth": {
+            "type": "INTEGER",
+            "scalar": 8
+          },
+          "UniformComponentScaling": {
+            "type": "BOOLEAN",
+            "scalar": false
+          },
+          "UseCameraBitDepth": {
+            "type": "BOOLEAN",
+            "scalar": true
+          },
+          "Visible": {
+            "type": "BOOLEAN",
+            "scalar": true
+          }
+        }
+      ]
+    },
+    "ColorMode": {
+      "type": "STRING",
+      "scalar": "GRAYSCALE"
+    },
+    "HistogramIsLogarithmic": {
+      "type": "BOOLEAN",
+      "scalar": false
+    },
+    "IgnorZerosAutoscale": {
+      "type": "BOOLEAN",
+      "scalar": false
+    },
+    "PlaybackFPS": {
+      "type": "DOUBLE",
+      "scalar": 10.0
+    },
+    "ROIAutoscale": {
+      "type": "BOOLEAN",
+      "scalar": true
+    },
+    "UniformChannelScaling": {
+      "type": "BOOLEAN",
+      "scalar": false
+    },
+    "ZoomRatio": {
+      "type": "DOUBLE",
+      "scalar": 2.0
+    }
+  }
+}
