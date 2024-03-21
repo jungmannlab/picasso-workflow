@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class TestWorkflow(unittest.TestCase):
     def setUp(self):
         self.results_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "TestData", "workflow"
+            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
         )
 
     def tearDown(self):

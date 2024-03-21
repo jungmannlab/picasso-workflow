@@ -28,6 +28,16 @@ def minimal_channel_align(filepaths, box_size=7):
     )
     workflow_modules_agg = [
         (
+            "load_datasets_to_aggregate",
+            {
+                "tags": ("$map", "#tags"),
+                "filenames": (
+                    "$get_prior_results",
+                    "all_results, $all, save_single_dataset, filepath",
+                ),
+            },
+        ),
+        (
             "align_channels",
             {
                 "evaldirs": (
@@ -39,7 +49,7 @@ def minimal_channel_align(filepaths, box_size=7):
     ]
     workflow_modules_multi = {
         "single_dataset_tileparameters": {
-            "$tags": [f"channel {i}" for i in len(filepaths)],
+            "#tags": [f"channel {i}" for i in len(filepaths)],
             "filename": filepaths,
         },
         "single_dataset_modules": sgl_dataset_workflow,

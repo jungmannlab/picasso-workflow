@@ -26,9 +26,7 @@ class Test_A_PackageIntegration(unittest.TestCase):
 
     def setUp(self):
         self.results_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "TestData",
-            "integration",
+            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
         )
         self.confluence_url = os.getenv("TEST_CONFLUENCE_URL")
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
@@ -142,10 +140,13 @@ class Test_B_CompleteIntegration(unittest.TestCase):
     """
 
     def setUp(self):
-        self.results_folder = os.path.join(
+        self.data_folder = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "TestData",
             "integration",
+        )
+        self.results_folder = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
         )
         self.confluence_url = os.getenv("TEST_CONFLUENCE_URL")
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
@@ -178,13 +179,13 @@ class Test_B_CompleteIntegration(unittest.TestCase):
         }
         workflow_modules = psw.minimal(
             filepath=os.path.join(
-                self.results_folder,
+                self.data_folder,
                 "3C_30px_1kframes_1",
                 "3C_30px_1kframes_MMStack_Pos0.ome.tif",
             )
         )
         # remove rcc, as the test dataset is too small
-        workflow_modules = workflow_modules[:-1]
+        workflow_modules = workflow_modules[:-2]
 
         wr = WorkflowRunner.config_from_dicts(
             reporter_config, analysis_config, workflow_modules

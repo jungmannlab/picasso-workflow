@@ -73,5 +73,11 @@ def minimal(filepath, box_size=7):
                 "save_locs": {"filename": "locs_undrift.hdf5"},
             },
         ),
+        (
+            "save_single_dataset",
+            {
+                "filename": "locs.hdf5",
+            },
+        ),
     ]
     return workflow_modules

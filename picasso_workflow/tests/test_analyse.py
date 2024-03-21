@@ -50,7 +50,7 @@ class TestAnalyse(unittest.TestCase):
 
     def setUp(self):
         self.results_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "TestData", "analyse"
+            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
         )
         analysis_config = {
             "camera_info": {
@@ -230,4 +230,62 @@ class TestAnalyse(unittest.TestCase):
         parameters, results = self.ap.manual(0, parameters)
         assert results["success"] is False
 
+        # clean up
         shutil.rmtree(os.path.join(self.results_folder, "00_manual"))
+
+    @patch("picasso_workflow.analyse.postprocess.nena")
+    def test_10_AutoPicasso_summarize_dataset(self, mock_nena):
+        mock_nena.return_value = (1.8, [2.4, 4.1])
+        parameters = {"methods": {"NeNa": {}}}
+        parameters, results = self.ap.summarize_dataset(0, parameters)
+
+        assert "nena" in results.keys()
+
+        with self.assertRaises(NotImplementedError):
+            self.ap.summarize_dataset(0, {"methods": {"NoMethod": {}}})
+
+        # clean up
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_summarize_dataset")
+        )
+
+    @patch("picasso_workflow.analyse.AutoPicasso._save_locs")
+    def test_11_AutoPicasso_save_single_dataset(self, mock_save):
+        mock_save.return_value = {"res_a": 7}
+        parameters = {"filename": "locs.hdf5"}
+        parameters, results = self.ap.save_single_dataset(0, parameters)
+
+        assert results["res_a"] == 7
+
+        # clean up
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_save_single_dataset")
+        )
+
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_12_AutoPicasso_load_datasets_to_aggregate(self, mock_load):
+        mock_load.return_value = (5, {"info": 4})
+        parameters = {
+            "filepaths": ["/my/path/to/locs.hdf5", "/my/path/to2/locs.hdf5"],
+            "tags": ["1", "2"],
+        }
+        parameters, results = self.ap.load_datasets_to_aggregate(0, parameters)
+
+        assert "filepaths" in results.keys()
+
+        # clean up
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_load_datasets_to_aggregate")
+        )
+
+    @patch("picasso_workflow.analyse.picasso_outpost.align_channels")
+    def test_13_AutoPicasso_align_channels(self, mock_align_channels):
+        mock_align_channels.return_value = [[3], [2]], np.zeros((3, 4, 5))
+
+        parameters = {"fig_filename": "shiftplot.png"}
+        parameters, results = self.ap.align_channels(0, parameters)
+
+        assert os.path.exists(results["fig_filepath"])
+
+        # clean up
+        shutil.rmtree(os.path.join(self.results_folder, "00_align_channels"))

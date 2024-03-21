@@ -217,7 +217,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def describe(self, i, pars_describe, res_describe):
+    def summarize_dataset(self, i, pars_describe, res_describe):
         logger.debug("Reporting dataset description.")
         text = """
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -237,6 +237,75 @@ class ConfluenceReporter(AbstractModuleCollection):
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
+
+    def save_single_dataset(self, i, parameters, results):
+        logger.debug("Reporting dataset saving.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Saving Resulting Dataset</strong></p>
+        <ul><li>filepath: {results.get('filepath')}</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    ##########################################################################
+    # Aggregation workflow modules
+    ##########################################################################
+
+    def load_datasets_to_aggregate(self, i, parameters, results):
+        logger.debug("Reporting load_datasets_to_aggregate.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Loading Datasets to aggregate</strong></p>
+        <ul><li>filepaths: {results.get('filepaths')}</li>
+        <li>tags: {results.get('tags')}</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def align_channels(self, i, parameters, results):
+        """Describes the align_channels module
+        Args:
+            parameters : dict
+                filenames : the net gradient used
+            results : dict
+                required:
+                    shifts
+                optional:
+                    fig_filepath
+        """
+        logger.debug("Reporting align_channels.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Align Channels via RCC</strong></p>
+        <ul><li>Shifts in x: {results.get('shifts')[0, :]}</li>
+        <li>Shifts in y: {results.get('shifts')[1, :]}</li>
+        <li>Shifts in z: {results.get('shifts')[2, :]}</li>
+        </ul>"""
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+        if driftimg_fn := results.get("fig_filepath"):
+            self.ci.upload_attachment(self.report_page_id, driftimg_fn)
+            self.ci.update_page_content_with_image_attachment(
+                self.report_page_name,
+                self.report_page_id,
+                os.path.split(driftimg_fn)[1],
+            )
 
 
 class UndriftError(Exception):

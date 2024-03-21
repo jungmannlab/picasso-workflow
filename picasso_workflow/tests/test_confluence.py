@@ -9,6 +9,7 @@ import logging
 import unittest
 from unittest.mock import patch, MagicMock
 import os
+import numpy as np
 
 from picasso_workflow import confluence
 
@@ -220,10 +221,46 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
-    def test_06_describe(self):
+    def test_06_summarize_dataset(self):
         parameters = {"methods": {"nena": {"inputpar": "a"}}}
         results = {"nena": {"best_vals": (3, 5, 7), "res": 1.23}}
-        self.cr.describe(0, parameters, results)
+        self.cr.summarize_dataset(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def test_07_save_single_dataset(self):
+        parameters = {}
+        results = {"filepath": "/path/to/my/file"}
+        self.cr.save_single_dataset(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def test_08_load_datasets_to_aggregate(self):
+        parameters = {}
+        results = {
+            "filepaths": ["/path/to/my/file", "/and/the/other"],
+            "tags": ["a", "b"],
+        }
+        self.cr.load_datasets_to_aggregate(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def test_09_align_channels(self):
+        parameters = {}
+        results = {"shifts": np.array([[3, 4], [2, 3], [1, 2]])}
+        self.cr.align_channels(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(

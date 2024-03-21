@@ -26,6 +26,10 @@ class AbstractModuleCollection(abc.ABC):
     def __init__(self):
         pass
 
+    ##########################################################################
+    # Single-dataset workflow modules
+    ##########################################################################
+
     @abc.abstractmethod
     def load_dataset(self):
         """Loads a DNA-PAINT dataset in a format supported by picasso."""
@@ -51,6 +55,33 @@ class AbstractModuleCollection(abc.ABC):
         """Describes a manual step, for which the workflow is paused."""
         pass
 
+    @abc.abstractmethod
+    def summarize_dataset(self):
+        """Summarizes the results of a dataset analysis."""
+        pass
+
+    @abc.abstractmethod
+    def save_single_dataset(self):
+        """Saves the locs and info of a single dataset; makes loading
+        for the aggregation workflow more straightforward."""
+        pass
+
+    ##########################################################################
+    # Aggregation workflow modules
+    ##########################################################################
+
+    @abc.abstractmethod
+    def load_datasets_to_aggregate(self):
+        """Loads data of multiple single-dataset workflows into one
+        aggregation workflow."""
+        pass
+
+    @abc.abstractmethod
+    def align_channels(self):
+        """Saves the locs and info of a single dataset; makes loading
+        for the aggregation workflow more straightforward."""
+        pass
+
 
 class ParameterTiler:
     """Multiplies a set of parameters according to a tile command.
@@ -72,7 +103,7 @@ class ParameterTiler:
                 generated for each item in the list. The keys should
                 be used in a $map command in the parameters in 'run'.
                 In addtition to the mapped variables, tile_entries
-                may comprise '$tags', which are keyword tags for the
+                may comprise '#tags', which are keyword tags for the
                 list of parameter sets.
                 for example:
                     tile_entries = {'file_name': ['a1.tiff', 'a2.tiff']}
@@ -96,7 +127,7 @@ class ParameterTiler:
             result_parameters : list of dict
                 the tiles of parameters
             tags : list of str
-                if the map_dict contains the key '$tags', its value is
+                if the map_dict contains the key '#tags', its value is
                 returned (supposed to be tags to use for naming),
                 otherwise list of empty strings
         """
@@ -110,7 +141,7 @@ class ParameterTiler:
             pce = ParameterCommandExecutor(self.parent_object, self.map_dict)
             logger.debug(f"running with parameters {parameters}")
             result_parameters.append(pce.run(copy.deepcopy(parameters)))
-        if (tags := self.tile_entries.get("$tags")) is None:
+        if (tags := self.tile_entries.get("#tags")) is None:
             tags = [""] * len(result_parameters)
 
         return result_parameters, tags

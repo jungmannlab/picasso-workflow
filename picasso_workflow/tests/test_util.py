@@ -84,7 +84,7 @@ class TestUtil(unittest.TestCase):
         mymap = {"key1": "value1", "key2": "value2"}
         tile_entries = {
             "file_name": ["a.tiff", "b.tiff"],
-            "$tags": ["RESI-1", "RESI-2"],
+            "#tags": ["RESI-1", "RESI-2"],
         }
         pce = util.ParameterTiler(self, tile_entries, mymap)
         di = [

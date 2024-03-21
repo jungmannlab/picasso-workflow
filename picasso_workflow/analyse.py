@@ -19,6 +19,7 @@ import logging
 
 from picasso_workflow.util import AbstractModuleCollection
 from picasso_workflow import process_brightfield
+from picasso_workflow import picasso_outpost
 
 
 logger = logging.getLogger(__name__)
@@ -55,11 +56,17 @@ class AutoPicasso(AbstractModuleCollection):
     Each module that runs saves their results into a separate folder.
     """
 
+    # for single-dataset analysis
     movie = None
     info = None
     identifications = None
     locs = None
     drift = None
+
+    # for multi-dataset analysis (aggregation)
+    channel_locs = None
+    channel_info = None
+    channel_tags = None
 
     def __init__(self, results_folder, analysis_config):
         """
@@ -79,7 +86,7 @@ class AutoPicasso(AbstractModuleCollection):
         self.analysis_config = analysis_config
 
     ##########################################################################
-    # MODULES
+    # Single dataset modules
     ##########################################################################
 
     @module_decorator
@@ -447,7 +454,7 @@ class AutoPicasso(AbstractModuleCollection):
                 pars["filename"] = os.path.join(
                     results["folder"], pars["filename"]
                 )
-            self.save_locs(pars["filename"])
+            self._save_locs(pars["filename"])
 
         dt = np.round(time.time() - t00, 2)
         results["duration"] = dt
@@ -596,7 +603,7 @@ class AutoPicasso(AbstractModuleCollection):
                 pars["filename"] = os.path.join(
                     results["folder"], pars["filename"]
                 )
-            self.save_locs(pars["filename"])
+            self._save_locs(pars["filename"])
 
         dt = np.round(time.time() - t00, 2)
         results["duration"] = dt
@@ -652,7 +659,7 @@ class AutoPicasso(AbstractModuleCollection):
         return parameters, results
 
     @module_decorator
-    def describe(self, i, parameters, results):
+    def summarize_dataset(self, i, parameters, results):
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
                 res, best_vals = postprocess.nena(self.locs, self.info)
@@ -663,7 +670,31 @@ class AutoPicasso(AbstractModuleCollection):
                 )
         return parameters, results
 
-    def save_locs(self, filename):
+    @module_decorator
+    def save_single_dataset(self, i, parameters, results):
+        """Saves the locs and info of a single dataset; makes loading
+        for the aggregation workflow more straightforward.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                        filename : str
+                            the name of the dataset
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        results["filepath"] = os.path.join(
+            results["folder"], parameters["filename"]
+        )
+        res = self._save_locs(results["filepath"])
+        for k, v in res.items():
+            results[k] = v
+        return parameters, results
+
+    def _save_locs(self, filename):
         t00 = time.time()
         base_info = {
             "Frames": self.movie.shape[0],
@@ -688,6 +719,85 @@ class AutoPicasso(AbstractModuleCollection):
         dt = np.round(time.time() - t00, 2)
         results_save = {"duration": dt}
         return results_save
+
+    ##########################################################################
+    # Aggregation workflow modules
+    ##########################################################################
+
+    @module_decorator
+    def load_datasets_to_aggregate(self, i, parameters, results):
+        """Loads the results of single-dataset workflows
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    filepaths : list of str
+                        the hdf5 files to load.
+                    tags : list of str
+                        the tags to name the datasets
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        self.channel_locs = []
+        self.channel_info = []
+        self.channel_tags = []
+        for fp, tag in zip(parameters["filepaths"], parameters["tags"]):
+            locs, info = io.load_locs(fp)
+            self.channel_locs.append(locs)
+            self.channel_info.append(info)
+            self.channel_tags.append(tag)
+        results["filepaths"] = parameters["filepaths"]
+        results["tags"] = parameters["tags"]
+        return parameters, results
+
+    @module_decorator
+    def align_channels(self, i, parameters, results):
+        """Aligns multiple channels to each other (part of an aggregation
+        workflow)
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+                    filepaths : list of str
+                        the previously saved hdf5 files to be loaded and
+                        aligned. if not given, the last processed data is used
+                    align_pars : dict
+                        kwargs of picasso_outpost.align_channels
+                            max_iterations, convergence
+                    fig_filename : str
+                        the location to save the drift figure to
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        if parameters.get("filepaths"):
+            self.channel_locs = []
+            self.channel_info = []
+            self.channel_tags = []
+            for fp in parameters["filepaths"]:
+                locs, info = io.load_locs(fp)
+                self.channel_locs.append(locs)
+                self.channel_info.append(info)
+                self.channel_tags.append(os.path.split(fp)[1])
+
+        shifts, cum_shifts = picasso_outpost.align_channels(
+            self.channel_locs,
+            self.channel_info,
+            **parameters.get("align_pars", {}),
+        )
+        results["shifts"] = cum_shifts[:, :, -1]
+
+        if fn := parameters.get("fig_filename"):
+            fig_filepath = os.path.join(results["folder"], fn)
+            picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
+            results["fig_filepath"] = fig_filepath
+
+        return parameters, results
 
 
 class AutoPicassoError(Exception):

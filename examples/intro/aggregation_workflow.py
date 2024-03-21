@@ -143,20 +143,27 @@ workflow_modules_sgl = [
 
 # for dataset aggregation, after they have been analyzed separately
 workflow_modules_agg = [
-    ("RESI", {"evaldirs": ["resiround1/eval", "resiround2/eval"]})
+    (
+        "load_datasets_to_aggregate",
+        {
+            "tags": ("$map", "#tags"),
+            "evaldirs": ["resiround1/eval", "resiround2/eval"],
+        },
+    ),
+    ("RESI", {"evaldirs": ["resiround1/eval", "resiround2/eval"]}),
 ]
 
 
 # e.g. for multi dataset evaluation and aggregation
 workflow_modules_multi = {
     "single_dataset_tileparameters": {
-        "$tags": ["RESIround1", "RESIround2"],
+        "#tags": ["RESIround1", "RESIround2"],
         "filename": ["fn1", "fn2"],
     },
     "single_dataset_modules": workflow_modules_sgl,
     "aggregation_modules": [
         (
-            "RESI",
+            "load",
             {
                 "evaldirs": (
                     "$get_prior_results",
