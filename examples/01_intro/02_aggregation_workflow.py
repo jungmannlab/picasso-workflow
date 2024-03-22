@@ -45,7 +45,7 @@ confluence_space = ""
 # the page under which the report should be generated
 parent_page_title = ""
 # the name under which the report should be generated
-report_name = ""
+report_name = "my-agg-test"
 
 
 # the directory where the analysis files should be stored
@@ -64,19 +64,20 @@ data_location = os.path.join(
 
 # # if you have the .env file set up (copy from .env_template),
 # # you can use its information instead of manually inputting it here
-# confluence_url = os.getenv("TEST_CONFLUENCE_URL")
-# confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
-# confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
-# parent_page_title = os.getenv("TEST_CONFLUENCE_PAGE")
+confluence_url = os.getenv("TEST_CONFLUENCE_URL")
+confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
+confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
+parent_page_title = os.getenv("TEST_CONFLUENCE_PAGE")
 
 
 reporter_config = {
+    "report_name": report_name,
     "ConfluenceReporter": {
         "base_url": confluence_url,
         "space_key": confluence_space,
         "parent_page_title": parent_page_title,
-        "report_name": report_name,
-    }
+        "token": confluence_token,
+    },
 }
 
 analysis_config = {
@@ -94,9 +95,9 @@ analysis_config = {
 # e.g. for single dataset evaluation
 workflow_modules_sgl = [
     (
-        "load_dataset",
+        "load_dataset_movie",
         {
-            "filename": ("$map", "filename"),
+            "filename": ("$$map", "filepath"),
             "sample_movie": {
                 "filename": "selected_frames.mp4",
                 "n_sample": 40,
@@ -112,10 +113,12 @@ workflow_modules_sgl = [
                 "filename": "ng_histogram.png",
                 "frame_numbers": (
                     "$get_prior_result",  # get from prior results
-                    "results, load, sample_movie, sample_frame_idx",
+                    """results, 00_load_dataset_movie, sample_movie,
+                    sample_frame_idx""",
                 ),
                 "start_ng": -3000,
                 "zscore": 5,
+                "box_size": 7,
             },
             "ids_vs_frame": {"filename": "ids_vs_frame.png"},
             "box_size": 7,
@@ -130,13 +133,19 @@ workflow_modules_sgl = [
     #     },
     # ),
     ("localize", {"fit_method": "lsq", "box_size": 7, "fit_parallel": True}),
+    # (
+    #     "undrift_rcc",
+    #     {
+    #         "segmentation": 1000,
+    #         "max_iter_segmentations": 4,
+    #         "filename": "drift.csv",
+    #         "save_locs": {"filename": "locs_undrift.hdf5"},
+    #     },
+    # ),
     (
-        "undrift_rcc",
+        "save_single_dataset",
         {
-            "segmentation": 1000,
-            "max_iter_segmentations": 4,
-            "filename": "drift.csv",
-            "save_locs": {"filename": "locs_undrift.hdf5"},
+            "filename": "locs.hdf5",
         },
     ),
     (
@@ -146,57 +155,75 @@ workflow_modules_sgl = [
             "filename": "locs_undrift.hdf5",
         },
     ),
-    # ('segmentation', {
-    #     'method': 'brightfield',
-    #     'parameters': {
-    #         'filename': 'BF.png'}
-    #     },
-    # ),
-    # ('cluster_smlm', {
-    #     'min_locs': 10,
-    #     'cluster_radius': 4
-    #     },
-    # ),
+    (
+        "load_dataset_localizations",
+        {
+            "filename": (
+                "$get_prior_result",  # get from prior results
+                "results, 04_manual, filepath",
+            ),
+        },
+    ),
+    (
+        "save_single_dataset",
+        {
+            "filename": "locs.hdf5",
+        },
+    ),
 ]
 
 
 # for dataset aggregation, after they have been analyzed separately
+idx_last_sgl_module = len(workflow_modules_sgl) - 1
 workflow_modules_agg = [
     (
         "load_datasets_to_aggregate",
         {
             "tags": ("$map", "#tags"),
-            "evaldirs": ["resiround1/eval", "resiround2/eval"],
+            "filepaths": (
+                "$get_prior_result",
+                "all_results, single_dataset, $all, "
+                + f"{idx_last_sgl_module:02d}_save_single_dataset, filepath",
+            ),
         },
     ),
-    ("RESI", {"evaldirs": ["resiround1/eval", "resiround2/eval"]}),
+    (
+        "align_channels",
+        {},
+    ),
+]
+
+filepath = [
+    os.path.join(
+        data_location,
+        "3C_30px_1kframes_1",
+        "3C_30px_1kframes_MMStack_Pos0.ome.tif",
+    ),
+    os.path.join(
+        data_location,
+        "3C_30px_1kframes_shifted_1",
+        "3C_30px_1kframes_shifted_MMStack_Pos0.ome.tif",
+    ),
 ]
 
 
 # e.g. for multi dataset evaluation and aggregation
 workflow_modules_multi = {
     "single_dataset_tileparameters": {
-        "#tags": ["RESIround1", "RESIround2"],
-        "filename": ["fn1", "fn2"],
+        "#tags": ["miniROI1", "miniROI2"],
+        "filepath": filepath,
     },
     "single_dataset_modules": workflow_modules_sgl,
-    "aggregation_modules": [
-        (
-            "load",
-            {
-                "evaldirs": (
-                    "$get_prior_results",
-                    "all_results, $all, undrift_rcc, locs_undrift.hdf5",
-                )
-            },
-        )
-    ],
+    "aggregation_modules": workflow_modules_agg,
 }
 
 
 if __name__ == "__main__":
     awr = AggregationWorkflowRunner.config_from_dicts(
-        reporter_config, analysis_config, workflow_modules_multi
+        reporter_config,
+        analysis_config,
+        workflow_modules_multi,
+        continue_previous_runner=True,
     )
     awr.run()
-    awr.save()
+    # awr.save()

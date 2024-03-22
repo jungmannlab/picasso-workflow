@@ -88,7 +88,7 @@ class TestUtil(unittest.TestCase):
         }
         pce = util.ParameterTiler(self, tile_entries, mymap)
         di = [
-            ("load", {"filename": ("$map", "file_name")}),
+            ("load", {"filename": ("$$map", "file_name")}),
             ("localize", {"min_ng": 20000}),
         ]
         res_exp = [

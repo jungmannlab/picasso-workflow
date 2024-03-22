@@ -24,33 +24,31 @@ def minimal_channel_align(filepaths, box_size=7):
             the analysis box size
     """
     sgl_dataset_workflow = ssw.minimal(
-        filepath=("$map", "filename"), box_size=box_size
+        filepath=("$$map", "filepath"), box_size=box_size
     )
+    idx_last_sgl_module = len(sgl_dataset_workflow) - 1
     workflow_modules_agg = [
         (
             "load_datasets_to_aggregate",
             {
                 "tags": ("$map", "#tags"),
-                "filenames": (
-                    "$get_prior_results",
-                    "all_results, $all, save_single_dataset, filepath",
+                "filepaths": (
+                    "$get_prior_result",
+                    "all_results, single_dataset, $all, "
+                    + f"{idx_last_sgl_module:02d}_save_single_dataset, "
+                    + "filepath",
                 ),
             },
         ),
         (
             "align_channels",
-            {
-                "evaldirs": (
-                    "$get_prior_results",
-                    "all_results, $all, undrift_rcc, locs_undrift.hdf5",
-                )
-            },
+            {},
         ),
     ]
     workflow_modules_multi = {
         "single_dataset_tileparameters": {
-            "#tags": [f"channel {i}" for i in len(filepaths)],
-            "filename": filepaths,
+            "#tags": [f"channel {i}" for i in range(len(filepaths))],
+            "filepath": filepaths,
         },
         "single_dataset_modules": sgl_dataset_workflow,
         "aggregation_modules": workflow_modules_agg,

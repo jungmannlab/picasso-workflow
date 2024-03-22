@@ -64,3 +64,8 @@ format = "txt"
 branch = "True"
 [pytest-cov.report]
 fail_under = 80
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = ["tests"]

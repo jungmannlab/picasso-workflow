@@ -121,7 +121,7 @@ class AutoPicasso(AbstractModuleCollection):
         results["movie.shape"] = self.movie.shape
 
         if parameters.get("load_camera_info"):
-            cam_name = self.info["Camera"]
+            cam_name = self.info[0]["Camera"]
             if cam_config := pCONFIG.get("Cameras", {}).get(cam_name):
                 # # find quantum efficiency
                 # filter_name = cam_config.get("Channel Device", {}).get(
@@ -138,7 +138,7 @@ class AutoPicasso(AbstractModuleCollection):
                 # sensitivity starts being a dict, and ends as a value
                 cat_vals = ""
                 for category in cam_config.get("Sensitivity Categories"):
-                    category_value = self.info.get(f"{cam_name}-{category}")
+                    category_value = self.info[0].get(f"{cam_name}-{category}")
                     cat_vals += f"{category}: {category_value}; "
                     sensitivity = sensitivity.get(category_value, {})
                 if isinstance(sensitivity, dict):

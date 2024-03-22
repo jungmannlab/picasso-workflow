@@ -31,3 +31,15 @@ repos:
 #     hooks:
 #     -   id: pytest-cov
 #     -   args: [--cov-report=term-missing]
+# -   repo: local
+#     hooks:
+#     -   id: pytest
+#         name: Run pytest
+#         entry: pytest
+#         language: system
+#         types: [python]
+#     -   id: coverage
+#         name: Check code coverage
+#         entry: pytest --cov-report=term-missing --cov-fail-under=80
+#         language: system
+#         types: [python]

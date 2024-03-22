@@ -14,7 +14,11 @@ import yaml
 import copy
 
 from picasso_workflow.analyse import AutoPicasso, AutoPicassoError
-from picasso_workflow.confluence import ConfluenceReporter, ConfluenceInterface
+from picasso_workflow.confluence import (
+    ConfluenceReporter,
+    ConfluenceInterface,
+    ConfluenceInterfaceError,
+)
 from picasso_workflow.util import (
     AbstractModuleCollection,
     ParameterCommandExecutor,
@@ -68,6 +72,7 @@ class AggregationWorkflowRunner:
         analysis_config,
         aggregation_workflow,
         postfix=None,
+        continue_previous_runner=False,
     ):
         """To keep flexibility for initialization methods, this is not
         done in __init__. This way in the future, we can instantiate
@@ -96,7 +101,21 @@ class AggregationWorkflowRunner:
                 The postfix to use (for loading prior analyses).
                 Format: %y%m%d-%H%M.
                 If None, a new postfix is generated
+            continue_previous_runner : bool, default False
+                continue a previous analysis that aborted (e.g. because of a
+                manual step). If no previous analysis exists in that folder,
+                create a new one.
         """
+        if continue_previous_runner:
+            folder = analysis_config["result_location"]
+            report_name = reporter_config["report_name"]
+            postfix = cls._check_previous_runner(folder, report_name)
+            logger.debug(f"Found postfix: {postfix}")
+            if postfix is not None:
+                report_name = report_name + "_" + postfix
+                runner_folder = os.path.join(folder, report_name)
+                instance = cls.load(runner_folder)
+                return instance
         if (
             sgltilepars := aggregation_workflow.get(
                 "single_dataset_tileparameters"
@@ -122,7 +141,12 @@ class AggregationWorkflowRunner:
         if confluence_config := reporter_config.get("ConfluenceReporter"):
             instance._initialize_confluence_interface(**confluence_config)
             body_text = """<b>Aggregation analysis reslts</b>"""
-            instance.ci.create_page(report_name, body_text)
+            try:
+                instance.ci.create_page(report_name, body_text)
+            except ConfluenceInterfaceError:
+                logger.debug(
+                    "Error creating page, it already exists. Continuing"
+                )
             reporter_config["ConfluenceReporter"][
                 "parent_page_title"
             ] = report_name
@@ -142,6 +166,41 @@ class AggregationWorkflowRunner:
 
         instance.aggregation_workflow = aggregation_workflow
         return instance
+
+    @classmethod
+    def _check_previous_runner(cls, folder, report_name):
+        """Check for a previous runner instance in the given location
+        Args:
+            folder : str
+                the folder to look in
+            report_name : str
+                the name of the report
+        Returns:
+            postfix : str
+                the postfix of the latest previous runner in that location
+                if none are found, postfix is None
+        """
+        dirs = [
+            it
+            for it in os.listdir(folder)
+            if os.path.isdir(os.path.join(folder, it))
+        ]
+        dirs = [it for it in dirs if report_name in it]
+        # find the latest runner
+        latest_datetime = None
+        latest_postfix = None
+        for d in dirs:
+            try:
+                # cut out the postfix
+                postfix_start = len(report_name) + 1
+                postfix = d[postfix_start:]
+                dt = datetime.strptime(postfix, "%y%m%d-%H%M")
+            except Exception:
+                continue
+            if latest_datetime is None or latest_datetime < dt:
+                latest_datetime = dt
+                latest_postfix = postfix
+        return latest_postfix
 
     def _initialize_confluence_interface(
         self, base_url, space_key, parent_page_title, token=None
@@ -165,6 +224,8 @@ class AggregationWorkflowRunner:
         report_name = self.reporter_config["report_name"]
         sgl_wkfl_reporter_config = copy.deepcopy(self.reporter_config)
         sgl_wkfl_analysis_config = copy.deepcopy(self.analysis_config)
+
+        sgl_dataset_success = [None] * len(tags)
         for i, (parameter_set, tag) in enumerate(
             zip(individual_parametersets, tags)
         ):
@@ -199,13 +260,26 @@ class AggregationWorkflowRunner:
                     postfix=self.postfix,
                 )
             self.cpage_names.append(wr.reporter_config["report_name"])
-            wr.run()
+            sgl_dataset_success[i] = wr.run()
             self.all_results["single_dataset"][i] = wr.results
             self.sgl_workflow_locations.append(wr.result_folder)
             self.save(self.result_folder)
 
+        if not all(sgl_dataset_success):
+            msg = (
+                "Not all single datasets were analysed successfully. "
+                + "Therefore, no aggregation analysis is started."
+            )
+            logger.error(msg)
+            raise WorkflowError(msg)
+
         # Then, run the aggregation workflow
-        pce = ParameterCommandExecutor(self)
+        pce = ParameterCommandExecutor(
+            self,
+            map_dict=self.aggregation_workflow.get(
+                "single_dataset_tileparameters"
+            ),
+        )
         parameters = pce.run(self.aggregation_workflow["aggregation_modules"])
         agg_reporter_config = copy.deepcopy(self.reporter_config)
         agg_reporter_config["report_name"] = (
@@ -239,7 +313,6 @@ class AggregationWorkflowRunner:
             "analysis_config": self.analysis_config,
             "aggregation_workflow": self.aggregation_workflow,
         }
-        logger.debug(data)
         with open(fp, "w") as f:
             yaml.dump(data, f)
 
@@ -264,6 +337,10 @@ class AggregationWorkflowRunner:
         instance.sgl_workflow_locations = data["sgl_workflow_locations"]
         instance.continue_workflow = True
         return instance
+
+
+class WorkflowError(Exception):
+    pass
 
 
 class WorkflowRunner:
@@ -402,7 +479,11 @@ class WorkflowRunner:
             self.confluencereporter = ConfluenceReporter(**init_kwargs)
 
     def run(self):
-        """Run the analysis of the worfklow modules."""
+        """Run the analysis of the worfklow modules.
+        Returns:
+            success : bool
+                whether all modulles ran through successfully.
+        """
         # first, check whether all modules are actually implemented
         available_modules = inspect.getmembers(AbstractModuleCollection)
         available_modules = [
@@ -442,6 +523,7 @@ class WorkflowRunner:
             if not success:
                 break
             self.save(self.result_folder)
+        return success
 
     ##########################################################################
     # UTIL FUNCTIONS

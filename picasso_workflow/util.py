@@ -165,7 +165,13 @@ class ParameterCommandExecutor(DictSimpleTyper):
     modules. These can be retrieved with this ParameterCommandExecutor.
     """
 
-    def __init__(self, parent_object=None, map_dict={}, to_simple_type=False):
+    def __init__(
+        self,
+        parent_object=None,
+        map_dict={},
+        to_simple_type=False,
+        command_sign="$",
+    ):
         """
         Args:
             parent_object : object
@@ -176,10 +182,16 @@ class ParameterCommandExecutor(DictSimpleTyper):
             to_simple_type : bool
                 converts numpy arrays and tuples to lists, numpy scalars to
                 python scalars
+            command_sign : str
+                the command sign to execute on. In aggregation workflow
+                preparation (Using the ParameterTiler), the single-workflow
+                commands should not be executed, therefore different
+                signs are used.
         """
         self.parent_object = parent_object
         self.map = map_dict
         self.to_simple_type = to_simple_type
+        self.command_sign = command_sign
 
     def run(self, parameters):
         """Scan a parameter set for commands to execute prior to module
@@ -193,15 +205,26 @@ class ParameterCommandExecutor(DictSimpleTyper):
         return self.scan(parameters)
 
     def scan_tuple(self, t):
-        if len(t) == 2 and isinstance(t[0], str) and t[0][0] == "$":
+        if (
+            len(t) == 2
+            and isinstance(t[0], str)
+            and t[0][: len(self.command_sign)] == self.command_sign
+        ):
             # this is a parameter command
-            if t[0] == "$get_prior_result":
+            if t[0] == f"{self.command_sign}get_prior_result":
                 logger.debug(f"Getting prior result from {t[1]}.")
                 res = self.get_prior_result(t[1])
                 logger.debug(f"Prior result is {res}.")
-            elif t[0] == "$map":
+            elif t[0] == f"{self.command_sign}map":
                 res = self.map[t[1]]
                 logger.debug(f"Mapping {t[1]}: {res}")
+            else:
+                msg = (
+                    "Found undefined command for current command "
+                    + f"sign {self.command_sign}: {t}"
+                )
+                logger.debug(msg)
+                raise NotImplementedError(msg)
             # elif add more parameter commands
             return res
         else:
@@ -229,19 +252,32 @@ class ParameterCommandExecutor(DictSimpleTyper):
             the last attribute in the chain.
         """
         root_att = self.parent_object
-        for att_name in locator.split(","):
-            if att_name == "$all":
+        attribute_levels = [it.strip() for it in locator.split(",")]
+        for i, att_name in enumerate(attribute_levels):
+            if att_name == f"{self.command_sign}all":
                 # root_att is a list, and all items should be equally processed
                 # in the next rounds
+                logger.debug(f"Leaving {root_att}, to get all.")
                 pass
             else:
-                if isinstance(root_att, list):
-                    root_att = [
-                        self.get_attribute(list_att, att_name)
-                        for list_att in root_att
-                    ]
-                else:
-                    root_att = self.get_attribute(root_att, att_name)
+                try:
+                    if isinstance(root_att, list):
+                        logger.debug(
+                            f"Getting all {att_name}attributes of {root_att}"
+                        )
+                        root_att = [
+                            self.get_attribute(list_att, att_name)
+                            for list_att in root_att
+                        ]
+                    else:
+                        root_att = self.get_attribute(root_att, att_name)
+                except PriorResultError:
+                    raise PriorResultError(
+                        f'"{attribute_levels[i - 1]}" of "{locator}" not '
+                        + f"present. Cannot get {att_name}. Check your "
+                        + f"workflow {self.command_sign}get_prior_result "
+                        + "argument."
+                    )
         logger.debug(f"Prior Result of {locator} is {root_att}")
         return root_att
 
@@ -252,13 +288,20 @@ class ParameterCommandExecutor(DictSimpleTyper):
             try:
                 att = getattr(root_att, att_name.strip())
             except AttributeError as e:
-                logger.error(
-                    f"Could not get attribute {att_name} "
-                    + f"from {str(root_att)}."
-                )
-                raise e
+                if root_att is None:
+                    raise PriorResultError()
+                else:
+                    logger.error(
+                        f"Could not get attribute {att_name} "
+                        + f"from {str(root_att)}."
+                    )
+                    raise e
         # logger.debug(f'From {root_att}, extracting "{att_name}": {att}')
         return att
+
+
+class PriorResultError(AttributeError):
+    pass
 
 
 class ParameterTiler:
@@ -269,7 +312,9 @@ class ParameterTiler:
     be used.
     """
 
-    def __init__(self, parent_object, tile_entries, map_dict={}):
+    def __init__(
+        self, parent_object, tile_entries, map_dict={}, command_sign="$$"
+    ):
         """
         Args:
             parent_object : object
@@ -289,12 +334,18 @@ class ParameterTiler:
             map_dict : dict
                 a dictionary to map values using the $map command
                 the tile_entries will be added to the map_dict
+            command_sign : str
+                the command sign to execute on. In aggregation workflow
+                preparation (Using the ParameterTiler), the single-workflow
+                commands should not be executed, therefore different
+                signs are used.
         """
         logger.debug("Initializeing ParameterTiler")
         self.tile_entries = tile_entries
         self.ntiles = len(list(tile_entries.values())[0])
         self.map_dict = map_dict
         self.parent_object = parent_object
+        self.command_sign = command_sign
 
     def run(self, parameters):
         """Creates the tile set of parameters.
@@ -316,8 +367,12 @@ class ParameterTiler:
             for k, v in self.tile_entries.items():
                 self.map_dict[k] = v[i]
             logger.debug(f"Map for tile {i}: {self.map_dict}")
-            pce = ParameterCommandExecutor(self.parent_object, self.map_dict)
-            logger.debug(f"running with parameters {parameters}")
+            pce = ParameterCommandExecutor(
+                self.parent_object,
+                self.map_dict,
+                command_sign=self.command_sign,
+            )
+            # logger.debug(f"Running with parameters {parameters}")
             result_parameters.append(pce.run(copy.deepcopy(parameters)))
         if (tags := self.tile_entries.get("#tags")) is None:
             tags = [""] * len(result_parameters)
