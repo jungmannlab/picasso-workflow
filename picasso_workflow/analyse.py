@@ -589,9 +589,8 @@ class AutoPicasso(AbstractModuleCollection):
                         the dimensions undrifted. For picasso RCC, this
                         is always ['x', 'y']
                 optional items:
-                    locs_vs_frame : dict
-                        for plotting locs vs time
-                        items correspond to arguments of _plot_locs_vs_frame
+                    filename : str
+                        the drift txt file name
                     save_locs : dict
                         if saving localizations is requested.
                         Items correpsond to arguments of save_locs
@@ -654,7 +653,9 @@ class AutoPicasso(AbstractModuleCollection):
             results["filepath_driftfile"] = os.path.join(
                 results["folder"], parameters["filename"]
             )
-            np.savetxt(parameters["filepath"], self.drift, delimiter=",")
+            np.savetxt(
+                results["filepath_driftfile"], self.drift, delimiter=","
+            )
             results["filepath_plot"] = (
                 os.path.splitext(results["filepath_driftfile"])[0] + ".png"
             )
