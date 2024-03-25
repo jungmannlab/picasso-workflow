@@ -1,6 +1,7 @@
 # picasso-workflow
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Test Status](https://github.com/junmannlab/picasso-workflow/actions/workflows/test.yml/badge.svg)
 
 A package for automated DNA-PAINT analysis workflows
 
