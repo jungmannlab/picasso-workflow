@@ -24,7 +24,8 @@ jobs:
       - name: Set up Python
         run: |
           Invoke-WebRequest -Uri https://www.python.org/ftp/python/3.10.0/python-3.10.0-amd64.exe
-          Start-Process -Wait -FilePath python310.exe -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1'
+          dir
+          Start-Process -Wait -FilePath python-3.10.0-amd64.exe -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1'
           python -m pip install --upgrade pip
 
       - name: Install dependencies
