@@ -24,9 +24,14 @@ via picassosr.
 
 ## Installation
 
-- Dependencies are specified in requirements.txt
-- Separately install picassosr (left out of requirements.txt for flexibility
-of installing via pip or a development version)
+- create a new anaconda environment: `conda create -n picasso-workflow python=3.10`
+- If you want to use a local development version of picasso, install that first:
+	- `cd /path/to/picasso`
+	- `pip install -e .`
+- Dependencies are specified in requirements.txt, install by:
+	- `cd /path/to/picasso-workflow`
+	- `pip install -r requirements.txt`
+	- `pip install -e .`
 - Should be platform independent. Tested on MacOS Sonoma and  Windows Server.
 
 ## Usage
@@ -40,6 +45,8 @@ and add new modules to:
 	- util/AbstractModuleCollection
 	- analyse/AutoPicasso
 	- confluence/ConfluenceReporter
+	- tests/test_analyse
+	- tests/test_confluence
 - Please adhere to PEP code style and send pull request when done.
 
 ## License
