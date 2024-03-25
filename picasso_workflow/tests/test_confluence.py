@@ -277,6 +277,21 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    def test_10_convert_zeiss_movie(self):
+        parameters = {"filepath": "myfile.czi"}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "filepath_raw": "myfile.raw",
+        }
+        self.cr.convert_zeiss_movie(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
 
 # @unittest.skip('')
 class Test_C_ConfluenceReporter(Test_B_ConfluenceReporter):

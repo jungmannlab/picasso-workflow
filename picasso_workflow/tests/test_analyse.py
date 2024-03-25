@@ -10,7 +10,7 @@ import unittest
 import os
 import shutil
 import numpy as np
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from picasso_workflow import analyse
 
@@ -291,3 +291,17 @@ class TestAnalyse(unittest.TestCase):
 
         # clean up
         shutil.rmtree(os.path.join(self.results_folder, "00_align_channels"))
+
+    @patch(
+        "picasso_workflow.analyse.picasso_outpost.convert_zeiss_file",
+        MagicMock,
+    )
+    def test_14_AutoPicasso_convert_zeiss_movie(self):
+
+        parameters = {"filepath": "a.tiff"}
+
+        parameters, results = self.ap.convert_zeiss_movie(0, parameters)
+        # logger.debug(f'parameters: {parameters}')
+        logger.debug(f"results: {results}")
+        assert results["filename_raw"] == "a.raw"
+        assert results["duration"] > -1

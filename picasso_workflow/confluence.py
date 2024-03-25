@@ -55,6 +55,24 @@ class ConfluenceReporter(AbstractModuleCollection):
                 Continuing on the pre-existing page"""
             )
 
+    ##########################################################################
+    # Single dataset modules
+    ##########################################################################
+
+    def convert_zeiss_movie(self, i, parameters, results):
+        """Descries converting from Zeiss."""
+        logger.debug("Reporting convert_zeiss_movie.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Converting Movie from .czi into .raw</strong></p>
+        <p>Converted the file {parameters["filepath"]} to
+        {results["filepath_raw"]} in {results["duration"]:.02f} s.</p>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
     def load_dataset_movie(self, i, pars_load, results_load):
         """Describes the loading
         Args:

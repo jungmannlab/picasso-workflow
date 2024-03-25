@@ -92,6 +92,42 @@ class AutoPicasso(AbstractModuleCollection):
     ##########################################################################
 
     @module_decorator
+    def convert_zeiss_movie(self, i, parameters, results):
+        """Converts a DNA-PAINT movie into .raw, as supported by picasso.
+        Args:
+            parameters : dict
+                necessary items:
+                    filepath : str
+                        the czi file name to load.
+                optional items:
+                    filepath_raw : str
+                        the file name to write to
+                    info : dict, information as used by picasso
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        t00 = time.time()
+
+        filepath_czi = parameters["filepath"]
+        filename_raw = parameters.get("filename_raw")
+        if filename_raw is None:
+            filename_raw = os.path.split(
+                (os.path.splitext(filepath_czi)[0] + ".raw")
+            )[1]
+        filepath_raw = os.path.join(results["folder"], filename_raw)
+        picasso_outpost.convert_zeiss_file(
+            filepath_czi, filepath_raw, parameters.get("info")
+        )
+
+        results["filepath_raw"] = filepath_raw
+        results["filename_raw"] = filename_raw
+        results["duration"] = np.round(time.time() - t00, 2)
+        return parameters, results
+
+    @module_decorator
     def load_dataset_movie(self, i, parameters, results):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
         The data is saved in
@@ -101,8 +137,7 @@ class AutoPicasso(AbstractModuleCollection):
             parameters : dict
                 necessary items:
                     filename : str
-                        the (main) file name to load. This can be image files,
-                        or hdf5.
+                        the (main) file name to load.
                 optional items:
                     sample_movie : dict, used for creating a subsampled movie
                         keywords as used in method create_sample_movie

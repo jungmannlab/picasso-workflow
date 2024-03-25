@@ -6,9 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "picasso_workflow"
 version = "0.0.1"
 description = "Automation and documentation of DNA-PAINT analysis workflows"
-author = "Heinrich Grabmayr"
-author_email = "hgrabmayr@biochem.mpg.de"
-license = "MIT"
+license = {'file' = "LICENSE"}
 keywords = ["picasso"]
 
 [tool.black]

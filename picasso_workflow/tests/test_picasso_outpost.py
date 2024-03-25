@@ -5,8 +5,10 @@ Author: Heinrich Grabmayr
 Initial Date: March 15, 2024
 Description: Test the module picasso_outpost.py
 """
+import os
 import logging
 import unittest
+from unittest.mock import patch
 import numpy as np
 
 from picasso_workflow import picasso_outpost
@@ -52,3 +54,19 @@ class TestPicassoOutpost(unittest.TestCase):
             [locs_a, locs_b, locs_c], [info_a, info_b, info_c]
         )
         logger.debug(f"shift: {shift}")
+
+    @patch("picasso_workflow.picasso_outpost.AICSImage")
+    def test_03_convert_zeiss_file(self, mock_aicsi):
+        temp_folder = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
+        )
+        filepath_czi = os.path.join(temp_folder, "zeissfile.czi")
+        filepath_raw = os.path.join(temp_folder, "myrawfile.raw")
+        picasso_outpost.convert_zeiss_file(filepath_czi, filepath_raw)
+
+        # clean up
+        filepath_info = os.path.join(
+            os.path.splitext(filepath_raw)[0], ".yaml"
+        )
+        os.remove(filepath_raw)
+        os.remove(filepath_info)

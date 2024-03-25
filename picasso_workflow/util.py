@@ -32,6 +32,11 @@ class AbstractModuleCollection(abc.ABC):
     ##########################################################################
 
     @abc.abstractmethod
+    def convert_zeiss_movie(self):
+        """Converts a DNA-PAINT movie into .raw, as supported by picasso."""
+        pass
+
+    @abc.abstractmethod
     def load_dataset_movie(self):
         """Loads a DNA-PAINT dataset in a format supported by picasso."""
         pass

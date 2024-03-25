@@ -11,6 +11,9 @@ Description: This is a collection of exploratory DNA-PAINT analysis / picasso
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
+import yaml
+import os
+from aicsimageio import AICSImage
 
 from picasso import render, imageprocess
 
@@ -142,3 +145,39 @@ def shift_from_rcc(channel_locs, channel_info):
     n_pairs = int(n_channels * (n_channels - 1) / 2)
     logger.debug(f"Correlating {n_pairs} image pairs.")
     return imageprocess.rcc(images)
+
+
+def convert_zeiss_file(filepath_czi, filepath_raw, info=None):
+    """Convert Zeiss .czi file into a picasso-readable .raw file.
+    Args:
+        filepath_csi : str
+            the filepath to the .czi file to load
+        filepath_raw : str
+            the filepath to the .raw file to write
+        info : dict, default None
+            the metadata to make the raw file picasso-readable.
+            If None is given, dummy values are entered.
+            Necesary keys:
+                'Byte Order', 'Camera', 'Micro-Manager Metadata'
+    """
+    img = AICSImage(filepath_czi)
+
+    with open(filepath_raw, "wb") as f:
+        img.get_image_data().squeeze().tofile(f)
+
+    if info is None:
+        info = {"Byte Order": "<", "Camera": "FusionBT"}
+        info["File"] = filepath_raw
+        info["Height"] = img.get_image_data().shape[-2]
+        info["Width"] = img.get_image_data().shape[-1]
+        info["Frames"] = img.get_image_data().shape[0]
+        info["Data Type"] = img.get_image_data().dtype.name
+        info["Micro-Manager Metadata"] = {
+            "FusionBT-ReadoutMode": 1,
+            "Filter": 561,
+        }
+
+    filepath_info = os.path.splitext(filepath_raw)[0] + ".yaml"
+
+    with open(filepath_info, "w") as f:
+        yaml.dump(info, f)
