@@ -22,13 +22,9 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Set up Python
-        uses: actions/setup-python@v1
-        with:
-          python-version: 3.10  # ${{ matrix.python-version }}
-
-      - name: Install pip
         run: |
-          python -m ensurepip --upgrade
+          curl -s -o python310.exe https://www.python.org/ftp/python/3.10.0/python-3.10.0-amd64.exe
+          Start-Process -Wait -FilePath python310.exe -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1'
           python -m pip install --upgrade pip
 
       - name: Install dependencies
