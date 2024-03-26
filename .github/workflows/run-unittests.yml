@@ -20,16 +20,7 @@ jobs:
           dir C:\\actions-runner
           $envFileContent = Get-Content -Path "C:\\actions-runner\\.env"
           Write-Output $envFileContent
-          foreach ($line in $envFileContent) {
-            # Split the line into key-value pairs
-            $key, $value = $line -split '=', 2
-            Write-Output $key
-            Write-Output $value
-
-            # Set the environment variable
-            $Env:$key = $value
-            $key = $value
-          }
+          foreach ($line in $envFileContent) {$key, $value = $line -split '=', 2; Write-Output $key; Write-Output $value; $key = $value}
 
       - name: Check environment variables1
         run: |
