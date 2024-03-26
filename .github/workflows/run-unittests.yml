@@ -21,8 +21,9 @@ jobs:
       - name: Set up Python A
         run: |
           Invoke-WebRequest -Uri https://github.com/actions/python-versions/releases/download/3.10.11-4626646535/python-3.10.11-win32-x64.zip -OutFile python-3.10.zip
-          Expand-Archive -InFile 'python-3.10.zip' -OutFile 'python3-10' -Force
+          Expand-Archive -Path 'python-3.10.zip' -DestinationPath 'python3-10' -Force
           dir
+          dir python3-10
           Start-Process -Wait -FilePath python-3.10.0.exe -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1'
           python3 -m pip install --upgrade pip
           
