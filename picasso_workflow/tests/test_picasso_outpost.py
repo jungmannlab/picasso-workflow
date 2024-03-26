@@ -62,11 +62,10 @@ class TestPicassoOutpost(unittest.TestCase):
         )
         filepath_czi = os.path.join(temp_folder, "zeissfile.czi")
         filepath_raw = os.path.join(temp_folder, "myrawfile.raw")
-        picasso_outpost.convert_zeiss_file(filepath_czi, filepath_raw)
+        info = {"Byte Order": "<", "Camera": "FusionBT"}
+        picasso_outpost.convert_zeiss_file(filepath_czi, filepath_raw, info)
 
         # clean up
-        filepath_info = os.path.join(
-            os.path.splitext(filepath_raw)[0], ".yaml"
-        )
+        filepath_info = os.path.splitext(filepath_raw)[0] + ".yaml"
         os.remove(filepath_raw)
         os.remove(filepath_info)
