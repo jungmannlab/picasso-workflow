@@ -23,15 +23,16 @@ jobs:
           Invoke-WebRequest -Uri https://github.com/actions/python-versions/releases/download/3.10.11-4626646535/python-3.10.11-win32-x64.zip -OutFile python-3.10.zip
           Expand-Archive -Path 'python-3.10.zip' -DestinationPath 'python3-10' -Force
           dir
-          dir python3-10
-          python3-10\setup.ps1
+          cd python3-10
+          dir
+          setup.ps1
           python --version
           python -m pip install --upgrade pip
           
-      - name: Set up Python B
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+      # - name: Set up Python B
+      #   uses: actions/setup-python@v5
+      #   with:
+      #     python-version: '3.10'
 
       - name: Install dependencies
         run: |
