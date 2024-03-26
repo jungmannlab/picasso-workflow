@@ -15,6 +15,10 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      - name: Check environment variables
+        run: |
+          Write-Output $env:TEST_CONFLUENCE_URL
+
       - name: Checkout code
         uses: actions/checkout@v4
 
