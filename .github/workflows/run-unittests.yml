@@ -29,13 +29,13 @@ jobs:
           Start-Process -Wait python -ArgumentList '-m pip install --upgrade pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: Start-Process -Wait pip -ArgumentList 'install -r requirements.txt'
 
       - name: Run unit tests
-        run: pytest
+        run: Start-Process -Wait pytest
 
       - name: Generate coverage report
-        run: coverage run -m pytest
+        run: Start-Process -Wait coverage -ArgumentList 'run -m pytest'
 
       - name: Print coverage report
-        run: coverage report
+        run: Start-Process -Wait coverage -ArgumentList 'report'
