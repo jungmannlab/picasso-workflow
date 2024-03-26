@@ -48,10 +48,22 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Run unit tests
-        run: python -m pytest
+        run: |
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          python -m pytest
 
       - name: Generate coverage report
-        run: python -m coverage run -m pytest
+        run: |
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          python -m coverage run -m pytest
 
       - name: Print coverage report
-        run: python -m coverage report
+        run: |
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          python -m coverage report
