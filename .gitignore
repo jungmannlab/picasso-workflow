@@ -163,4 +163,4 @@ cython_debug/
 
 temp_scripts
 
-temp
+temp/*
