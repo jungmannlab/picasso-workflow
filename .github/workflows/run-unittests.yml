@@ -17,8 +17,8 @@ jobs:
     steps:
       - name: read env file
         run: |
-          dir
-          $envFileContent = Get-Content -Path ".env"
+          dir C:\\actions-runner
+          $envFileContent = Get-Content -Path "C:\\actions-runner\\.env"
           Write-Output $envFileContent
 
       - name: Check environment variables1
