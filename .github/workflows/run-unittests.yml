@@ -26,6 +26,8 @@ jobs:
           cd python3-10
           dir
           .\setup.ps1
+          python3 --version
+          New-Item -ItemType SymbolicLink -Path "python" -Target "python3"
           python --version
           python -m pip install --upgrade pip
           
