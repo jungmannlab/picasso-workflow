@@ -1,7 +1,7 @@
 import os
 
 
-results_folder = os.abspath(
+results_folder = os.path.abspath(
     os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
     )
