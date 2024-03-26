@@ -1,17 +1,12 @@
-name: Python Unit Tests and Coverage
+name: Bump version
 
 on:
   push:
     branches:
       - master
-      - develop
-  pull_request:
-    branches:
-      - master
-      - develop
 
 jobs:
-  test:
+  bump-version:
     runs-on: self-hosted
 
     steps:
@@ -34,37 +29,18 @@ jobs:
           python -m pip install --upgrade pip
           dir c:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages
 
-      # - name: Set up Python B
-      #   uses: actions/setup-python@v5
-      #   with:
-      #     python-version: '3.10'
-
-      - name: Install dependencies
+      - name: Install bump2version
         run: |
           $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
           $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
           $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
           python --version
-          python -m pip install -r requirements.txt
-          python -m pip install -e .
+          python -m pip install bump2version
 
-      - name: Run unit tests
+      - name: Bump version
         run: |
           $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
           $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
           $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
-          python -m pytest
-
-      - name: Generate coverage report
-        run: |
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
-          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
-          python -m coverage run -m pytest
-
-      - name: Print coverage report
-        run: |
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
-          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
-          python -m coverage report
+          python --version
+          python -m bump2version minor

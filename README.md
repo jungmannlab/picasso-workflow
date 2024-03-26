@@ -1,8 +1,12 @@
 # picasso-workflow
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![develop test](https://img.shields.io/github/actions/workflow/status/jungmannlab/picasso-workflow/run-unittests.yml?branch=develop)
+
+master:
 ![master test](https://img.shields.io/github/actions/workflow/status/jungmannlab/picasso-workflow/run-unittests.yml?branch=master)
+
+develop:
+![develop test](https://img.shields.io/github/actions/workflow/status/jungmannlab/picasso-workflow/run-unittests.yml?branch=develop)
 ![Coveralls develop](https://img.shields.io/coverallsCoverage/github/jungmannlab/picasso-workflow?branch=develop)
 
 
