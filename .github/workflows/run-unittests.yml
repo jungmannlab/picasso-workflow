@@ -24,8 +24,9 @@ jobs:
           Expand-Archive -Path 'python-3.10.zip' -DestinationPath 'python3-10' -Force
           dir
           dir python3-10
-          Start-Process -Wait -FilePath python-3.10.0.exe -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1'
-          python3 -m pip install --upgrade pip
+          Start-Process -Wait -FilePath python3-10\python-3.10.11-amd64.exe -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1'
+          python --version
+          python -m pip install --upgrade pip
           
       - name: Set up Python B
         uses: actions/setup-python@v5
