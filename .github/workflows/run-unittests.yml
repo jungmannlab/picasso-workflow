@@ -25,7 +25,7 @@ jobs:
           dir
           cd python3-10
           dir
-          setup.ps1
+          .\setup.ps1
           python --version
           python -m pip install --upgrade pip
           
