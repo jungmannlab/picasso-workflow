@@ -15,6 +15,12 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      - name: read env file
+        run: |
+          dir
+          $envFileContent = Get-Content -Path ".env"
+          Write-Output $envFileContent
+
       - name: Check environment variables1
         run: |
           $TEST_CONFLUENCE_URL
