@@ -15,7 +15,16 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Check environment variables
+      - name: Check environment variables1
+        run: |
+          $TEST_CONFLUENCE_URL
+          Write-Output $TEST_CONFLUENCE_URL
+
+
+      - name: Check environment variables2
+        run: env
+
+      - name: Check environment variables3
         env:
           TEST_CONFLUENCE_URL: ${{ env.TEST_CONFLUENCE_URL }}
         run: |
