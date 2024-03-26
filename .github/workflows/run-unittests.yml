@@ -32,6 +32,7 @@ jobs:
           # New-Item -ItemType SymbolicLink -Path "python" -Target "python3"
           python --version
           python -m pip install --upgrade pip
+          dir c:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages
           
       # - name: Set up Python B
       #   uses: actions/setup-python@v5
@@ -41,6 +42,7 @@ jobs:
       - name: Install dependencies
         run: |
           $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
           python --version
           pip install -r requirements.txt
 
