@@ -19,9 +19,7 @@ jobs:
         env:
           TEST_CONFLUENCE_URL: ${{ env.TEST_CONFLUENCE_URL }}
         run: |
-          TEST_CONFLUENCE_URL
           $TEST_CONFLUENCE_URL
-          Write-Output TEST_CONFLUENCE_URL
           Write-Output $TEST_CONFLUENCE_URL
 
       - name: Checkout code
