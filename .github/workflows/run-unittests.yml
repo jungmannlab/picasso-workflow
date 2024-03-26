@@ -28,7 +28,7 @@ jobs:
           .\setup.ps1
           $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
           dir C:\actions-runner\_work\_tool\Python\3.10.11\x64
-          python3 --version
+          # python3 --version
           # New-Item -ItemType SymbolicLink -Path "python" -Target "python3"
           python --version
           python -m pip install --upgrade pip
