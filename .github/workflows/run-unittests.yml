@@ -43,5 +43,5 @@ jobs:
         run: |
           $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64;C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
           python --version
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
 
