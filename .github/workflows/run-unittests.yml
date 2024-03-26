@@ -20,7 +20,13 @@ jobs:
           dir C:\\actions-runner
           $envFileContent = Get-Content -Path "C:\\actions-runner\\.env"
           Write-Output $envFileContent
-          foreach ($line in $envFileContent) {$key, $value = $line -split '=', 2; Write-Output $key; Write-Output $value; $key = $value}
+          # foreach ($line in $envFileContent) {$key, $value = $line -split '=', 2; Write-Output $key; Write-Output $value; $key = $value}
+          $key, $TEST_CONFLUENCE_URL = $envFileContent[0] -split '=', 2
+          $key, $TEST_CONFLUENCE_TOKEN = $envFileContent[1] -split '=', 2
+          $key, $TEST_CONFLUENCE_SPACE = $envFileContent[2] -split '=', 2
+          $key, $TEST_CONFLUENCE_PAGE = $envFileContent[3] -split '=', 2
+          $TEST_CONFLUENCE_URL
+          Write-Output $TEST_CONFLUENCE_URL
 
       - name: Check environment variables1
         run: |
