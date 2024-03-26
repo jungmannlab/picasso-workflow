@@ -25,6 +25,10 @@ jobs:
           $key, $TEST_CONFLUENCE_TOKEN = $envFileContent[1] -split '=', 2
           $key, $TEST_CONFLUENCE_SPACE = $envFileContent[2] -split '=', 2
           $key, $TEST_CONFLUENCE_PAGE = $envFileContent[3] -split '=', 2
+          echo $envFileContent[0] >> $env.GITHUB_ENV
+          echo $envFileContent[1] >> $env.GITHUB_ENV
+          echo $envFileContent[2] >> $env.GITHUB_ENV
+          echo $envFileContent[3] >> $env.GITHUB_ENV
           $TEST_CONFLUENCE_URL
           Write-Output $TEST_CONFLUENCE_URL
 
