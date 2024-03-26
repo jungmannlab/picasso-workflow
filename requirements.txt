@@ -1,6 +1,6 @@
-matplotlib==3.7.3
-numpy==1.24.3
-pandas==2.1.1
+matplotlib
+numpy
+pandas
 openpyxl==3.1.2
 picassosr
 moviepy==1.0.3
@@ -11,4 +11,4 @@ coverage==7.4.4
 isort==5.13.2
 aicspylibczi>=3.1.1
 fsspec>=2022.8.0
-aicsimageio=4.13.0
+aicsimageio

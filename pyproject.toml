@@ -1,5 +1,5 @@
 [build-system]
-requires = ["pip>=20.3", "setuptools>=50.3.0", "wheel>=0.35.0"]
+requires = ["pip>=20.3", "setuptools>=50.3.0", "wheel>=0.35.0", "python>=3.10"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,7 @@ name = "picasso_workflow"
 version = "0.0.1"
 description = "Automation and documentation of DNA-PAINT analysis workflows"
 license = {'file' = "LICENSE"}
+dependencies = { file = "requirements.txt" }
 keywords = ["picasso"]
 
 [tool.black]
