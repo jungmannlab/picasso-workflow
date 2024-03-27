@@ -15,6 +15,20 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      - name: Report Coveralls
+        run: |
+          $gitUrl = "https://github.com/git-for-windows/git/releases/download/v2.34.1.windows.1/Git-2.34.1-64-bit.exe"
+          Invoke-WebRequest -Uri $gitUrl -OutFile '.\GitInstaller.exe'
+          dir
+          .\GitInstaller.exe
+          git --version
+          Invoke-WebRequest -Uri https://github.com/coverallsapp/coverage-reporter/releases/latest/download/coveralls-windows.zip  -OutFile coveralls-windows.zip
+          Expand-Archive -Path '.\coveralls-windows.zip' -DestinationPath '.\' -Force
+          dir
+          .\coveralls.exe
+        env:
+          COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: read env file
         run: |
           dir C:\\actions-runner
@@ -123,6 +137,7 @@ jobs:
           dir
           $gitUrl = "https://github.com/git-for-windows/git/releases/download/v2.34.1.windows.1/Git-2.34.1-64-bit.exe"
           Invoke-WebRequest -Uri $gitUrl -OutFile '.\GitInstaller.exe'
+          .\GitInstaller.exe
           Start-Process -FilePath '.\GitInstaller.exe' -ArgumentList "/SILENT" -Wait
           git --version
           .\coveralls.exe
