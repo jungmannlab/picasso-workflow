@@ -118,7 +118,8 @@ jobs:
 
       - name: Report Coveralls
         run: |
-          curl -sL https://github.com/coverallsapp/coverage-reporter/releases/latest/download/coveralls-windows.zip | zcat > ./coveralls.exe
+          curl -sL https://github.com/coverallsapp/coverage-reporter/releases/latest/download/coveralls-windows.zip
+          Expand-Archive -Path '.\coveralls-windows.zip' -DestinationPath '.\coveralls.exe' -Force
           ./coveralls.exe
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
