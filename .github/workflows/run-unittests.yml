@@ -113,5 +113,10 @@ jobs:
           $key, $TEST_CONFLUENCE_PAGE = $envFileContent[3] -split '=', 2
           python -m coverage report
 
-      - name: Coveralls
-        uses: coverallsapp/github-action@v2
+      # - name: Coveralls
+      #   uses: coverallsapp/github-action@v2
+
+      - name: Report Coveralls
+        run: curl -sL https://github.com/coverallsapp/coverage-reporter/releases/latest/download/coveralls-windows.zip | zcat > ./coveralls.exe && ./coveralls.exe
+        env:
+          COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
