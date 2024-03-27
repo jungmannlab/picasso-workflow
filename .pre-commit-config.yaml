@@ -1,0 +1,45 @@
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.0.1
+    hooks:
+    -   id: trailing-whitespace
+    -   id: end-of-file-fixer
+    -   id: check-yaml
+    -   id: check-added-large-files
+-   repo: https://github.com/psf/black
+    rev: 24.3.0
+    hooks:
+    -   id: black
+# -   repo: https://github.com/pycqa/isort
+#     rev: 5.9.3
+#     hooks:
+#     -   id: isort
+-   repo: https://github.com/pycqa/flake8
+    rev: 3.9.2
+    hooks:
+    -   id: flake8
+# -   repo: https://github.com/PyCQA/bandit
+#     rev: 1.7.0
+#     hooks:
+#     -   id: bandit
+# -   repo: https://github.com/pre-commit/mirrors-mypy
+#     rev: v0.910
+#     hooks:
+#     -   id: mypy
+# -   repo: https://github.com/pytest-dev/pytest
+#     rev: 8.1.1
+#     hooks:
+#     -   id: pytest-cov
+#     -   args: [--cov-report=term-missing]
+# -   repo: local
+#     hooks:
+#     -   id: pytest
+#         name: Run pytest
+#         entry: pytest
+#         language: system
+#         types: [python]
+#     -   id: coverage
+#         name: Check code coverage
+#         entry: pytest --cov-report=term-missing --cov-fail-under=80
+#         language: system
+#         types: [python]

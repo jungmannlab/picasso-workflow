@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+dynamic= ["version"]
+name = "picasso_workflow"
+description = "Automation and documentation of DNA-PAINT analysis workflows"
+license = {'file' = "LICENSE"}
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "openpyxl==3.1.2",
+    "picassosr",
+    "moviepy==1.0.3",
+    "python-dotenv==1.0.1",
+    "pre-commit>=3.5.1",
+    "bandit==1.7.8",
+    "coverage==7.4.4",
+    "pytest==8.1.1",
+    "isort==5.13.2",
+    "aicspylibczi>=3.1.1",
+    "fsspec>=2022.8.0",
+    "aicsimageio",
+]
+keywords = ["picasso"]
+
+[tool.setuptools]
+packages = ["picasso_workflow"]
+
+[tool.black]
+line-length = 79
+include = "\\.pyi?$"
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+strict = true
+
+#[tool.isort]
+
+[tool.flake8]
+max-line-length = 88
+exclude = ".tox,.git,__pycache__,docs"
+ignore = "E203,W503"
+select = "C,E,F,W,B,B9,I"
+# C: complexity
+# E: pycodestyle errors
+# F: pyflakes errors
+# W: pycodestyle warnings
+# B: bugbear errors
+# B9: bugbear warnings
+# I: isort errors
+# Plugins
+require-code = "True"
+ban-relative-imports = "True"
+docstring-convention = "google"
+# flake8-bugbear
+# flake8-eradicate
+# flake8-docstrings
+
+[tool.bandit]
+exclude = "/tests"
+skips = "B105,B404"
+baseline = "bandit-baseline.json"
+format = "txt"
+
+[tool.pytest-cov]
+[pytest-cov.run]
+branch = "True"
+[pytest-cov.report]
+fail_under = 80
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = ["tests"]

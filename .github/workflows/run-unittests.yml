@@ -1,0 +1,125 @@
+name: Python Unit Tests and Coverage
+
+on:
+  push:
+    branches:
+      - master
+      - develop
+  pull_request:
+    branches:
+      - master
+      - develop
+
+jobs:
+  test:
+    runs-on: self-hosted
+
+    steps:
+      - name: read env file
+        run: |
+          dir C:\\actions-runner
+          $envFileContent = Get-Content -Path "C:\\actions-runner\\.env"
+          Write-Output $envFileContent
+          # foreach ($line in $envFileContent) {$key, $value = $line -split '=', 2; Write-Output $key; Write-Output $value; $key = $value}
+          $key, $TEST_CONFLUENCE_URL = $envFileContent[0] -split '=', 2
+          $key, $TEST_CONFLUENCE_TOKEN = $envFileContent[1] -split '=', 2
+          $key, $TEST_CONFLUENCE_SPACE = $envFileContent[2] -split '=', 2
+          $key, $TEST_CONFLUENCE_PAGE = $envFileContent[3] -split '=', 2
+          echo $envFileContent[0] >> $GITHUB_ENV
+          echo $envFileContent[1] >> $GITHUB_ENV
+          echo $envFileContent[2] >> $GITHUB_ENV
+          echo $envFileContent[3] >> $GITHUB_ENV
+          $TEST_CONFLUENCE_URL
+
+      # - name: Check environment variables1
+      #   run: |
+      #     $TEST_CONFLUENCE_URL
+      #     Write-Output $TEST_CONFLUENCE_URL
+
+      # - name: Check environment variables3
+      #   env:
+      #     TEST_CONFLUENCE_URL: ${{ env.TEST_CONFLUENCE_URL }}
+      #   run: |
+      #     $TEST_CONFLUENCE_URL
+      #     Write-Output $TEST_CONFLUENCE_URL
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        run: |
+          Invoke-WebRequest -Uri https://github.com/actions/python-versions/releases/download/3.10.11-4626646535/python-3.10.11-win32-x64.zip -OutFile python-3.10.zip
+          Expand-Archive -Path 'python-3.10.zip' -DestinationPath 'python3-10' -Force
+          dir
+          cd python3-10
+          dir
+          .\setup.ps1
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          dir C:\actions-runner\_work\_tool\Python\3.10.11\x64
+          # python3 --version
+          # New-Item -ItemType SymbolicLink -Path "python" -Target "python3"
+          python --version
+          python -m pip install --upgrade pip
+          dir c:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages
+
+      # - name: Set up Python B
+      #   uses: actions/setup-python@v5
+      #   with:
+      #     python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          python --version
+          # python -m pip install -r requirements.txt
+          python -m pip install -e .
+
+      - name: Run unit tests
+        run: |
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          $envFileContent = Get-Content -Path "C:\\actions-runner\\.env"
+          $key, $TEST_CONFLUENCE_URL = $envFileContent[0] -split '=', 2
+          $key, $TEST_CONFLUENCE_TOKEN = $envFileContent[1] -split '=', 2
+          $key, $TEST_CONFLUENCE_SPACE = $envFileContent[2] -split '=', 2
+          $key, $TEST_CONFLUENCE_PAGE = $envFileContent[3] -split '=', 2
+          python -m pytest
+
+      - name: Generate coverage report
+        run: |
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          $envFileContent = Get-Content -Path "C:\\actions-runner\\.env"
+          $key, $TEST_CONFLUENCE_URL = $envFileContent[0] -split '=', 2
+          $key, $TEST_CONFLUENCE_TOKEN = $envFileContent[1] -split '=', 2
+          $key, $TEST_CONFLUENCE_SPACE = $envFileContent[2] -split '=', 2
+          $key, $TEST_CONFLUENCE_PAGE = $envFileContent[3] -split '=', 2
+          python -m coverage run -m pytest
+
+      - name: Print coverage report
+        run: |
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          $envFileContent = Get-Content -Path "C:\\actions-runner\\.env"
+          $key, $TEST_CONFLUENCE_URL = $envFileContent[0] -split '=', 2
+          $key, $TEST_CONFLUENCE_TOKEN = $envFileContent[1] -split '=', 2
+          $key, $TEST_CONFLUENCE_SPACE = $envFileContent[2] -split '=', 2
+          $key, $TEST_CONFLUENCE_PAGE = $envFileContent[3] -split '=', 2
+          python -m coverage report
+
+      # - name: Coveralls
+      #   uses: coverallsapp/github-action@v2
+
+      - name: Report Coveralls
+        run: |
+          Invoke-WebRequest -Uri https://github.com/coverallsapp/coverage-reporter/releases/latest/download/coveralls-windows.zip  -OutFile coveralls-windows.zip
+          Expand-Archive -Path '.\coveralls-windows.zip' -DestinationPath '.\' -Force
+          dir
+          .\coveralls.exe
+        env:
+          COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}

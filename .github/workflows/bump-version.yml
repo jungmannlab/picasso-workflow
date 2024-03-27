@@ -1,0 +1,46 @@
+name: Bump version
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  bump-version:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        run: |
+          Invoke-WebRequest -Uri https://github.com/actions/python-versions/releases/download/3.10.11-4626646535/python-3.10.11-win32-x64.zip -OutFile python-3.10.zip
+          Expand-Archive -Path 'python-3.10.zip' -DestinationPath 'python3-10' -Force
+          dir
+          cd python3-10
+          dir
+          .\setup.ps1
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          dir C:\actions-runner\_work\_tool\Python\3.10.11\x64
+          # python3 --version
+          # New-Item -ItemType SymbolicLink -Path "python" -Target "python3"
+          python --version
+          python -m pip install --upgrade pip
+          dir c:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages
+
+      - name: Install bump2version
+        run: |
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          python --version
+          python -m pip install bump2version
+
+      - name: Bump version
+        run: |
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          python --version
+          python -m bump2version minor
