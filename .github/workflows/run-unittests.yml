@@ -15,12 +15,6 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Test git
-        run: |
-          git --version
-        env:
-          COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: read env file
         run: |
           dir C:\\actions-runner
@@ -36,19 +30,18 @@ jobs:
           echo $envFileContent[2] >> $GITHUB_ENV
           echo $envFileContent[3] >> $GITHUB_ENV
           $TEST_CONFLUENCE_URL
-          Write-Output $TEST_CONFLUENCE_URL
 
-      - name: Check environment variables1
-        run: |
-          $TEST_CONFLUENCE_URL
-          Write-Output $TEST_CONFLUENCE_URL
+      # - name: Check environment variables1
+      #   run: |
+      #     $TEST_CONFLUENCE_URL
+      #     Write-Output $TEST_CONFLUENCE_URL
 
-      - name: Check environment variables3
-        env:
-          TEST_CONFLUENCE_URL: ${{ env.TEST_CONFLUENCE_URL }}
-        run: |
-          $TEST_CONFLUENCE_URL
-          Write-Output $TEST_CONFLUENCE_URL
+      # - name: Check environment variables3
+      #   env:
+      #     TEST_CONFLUENCE_URL: ${{ env.TEST_CONFLUENCE_URL }}
+      #   run: |
+      #     $TEST_CONFLUENCE_URL
+      #     Write-Output $TEST_CONFLUENCE_URL
 
       - name: Checkout code
         uses: actions/checkout@v4
@@ -127,11 +120,6 @@ jobs:
           Invoke-WebRequest -Uri https://github.com/coverallsapp/coverage-reporter/releases/latest/download/coveralls-windows.zip  -OutFile coveralls-windows.zip
           Expand-Archive -Path '.\coveralls-windows.zip' -DestinationPath '.\' -Force
           dir
-          $gitUrl = "https://github.com/git-for-windows/git/releases/download/v2.34.1.windows.1/Git-2.34.1-64-bit.exe"
-          Invoke-WebRequest -Uri $gitUrl -OutFile '.\GitInstaller.exe'
-          .\GitInstaller.exe
-          Start-Process -FilePath '.\GitInstaller.exe' -ArgumentList "/SILENT" -Wait
-          git --version
           .\coveralls.exe
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
