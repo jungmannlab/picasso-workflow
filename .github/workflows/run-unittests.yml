@@ -117,6 +117,8 @@ jobs:
       #   uses: coverallsapp/github-action@v2
 
       - name: Report Coveralls
-        run: curl -sL https://github.com/coverallsapp/coverage-reporter/releases/latest/download/coveralls-windows.zip | zcat > ./coveralls.exe && ./coveralls.exe
+        run: |
+          curl -sL https://github.com/coverallsapp/coverage-reporter/releases/latest/download/coveralls-windows.zip | zcat > ./coveralls.exe
+          ./coveralls.exe
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
