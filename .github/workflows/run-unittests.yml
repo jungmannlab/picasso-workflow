@@ -120,6 +120,6 @@ jobs:
         run: |
           Invoke-WebRequest -Uri https://github.com/coverallsapp/coverage-reporter/releases/latest/download/coveralls-windows.zip  -OutFile coveralls-windows.zip
           Expand-Archive -Path '.\coveralls-windows.zip' -DestinationPath '.\coveralls.exe' -Force
-          ./coveralls.exe
+          .\coveralls.exe
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
