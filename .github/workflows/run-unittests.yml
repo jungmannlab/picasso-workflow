@@ -112,3 +112,6 @@ jobs:
           $key, $TEST_CONFLUENCE_SPACE = $envFileContent[2] -split '=', 2
           $key, $TEST_CONFLUENCE_PAGE = $envFileContent[3] -split '=', 2
           python -m coverage report
+
+      - name: Coveralls
+        uses: coverallsapp/github-action@v2
