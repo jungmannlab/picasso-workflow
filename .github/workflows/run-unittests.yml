@@ -121,6 +121,9 @@ jobs:
           Invoke-WebRequest -Uri https://github.com/coverallsapp/coverage-reporter/releases/latest/download/coveralls-windows.zip  -OutFile coveralls-windows.zip
           Expand-Archive -Path '.\coveralls-windows.zip' -DestinationPath '.\' -Force
           dir
+          Update-Module -Name PowerShellGet
+          Clear-Module -Name PowerShellGet -Force
+          Install-Module -Name Git -Scope CurrentUser -Force
           git --version
           .\coveralls.exe
         env:
