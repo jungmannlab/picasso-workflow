@@ -288,7 +288,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 meth_res = res_describe["nena"]
                 text += f"""
                     <p>NeNa</p>
-                    <ul><li>Input Parameter: {meth_pars['inputpar']}</li>
+                    <ul>
                     <li>Best Values: {str(meth_res['best_vals'])}</li>
                     <li>Result: {str(meth_res['res'])}</li>
                     </ul>"""
