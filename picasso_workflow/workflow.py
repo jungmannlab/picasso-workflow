@@ -505,8 +505,16 @@ class WorkflowRunner:
         for i, (module_name, module_parameters) in enumerate(
             self.workflow_modules
         ):
-            # check whether the next module has been analysed already
-            if self.module_previously_analyzed(i + 1):
+            # # check whether the next module has been analysed already
+            # if self.module_previously_analyzed(i + 1):
+            #     # if it has, skip this. This way an aborted module
+            #     # will be re-analyzed.
+            #     logger.debug(
+            #         f"""Module {i}, {module_name} has been previously
+            #         analyzed. Skipping."""
+            #     )
+            #     continue
+            if self.module_previously_succeeded(i, module_name):
                 # if it has, skip this. This way an aborted module
                 # will be re-analyzed.
                 logger.debug(
@@ -582,6 +590,7 @@ class WorkflowRunner:
             module_found : bool
                 whether the folder corresponding to the module index was found
         """
+        # via created directories:
         dirs = os.listdir(self.result_folder)
         dirs = [
             d
@@ -591,6 +600,21 @@ class WorkflowRunner:
         prefix = f"{i:02d}_"
         module_found = any([d.startswith(prefix) for d in dirs])
         return module_found
+
+    def module_previously_succeeded(self, i, module_name):
+        """Check whether a module has previously succeeded, which must be
+        saved in the results.
+        Args:
+            i : int
+                the module index
+            module_name : str
+                the module name
+        Returns:
+            module_found : bool
+                whether a previous module evaluation has succeeded
+        """
+        module_id = f"{i:02d}_{module_name}"
+        return self.results.get(module_id, {}).get("success", False)
 
     def call_module(self, fun_name, i, parameters):
         """At the level of the WorkflowRunner, all modules are processed the
