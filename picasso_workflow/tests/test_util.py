@@ -38,7 +38,7 @@ class TestUtil(unittest.TestCase):
 
     def test_03_ParameterCommandExecutor_priorresult(self):
         pce = util.ParameterCommandExecutor(self)
-        self.result = {
+        self.results = {
             "load": {"sample_movie": {"sample_frame_idx": [0, 1, 2]}}
         }
         di = [
@@ -50,7 +50,7 @@ class TestUtil(unittest.TestCase):
                     "y": 84,
                     "x": (
                         "$get_prior_result",
-                        "result, load, sample_movie, sample_frame_idx",
+                        "results, load, sample_movie, sample_frame_idx",
                     ),
                 },
             ),
@@ -58,6 +58,34 @@ class TestUtil(unittest.TestCase):
         di_exp = [
             ("a", {"1": 1, "2": 2, "3": 3}),
             ("b", {"z": 42, "y": 84, "x": [0, 1, 2]}),
+        ]
+        di_out = pce.run(di)
+        # logger.debug(f'dictionary expected: {di_exp}')
+        # logger.debug(f'dictionary received: {di_out}')
+        assert di_out == di_exp
+
+    def test_03_ParameterCommandExecutor_previousresult(self):
+        pce = util.ParameterCommandExecutor(self)
+        self.results = {
+            "00_load": {"sample_movie": {"sample_frame_idx": [0, 1, 2]}}
+        }
+        di = [
+            ("load", {"1": 1, "2": 2, "3": 3}),
+            (
+                "identify",
+                {
+                    "z": 42,
+                    "y": 84,
+                    "x": (
+                        "$get_previous_module_result",
+                        "sample_movie, sample_frame_idx",
+                    ),
+                },
+            ),
+        ]
+        di_exp = [
+            ("load", {"1": 1, "2": 2, "3": 3}),
+            ("identify", {"z": 42, "y": 84, "x": [0, 1, 2]}),
         ]
         di_out = pce.run(di)
         # logger.debug(f'dictionary expected: {di_exp}')

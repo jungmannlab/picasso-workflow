@@ -118,11 +118,19 @@ class DictSimpleTyper:
         logger.debug("Running DictSimpleTyper")
         return self.scan(parameters)
 
-    def scan(self, itrbl):
+    def scan(self, itrbl, root_level=False):
+        """Scan a level in a dict.
+        Args:
+            itrbl : usually an iterable
+                the value to scan
+            root_level : bool
+                whether the value is in root level.
+                If it is, its index will be stored.
+        """
         if isinstance(itrbl, dict):
             res = self.scan_dict(itrbl)
         elif isinstance(itrbl, list):
-            res = self.scan_list(itrbl)
+            res = self.scan_list(itrbl, root_level)
         elif isinstance(itrbl, tuple):
             res = self.scan_tuple(itrbl)
         elif isinstance(itrbl, np.ndarray):
@@ -139,8 +147,10 @@ class DictSimpleTyper:
             d[k] = self.scan(v)
         return d
 
-    def scan_list(self, li):
+    def scan_list(self, li, root_level=False):
         for i, it in enumerate(li):
+            if root_level:
+                self.curr_rootidx = i
             li[i] = self.scan(it)
         return li
 
@@ -207,7 +217,9 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 the parameters for a module
         """
         logger.debug("Running ParameterCommandExecutor")
-        return self.scan(parameters)
+        # extract module names
+        self.module_names = [it[0] for it in parameters]
+        return self.scan(parameters, root_level=True)
 
     def scan_tuple(self, t):
         if (
@@ -220,6 +232,10 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 logger.debug(f"Getting prior result from {t[1]}.")
                 res = self.get_prior_result(t[1])
                 logger.debug(f"Prior result is {res}.")
+            elif t[0] == f"{self.command_sign}get_previous_module_result":
+                logger.debug(f"Getting previous module result {t[1]}.")
+                res = self.get_previous_module_result(t[1])
+                logger.debug(f"Previous module result is {res}.")
             elif t[0] == f"{self.command_sign}map":
                 res = self.map[t[1]]
                 logger.debug(f"Mapping {t[1]}: {res}")
@@ -250,9 +266,9 @@ class ParameterCommandExecutor(DictSimpleTyper):
             locator : str
                 the chain of attributes for finding the prior result, comma
                 separated. They all need to be obtainable with getattr,
-                starting from this class e.g. "results, load, sample_movie,
+                starting from this class e.g. "results, 02_load, sample_movie,
                 sample_frame_idx" obtains
-                self.results['load']['sample_movie']['sample_frame_idx']
+                self.results['02_load']['sample_movie']['sample_frame_idx']
         Returns:
             the last attribute in the chain.
         """
@@ -285,6 +301,24 @@ class ParameterCommandExecutor(DictSimpleTyper):
                     )
         logger.debug(f"Prior Result of {locator} is {root_att}")
         return root_att
+
+    def get_previous_module_result(self, locator):
+        """This is a convenience function for get_prior_result. It
+        automatically prepends the previous module to the command.
+        Args:
+            locator : str
+                the chain of attributes for finding the result from within
+                the module; e.g. "sample_movie, sample_frame_idx". Called from
+                module 3, this will obtain
+                self.results['02_load']['sample_movie']['sample_frame_idx']
+        Returns:
+            the last attribute in the chain.
+        """
+        prev_module_idx = self.curr_rootidx - 1
+        prev_module_name = self.module_names[prev_module_idx]
+        module_id = f"{prev_module_idx:02d}_{prev_module_name}"
+        locator = f"results, {module_id}, {locator}"
+        return self.get_prior_result(locator)
 
     def get_attribute(self, root_att, att_name):
         if isinstance(root_att, dict):
