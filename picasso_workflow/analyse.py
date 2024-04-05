@@ -728,8 +728,11 @@ class AutoPicasso(AbstractModuleCollection):
     def summarize_dataset(self, i, parameters, results):
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
-                res, best_vals = postprocess.nena(self.locs, self.info)
-                results["nena"] = {"res": res, "best_vals": best_vals}
+                try:
+                    res, best_vals = postprocess.nena(self.locs, self.info)
+                    results["nena"] = {"res": res, "best_vals": best_vals}
+                except ValueError:
+                    results["nena"] = {"res": "Fitting Error", "best_vals": ""}
             else:
                 raise NotImplementedError(
                     f"Description method {meth} not implemented."
