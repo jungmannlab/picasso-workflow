@@ -517,7 +517,7 @@ class WorkflowRunner:
             # all modules are called with iteration and parameter dict
             # as arguments
             module_parameters = self.parameter_command_executor.run(
-                module_parameters
+                module_parameters, curr_rootidx=i
             )
             success = self.call_module(module_name, i, module_parameters)
             if not success:

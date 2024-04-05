@@ -87,4 +87,4 @@ fail_under = 80
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra -q"
-testpaths = ["tests"]
+testpaths = ["picasso_workflow/tests"]

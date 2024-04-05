@@ -105,7 +105,8 @@ class DictSimpleTyper:
                 converts numpy arrays and tuples to lists, numpy scalars to
                 python scalars
         """
-        self.to_simple_type = True
+        self.to_simple_type = to_simple_type
+        self.curr_rootidx = 0
 
     def run(self, parameters):
         """Scan a parameter set for commands to execute prior to module
@@ -203,22 +204,24 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 commands should not be executed, therefore different
                 signs are used.
         """
+        super().__init__(to_simple_type)
         self.parent_object = parent_object
         self.map = map_dict
-        self.to_simple_type = to_simple_type
         self.command_sign = command_sign
 
-    def run(self, parameters):
+    def run(self, parameters, curr_rootidx=None):
         """Scan a parameter set for commands to execute prior to module
         execution.
         commands: '$get_prior_result'
         Args:
             parameters : dict
                 the parameters for a module
+            curr_rootidx : int or None
+                if int, this is the current module index
         """
         logger.debug("Running ParameterCommandExecutor")
-        # extract module names
-        self.module_names = [it[0] for it in parameters]
+        if curr_rootidx is not None:
+            self.curr_rootidx = curr_rootidx
         return self.scan(parameters, root_level=True)
 
     def scan_tuple(self, t):
@@ -315,9 +318,14 @@ class ParameterCommandExecutor(DictSimpleTyper):
             the last attribute in the chain.
         """
         prev_module_idx = self.curr_rootidx - 1
-        prev_module_name = self.module_names[prev_module_idx]
-        module_id = f"{prev_module_idx:02d}_{prev_module_name}"
-        locator = f"results, {module_id}, {locator}"
+        all_module_ids = list(self.parent_object.results.keys())
+        prev_module_id = [
+            mid
+            for mid in all_module_ids
+            if mid.startswith(f"{prev_module_idx:02d}_")
+        ]
+        prev_module_id = prev_module_id[0]
+        locator = f"results, {prev_module_id}, {locator}"
         return self.get_prior_result(locator)
 
     def get_attribute(self, root_att, att_name):
