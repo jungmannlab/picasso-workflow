@@ -239,13 +239,18 @@ class AggregationWorkflowRunner:
             #     self.result_folder, sgl_wkfl_reporter_config['report_name'])
             if self.continue_workflow:
                 try:
+                    logger.debug('loading WorkflowRunner from ' + os.path.join(
+                        self.result_folder,
+                        sgl_wkfl_reporter_config["report_name"]+'_'+self.postfix,
+                    ))
                     wr = WorkflowRunner.load(
                         os.path.join(
                             self.result_folder,
-                            sgl_wkfl_reporter_config["report_name"],
+                            sgl_wkfl_reporter_config["report_name"]+'_'+self.postfix,
                         )
                     )
                 except Exception:
+                    logger.debug('loading did not work. creating from dict.')
                     wr = WorkflowRunner.config_from_dicts(
                         sgl_wkfl_reporter_config,
                         sgl_wkfl_analysis_config,
@@ -253,6 +258,7 @@ class AggregationWorkflowRunner:
                         postfix=self.postfix,
                     )
             else:
+                logger.debug('not dontinuing workflow.starting new.')
                 wr = WorkflowRunner.config_from_dicts(
                     sgl_wkfl_reporter_config,
                     sgl_wkfl_analysis_config,
@@ -502,6 +508,7 @@ class WorkflowRunner:
                 )
 
         # now, run the modules
+        all_previously_succeeded = True
         for i, (module_name, module_parameters) in enumerate(
             self.workflow_modules
         ):
@@ -514,7 +521,7 @@ class WorkflowRunner:
             #         analyzed. Skipping."""
             #     )
             #     continue
-            if self.module_previously_succeeded(i, module_name):
+            if (all_previously_succeeded and self.module_previously_succeeded(i, module_name)) and self.module_previously_analyzed(i):
                 # if it has, skip this. This way an aborted module
                 # will be re-analyzed.
                 logger.debug(
@@ -522,6 +529,8 @@ class WorkflowRunner:
                     analyzed. Skipping."""
                 )
                 continue
+            else:
+                all_previously_succeeded = False
             # all modules are called with iteration and parameter dict
             # as arguments
             module_parameters = self.parameter_command_executor.run(
@@ -531,6 +540,8 @@ class WorkflowRunner:
             if not success:
                 break
             self.save(self.result_folder)
+        else:
+            success = True
         return success
 
     ##########################################################################
@@ -556,6 +567,8 @@ class WorkflowRunner:
             "analysis_config": pce.run(self.analysis_config),
             "workflow_modules": pce.run(self.workflow_modules),
         }
+        logger.debug('saving data:')
+        logger.debug(str(data))
         with open(filepath, "w") as f:
             yaml.dump(data, f)
 
@@ -614,6 +627,9 @@ class WorkflowRunner:
                 whether a previous module evaluation has succeeded
         """
         module_id = f"{i:02d}_{module_name}"
+        logger.debug('looking for previous ' + module_id)
+        logger.debug(str(self.results.get(module_id, {})))
+        logger.debug(str(self.results.get(module_id, {}).get("success", False)))
         return self.results.get(module_id, {}).get("success", False)
 
     def call_module(self, fun_name, i, parameters):
@@ -642,9 +658,13 @@ class WorkflowRunner:
         try:
             parameters, self.results[key] = fun_ap(i, parameters)
         except AutoPicassoError as e:
+            self.results[key]['success'] = False
             logger.error(e)
             raise e
         logger.debug(f"RESULTS: {self.results[key]}")
         fun_cr = getattr(self.confluencereporter, fun_name)
-        fun_cr(i, parameters, self.results[key])
+        try:
+            fun_cr(i, parameters, self.results[key])
+        except ConfluenceInterfaceError as e:
+            logger.error(e)
         return self.results[key]["success"]

@@ -278,19 +278,19 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def summarize_dataset(self, i, pars_describe, res_describe):
+    def summarize_dataset(self, i, parameters, results):
         logger.debug("Reporting dataset description.")
         text = """
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Descriptive Statistics</strong></p>"""
-        for meth, meth_pars in pars_describe["methods"].items():
+        for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
-                meth_res = res_describe["nena"]
+                meth_res = results["nena"]
                 text += f"""
                     <p>NeNa</p>
                     <ul>
-                    <li>Best Values: {str(meth_res['best_vals'])}</li>
-                    <li>Result: {str(meth_res['res'])}</li>
+                    <li>Best Values: {str(results.get('best_vals'))}</li>
+                    <li>Result: {str(results.get('res'))}</li>
                     </ul>"""
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>

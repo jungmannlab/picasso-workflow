@@ -714,7 +714,8 @@ class AutoPicasso(AbstractModuleCollection):
             results["filepath"] = filepath
             results["success"] = True
         else:
-            msg = "This is a manual step. Please provide input. "
+            msg = "This is a manual step. Please provide input, "
+            msg += "and re-execute the workflow."
             msg += parameters["prompt"]
             msg += f" The resulting file should be {filepath}."
             results["message"] = msg
@@ -730,7 +731,7 @@ class AutoPicasso(AbstractModuleCollection):
             if meth.lower() == "nena":
                 try:
                     res, best_vals = postprocess.nena(self.locs, self.info)
-                    results["nena"] = {"res": res, "best_vals": best_vals}
+                    results["nena"] = {"res": str(res), "best_vals": best_vals}
                 except ValueError:
                     results["nena"] = {"res": "Fitting Error", "best_vals": ""}
             else:
