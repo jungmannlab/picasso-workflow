@@ -239,18 +239,25 @@ class AggregationWorkflowRunner:
             #     self.result_folder, sgl_wkfl_reporter_config['report_name'])
             if self.continue_workflow:
                 try:
-                    logger.debug('loading WorkflowRunner from ' + os.path.join(
-                        self.result_folder,
-                        sgl_wkfl_reporter_config["report_name"]+'_'+self.postfix,
-                    ))
+                    logger.debug(
+                        "loading WorkflowRunner from "
+                        + os.path.join(
+                            self.result_folder,
+                            sgl_wkfl_reporter_config["report_name"]
+                            + "_"
+                            + self.postfix,
+                        )
+                    )
                     wr = WorkflowRunner.load(
                         os.path.join(
                             self.result_folder,
-                            sgl_wkfl_reporter_config["report_name"]+'_'+self.postfix,
+                            sgl_wkfl_reporter_config["report_name"]
+                            + "_"
+                            + self.postfix,
                         )
                     )
                 except Exception:
-                    logger.debug('loading did not work. creating from dict.')
+                    logger.debug("loading did not work. creating from dict.")
                     wr = WorkflowRunner.config_from_dicts(
                         sgl_wkfl_reporter_config,
                         sgl_wkfl_analysis_config,
@@ -258,7 +265,7 @@ class AggregationWorkflowRunner:
                         postfix=self.postfix,
                     )
             else:
-                logger.debug('not dontinuing workflow.starting new.')
+                logger.debug("not dontinuing workflow.starting new.")
                 wr = WorkflowRunner.config_from_dicts(
                     sgl_wkfl_reporter_config,
                     sgl_wkfl_analysis_config,
@@ -521,7 +528,10 @@ class WorkflowRunner:
             #         analyzed. Skipping."""
             #     )
             #     continue
-            if (all_previously_succeeded and self.module_previously_succeeded(i, module_name)) and self.module_previously_analyzed(i):
+            if (
+                all_previously_succeeded
+                and self.module_previously_succeeded(i, module_name)
+            ) and self.module_previously_analyzed(i):
                 # if it has, skip this. This way an aborted module
                 # will be re-analyzed.
                 logger.debug(
@@ -567,7 +577,7 @@ class WorkflowRunner:
             "analysis_config": pce.run(self.analysis_config),
             "workflow_modules": pce.run(self.workflow_modules),
         }
-        logger.debug('saving data:')
+        logger.debug("saving data:")
         logger.debug(str(data))
         with open(filepath, "w") as f:
             yaml.dump(data, f)
@@ -627,9 +637,11 @@ class WorkflowRunner:
                 whether a previous module evaluation has succeeded
         """
         module_id = f"{i:02d}_{module_name}"
-        logger.debug('looking for previous ' + module_id)
+        logger.debug("looking for previous " + module_id)
         logger.debug(str(self.results.get(module_id, {})))
-        logger.debug(str(self.results.get(module_id, {}).get("success", False)))
+        logger.debug(
+            str(self.results.get(module_id, {}).get("success", False))
+        )
         return self.results.get(module_id, {}).get("success", False)
 
     def call_module(self, fun_name, i, parameters):
@@ -658,7 +670,7 @@ class WorkflowRunner:
         try:
             parameters, self.results[key] = fun_ap(i, parameters)
         except AutoPicassoError as e:
-            self.results[key]['success'] = False
+            self.results[key]["success"] = False
             logger.error(e)
             raise e
         logger.debug(f"RESULTS: {self.results[key]}")
