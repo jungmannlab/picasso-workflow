@@ -250,7 +250,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-        if driftimg_fn := pars_undrift.get("filepath_plot"):
+        if driftimg_fn := res_undrift.get("filepath_plot"):
             self.ci.upload_attachment(self.report_page_id, driftimg_fn)
             self.ci.update_page_content_with_image_attachment(
                 self.report_page_name,
@@ -289,12 +289,22 @@ class ConfluenceReporter(AbstractModuleCollection):
                 text += f"""
                     <p>NeNa</p>
                     <ul>
-                    <li>Best Values: {str(meth_res.get('best_vals'))}</li>
-                    <li>Result: {str(meth_res.get('res'))}</li>
+                    <li>NeNa value: {str(meth_res.get('NeNa'))}</li>
+                    <li>Best Fit Values: {str(meth_res.get('res'))}</li>
+                    <li>Chi Square: {str(meth_res.get('chisqr'))}</li>
                     </ul>"""
+                if fp_nena := meth_res.get("filepath_plot"):
+                    self.ci.upload_attachment(self.report_page_id, fp_nena)
+                    _, fn_nena = os.path.split(fp_nena)
+                    text += (
+                        "<ul><ac:image><ri:attachment "
+                        + f'ri:filename="{fn_nena}" />'
+                        + "</ac:image></ul>"
+                    )
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        logger.debug("description text: " + text)
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )

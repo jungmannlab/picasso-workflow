@@ -730,15 +730,51 @@ class AutoPicasso(AbstractModuleCollection):
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
                 try:
-                    res, best_vals = postprocess.nena(self.locs, self.info)
-                    results["nena"] = {"res": str(res), "best_vals": best_vals}
-                except ValueError:
+                    res, best_val = postprocess.nena(self.locs, self.info)
+                    fp_plot = os.path.join(results["folder"], "nena.png")
+                    self._plot_nena(res, fp_plot)
+                    all_best_vals = {
+                        "a": res.best_values["a"],
+                        "s": res.best_values["s"],
+                        "ac": res.best_values["ac"],
+                        "dc": res.best_values["dc"],
+                        "sc": res.best_values["sc"],
+                    }
+                    results["nena"] = {
+                        "res": str(all_best_vals),
+                        "chisqr": res.chisqr,
+                        "NeNa": (
+                            f"{best_val:.3f} px;"
+                            + f" {130*best_val:.3f} nm "
+                            + "(assuming 130nm pixel size)"
+                        ),
+                        "filepath_plot": fp_plot,
+                    }
+                except ValueError as e:
+                    logger.error(e)
                     results["nena"] = {"res": "Fitting Error", "best_vals": ""}
+                except Exception as e:
+                    logger.error(e)
+                    results["nena"] = {
+                        "res": str(e.msg),
+                        "best_vals": "Error.",
+                    }
             else:
                 raise NotImplementedError(
                     f"Description method {meth} not implemented."
                 )
         return parameters, results
+
+    def _plot_nena(self, nena_result, filepath_plot):
+        fig, ax = plt.subplots()
+        d = nena_result.userkws["d"]
+        ax.set_title("Next frame neighbor distance histogram")
+        ax.plot(d, nena_result.data, label="Data")
+        ax.plot(d, nena_result.best_fit, label="Fit")
+        ax.set_xlabel("Distance [px]")
+        ax.set_ylabel("Counts")
+        ax.legend(loc="best")
+        fig.savefig(filepath_plot)
 
     @module_decorator
     def save_single_dataset(self, i, parameters, results):
