@@ -44,6 +44,10 @@ def minimal_channel_align(filepaths, box_size=7):
             "align_channels",
             {},
         ),
+        (
+            "save_datasets_aggregated",
+            {},
+        ),
     ]
     workflow_modules_multi = {
         "single_dataset_tileparameters": {
