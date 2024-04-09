@@ -93,6 +93,12 @@ class AbstractModuleCollection(abc.ABC):
         for the aggregation workflow more straightforward."""
         pass
 
+    @abc.abstractmethod
+    def save_datasets_aggregated(self):
+        """save data of multiple single-dataset workflows from one
+        aggregation workflow."""
+        pass
+
 
 class DictSimpleTyper:
     """Scans a complex dictionary and converts numpy arrays and

@@ -361,9 +361,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Align Channels via RCC</strong></p>
-        <ul><li>Shifts in x: {results.get('shifts')[0, :]}</li>
-        <li>Shifts in y: {results.get('shifts')[1, :]}</li>
-        <li>Shifts in z: {results.get('shifts')[2, :]}</li>
+        <ul><li>Shifts in x [px]: {results.get('shifts')[0, :]}</li>
+        <li>Shifts in y [px]: {results.get('shifts')[1, :]}</li>
+        <li>Shifts in z [px]: {results.get('shifts')[2, :]}</li>
         <li>Start Time: {results['start time']}</li>
         </ul>"""
         text += """
@@ -380,6 +380,25 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_id,
                 os.path.split(driftimg_fn)[1],
             )
+
+    def save_datasets_aggregated(self, i, parameters, results):
+        """save data of multiple single-dataset workflows from one
+        aggregation workflow."""
+        logger.debug("Reporting save_datasets_aggregated.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Saving Datasets aggregated</strong></p>
+        <ul><li>filepaths: {results.get('filepaths')}</li>
+        <li>Start Time: {results['start time']}</li>
+        <li>tags: {results.get('tags')}</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
 
 
 class UndriftError(Exception):

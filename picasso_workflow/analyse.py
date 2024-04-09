@@ -756,7 +756,7 @@ class AutoPicasso(AbstractModuleCollection):
                 except Exception as e:
                     logger.error(e)
                     results["nena"] = {
-                        "res": str(e.msg),
+                        "res": str(e),
                         "best_vals": "Error.",
                     }
             else:
@@ -893,6 +893,34 @@ class AutoPicasso(AbstractModuleCollection):
             picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath
 
+        return parameters, results
+
+    @module_decorator
+    def save_datasets_aggregated(self, i, parameters, results):
+        """save data of multiple single-dataset workflows from one
+        aggregation workflow.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        t00 = time.time()
+        allfps = []
+        for locs, info, tag in zip(
+            self.channel_locs, self.channel_info, self.channel_tags
+        ):
+            filepath = os.path.join(results["folder"], tag + ".hdf5")
+            io.save_locs(filepath, locs, info)
+            allfps.append(filepath)
+        results["filepaths"] = allfps
+
+        dt = np.round(time.time() - t00, 2)
+        results["duration"] = dt
         return parameters, results
 
 
