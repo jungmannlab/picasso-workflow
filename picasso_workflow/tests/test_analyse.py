@@ -126,13 +126,18 @@ class TestAnalyse(unittest.TestCase):
             os.path.join(self.results_folder, "00_load_dataset_movie")
         )
 
-    def test_04_AutoPicasso_auto_min_netgrad(self):
+    @patch("picasso_workflow.analyse.localize.get_spots")
+    def test_04_AutoPicasso_auto_min_netgrad(self, mock_get_spots):
+        mock_get_spots.return_value = np.random.randint(
+            0, 1000, size=(7, 7), dtype=np.uint16
+        )
         fn = os.path.join(self.results_folder, "autominnet.png")
         results = self.ap._auto_min_netgrad(
             box_size=7, frame_numbers=[9], filename=fn
         )
         logger.debug(results)
         assert results["filename"] == fn
+        assert False
 
         os.remove(fn)
 

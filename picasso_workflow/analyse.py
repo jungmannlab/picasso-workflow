@@ -330,8 +330,13 @@ class AutoPicasso(AbstractModuleCollection):
         # highest peak in the histogram: find max and FWHM
         # FWHM as the most robust detection for peak width
         bkg_peak_height, bkg_peak_pos = np.max(hist), np.argmax(hist)
-        bkg_halfclose = np.argsort(np.abs(hist - bkg_peak_height / 2))
-        bkg_fwhm = np.abs(bkg_halfclose[1] - bkg_halfclose[0])
+        bkg_halfclose_lo = np.argsort(
+            np.abs(hist[:bkg_peak_pos] - bkg_peak_height / 2)
+        )
+        bkg_halfclose_hi = np.argsort(
+            np.abs(hist[bkg_peak_pos:] - bkg_peak_height / 2)
+        )
+        bkg_fwhm = np.abs(bkg_halfclose_hi[0] - bkg_halfclose_lo[0])
         bkg_sigma = bkg_fwhm / np.sqrt(4 * np.log(2))
         # threshold at zscore * bkg_sigma
         ng_est_idx = int(zscore * bkg_sigma) + bkg_peak_pos
@@ -341,17 +346,17 @@ class AutoPicasso(AbstractModuleCollection):
 
         # plot results
         if filename:
-            fig, ax = plt.subplots()
-            ax.plot(edges[:-1], hist, color="b", label="combined histogram")
+            fig, ax = plt.subplots(nrows=2)
+            ax[0].plot(edges[:-1], hist, color="b", label="combined histogram")
             # for i, frame_number in enumerate(frame_numbers):
             #     hi, ed = np.histogram(
             #         id_list[i]['net_gradient'], bins=bins, density=True)
             #     ax.plot(ed[:-1], hi, color='gray')
-            ylims = ax.get_ylim()
-            ax.set_title("Net Gradient histogram of subsampled frames")
-            ax.set_xlabel("net gradient")
-            ax.set_yscale("log")
-            ax.plot(
+            ylims = ax[0].get_ylim()
+            ax[0].set_title("Net Gradient histogram of subsampled frames")
+            ax[0].set_xlabel("net gradient")
+            ax[0].set_yscale("log")
+            ax[0].plot(
                 [results["estd_net_grad"], results["estd_net_grad"]],
                 ylims,
                 color="r",
@@ -359,15 +364,79 @@ class AutoPicasso(AbstractModuleCollection):
                     results["estd_net_grad"]
                 ),
             )
-            ax.plot(
+            ax[0].plot(
                 [edges[bkg_peak_pos], edges[bkg_peak_pos]],
                 ylims,
                 color="gray",
                 label="detected background peak",
             )
-            ax.legend()
+            ax[0].legend()
             # plt.show()
+
+            # pull up example spots at the threshold net_grad
+            sample_spots_rows = 4
+            sample_spots_cols = 12
+            n_spots = sample_spots_cols * sample_spots_rows
+            sample_idxs = np.argsort(
+                np.abs(
+                    identifications["net_gradient"] - results["estd_net_grad"]
+                )
+            )[:n_spots]
+            sample_identifications = identifications[sample_idxs]
+            sample_spots = localize.get_spots(
+                self.movie,
+                sample_identifications,
+                box_size,
+                self.analysis_config["camera_info"],
+            )
+            logger.debug("sample spots: " + str(len(sample_spots)))
+            logger.debug("sample spot shape: " + str(sample_spots[0].shape))
+
+            border_width = 2
+            canvas_size = (
+                box_size * sample_spots_rows
+                + border_width * (sample_spots_rows - 1),
+                box_size * sample_spots_cols
+                + border_width * (sample_spots_cols - 1),
+            )
+
+            def normalize_spot(spot, maxval=255, dtype=np.uint8):
+                # logger.debug('spot input: ' + str(spot))
+                sp = spot - np.min(spot)
+                imgmax = np.max(sp)
+                imgmax = 1 if imgmax == 0 else imgmax
+                sp = sp.astype(np.float32) / imgmax * maxval
+                # logger.debug('spot output: ' + str(sp.astype(dtype)))
+                return sp.astype(dtype)
+
+            canvas = np.zeros(canvas_size, dtype=np.uint8)
+            for i, spot in enumerate(sample_spots):
+                ix, iy = i // sample_spots_cols, i % sample_spots_cols
+                pix = ix * (box_size + border_width)
+                piy = iy * (box_size + border_width)
+                logger.debug(
+                    "normspot shape: " + str(normalize_spot(spot).shape)
+                )
+                logger.debug("normspot: " + str(normalize_spot(spot)))
+                # logger.debug('target: ' + str(canvas[
+                #     pix:pix + box_size,
+                #     piy:piy + box_size]))
+                canvas[pix:pix + box_size, piy:piy + box_size] = (
+                    spot  # normalize_spot(spot)
+                )
+                break
+            ax[1].imshow(canvas, cmap="gray", interpolation="nearest")
+            ax[1].grid(visible=False)
+            ax[1].tick_params(bottom=False, left=False)
+            ax[1].set_xticklabels([])
+            ax[1].set_yticklabels([])
+            ax[1].set_title(
+                "spots around min net_gradient = "
+                + f'{results["estd_net_grad"]:.0f}'
+            )
+
             results["filename"] = filename
+            plt.tight_layout()
             fig.savefig(results["filename"])
         return results
 
@@ -715,7 +784,7 @@ class AutoPicasso(AbstractModuleCollection):
             results["success"] = True
         else:
             msg = "This is a manual step. Please provide input, "
-            msg += "and re-execute the workflow."
+            msg += "and re-execute the workflow. "
             msg += parameters["prompt"]
             msg += f" The resulting file should be {filepath}."
             results["message"] = msg
@@ -740,13 +809,15 @@ class AutoPicasso(AbstractModuleCollection):
                         "dc": res.best_values["dc"],
                         "sc": res.best_values["sc"],
                     }
+                    pixelsize = self.analysis_config["camera_info"][
+                        "pixelsize"
+                    ]
                     results["nena"] = {
                         "res": str(all_best_vals),
                         "chisqr": res.chisqr,
                         "NeNa": (
                             f"{best_val:.3f} px;"
-                            + f" {130*best_val:.3f} nm "
-                            + "(assuming 130nm pixel size)"
+                            + f" {pixelsize*best_val:.3f} nm "
                         ),
                         "filepath_plot": fp_plot,
                     }
