@@ -389,8 +389,6 @@ class AutoPicasso(AbstractModuleCollection):
                 box_size,
                 self.analysis_config["camera_info"],
             )
-            logger.debug("sample spots: " + str(len(sample_spots)))
-            logger.debug("sample spot shape: " + str(sample_spots[0].shape))
 
             border_width = 2
             canvas_size = (
@@ -414,17 +412,10 @@ class AutoPicasso(AbstractModuleCollection):
                 ix, iy = i // sample_spots_cols, i % sample_spots_cols
                 pix = ix * (box_size + border_width)
                 piy = iy * (box_size + border_width)
-                logger.debug(
-                    "normspot shape: " + str(normalize_spot(spot).shape)
-                )
-                logger.debug("normspot: " + str(normalize_spot(spot)))
-                # logger.debug('target: ' + str(canvas[
-                #     pix:pix + box_size,
-                #     piy:piy + box_size]))
                 canvas[pix:pix + box_size, piy:piy + box_size] = (
-                    spot  # normalize_spot(spot)
+                    normalize_spot(spot)
                 )
-                break
+                # break
             ax[1].imshow(canvas, cmap="gray", interpolation="nearest")
             ax[1].grid(visible=False)
             ax[1].tick_params(bottom=False, left=False)
