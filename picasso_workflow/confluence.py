@@ -168,7 +168,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Identifications found: {results_identify['num_identifications']:,}
         </li>
         </ul>
-        TODO: DISPLAY SPOTS AROUND THE AUTO-IDENTIFIED MIN GRADIENT
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(

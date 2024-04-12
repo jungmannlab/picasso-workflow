@@ -15,7 +15,7 @@ import yaml
 import os
 from aicsimageio import AICSImage
 
-from picasso import render, imageprocess
+from picasso import localize, render, imageprocess
 
 
 logger = logging.getLogger(__name__)
@@ -181,3 +181,57 @@ def convert_zeiss_file(filepath_czi, filepath_raw, info=None):
 
     with open(filepath_info, "w") as f:
         yaml.dump(info, f)
+
+
+#############################################################################
+# for plotting single spots in analyse.AutoPicasso.
+#############################################################################
+
+def get_spots(movie, identifications, box, camera_info):
+    spots = _cut_spots(movie, identifications, box)
+    return localize._to_photons(spots, camera_info)
+
+
+def _cut_spots(movie, ids, box):
+    N = len(ids.frame)
+    spots = np.zeros((N, box, box), dtype=movie.dtype)
+    spots = _cut_spots_byrandomframe(
+        movie, ids.frame, ids.x, ids.y, box, spots
+    )
+    return spots
+
+
+def _cut_spots_byrandomframe(
+    movie, ids_frame, ids_x, ids_y, box, spots
+):
+    """Cuts the spots out of a movie by non-sorted frames.
+
+    Args:
+        movie : AbstractPicassoMovie (t, x, y)
+            the image data
+        ids_frame, ids_x, ids_y : 1D array (k)
+            spot positions in the image data. Length: number of spots
+            identified
+        box : uneven int
+            the cut spot box size
+        spots : 3D array (k, box, box)
+            the cut spots
+    Returns:
+        spots : as above
+            the image-data filled spots
+    """
+    r = int(box / 2)
+    for j, (fr, xc, yc) in enumerate(zip(ids_frame, ids_x, ids_y)):
+        frame = movie[fr]
+        spots[j] = frame[yc - r:yc + r + 1, xc - r:xc + r + 1]
+    return spots
+
+
+def normalize_spot(spot, maxval=255, dtype=np.uint8):
+    # logger.debug('spot input: ' + str(spot))
+    sp = spot - np.min(spot)
+    imgmax = np.max(sp)
+    imgmax = 1 if imgmax == 0 else imgmax
+    sp = sp.astype(np.float32) / imgmax * maxval
+    # logger.debug('spot output: ' + str(sp.astype(dtype)))
+    return sp.astype(dtype)

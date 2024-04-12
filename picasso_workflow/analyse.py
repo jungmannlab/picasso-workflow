@@ -321,7 +321,7 @@ class AutoPicasso(AbstractModuleCollection):
         # calculate histogram
         if bins is None:
             hi = np.quantile(identifications["net_gradient"], 0.9995)
-            bins = np.linspace(start_ng, hi, num=200)
+            bins = np.linspace(start_ng, hi, num=500)
         hist, edges = np.histogram(
             identifications["net_gradient"], bins=bins, density=True
         )
@@ -329,20 +329,21 @@ class AutoPicasso(AbstractModuleCollection):
         # find the background peak, assume it to be Gaussian and the
         # highest peak in the histogram: find max and FWHM
         # FWHM as the most robust detection for peak width
+        # only use the lower half for FWHM calculation, as the higher
+        # tail is confounded by non-background spots
         bkg_peak_height, bkg_peak_pos = np.max(hist), np.argmax(hist)
-        bkg_halfclose_lo = np.argsort(
+        bkg_half_lo = np.argsort(
             np.abs(hist[:bkg_peak_pos] - bkg_peak_height / 2)
         )
-        bkg_halfclose_hi = np.argsort(
-            np.abs(hist[bkg_peak_pos:] - bkg_peak_height / 2)
-        )
-        bkg_fwhm = np.abs(bkg_halfclose_hi[0] - bkg_halfclose_lo[0])
+        bkg_fwhm = 2 * np.abs(bkg_peak_pos - bkg_half_lo[0])
         bkg_sigma = bkg_fwhm / np.sqrt(4 * np.log(2))
         # threshold at zscore * bkg_sigma
         ng_est_idx = int(zscore * bkg_sigma) + bkg_peak_pos
         if ng_est_idx >= len(edges):
             ng_est_idx = len(edges) - 1
         results["estd_net_grad"] = edges[ng_est_idx]
+        bkg_peak = edges[bkg_peak_pos]
+        bkg_sigma = edges[int(bkg_peak_pos + bkg_sigma)] - bkg_peak
 
         # plot results
         if filename:
@@ -368,68 +369,92 @@ class AutoPicasso(AbstractModuleCollection):
                 [edges[bkg_peak_pos], edges[bkg_peak_pos]],
                 ylims,
                 color="gray",
-                label="detected background peak",
+                label=f"background: {bkg_peak:.0f}+/-{bkg_sigma:.0f}",
             )
             ax[0].legend()
             # plt.show()
 
-            # pull up example spots at the threshold net_grad
-            sample_spots_rows = 4
-            sample_spots_cols = 12
-            n_spots = sample_spots_cols * sample_spots_rows
-            sample_idxs = np.argsort(
-                np.abs(
-                    identifications["net_gradient"] - results["estd_net_grad"]
-                )
-            )[:n_spots]
-            sample_identifications = identifications[sample_idxs]
-            sample_spots = localize.get_spots(
-                self.movie,
-                sample_identifications,
-                box_size,
-                self.analysis_config["camera_info"],
-            )
-
-            border_width = 2
-            canvas_size = (
-                box_size * sample_spots_rows
-                + border_width * (sample_spots_rows - 1),
-                box_size * sample_spots_cols
-                + border_width * (sample_spots_cols - 1),
-            )
-
-            def normalize_spot(spot, maxval=255, dtype=np.uint8):
-                # logger.debug('spot input: ' + str(spot))
-                sp = spot - np.min(spot)
-                imgmax = np.max(sp)
-                imgmax = 1 if imgmax == 0 else imgmax
-                sp = sp.astype(np.float32) / imgmax * maxval
-                # logger.debug('spot output: ' + str(sp.astype(dtype)))
-                return sp.astype(dtype)
-
-            canvas = np.zeros(canvas_size, dtype=np.uint8)
-            for i, spot in enumerate(sample_spots):
-                ix, iy = i // sample_spots_cols, i % sample_spots_cols
-                pix = ix * (box_size + border_width)
-                piy = iy * (box_size + border_width)
-                canvas[pix:pix + box_size, piy:piy + box_size] = (
-                    normalize_spot(spot)
-                )
-                # break
-            ax[1].imshow(canvas, cmap="gray", interpolation="nearest")
+            sample_spots, ng_start, ng_end = self._draw_sample_spots(
+                identifications, results["estd_net_grad"], box_size)
+            ax[1].imshow(sample_spots, cmap="gray", interpolation="nearest")
             ax[1].grid(visible=False)
             ax[1].tick_params(bottom=False, left=False)
             ax[1].set_xticklabels([])
             ax[1].set_yticklabels([])
             ax[1].set_title(
-                "spots around min net_gradient = "
-                + f'{results["estd_net_grad"]:.0f}'
+                "spots with net_gradient " + f"{ng_start:.0f} to {ng_end:.0f}"
             )
 
             results["filename"] = filename
             plt.tight_layout()
             fig.savefig(results["filename"])
         return results
+
+    def _draw_sample_spots(
+        self, identifications, estd_net_grad, box_size,
+        sample_spots_rows=4, sample_spots_cols=12
+    ):
+        """Pull up example spots at the threshold net_grad for
+        visualizing the automatically found min net gradient.
+        Args:
+            identifications : np recarray
+                identifications from subsampled frames with
+                very low min net gradient.
+            estd_net_grad : float
+                the estimated min net gradient
+            box_size : uneven int
+                the box size to display
+            sample_spots_rows : int
+                the number of rows of spots to display
+            sample_spots_cols : int
+                the number of cols of spots to display
+        Returns:
+            canvas : 2D array
+                the canvas with spots to display
+            ng_start : float
+                the lowest net gradient shown (upper left spot)
+            ng_end : float
+                the highest net gradient shown (lower right spot)
+        """
+        n_spots = sample_spots_cols * sample_spots_rows
+        sample_idxs = np.argsort(
+            np.abs(
+                identifications["net_gradient"] - estd_net_grad
+            )
+        )[:n_spots]
+        sample_identifications = identifications[sample_idxs]
+        sample_identifications = sample_identifications[
+            np.argsort(sample_identifications["net_gradient"])
+        ]
+
+        # sample_spots = localize.get_spots(
+        sample_spots = picasso_outpost.get_spots(
+            self.movie,
+            sample_identifications,
+            box_size,
+            self.analysis_config["camera_info"],
+        )
+        ng_start = np.min(sample_identifications["net_gradient"])
+        ng_end = np.max(sample_identifications["net_gradient"])
+
+        border_width = 2
+        canvas_size = (
+            box_size * sample_spots_rows
+            + border_width * (sample_spots_rows - 1),
+            box_size * sample_spots_cols
+            + border_width * (sample_spots_cols - 1),
+        )
+
+        canvas = np.zeros(canvas_size, dtype=np.uint8)
+        for i, spot in enumerate(sample_spots):
+            ix, iy = i // sample_spots_cols, i % sample_spots_cols
+            pix = ix * (box_size + border_width)
+            piy = iy * (box_size + border_width)
+            logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
+            canvas[pix:pix + box_size, piy:piy + box_size] = (
+                picasso_outpost.normalize_spot(spot)
+            )
+        return canvas, ng_start, ng_end
 
     @module_decorator
     def identify(self, i, parameters, results):
