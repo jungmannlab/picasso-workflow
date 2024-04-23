@@ -72,6 +72,37 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def aggregate_cluster(self):
+        """Aggregate along the cluster column.
+        Uses picasso.postprocess.cluster_combine"""
+        pass
+
+    @abc.abstractmethod
+    def density(self):
+        """Calculate local localization density"""
+        pass
+
+    @abc.abstractmethod
+    def dbscan(self):
+        """Perform clustering using dbscan"""
+        pass
+
+    @abc.abstractmethod
+    def hdbscan(self):
+        """Perform clustering using hdbscan"""
+        pass
+
+    @abc.abstractmethod
+    def smlm_clusterer(self):
+        """Perform clustering using the smlm clusterer"""
+        pass
+
+    @abc.abstractmethod
+    def nneighbor(self):
+        """Calculate Nearest Neighbor distances"""
+        pass
+
+    @abc.abstractmethod
     def save_single_dataset(self):
         """Saves the locs and info of a single dataset; makes loading
         for the aggregation workflow more straightforward."""

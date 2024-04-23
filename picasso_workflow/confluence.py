@@ -308,6 +308,117 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    def aggregate_cluster(self, i, parameters, results):
+        logger.debug("Reporting aggregate_cluster.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>aggregate_cluster</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <ul><li>Duration: {results['duration']} s</li>
+        <li>Number of locs after aggregating: {results.get('nlocs')}</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def density(self, i, parameters, results):
+        logger.debug("Reporting density.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Local density computation</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <ul><li>Duration: {results['duration']} s</li>
+        <li>Radius: {parameters.get('radius')}</li>
+        </ul>"""
+
+        text += """
+        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def dbscan(self, i, parameters, results):
+        logger.debug("Reporting dbscan.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>dbscan clustering</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <ul><li>Duration: {results['duration']} s</li>
+        <li>Radius: {parameters.get('radius')}</li>
+        <li>min_density: {parameters.get('min_density')}</li>
+        </ul>"""
+
+        text += """
+        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def hdbscan(self, i, parameters, results):
+        logger.debug("Reporting hdbscan.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>dbscan clustering</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <ul><li>Duration: {results['duration']} s</li>
+        <li>min_cluster: {parameters.get('min_cluster')}</li>
+        <li>min_sample: {parameters.get('min_sample')}</li>
+        </ul>"""
+
+        text += """
+        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def smlm_clusterer(self, i, parameters, results):
+        logger.debug("Reporting smlm_clusterer.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>smlm_clusterer clustering</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <ul><li>Duration: {results['duration']} s</li>
+        <li>radius: {parameters.get('radius')}</li>
+        <li>min_locs: {parameters.get('min_locs')}</li>
+        <li>basic_fa: {parameters.get('basic_fa')}</li>
+        <li>radius_z: {parameters.get('radius_z')}</li>
+        </ul>"""
+
+        text += """
+        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def nneighbor(self, i, parameters, results):
+        logger.debug("Reporting nneighbor.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>nneighbor calculation</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <ul><li>Duration: {results['duration']} s</li>
+        </ul>"""
+
+        text += """
+        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
     def save_single_dataset(self, i, parameters, results):
         logger.debug("Reporting dataset saving.")
         text = f"""
