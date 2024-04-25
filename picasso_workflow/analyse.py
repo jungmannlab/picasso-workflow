@@ -5,7 +5,7 @@ Author: Heinrich Grabmayr
 Initial Date: March 7, 2024
 Description: This is the picasso interface of picasso-workflow
 """
-from picasso import io, localize, gausslq, postprocess
+from picasso import io, localize, gausslq, postprocess, clusterer
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import os
@@ -14,6 +14,7 @@ from concurrent import futures as _futures
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
+from scipy.spatial import distance
 import matplotlib.pyplot as plt
 import logging
 from datetime import datetime
@@ -51,7 +52,10 @@ def module_decorator(method):
             if parameters.get("save_locs") is True:
                 self._save_locs(os.path.join(results["folder"], "locs.hdf5"))
         results["end time"] = datetime.now().strftime("%y-%m-%d %H:%M:%S")
-        results["duration"] = results["end time"] - results["start time"]
+        td = datetime.strptime(
+            results["end time"], "%y-%m-%d %H:%M:%S"
+        ) - datetime.strptime(results["start time"], "%y-%m-%d %H:%M:%S")
+        results["duration"] = td.total_seconds()
         logger.debug(f"RESULTS: {results}")
         return parameters, results
 
@@ -114,8 +118,6 @@ class AutoPicasso(AbstractModuleCollection):
             results : dict
                 the analysis results
         """
-        t00 = time.time()
-
         filepath_czi = parameters["filepath"]
         filename_raw = parameters.get("filename_raw")
         if filename_raw is None:
@@ -129,7 +131,6 @@ class AutoPicasso(AbstractModuleCollection):
 
         results["filepath_raw"] = filepath_raw
         results["filename_raw"] = filename_raw
-        results["duration"] = np.round(time.time() - t00, 2)
         return parameters, results
 
     @module_decorator
@@ -156,7 +157,6 @@ class AutoPicasso(AbstractModuleCollection):
                 the analysis results
         """
         results["picasso version"] = picassoversion
-        t00 = time.time()
         self.movie, self.info = io.load_movie(parameters["filename"])
         results["movie.shape"] = self.movie.shape
 
@@ -209,8 +209,6 @@ class AutoPicasso(AbstractModuleCollection):
             res = self._create_sample_movie(**samplemov_pars)
             results["sample_movie"] = res
 
-        dt = np.round(time.time() - t00, 2)
-        results["duration"] = dt
         return parameters, results
 
     def _create_sample_movie(
@@ -261,12 +259,9 @@ class AutoPicasso(AbstractModuleCollection):
                 the analysis results
         """
         results["picasso version"] = picassoversion
-        t00 = time.time()
         self.locs, self.info = io.load_locs(parameters["filename"])
         results["nlocs"] = len(self.locs)
 
-        dt = np.round(time.time() - t00, 2)
-        results["duration"] = dt
         return parameters, results
 
     def _auto_min_netgrad(
@@ -348,7 +343,10 @@ class AutoPicasso(AbstractModuleCollection):
             ng_est_idx = len(edges) - 1
         results["estd_net_grad"] = edges[ng_est_idx]
         bkg_peak = edges[bkg_peak_pos]
-        bkg_sigma = edges[int(bkg_peak_pos + bkg_sigma)] - bkg_peak
+        lo_idx = int(bkg_peak_pos - bkg_sigma)
+        if lo_idx < 0:
+            lo_idx = 0
+        bkg_sigma = bkg_peak - edges[lo_idx]
 
         # plot results
         if filename:
@@ -459,7 +457,7 @@ class AutoPicasso(AbstractModuleCollection):
             pix = ix * (box_size + border_width)
             piy = iy * (box_size + border_width)
             logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
-            canvas[pix:pix + box_size, piy:piy + box_size] = (
+            canvas[pix : pix + box_size, piy : piy + box_size] = (
                 picasso_outpost.normalize_spot(spot)
             )
         return canvas, ng_start, ng_end
@@ -487,8 +485,6 @@ class AutoPicasso(AbstractModuleCollection):
             results : dict
                 the analysis results
         """
-        t00 = time.time()
-
         # auto-detect net grad if required:
         if (autograd_pars := parameters.get("auto_netgrad")) is not None:
             if "filename" in autograd_pars.keys():
@@ -506,8 +502,6 @@ class AutoPicasso(AbstractModuleCollection):
             roi=None,
         )
         self.identifications = localize.identifications_from_futures(futures)
-        dt = np.round(time.time() - t00, 2)
-        results["duration"] = dt
         results["num_identifications"] = len(self.identifications)
 
         if (pars := parameters.get("ids_vs_frame")) is not None:
@@ -561,7 +555,6 @@ class AutoPicasso(AbstractModuleCollection):
             results : dict
                 the analysis results
         """
-        t00 = time.time()
         em = self.analysis_config["camera_info"]["gain"] > 1
         spots = localize.get_spots(
             self.movie,
@@ -614,8 +607,6 @@ class AutoPicasso(AbstractModuleCollection):
                 )
             self._save_locs(pars["filename"])
 
-        dt = np.round(time.time() - t00, 2)
-        results["duration"] = dt
         results["locs_columns"] = self.locs.dtype.names
         return parameters, results
 
@@ -695,8 +686,6 @@ class AutoPicasso(AbstractModuleCollection):
                 the analysis results
 
         """
-        t00 = time.time()
-
         seg_init = parameters["segmentation"]
         for i in range(parameters.get("max_iter_segmentations", 3)):
             # if the segmentation is too low, the process raises an error
@@ -762,9 +751,6 @@ class AutoPicasso(AbstractModuleCollection):
                     results["folder"], pars["filename"]
                 )
             self._save_locs(pars["filename"])
-
-        dt = np.round(time.time() - t00, 2)
-        results["duration"] = dt
 
         return parameters, results
 
@@ -873,29 +859,29 @@ class AutoPicasso(AbstractModuleCollection):
         ax.legend(loc="best")
         fig.savefig(filepath_plot)
 
-    @module_decorator
-    def aggregate_cluster(self, i, parameters, results):
-        """Aggregate along the cluster column.
-        Uses picasso.postprocess.cluster_combine
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
-        """
-        self.locs = postprocess.cluster_combine(self.locs)
-        combined_info = {"Generated by": "Picasso Combine"}
-        self.info.append(combined_info)
-        results["nlocs"] = np.len(self.locs)
-        if parameters.get("save"):
-            self._save_locs(os.path.join(results["folder"], "locs.hdf5"))
-        return parameters, results
+    # @module_decorator
+    # def aggregate_cluster(self, i, parameters, results):
+    #     """Aggregate along the 'cluster' column.
+    #     Uses picasso.postprocess.cluster_combine
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #             and optional keys:
+    #                 save_locs : bool
+    #                     whether to save the locs into the results folder
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     self.locs = postprocess.cluster_combine(self.locs)
+    #     combined_info = {"Generated by": "Picasso Combine"}
+    #     self.info.append(combined_info)
+    #     results["nlocs"] = np.len(self.locs)
+    #     if parameters.get("save"):
+    #         self._save_locs(os.path.join(results["folder"], "locs.hdf5"))
+    #     return parameters, results
 
     @module_decorator
     def density(self, i, parameters, results):
@@ -926,7 +912,8 @@ class AutoPicasso(AbstractModuleCollection):
 
     @module_decorator
     def dbscan(self, i, parameters, results):
-        """Perform dbscan clustering
+        """Perform dbscan clustering. After this module, the standard
+        locs will be the cluster centers.
         Args:
             i : int
                 the index of the module
@@ -943,25 +930,28 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        from picasso import clusterer
-
         radius = parameters["radius"]
         min_density = parameters["min_density"]
         pixelsize = self.analysis_config["camera_info"]["pixelsize"]
+        # label locs according to clusters
         self.locs = clusterer.dbscan(self.locs, radius, min_density, pixelsize)
-        self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
-        logger.warning("saving cluster centeras as locs. Is that intended?")
         dbscan_info = {
             "Generated by": "Picasso DBSCAN",
             "Radius": radius,
             "Minimum local density": min_density,
         }
         self.info.append(dbscan_info)
+        filepath = os.path.join(results["folder"], "locs_dbscan.hdf5")
+        self._save_locs(filepath)
+
+        self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
+        logger.warning("saving cluster centeras as locs. Is that intended?")
         return parameters, results
 
     @module_decorator
     def hdbscan(self, i, parameters, results):
-        """Perform hdbscan clustering
+        """Perform hdbscan clustering. After this module, the standard
+        locs will be the cluster centers.
         Args:
             i : int
                 the index of the module
@@ -978,29 +968,32 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        from picasso import clusterer
-
         min_cluster = parameters["min_cluster"]
         min_samples = parameters["min_samples"]
         pixelsize = self.analysis_config["camera_info"]["pixelsize"]
 
+        # label locs according to clusters
         self.locs = clusterer.hdbscan(
             self.locs, min_cluster, min_samples, pixelsize
         )
-        self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
-        logger.warning("saving cluster centeras as locs. Is that intended?")
         hdbscan_info = {
             "Generated by": "Picasso HDBSCAN",
             "Min. cluster": min_cluster,
             "Min. samples": min_samples,
         }
         self.info.append(hdbscan_info)
+        filepath = os.path.join(results["folder"], "locs_hdbscan.hdf5")
+        self._save_locs(filepath)
+
+        self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
+        logger.warning("saving cluster centeras as locs. Is that intended?")
 
         return parameters, results
 
     @module_decorator
     def smlm_clusterer(self, i, parameters, results):
-        """Perform smlm clustering
+        """Perform smlm clustering. After this module, the standard
+        locs will be the cluster centers.
         Args:
             i : int
                 the index of the module
@@ -1021,8 +1014,6 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        from picasso import clusterer
-
         radius = parameters["radius"]
         min_locs = parameters["min_locs"]
         basic_fa = parameters.get("basic_fa", False)
@@ -1036,9 +1027,8 @@ class AutoPicasso(AbstractModuleCollection):
         else:  # 2D
             params = [radius, min_locs, 0, basic_fa, 0]
 
+        # label locs according to clusters
         self.locs = clusterer.cluster(self.locs, params, pixelsize)
-        self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
-        logger.warning("saving cluster centeras as locs. Is that intended?")
         smlm_cluster_info = {
             "Generated by": "Picasso SMLM clusterer",
             "Radius_xy": radius,
@@ -1047,6 +1037,11 @@ class AutoPicasso(AbstractModuleCollection):
             "Basic frame analysis": basic_fa,
         }
         self.info.append(smlm_cluster_info)
+        filepath = os.path.join(results["folder"], "locs_smlm.hdf5")
+        self._save_locs(filepath)
+
+        self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
+        logger.warning("saving cluster centeras as locs. Is that intended?")
 
         return parameters, results
 
@@ -1065,8 +1060,6 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        from scipy.spatial import distance
-
         clusters = np.rec.array(self.locs, dtype=self.locs.dtype)
         points = np.array(clusters[["com_x", "com_y"]].tolist())
         alldist = distance.cdist(points, points)
@@ -1210,7 +1203,6 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        t00 = time.time()
         allfps = []
         for locs, info, tag in zip(
             self.channel_locs, self.channel_info, self.channel_tags
@@ -1220,8 +1212,6 @@ class AutoPicasso(AbstractModuleCollection):
             allfps.append(filepath)
         results["filepaths"] = allfps
 
-        dt = np.round(time.time() - t00, 2)
-        results["duration"] = dt
         return parameters, results
 
 

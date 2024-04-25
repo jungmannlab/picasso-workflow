@@ -71,11 +71,11 @@ class AbstractModuleCollection(abc.ABC):
         """Summarizes the results of a dataset analysis."""
         pass
 
-    @abc.abstractmethod
-    def aggregate_cluster(self):
-        """Aggregate along the cluster column.
-        Uses picasso.postprocess.cluster_combine"""
-        pass
+    # @abc.abstractmethod
+    # def aggregate_cluster(self):
+    #     """Aggregate along the cluster column.
+    #     Uses picasso.postprocess.cluster_combine"""
+    #     pass
 
     @abc.abstractmethod
     def density(self):
