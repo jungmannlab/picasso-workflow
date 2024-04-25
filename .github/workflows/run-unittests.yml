@@ -112,8 +112,10 @@ jobs:
           $key, $TEST_CONFLUENCE_PAGE = $envFileContent[3] -split '=', 2
           python -m coverage report
 
-      # - name: Coveralls
-      #   uses: coverallsapp/github-action@v2
+      - name: Coveralls
+        uses: coverallsapp/github-action@v2
+        env:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Report Coveralls
         run: |
