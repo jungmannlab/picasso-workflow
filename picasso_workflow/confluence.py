@@ -66,7 +66,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Converting Movie from .czi into .raw</strong></p>
         <p>Converted the file {parameters["filepath"]} to
-        {results["filepath_raw"]} in {results["duration"]:.02f} s.</p>
+        {results["filepath_raw"]} in {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s.</p>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(
@@ -91,7 +92,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         Width: {results_load['movie.shape'][1]},
         Height: {results_load['movie.shape'][2]}</li>
         <li>Start Time: {results_load['start time']}</li>
-        <li>Duration: {results_load['duration']} s</li>
+        <li>Duration: {results_load["duration"] // 60:.0f} min
+        {(results_load["duration"] % 60):.02f} s</li>
         </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -137,7 +139,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Movie Location: {parameters['filename']}</li>
         <li>Number of localizations: {results['nlocs']}</li>
         <li>Start Time: {results['start time']}</li>
-        <li>Duration: {results['duration']} s</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
         </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -145,7 +148,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def identify(self, i, pars_identify, results_identify):
+    def identify(self, i, parameters, results):
         """Describes the identify step
         Args:
             localize_params : dict
@@ -161,11 +164,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Identify</strong></p>
         <ul>
-        <li>Min Net Gradient: {pars_identify['min_gradient']:,.0f}</li>
-        <li>Box Size: {pars_identify['box_size']} px</li>
-        <li>Start Time: {results_identify['start time']}</li>
-        <li>Duration: {results_identify['duration']} s</li>
-        <li>Identifications found: {results_identify['num_identifications']:,}
+        <li>Min Net Gradient: {parameters['min_gradient']:,.0f}</li>
+        <li>Box Size: {parameters['box_size']} px</li>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Identifications found: {results['num_identifications']:,}
         </li>
         </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -173,9 +177,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
-        if (
-            res_autonetgrad := results_identify.get("auto_netgrad")
-        ) is not None:
+        if (res_autonetgrad := results.get("auto_netgrad")) is not None:
             logger.debug("Uploading graph for auto_netgrad.")
             self.ci.upload_attachment(
                 self.report_page_id, res_autonetgrad["filename"]
@@ -185,7 +187,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_id,
                 os.path.split(res_autonetgrad["filename"])[1],
             )
-        if (res := results_identify.get("ids_vs_frame")) is not None:
+        if (res := results.get("ids_vs_frame")) is not None:
             logger.debug("uploading graph for identifications vs frame.")
             self.ci.upload_attachment(self.report_page_id, res["filename"])
             self.ci.update_page_content_with_image_attachment(
@@ -194,7 +196,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(res["filename"])[1],
             )
 
-    def localize(self, i, pars_localize, results_localize):
+    def localize(self, i, parameters, results):
         """Describes the Localize section of picasso
         Args:
             localize_params : dict
@@ -205,9 +207,10 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Localize</strong></p>
-        <ul><li>Start Time: {results_localize['start time']}</li>
-        <li>Duration: {results_localize['duration']}</li>
-        <li>Locs Column names: {results_localize['locs_columns']}</li></ul>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Locs Column names: {results['locs_columns']}</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         # text = "<p><strong>Localize</strong></p>"
@@ -215,7 +218,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-        if (res := results_localize.get("locs_vs_frame")) is not None:
+        if (res := results.get("locs_vs_frame")) is not None:
             # print('uploading graph')
             self.ci.upload_attachment(self.report_page_id, res["filename"])
             self.ci.update_page_content_with_image_attachment(
@@ -224,32 +227,30 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(res["filename"])[1],
             )
 
-    def undrift_rcc(self, i, pars_undrift, res_undrift):
+    def undrift_rcc(self, i, parameters, results):
         """Describes the Localize section of picasso
         Args:
-            localize_params : dict
-                net_gradient : the net gradient used
-                frames : the number of frames
         """
         logger.debug("Reporting undrifting via RCC.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Undrifting via RCC</strong></p>
-        <ul><li>Dimensions: {pars_undrift.get('dimensions')}</li>
-        <li>Segmentation: {pars_undrift.get('segmentation')}</li>
+        <ul><li>Dimensions: {parameters.get('dimensions')}</li>
+        <li>Segmentation: {parameters.get('segmentation')}</li>
         """
-        if msg := res_undrift.get("message"):
+        if msg := results.get("message"):
             text += f"""<li>Note: {msg}</li>"""
         text += f"""
-        <li>Start Time: {res_undrift['start time']}</li>
-        <li>Duration: {res_undrift.get('duration')} s</li></ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
 
-        if driftimg_fn := res_undrift.get("filepath_plot"):
+        if driftimg_fn := results.get("filepath_plot"):
             self.ci.upload_attachment(self.report_page_id, driftimg_fn)
             self.ci.update_page_content_with_image_attachment(
                 self.report_page_name,
@@ -308,12 +309,130 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    # def aggregate_cluster(self, i, parameters, results):
+    #     logger.debug("Reporting aggregate_cluster.")
+    #     text = f"""
+    #     <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+    #     <p><strong>aggregate_cluster</strong></p>
+    #     <ul><li>Start Time: {results['start time']}</li>
+    #     <li>Duration: {results["duration"] // 60:.0f} min
+    #     {(results["duration"] % 60):.02f} s</li>
+    #     <li>Number of locs after aggregating: {results.get('nlocs')}</li>
+    #     </ul>"""
+
+    #     text += """
+    #     </ac:layout-cell></ac:layout-section></ac:layout>
+    #     """
+    #     self.ci.update_page_content(
+    #         self.report_page_name, self.report_page_id, text
+    #     )
+
+    def density(self, i, parameters, results):
+        logger.debug("Reporting density.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Local density computation</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Radius: {parameters.get('radius')}</li>
+        </ul>"""
+
+        text += """
+        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def dbscan(self, i, parameters, results):
+        logger.debug("Reporting dbscan.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>dbscan clustering</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <ul><li>Duration: {results['duration']} s</li>
+        <li>Radius: {parameters.get('radius')}</li>
+        <li>min_density: {parameters.get('min_density')}</li>
+        </ul>"""
+
+        text += """
+        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def hdbscan(self, i, parameters, results):
+        logger.debug("Reporting hdbscan.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>dbscan clustering</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>min_cluster: {parameters.get('min_cluster')}</li>
+        <li>min_sample: {parameters.get('min_sample')}</li>
+        </ul>"""
+
+        text += """
+        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def smlm_clusterer(self, i, parameters, results):
+        logger.debug("Reporting smlm_clusterer.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>smlm_clusterer clustering</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>radius: {parameters.get('radius')}</li>
+        <li>min_locs: {parameters.get('min_locs')}</li>
+        <li>basic_fa: {parameters.get('basic_fa')}</li>
+        <li>radius_z: {parameters.get('radius_z')}</li>
+        </ul>"""
+
+        text += """
+        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def nneighbor(self, i, parameters, results):
+        logger.debug("Reporting nneighbor.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>nneighbor calculation</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        text += """
+        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
     def save_single_dataset(self, i, parameters, results):
         logger.debug("Reporting dataset saving.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Saving Resulting Dataset</strong></p>
         <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
         <li>filepath: {results.get('filepath')}</li>
         </ul>"""
 
@@ -335,6 +454,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <p><strong>Loading Datasets to aggregate</strong></p>
         <ul><li>filepaths: {results.get('filepaths')}</li>
         <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
         <li>tags: {results.get('tags')}</li>
         </ul>"""
 
@@ -364,6 +485,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Shifts in y [px]: {results.get('shifts')[1, :]}</li>
         <li>Shifts in z [px]: {results.get('shifts')[2, :]}</li>
         <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
         </ul>"""
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -389,6 +512,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <p><strong>Saving Datasets aggregated</strong></p>
         <ul><li>filepaths: {results.get('filepaths')}</li>
         <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
         <li>tags: {results.get('tags')}</li>
         </ul>"""
 

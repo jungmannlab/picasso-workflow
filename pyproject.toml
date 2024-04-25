@@ -50,8 +50,6 @@ exclude = '''
 [tool.mypy]
 strict = true
 
-#[tool.isort]
-
 [tool.flake8]
 max-line-length = 88
 exclude = ".tox,.git,__pycache__,docs"
