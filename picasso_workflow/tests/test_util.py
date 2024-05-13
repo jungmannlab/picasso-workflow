@@ -92,6 +92,30 @@ class TestUtil(unittest.TestCase):
         # logger.debug(f'dictionary received: {di_out}')
         assert di_out == di_exp
 
+    def test_03_ParameterCommandExecutor_previousresult_exp(self):
+        pce = util.ParameterCommandExecutor(self)
+        self.results = {"00_nena": {"nena": 5.2}}
+        di = [
+            ("nena", {}),
+            (
+                "double",
+                {
+                    "dbl": (
+                        "$get_previous_module_result *2+3",
+                        "nena",
+                    ),
+                },
+            ),
+        ]
+        di_exp = [
+            ("nena", {}),
+            ("double", {"dbl": 13.4}),
+        ]
+        di_out = pce.run(di)
+        # logger.debug(f'dictionary expected: {di_exp}')
+        # logger.debug(f'dictionary received: {di_out}')
+        assert di_out == di_exp
+
     def test_04_ParameterCommandExecutor_map(self):
         mymap = {"key1": "value1", "key2": "value2"}
         pce = util.ParameterCommandExecutor(self, mymap)

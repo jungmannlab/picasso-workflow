@@ -268,21 +268,43 @@ class ParameterCommandExecutor(DictSimpleTyper):
         return self.scan(parameters, root_level=True)
 
     def scan_tuple(self, t):
+        """Firstly, this scans normal tuples. Secondly, tuples of len 2
+        can be commands, e.g.
+            $get_prior_result
+                retreive a result of a prior module, e.g.
+                ("$get_prior_result", "results, 04_manual, filepath")
+            $get_previous_module_result
+                retreive a result of the module directly before the current one
+                ("$get_previous_module_result",
+                 "sample_movie, sample_frame_idx")
+            $map
+                use self.map dictionary to map values, e.g.
+                ("$$map", "filepath")
+        The commands can be combined with numeric operations:
+            ('$get_previous_module_result *2', 'nena')
+            The arithmetic expression must not contain any spaces.
+        """
         if (
             len(t) == 2
             and isinstance(t[0], str)
             and t[0][: len(self.command_sign)] == self.command_sign
         ):
             # this is a parameter command
-            if t[0] == f"{self.command_sign}get_prior_result":
+            if " " in t[0]:
+                cmd = t[0].split(" ")[0]
+                aritexp = t[0].split(" ")[1]
+            else:
+                cmd = t[0]
+                aritexp = None
+            if cmd == f"{self.command_sign}get_prior_result":
                 logger.debug(f"Getting prior result from {t[1]}.")
                 res = self.get_prior_result(t[1])
                 logger.debug(f"Prior result is {res}.")
-            elif t[0] == f"{self.command_sign}get_previous_module_result":
+            elif cmd == f"{self.command_sign}get_previous_module_result":
                 logger.debug(f"Getting previous module result {t[1]}.")
                 res = self.get_previous_module_result(t[1])
                 logger.debug(f"Previous module result is {res}.")
-            elif t[0] == f"{self.command_sign}map":
+            elif cmd == f"{self.command_sign}map":
                 res = self.map[t[1]]
                 logger.debug(f"Mapping {t[1]}: {res}")
             else:
@@ -293,6 +315,20 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 logger.debug(msg)
                 raise NotImplementedError(msg)
             # elif add more parameter commands
+
+            # check for arithmetic expression:
+            if aritexp is not None:
+
+                def is_valid_expression(expression):
+                    pattern = r"^[\d+\-*/\s()]+$"
+                    return re.match(pattern, expression) is not None
+
+                if not is_valid_expression(aritexp):
+                    raise PriorResultError(
+                        f"'{aritexp}' is not a valid numeric "
+                        + "arithmetic expression."
+                    )
+                res = eval(str(res) + aritexp)
             return res
         else:
             # it's just a normal tuple
