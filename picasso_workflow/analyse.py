@@ -658,6 +658,52 @@ class AutoPicasso(AbstractModuleCollection):
         return results
 
     @module_decorator
+    def export_brightfield(self, i, parameters, results):
+        """Opens a single-plane tiff image and saves it to png with
+        contrast adjustment.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    filepath : str or list of str
+                        the tiff file(s) to load. The converted file(s) will
+                        have the same name, but with .png extension
+                optional items:
+                    min_quantile : float, default: 0
+                        the quantile below which pixels are shown black
+                    max_quantile : float, default: 1
+                        the quantile above which pixels are shown white
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+                    filename : the png file
+        """
+        fps_in = parameters["filepath"]
+        if isinstance(fps_in, str):
+            fps_in = [fps_in]
+        fps_out = []
+        for fp in fps_in:
+            mov, _ = io.load_movie(fp)
+            frame = mov[0]
+            fn = os.path.split(fp)[1]
+            fn = os.path.splitext(fn)[0] + ".png"
+            fp = os.path.join(results["folder"], fn)
+            fps_out.append(fp)
+            min_quantile = parameters.get("min_quantile", 0)
+            max_quantile = parameters.get("max_quantile", 1)
+            process_brightfield.save_frame(
+                fp, frame, min_quantile, max_quantile
+            )
+        results["filenames"] = fps_out
+        return parameters, results
+
+    @module_decorator
     def undrift_rcc(self, i, parameters, results):
         """Undrifts localized data using redundant cross correlation.
         drift is saved in

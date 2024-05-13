@@ -178,6 +178,19 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
+    @patch("picasso_workflow.analyse.io.load_movie")
+    def export_brightfield(self, mock_load):
+        frame = np.random.randint(0, 1000, size=(1, 32, 32))
+        mock_load.return_value = (frame, [])
+
+        parameters = {"filepath": "myfp.ome.tiff"}
+
+        parameters, results = self.ap.export_brightfield(0, parameters)
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_export_brightfield")
+        )
+
     @patch("picasso_workflow.analyse.postprocess.undrift")
     def undrift_rcc(self, mock_undrift_rcc):
         nspots = 5

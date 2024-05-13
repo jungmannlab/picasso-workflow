@@ -234,6 +234,22 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
+    def export_brightfield(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 16.4,
+            "filepaths": ["myfp.png"],
+        }
+        self.cr.export_brightfield(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
     def undrift_rcc(self):
         parameters = {
             "dimensions": ["x", "y"],
