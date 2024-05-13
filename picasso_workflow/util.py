@@ -57,6 +57,12 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def export_brightfield(self):
+        """Opens a single-plane tiff image and saves it to png with
+        contrast adjustment."""
+        pass
+
+    @abc.abstractmethod
     def undrift_rcc(self):
         """Undrifts localized data using redundant cross correlation."""
         pass

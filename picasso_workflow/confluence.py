@@ -227,6 +227,34 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(res["filename"])[1],
             )
 
+    def export_brightfield(self, i, parameters, results):
+        """Describes the export_brightfield section of picasso
+        Args:
+        """
+        logger.debug("Reporting export_brightfield.")
+        text = """
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Exporting Brightfield</strong></p>
+        <ul>
+        """
+        text += f"""
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li></ul>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+        for fp in results.get("filepaths"):
+            self.ci.upload_attachment(self.report_page_id, fp)
+            self.ci.update_page_content_with_image_attachment(
+                self.report_page_name,
+                self.report_page_id,
+                os.path.split(fp)[1],
+            )
+
     def undrift_rcc(self, i, parameters, results):
         """Describes the Localize section of picasso
         Args:
