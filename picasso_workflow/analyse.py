@@ -5,7 +5,7 @@ Author: Heinrich Grabmayr
 Initial Date: March 7, 2024
 Description: This is the picasso interface of picasso-workflow
 """
-from picasso import io, localize, gausslq, postprocess, clusterer
+from picasso import lib, io, localize, gausslq, postprocess, clusterer
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import os
@@ -877,6 +877,7 @@ class AutoPicasso(AbstractModuleCollection):
                             f"{best_val:.3f} px;"
                             + f" {pixelsize*best_val:.3f} nm "
                         ),
+                        "nena-nm": pixelsize * best_val,
                         "filepath_plot": fp_plot,
                     }
                 except ValueError as e:
@@ -1180,8 +1181,20 @@ class AutoPicasso(AbstractModuleCollection):
         self.channel_locs = []
         self.channel_info = []
         self.channel_tags = []
-        for fp, tag in zip(parameters["filepaths"], parameters["tags"]):
+        for i, (fp, tag) in enumerate(
+            zip(parameters["filepaths"], parameters["tags"])
+        ):
             locs, info = io.load_locs(fp)
+            # locs = lib.append_to_rec(
+            #     locs,
+            #     np.full(len(locs), tag, dtype='U10'),
+            #     "channel",
+            # )
+            locs = lib.append_to_rec(
+                locs,
+                i * np.ones(len(locs), dtype=np.int8),
+                "channel",
+            )
             self.channel_locs.append(locs)
             self.channel_info.append(info)
             self.channel_tags.append(tag)
@@ -1232,6 +1245,37 @@ class AutoPicasso(AbstractModuleCollection):
             fig_filepath = os.path.join(results["folder"], fn)
             picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath
+
+        return parameters, results
+
+    @module_decorator
+    def combine_channels(self, i, parameters, results):
+        """Combines multiple channels into one dataset. This is relevant
+        e.g. for RESI.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        combined_locs = np.lib.recfunctions.stack_arrays(
+            self.channel_locs,
+            asrecarray=True,
+            usemask=False,
+            autoconvert=True,
+        )
+        # sort like all Picasso localization lists
+        combined_locs.sort(kind="mergesort", order="frame")
+
+        # replace the channel_locs with the one combined dataset
+        self.channel_locs = [combined_locs]
+        info = self.channel_info[0] + ["Combined channels"]
+        self.channel_info = [info]
+        self.channel_tags = ["combined-channels"]
 
         return parameters, results
 

@@ -131,6 +131,12 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def combine_channels(self):
+        """Combines multiple channels into one dataset. This is relevant
+        e.g. for RESI."""
+        pass
+
+    @abc.abstractmethod
     def save_datasets_aggregated(self):
         """save data of multiple single-dataset workflows from one
         aggregation workflow."""
