@@ -282,7 +282,22 @@ class TestAnalyseModules(unittest.TestCase):
 
     @patch("picasso_workflow.analyse.io.load_locs")
     def load_datasets_to_aggregate(self, mock_load):
-        mock_load.return_value = (5, {"info": 4})
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        locs = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        mock_load.return_value = (locs, {"info": 4})
         parameters = {
             "filepaths": ["/my/path/to/locs.hdf5", "/my/path/to2/locs.hdf5"],
             "tags": ["1", "2"],
@@ -307,6 +322,35 @@ class TestAnalyseModules(unittest.TestCase):
 
         # clean up
         shutil.rmtree(os.path.join(self.results_folder, "00_align_channels"))
+
+    def combine_channels(self):
+        # create locs to be combined
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        locs1 = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        locs2 = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.channel_locs = [locs1, locs2]
+        self.ap.channel_info = [["info1"], ["info2"]]
+        self.ap.channel_tags = ["1", "2"]
+        self.ap.combine_channels(0, {})
 
     @patch(
         "picasso_workflow.analyse.picasso_outpost.convert_zeiss_file",

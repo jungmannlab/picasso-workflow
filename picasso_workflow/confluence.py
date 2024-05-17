@@ -531,6 +531,27 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(driftimg_fn)[1],
             )
 
+    def combine_channels(self, i, parameters, results):
+        """Describes the combine_channels module
+        Args:
+            parameters : dict
+                filenames : the net gradient used
+            results : dict
+                required:
+                optional:
+        """
+        logger.debug("Reporting combine_channels.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Combine Channels</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+
     def save_datasets_aggregated(self, i, parameters, results):
         """save data of multiple single-dataset workflows from one
         aggregation workflow."""
