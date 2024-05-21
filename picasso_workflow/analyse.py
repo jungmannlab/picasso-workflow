@@ -44,13 +44,24 @@ def module_decorator(method):
             "folder": module_result_dir,
             "start time": datetime.now().strftime("%y-%m-%d %H:%M:%S"),
         }
+
+        # call the module
         parameters, results = method(self, i, parameters, results)
+
+        # post-actions
         # modules only need to specifically set an error.
         if results.get("success") is None:
             results["success"] = True
             # save locs if desired
-            if parameters.get("save_locs") is True:
-                self._save_locs(os.path.join(results["folder"], "locs.hdf5"))
+            if parameters.get("save_locs") is True or self.analysis_config.get(
+                "always_save"
+            ):
+                if hasattr(self, "locs"):
+                    self._save_locs(
+                        os.path.join(results["folder"], "locs.hdf5")
+                    )
+                if hasattr(self, "channel_locs"):
+                    self._save_datasets_agg(results["folder"])
         results["end time"] = datetime.now().strftime("%y-%m-%d %H:%M:%S")
         td = datetime.strptime(
             results["end time"], "%y-%m-%d %H:%M:%S"
@@ -89,9 +100,12 @@ class AutoPicasso(AbstractModuleCollection):
                 the general configuration. necessary items:
                     gpufit_installed : bool
                         whether the machine has gpufit installed
+                (potentially) optional items
                     camera_info : dict
                         as used by picasso. Only necessary if not loaded by
                         module load_dataset
+                    always_save : bool
+                        whether every module should end in saving the current locs
         """
         self.results_folder = results_folder
         self.analysis_config = analysis_config
@@ -700,7 +714,7 @@ class AutoPicasso(AbstractModuleCollection):
             process_brightfield.save_frame(
                 fp, frame, min_quantile, max_quantile
             )
-        results["filenames"] = fps_out
+        results["filepaths"] = fps_out
         return parameters, results
 
     @module_decorator
@@ -1293,16 +1307,21 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        allfps = self._save_datasets_agg(results["folder"])
+        results["filepaths"] = allfps
+
+        return parameters, results
+
+    def _save_datasets_agg(self, folder):
+        """ """
         allfps = []
         for locs, info, tag in zip(
             self.channel_locs, self.channel_info, self.channel_tags
         ):
-            filepath = os.path.join(results["folder"], tag + ".hdf5")
+            filepath = os.path.join(folder, tag + ".hdf5")
             io.save_locs(filepath, locs, info)
             allfps.append(filepath)
-        results["filepaths"] = allfps
-
-        return parameters, results
+        return allfps
 
 
 class AutoPicassoError(Exception):
