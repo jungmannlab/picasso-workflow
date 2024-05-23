@@ -926,6 +926,7 @@ class AutoPicasso(AbstractModuleCollection):
                             f"{best_val:.3f} px;"
                             + f" {pixelsize*best_val:.3f} nm "
                         ),
+                        "nena-px": best_val,
                         "nena-nm": pixelsize * best_val,
                         "filepath_plot": fp_plot,
                     }
@@ -1305,7 +1306,8 @@ class AutoPicasso(AbstractModuleCollection):
             "shifts": results["shifts"],
             "parameters": parameters,
         }
-        self.info = self.info + [new_info]
+        for i in range(len(self.channel_info)):
+            self.channel_info[i].append(new_info)
 
         return parameters, results
 
