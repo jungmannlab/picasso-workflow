@@ -539,6 +539,7 @@ class TestAnalyse(unittest.TestCase):
     def test_01_module_decorator(self):
         class TestClass:
             results_folder = self.results_folder
+            analysis_config = {}
 
             @analyse.module_decorator
             def my_method(self, i, parameters, results):
