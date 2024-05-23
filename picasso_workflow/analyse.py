@@ -83,7 +83,7 @@ class AutoPicasso(AbstractModuleCollection):
 
     # for single-dataset analysis
     movie = None
-    info = None
+    info = []
     identifications = None
     locs = None
     drift = None
@@ -709,9 +709,10 @@ class AutoPicasso(AbstractModuleCollection):
                 the module index in the protocol
             parameters : dict
                 necessary items:
-                    filepath : str or list of str
+                    filepath : str or list of str or dict
                         the tiff file(s) to load. The converted file(s) will
                         have the same name, but with .png extension
+                        if dict: keys are labels
                 optional items:
                     min_quantile : float, default: 0
                         the quantile below which pixels are shown black
@@ -724,25 +725,31 @@ class AutoPicasso(AbstractModuleCollection):
                 as input, potentially changed values, for consistency
             results : dict
                 the analysis results
-                    filename : the png file
+                    labeled filepath : dict
+                        keys : labels
+                        values : filepaths
         """
         fps_in = parameters["filepath"]
         if isinstance(fps_in, str):
             fps_in = [fps_in]
-        fps_out = []
-        for fp in fps_in:
+        if isinstance(fps_in, list):
+            d = {}
+            for i, fp in enumerate(fps_in):
+                d[str(i)] = fp
+        fps_out = {}
+        for label, fp in fps_in.items():
             mov, _ = io.load_movie(fp)
             frame = mov[0]
             fn = os.path.split(fp)[1]
             fn = os.path.splitext(fn)[0] + ".png"
             fp = os.path.join(results["folder"], fn)
-            fps_out.append(fp)
+            fps_out[label] = fp
             min_quantile = parameters.get("min_quantile", 0)
             max_quantile = parameters.get("max_quantile", 1)
             process_brightfield.save_frame(
                 fp, frame, min_quantile, max_quantile
             )
-        results["filepaths"] = fps_out
+        results["labeled filepaths"] = fps_out
         return parameters, results
 
     @module_decorator
@@ -1100,7 +1107,7 @@ class AutoPicasso(AbstractModuleCollection):
             parameters: dict
                 with required keys:
                     radius : float
-                        the smlm radius
+                        the smlm radius, in px
                     min_locs : float
                         the smlm min_locs
                 and optional keys:

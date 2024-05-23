@@ -171,6 +171,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=self.locs_dtype,
         )
+        self.ap.info = []
 
         parameters = {"box_size": 7, "fit_parallel": False}
 

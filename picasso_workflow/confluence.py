@@ -247,7 +247,11 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-        for fp in results.get("filepaths"):
+        for label, fp in results.get("filepaths").items():
+            text = f"""{label}"""
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
+            )
             self.ci.upload_attachment(self.report_page_id, fp)
             self.ci.update_page_content_with_image_attachment(
                 self.report_page_name,

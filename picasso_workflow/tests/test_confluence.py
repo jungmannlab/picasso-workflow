@@ -239,7 +239,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         results = {
             "start time": "now",
             "duration": 16.4,
-            "filepaths": ["myfp.png"],
+            "filepaths": {"GFP": "myfp.png"},
         }
         self.cr.export_brightfield(0, parameters, results)
 
