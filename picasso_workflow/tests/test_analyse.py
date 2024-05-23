@@ -314,6 +314,7 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.picasso_outpost.align_channels")
     def align_channels(self, mock_align_channels):
         mock_align_channels.return_value = [[3], [2]], np.zeros((3, 4, 5))
+        self.ap.channel_info = []
 
         parameters = {"fig_filename": "shiftplot.png"}
         parameters, results = self.ap.align_channels(0, parameters)
