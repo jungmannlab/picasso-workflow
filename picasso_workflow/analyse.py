@@ -736,6 +736,7 @@ class AutoPicasso(AbstractModuleCollection):
             d = {}
             for i, fp in enumerate(fps_in):
                 d[str(i)] = fp
+            fps_in = d
         fps_out = {}
         for label, fp in fps_in.items():
             mov, _ = io.load_movie(fp)
