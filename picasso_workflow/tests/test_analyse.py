@@ -495,6 +495,35 @@ class TestAnalyseModules(unittest.TestCase):
         logger.debug(f"results: {results}")
         assert results["duration"] > -1
 
+    @patch("picasso_workflow.analyse.picasso_outpost.spinna_temp", MagicMock)
+    def spinna_manual(self):
+        info = [{"Width": 1000, "Height": 1000}]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        locs = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.channel_locs = [locs]
+        self.ap.channel_info = [info]
+        self.ap.channel_tags = ["CD86"]
+
+        parameters = {}
+        # test preparatory stage
+        parameters, results = self.ap.spinna_manual(0, parameters)
+
+        # test calling spinna
+        parameters, results = self.ap.spinna_manual(0, parameters)
+
 
 # @unittest.skip("")
 class TestAnalyse(unittest.TestCase):

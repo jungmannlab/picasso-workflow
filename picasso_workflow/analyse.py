@@ -18,6 +18,7 @@ from scipy.spatial import distance
 import matplotlib.pyplot as plt
 import logging
 from datetime import datetime
+import yaml
 
 from picasso_workflow.util import AbstractModuleCollection
 from picasso_workflow import process_brightfield
@@ -1383,6 +1384,101 @@ class AutoPicasso(AbstractModuleCollection):
             io.save_locs(filepath, locs, info)
             allfps.append(filepath)
         return allfps
+
+    @module_decorator
+    def spinna_manual(self, i, parameters, results):
+        """Direct implementation of spinna batch analysis.
+        The current locs file(s) are saved into the results folder, and
+        a template csv file is created. This csv needs to be filled out by the
+        user in a manual step before the spinna analysis is carried out.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        cfg_fp = os.path.join(results["folder"], "spinna_config.csv")
+        if os.path.exists(cfg_fp):
+            prepped = True
+        else:
+            prepped = False
+
+        if not prepped:
+            # prepare input files for the user to edit, with default values
+            spinna_structs = []
+            for tag in self.channel_tags:
+                struct = {
+                    "Molecular targets": [tag],
+                    "Structure title": f"{tag}-monomer",
+                    f"{tag}_x": [0.0],
+                    f"{tag}_y": [0.0],
+                    f"{tag}_z": [0.0],
+                }
+                spinna_structs.append(struct)
+                struct = {
+                    "Molecular targets": [tag],
+                    "Structure title": f"{tag}-dimer",
+                    f"{tag}_x": [-10.0, 10.0],
+                    f"{tag}_y": [0.0, 0.0],
+                    f"{tag}_z": [0.0, 0.0],
+                }
+                spinna_structs.append(struct)
+            structs_fn = "spinna_structs.yaml"
+            structs_fp = os.path.join(results["folder"], structs_fn)
+            with open(structs_fp, "w") as f:
+                yaml.dump(spinna_structs, f)
+
+            spinna_config = {}
+            spinna_config["structures_filename"] = [structs_fp]
+            for locs, info, tag in zip(
+                self.channel_locs, self.channel_info, self.channel_tags
+            ):
+                locs_fn = tag + ".hdf5"
+                locs_fp = os.path.join(results["folder"], locs_fn)
+                io.save_locs(locs_fp, locs, info)
+
+                spinna_config[f"exp_data_{tag}"] = [locs_fp]
+                spinna_config[f"le_{tag}"] = [50]
+                spinna_config[f"label_unc_{tag}"] = [2]
+                spinna_config[f"n_simulated_{tag}"] = [50000]
+            spinna_config["res_factor"] = [100]
+            spinna_config["fit_NND_bin"] = [5]
+            spinna_config["fit_NND_maxdist"] = [500]
+            spinna_config["save_filename"] = ["spinna_results"]
+            spinna_config["nn_plotted"] = [4]
+
+            data_2d = "z" in self.channel_locs[0].dtype.names
+            if data_2d:
+                spinna_config["rotation_mode"] = ["2D"]
+                spinna_config["area"] = [10000]
+            else:
+                spinna_config["rotation_mode"] = ["3D"]
+                spinna_config["volume"] = [20000]
+                spinna_config["z_range"] = [5]
+
+            # save config to file
+            pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
+
+            msg = "This is a manual step. Please provide input, "
+            msg += "and re-execute the workflow. "
+            msg += f" The file {cfg_fp} has been prepared for you."
+            results["message"] = msg
+            logger.debug(msg)
+            print(msg)
+            results["success"] = False
+        else:
+            # kick off SPINNA analysis
+            picasso_outpost.spinna_temp(cfg_fp)
+
+            results["message"] = "Successfully performed SPINNA analysis."
+            results["success"] = True
+
+        return parameters, results
 
 
 class AutoPicassoError(Exception):

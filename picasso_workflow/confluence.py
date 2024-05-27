@@ -577,6 +577,25 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    def spinna_manual(self, i, parameters, results):
+        """ """
+        logger.debug("Reporting spinna_manual.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>SPINNA-Manual</strong></p>
+        <li>file present: {results.get('success')}</li>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+        text += "<p>" + results["message"] + "</p>"
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
 
 class UndriftError(Exception):
     pass

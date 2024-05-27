@@ -142,6 +142,11 @@ class AbstractModuleCollection(abc.ABC):
         aggregation workflow."""
         pass
 
+    @abc.abstractmethod
+    def spinna_manual(self):
+        """Direct implementation of spinna batch analysis."""
+        pass
+
 
 class DictSimpleTyper:
     """Scans a complex dictionary and converts numpy arrays and

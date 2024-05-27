@@ -484,6 +484,23 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    # @unittest.skip("")
+    def spinna_manual(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "message": "This is my message to you.",
+            "success": False,
+        }
+        self.cr.manual(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
 
 # @unittest.skip('')
 class Test_B_ConfluenceReporter(unittest.TestCase):

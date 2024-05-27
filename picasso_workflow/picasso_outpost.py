@@ -187,6 +187,7 @@ def convert_zeiss_file(filepath_czi, filepath_raw, info=None):
 # for plotting single spots in analyse.AutoPicasso.
 #############################################################################
 
+
 def get_spots(movie, identifications, box, camera_info):
     spots = _cut_spots(movie, identifications, box)
     return localize._to_photons(spots, camera_info)
@@ -201,9 +202,7 @@ def _cut_spots(movie, ids, box):
     return spots
 
 
-def _cut_spots_byrandomframe(
-    movie, ids_frame, ids_x, ids_y, box, spots
-):
+def _cut_spots_byrandomframe(movie, ids_frame, ids_x, ids_y, box, spots):
     """Cuts the spots out of a movie by non-sorted frames.
 
     Args:
@@ -223,7 +222,7 @@ def _cut_spots_byrandomframe(
     r = int(box / 2)
     for j, (fr, xc, yc) in enumerate(zip(ids_frame, ids_x, ids_y)):
         frame = movie[fr]
-        spots[j] = frame[yc - r:yc + r + 1, xc - r:xc + r + 1]
+        spots[j] = frame[yc - r : yc + r + 1, xc - r : xc + r + 1]
     return spots
 
 
@@ -235,3 +234,13 @@ def normalize_spot(spot, maxval=255, dtype=np.uint8):
     sp = sp.astype(np.float32) / imgmax * maxval
     # logger.debug('spot output: ' + str(sp.astype(dtype)))
     return sp.astype(dtype)
+
+
+def spinna_temp(parameters_filename):
+    """While SPINNA is under development (and the paper being written)
+    it is not integrated in the regular picasso package. Here, the
+    corresponding module is being loaded.
+    """
+    from ..temp.spinna_main import _spinna_batch_analysis
+
+    _spinna_batch_analysis(parameters_filename)
