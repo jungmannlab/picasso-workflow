@@ -249,7 +249,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
         for label, fp in results.get("labeled filepaths").items():
-            text = f"""{label}"""
+            text = f"""<p><strong>{label}</strong></p>"""
             self.ci.update_page_content(
                 self.report_page_name, self.report_page_id, text
             )
@@ -605,13 +605,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
-        for fp in results["fp_fig"]:
-            self.ci.upload_attachment(self.report_page_id, fp)
-            self.ci.update_page_content_with_image_attachment(
-                self.report_page_name,
-                self.report_page_id,
-                os.path.split(fp)[1],
-            )
+        if results["success"]:
+            for fp in results["fp_fig"]:
+                self.ci.upload_attachment(self.report_page_id, fp)
+                self.ci.update_page_content_with_image_attachment(
+                    self.report_page_name,
+                    self.report_page_id,
+                    os.path.split(fp)[1],
+                )
 
 
 class UndriftError(Exception):
