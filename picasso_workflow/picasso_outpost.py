@@ -240,7 +240,17 @@ def spinna_temp(parameters_filename):
     """While SPINNA is under development (and the paper being written)
     it is not integrated in the regular picasso package. Here, the
     corresponding module is being loaded.
+
+    Returns:
+        result_dir : str
+            folder containing the results
+        fp_summary : str
+            the filepath of the summary csv file
+        fp_fig : list of str
+            filepaths of the NND figures
     """
     from picasso_workflow.spinna_main import _spinna_batch_analysis
 
-    _spinna_batch_analysis(parameters_filename)
+    result_dir, fp_summary, fp_fig = _spinna_batch_analysis(
+        parameters_filename
+    )
