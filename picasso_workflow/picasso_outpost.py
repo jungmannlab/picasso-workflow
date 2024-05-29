@@ -241,6 +241,6 @@ def spinna_temp(parameters_filename):
     it is not integrated in the regular picasso package. Here, the
     corresponding module is being loaded.
     """
-    from ..temp.spinna_main import _spinna_batch_analysis
+    from picasso_workflow.spinna_main import _spinna_batch_analysis
 
     _spinna_batch_analysis(parameters_filename)

@@ -247,7 +247,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-        for label, fp in results.get("filepaths").items():
+        for label, fp in results.get("labeled filepaths").items():
             text = f"""{label}"""
             self.ci.update_page_content(
                 self.report_page_name, self.report_page_id, text

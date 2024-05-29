@@ -1431,7 +1431,7 @@ class AutoPicasso(AbstractModuleCollection):
             structs_fn = "spinna_structs.yaml"
             structs_fp = os.path.join(results["folder"], structs_fn)
             with open(structs_fp, "w") as f:
-                yaml.dump(spinna_structs, f)
+                yaml.dump_all(spinna_structs, f)
 
             spinna_config = {}
             spinna_config["structures_filename"] = [structs_fp]
