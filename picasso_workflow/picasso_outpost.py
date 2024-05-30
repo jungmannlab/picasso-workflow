@@ -254,3 +254,4 @@ def spinna_temp(parameters_filename):
     result_dir, fp_summary, fp_fig = _spinna_batch_analysis(
         parameters_filename
     )
+    return result_dir, fp_summary, fp_fig
