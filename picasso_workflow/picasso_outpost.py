@@ -272,7 +272,9 @@ def spinna_temp(parameters_filename):
 ########################################################################
 
 
-def estimate_density_from_neighbordists(nn_dists, rho_init, kmin=1):
+def estimate_density_from_neighbordists(
+    nn_dists, rho_init, kmin=1, rho_bound_factor=100
+):
     """For one point with k nearest neighbor distances (all assumed from
     a CSR distribution), do a maximum likelihood estimation for the
     density.
@@ -286,7 +288,9 @@ def estimate_density_from_neighbordists(nn_dists, rho_init, kmin=1):
             the maximum likelihood estimate for the local density
             based on the nearest neighbor distances
     """
-    bounds = [(1e-6, 1e6)]  # rho must be positive
+    bounds = [
+        (rho_init / rho_bound_factor, rho_init * rho_bound_factor)
+    ]  # rho must be positive
     mle_rho = minimize(
         minimization_loglike,
         x0=[rho_init],
@@ -300,11 +304,11 @@ def estimate_density_from_neighbordists(nn_dists, rho_init, kmin=1):
         options={
             "disp": None,
             "maxcor": 10,
-            "ftol": 2e-13,
-            "gtol": 1e-13,
-            "eps": 1e-13,
-            "maxfun": 15000,
-            "maxiter": 15000,
+            "ftol": 2e-15,
+            "gtol": 1e-15,
+            "eps": 1e-15,
+            "maxfun": 150,
+            "maxiter": 150,
             "iprint": -1,
             "maxls": 100,
             "finite_diff_rel_step": None,
@@ -344,11 +348,11 @@ def nndist_loglikelihood_csr(nndist_observed, rho, kmin=1):
             from CSR
     """
     log_like = 0
-    print("nndist_obs shape", nndist_observed.shape)
+    # print("nndist_obs shape", nndist_observed.shape)
     for i, dist in enumerate(nndist_observed):
         k = i + kmin
-        print(f"evaluating csr of {len(dist)} spots at k={k}, with rho={rho}")
-        assert False
+        # print(f"evaluating csr of {len(dist)} spots at k={k}, with rho={rho}")
+        # assert False
         prob = nndistribution_from_csr(dist, k, rho)
         log_like += np.sum(np.log(prob))
     return log_like

@@ -1179,6 +1179,7 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        fig, ax = plt.subplots(nrows=2)
         points = np.array(
             self.channel_locs[0][parameters["dims"]].tolist()
         )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
@@ -1191,39 +1192,76 @@ class AutoPicasso(AbstractModuleCollection):
         # print(points)
         # print(points.shape)
         alldist = distance.cdist(points, points)
+        alldist = np.sort(alldist, axis=1)
+        _, density = self._calc_radial_distribution_function(
+            alldist, parameters, ax=ax[0]
+        )
+        results["density_rdf"] = density
         # print(alldist)
         # print(alldist.shape)
         # out_path = os.path.join(results["folder"], "nneighbors_all.txt")
         # np.savetxt(out_path, np.sort(alldist, axis=1), newline="\r\n")
-        alldist[alldist == 0] = float("inf")
-        nneighbors = np.sort(alldist, axis=1)[:, : parameters["nth"]]
+        # alldist[alldist == 0] = float("inf")
+        # nneighbors = np.sort(alldist, axis=1)[:, : parameters["nth"]]
+        nneighbors = alldist[:, 1 : parameters["nth"] + 1]
         out_path = os.path.join(results["folder"], "nneighbors.txt")
         np.savetxt(out_path, nneighbors, newline="\r\n")
         results["fp_nneighbors"] = out_path
 
         # plot results
-        fig, ax = plt.subplots()
         colors = cm.get_cmap("viridis", nneighbors.shape[1]).colors
         bin_max = np.quantile(nneighbors[:, -1], 0.95)
         bins = np.linspace(0, bin_max, num=50)
         nnhist_obs = np.zeros((len(bins), nneighbors.shape[1]))
         for i in range(nnhist_obs.shape[1]):
             k = i + 1
-            _ = ax.hist(
+            _ = ax[1].hist(
                 nneighbors[:, i],
                 bins=bins,
                 color=colors[i],
                 alpha=0.2,
                 label=f"k={k}",
             )
-        ax.legend()
-        ax.set_xlabel("Distance [nm]")
-        ax.set_ylabel("Frequency")
-        ax.set_title("Nearest Neighbor Histogram")
+        ax[1].legend()
+        ax[1].set_xlabel("Distance [nm]")
+        ax[1].set_ylabel("Frequency")
+        ax[1].set_title("Nearest Neighbor Histogram")
         results["fp_fig"] = os.path.join(results["folder"], "nndist.png")
         fig.savefig(results["fp_fig"])
 
         return parameters, results
+
+    def _calc_radial_distribution_function(
+        self, alldist_sorted, parameters, ax=None
+    ):
+
+        rs = np.arange(
+            0,
+            parameters["rmax"] + 2 * parameters["deltar"],
+            parameters["deltar"],
+        )
+        n_means = np.zeros_like(rs)
+        d_areas = np.zeros_like(rs)
+
+        for i, r in enumerate(rs):
+            # area = 2 * np.pi * r**2
+            # n_mean = np.sum(alldist < r) / len(locs)
+            # crdf[i] = n_mean / area
+            d_areas[i] = 2 * np.pi * r * parameters["deltar"]
+            n_means[i] = np.sum(alldist_sorted < r) / alldist_sorted.shape[0]
+        d_n_means = n_means[1:] - n_means[:-1]
+        rdf = d_n_means / d_areas[1:]
+        # rdf = crdf[1:] - crdf[:-1]
+
+        density = np.median(rdf[int(len(rs) / 2) :])
+
+        # plot results
+        fig, ax = plt.subplots()
+        ax.plot(rs[1:], rdf)
+        ax.set_xlabel("Radius [nm]")
+        ax.set_ylabel("probability density")
+        ax.set_title("Radial Distribution Function")
+        return rdf, density
 
     @module_decorator
     def fit_csr(self, i, parameters, results):
@@ -1255,18 +1293,22 @@ class AutoPicasso(AbstractModuleCollection):
         # print(nneighbors.shape)
         # return
         k_max = nneighbors.shape[1]
-        nspots = nneighbors.shape[0]
+        # nspots = nneighbors.shape[0]
         d = parameters["dimensionality"]
-        rho_init = 1 / (2 * d * np.pi * np.mean(nneighbors[:, 0]) ** d)
-        rho_mle, _ = picasso_outpost.estimate_density_from_neighbordists(
-            nneighbors.T, rho_init
+        rho_init = 2 / (2 * d * np.pi * np.median(nneighbors[:, 0]) ** d)
+        rho_mle, fitresult = (
+            picasso_outpost.estimate_density_from_neighbordists(
+                nneighbors.T, rho_init
+            )
         )
+        print(fitresult)
+        logger.debug(str(fitresult))
         results["density"] = rho_mle
 
         # plot results
         fig, ax = plt.subplots()
         colors = cm.get_cmap("viridis", k_max).colors
-        bin_max = np.quantile(nneighbors[:, -1], 0.95)
+        bin_max = np.quantile(nneighbors[:, -1], 0.99)
         bins = np.linspace(0, bin_max, num=50)
         nnhist_obs = np.zeros((len(bins), k_max))
         nnhist_an = np.zeros_like(nnhist_obs)
@@ -1276,27 +1318,31 @@ class AutoPicasso(AbstractModuleCollection):
             nnhist_an = picasso_outpost.nndistribution_from_csr(
                 bins, k, rho_mle, d=parameters["dimensionality"]
             )
+            if i == 0:
+                lbl = f"rho_init {1E6*rho_init:.1f} um^2"
+                lblf = f"rho_fit {1E6*rho_mle:.1f} um^2"
+            else:
+                lbl = f"observed k={k}"
+                lblf = f"fitted k={k}"
             _ = ax.hist(
                 nneighbors[:, i],
                 bins=bins,
+                density=True,
                 color=colors[i],
                 alpha=0.2,
-                label=f"observed k={k}",
+                label=lbl,
             )
             ax.plot(
-                bins + (bins[1] - bins[0]),
-                nnhist_an * nspots / 4.9,
+                bins,  # + (bins[1] - bins[0]) / 2,
+                nnhist_an * 1,  # no idea why we need this factor
                 color=colors[i],
                 linestyle="--",
-                label=f"fitted k={k}",
+                label=lblf,
             )
         ax.legend()
         ax.set_xlabel("Distance [nm]")
         ax.set_ylabel("probability density")
-        ax.set_title(
-            "Nearest Neighbor Distribution, "
-            + f"density {rho_mle} nm^{-parameters['dimensionality']}"
-        )
+        ax.set_title("Nearest Neighbor Distribution")
         results["fp_fig"] = os.path.join(results["folder"], "nndist_fit.png")
         fig.savefig(results["fp_fig"])
 
