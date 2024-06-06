@@ -114,6 +114,14 @@ class AbstractModuleCollection(abc.ABC):
         nearest neighbors"""
         pass
 
+    # @abs.abstractmethod
+    # def radial_distribution_function(self):
+    #     """Generate the Radial Distribution Function,
+    #     Whis is the sum of nearest neighbors with geometry factor.
+    #     At long radii, its value is the overall density.
+    #     """
+    # pass
+
     @abc.abstractmethod
     def save_single_dataset(self):
         """Saves the locs and info of a single dataset; makes loading

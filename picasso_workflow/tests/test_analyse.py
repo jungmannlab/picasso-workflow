@@ -488,9 +488,10 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.distance.cdist")
     def nneighbor(self, mock_cdist):
         mock_cdist.return_value = np.random.rand(len(self.ap.movie), 4)
+        # def nneighbor(self):
         self.ap.info = []
         parameters = {
-            "dims": ["com_x", "com_y"],
+            "dims": ["x", "y"],
             "nth": 4,
         }
         locs_dtype = [
@@ -498,8 +499,8 @@ class TestAnalyseModules(unittest.TestCase):
             ("photons", "f4"),
             ("sx", "f4"),
             ("sy", "f4"),
-            ("com_x", "f4"),
-            ("com_y", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
         ]
         self.ap.locs = np.rec.array(
             [
@@ -508,10 +509,14 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.channel_locs = [self.ap.locs]
+        self.ap.tags = ["mytag"]
         parameters, results = self.ap.nneighbor(0, parameters)
         # logger.debug(f'parameters: {parameters}')
         logger.debug(f"results: {results}")
         assert results["duration"] > -1
+
+        # assert False
 
         shutil.rmtree(os.path.join(self.results_folder, "00_nneighbor"))
 

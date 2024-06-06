@@ -272,7 +272,7 @@ def spinna_temp(parameters_filename):
 ########################################################################
 
 
-def estimate_density_from_neighbordists(nn_dists, rho_init):
+def estimate_density_from_neighbordists(nn_dists, rho_init, kmin=1):
     """For one point with k nearest neighbor distances (all assumed from
     a CSR distribution), do a maximum likelihood estimation for the
     density.
@@ -290,7 +290,7 @@ def estimate_density_from_neighbordists(nn_dists, rho_init):
     mle_rho = minimize(
         minimization_loglike,
         x0=[rho_init],
-        args=(nn_dists),
+        args=(nn_dists, kmin),
         bounds=bounds,
         # tol=1e-8, options={'maxiter': 1e5}, method='Powell'
         # options={'maxiter': 1e5}, method='L-BFGS-B'
@@ -300,8 +300,8 @@ def estimate_density_from_neighbordists(nn_dists, rho_init):
         options={
             "disp": None,
             "maxcor": 10,
-            "ftol": 2e-12,
-            "gtol": 1e-11,
+            "ftol": 2e-13,
+            "gtol": 1e-13,
             "eps": 1e-13,
             "maxfun": 15000,
             "maxiter": 15000,
@@ -314,7 +314,7 @@ def estimate_density_from_neighbordists(nn_dists, rho_init):
     return mle_rho.x[0], mle_rho
 
 
-def minimization_loglike(rho, nndist_observed):
+def minimization_loglike(rho, nndist_observed, kmin=1):
     """The minimization function for nndist loglikelihood fun
     based on k-th nearest neighbor CSR distributions
     Args:
@@ -327,10 +327,10 @@ def minimization_loglike(rho, nndist_observed):
             the log likelihood of finding the observed neighbor distances
             in the model of CSR and given rho
     """
-    return -nndist_loglikelihood_csr(nndist_observed, rho[0])
+    return -nndist_loglikelihood_csr(nndist_observed, rho[0], kmin)  # - 200000
 
 
-def nndist_loglikelihood_csr(nndist_observed, rho):
+def nndist_loglikelihood_csr(nndist_observed, rho, kmin=1):
     """get the Log-Likelihood of observed nearest neighbors assuming
     a CSR distribution with density rho.
     Args:
@@ -344,8 +344,10 @@ def nndist_loglikelihood_csr(nndist_observed, rho):
             from CSR
     """
     log_like = 0
-    for k, dist in enumerate(nndist_observed):
-        prob = nndistribution_from_csr(dist, k + 1, rho)
+    for i, dist in enumerate(nndist_observed):
+        k = i + kmin
+        print(f"evaluating csr at k={k}, with rho={rho}")
+        prob = nndistribution_from_csr(dist, k, rho)
         log_like += np.sum(np.log(prob))
     return log_like
 
@@ -366,10 +368,20 @@ def nndistribution_from_csr(r, k, rho, d=2):
         p : same as r
             the probability density of k-th nearest neighbor at r
     """
+    # if k != 1:
+    #     print(f'evaluating CSR not at k=1 but k={k}')
+
+    # def gaussian_pdf(x, mean, std):
+    #     factor = (1 / (np.sqrt(2 * np.pi) * std))
+    #     return factor * np.exp(-0.5 * ((x - mean) / std) ** 2)
+
+    # pdf = gaussian_pdf(r, 4, k*rho*4)
+    # # pdf = gaussian_pdf(r, 4+k*rho, .8)
+    # return pdf #/ np.sum(pdf)
     lam = rho * np.pi ** (d / 2) / _gamma(d / 2 + 1)
     factor = d / _factorial(k - 1) * lam**k * r ** (d * k - 1)
     dist = factor * np.exp(-lam * r**d)
-    return dist / np.sum(dist)
+    return dist  # / np.sum(dist)
 
 
 ########################################################################

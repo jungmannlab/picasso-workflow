@@ -1179,19 +1179,50 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        points = np.array(self.locs[parameters["dims"]].tolist())
+        points = np.array(
+            self.channel_locs[0][parameters["dims"]].tolist()
+        )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
         # convert all dimensions to nanometers
         pixelsize = self.analysis_config["camera_info"]["pixelsize"]
         for i, dim in enumerate(parameters["dims"]):
             if dim in ["x", "y"]:
                 points[:, i] = points[:, i] * pixelsize
 
+        # print(points)
+        # print(points.shape)
         alldist = distance.cdist(points, points)
+        # print(alldist)
+        # print(alldist.shape)
+        # out_path = os.path.join(results["folder"], "nneighbors_all.txt")
+        # np.savetxt(out_path, np.sort(alldist, axis=1), newline="\r\n")
         alldist[alldist == 0] = float("inf")
-        nneighbors = np.sort(alldist, axis=0)[:, : parameters["nth"]]
+        nneighbors = np.sort(alldist, axis=1)[:, : parameters["nth"]]
         out_path = os.path.join(results["folder"], "nneighbors.txt")
         np.savetxt(out_path, nneighbors, newline="\r\n")
         results["fp_nneighbors"] = out_path
+
+        # plot results
+        fig, ax = plt.subplots()
+        colors = cm.get_cmap("viridis", nneighbors.shape[1]).colors
+        bin_max = np.quantile(nneighbors[:, -1], 0.95)
+        bins = np.linspace(0, bin_max, num=50)
+        nnhist_obs = np.zeros((len(bins), nneighbors.shape[1]))
+        for i in range(nnhist_obs.shape[1]):
+            k = i + 1
+            nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
+            ax.plot(
+                (edges[:-1] + edges[1:]) / 2,
+                nnhist_obs,
+                color=colors[i],
+                linestyle="-",
+                label=f"observed k={k}",
+            )
+        ax.legend()
+        ax.set_xlabel("Distance [nm]")
+        ax.set_ylabel("Frequency")
+        ax.set_title("Nearest Neighbor Histograma")
+        results["fp_fig"] = os.path.join(results["folder"], "nndist.png")
+        fig.savefig(results["fp_fig"])
 
         return parameters, results
 
@@ -1219,7 +1250,7 @@ class AutoPicasso(AbstractModuleCollection):
                 in the decorator wrapper
         """
         if isinstance(parameters["nneighbors"], str):
-            nneighbors = np.loadtxt(parameters["nneighbors"], newline="\r\n")
+            nneighbors = np.loadtxt(parameters["nneighbors"])
         else:
             nneighbors = parameters["nneighbors"]
         k_max = nneighbors.shape[1]
@@ -1257,13 +1288,69 @@ class AutoPicasso(AbstractModuleCollection):
                 label=f"fitted k={k}",
             )
         ax.legend()
-        ax.set_xlabel("Radius")
+        ax.set_xlabel("Distance [nm]")
         ax.set_ylabel("probability density")
         ax.set_title("kth nearest neighbor distribution")
         results["fp_fig"] = os.path.join(results["folder"], "nndist_fit.png")
         fig.savefig(results["fp_fig"])
 
         return parameters, results
+
+    # @module_decorator
+    # def radial_distribution_function(self, i, parameters, results):
+    #     """Generate the Radial Distribution Function,
+    #     Whis is the sum of nearest neighbors with geometry factor.
+    #     At long radii, its value is the overall density.
+
+    #     Every spot is picked, pick radii are altered and the density
+    #     calculated. The RDF is the difference between those densities.
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #                 dims : list of str
+    #                     the distance dimensions, e.g. ['x', 'y']
+    #                     or ['x', 'y', 'z']
+    #                 rmax : float
+    #                     the maximum r to evaluate
+    #                 deltar : float
+    #                     the step size in r
+    #             and optional keys:
+    #                 save_locs : bool
+    #                     whether to save the locs into the results folder
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     rs = np.arange(0, parameters["rmax"], parameters["deltar"])
+    #     n_means = np.zeros_like(rs)
+    #     d_areas = np.zeros_like(rs)
+    #     locs = self.channel_locs[
+    #         0
+    #     ]  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
+
+    #     points = np.array(locs[parameters["dims"]].tolist())
+    #     # convert all dimensions to nanometers
+    #     pixelsize = self.analysis_config["camera_info"]["pixelsize"]
+    #     for i, dim in enumerate(parameters["dims"]):
+    #         if dim in ["x", "y"]:
+    #             points[:, i] = points[:, i] * pixelsize
+
+    #     alldist = distance.cdist(points, points)
+    #     # alldist[alldist == 0] = float("inf")
+    #     alldist = np.sort(alldist, axis=1)
+
+    #     for i, r in enumerate(rs):
+    #         area = 2 * np.pi * r**2
+    #         n_mean = np.sum(alldist < r) / len(locs)
+    #         crdf[i] = n_mean / area
+    #         d_areas[i] = 2 * np.pi * r * parameters["deltar"]
+    #         n_means[i] = n_mean = np.sum(alldist < r) / len(locs)
+
+    #     rdf = crdf[1:] - crdf[:-1]
+
+    #     return parameters, results
 
     @module_decorator
     def save_single_dataset(self, i, parameters, results):
