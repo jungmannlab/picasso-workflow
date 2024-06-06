@@ -248,7 +248,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-        for label, fp in results.get("labeled filepaths").items():
+        for label, fp in results.get("labeled filepaths", {}).items():
             text = f"""<p><strong>{label}</strong></p>"""
             self.ci.update_page_content(
                 self.report_page_name, self.report_page_id, text
@@ -448,10 +448,47 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
+        <li>Dimensions taken into account: {parameters['dims']}</li>
+        <li>Calculated up to nearest neighbor #: {parameters['nth']}</li>
+        <li>Saved numpy txt file as: {results["fp_nneighbors"]}</li>
         </ul>"""
 
         text += """
-        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def fit_csr(self, i, parameters, results):
+        logger.debug("Reporting fit_csr.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Completely Spatially Random Distribution Fit</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Dimensionality of analytical CSR:
+         {parameters['dimensionality']}</li>"""
+        if isinstance(parameters["nneighbors"], str):
+            text += f"""<li>Experimental Nearest neighbor distances loaded
+             from: {parameters['nneighbors']}</li>"""
+        else:
+            text += f"""<li>Experimental Nearest neighbor distances:
+             {parameters['nneighbors'].shape[0]} spots,
+              {parameters['nneighbors'].shape[1]} neighbors</li>"""
+        text += f"""<li>Density fitted:
+         {results['density']} nm^(-{parameters['dimensionality']})</li>
+        </ul>"""
+        if fp_fig := results.get("fp_fig"):
+            self.ci.upload_attachment(self.report_page_id, fp_fig)
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+        text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(

@@ -69,3 +69,50 @@ class TestPicassoOutpost(unittest.TestCase):
         filepath_info = os.path.splitext(filepath_raw)[0] + ".yaml"
         os.remove(filepath_raw)
         os.remove(filepath_info)
+
+    def test_04a_nndistribution_from_csr(self):
+        r = np.arange(50)
+        p = picasso_outpost.nndistribution_from_csr(r, 2, 0.3)
+        assert p.shape == r.shape
+
+    def test_04b_nndist_loglikelihood_csr(self):
+        rho = 0.2
+        r = np.linspace(0, 20, num=30)
+        pdists = [
+            picasso_outpost.nndistribution_from_csr(r, k, rho)
+            for k in range(1, 4)
+        ]
+        # test for one spot
+        nnobs = np.array([max(pd) for pd in pdists])
+        loglike = picasso_outpost.nndist_loglikelihood_csr(nnobs, rho)
+        assert loglike <= 0
+
+        # test for multiple spots
+        nspots = 6
+        nnobs = np.array(
+            [
+                np.random.choice(r, size=nspots, p=pd / np.sum(pd))
+                for pd in pdists
+            ]
+        )
+        loglike = picasso_outpost.nndist_loglikelihood_csr(nnobs, rho)
+        assert loglike <= 0
+
+    def test_04c_estimate_density_from_neighbordists(self):
+        rho = 0.2
+        r = np.linspace(0, 20, num=30)
+        pdists = [
+            picasso_outpost.nndistribution_from_csr(r, k, rho)
+            for k in range(1, 4)
+        ]
+        nspots = 20
+        nnobs = np.array(
+            [
+                np.random.choice(r, size=nspots, p=pd / np.sum(pd))
+                for pd in pdists
+            ]
+        )
+        rhofit, fitres = picasso_outpost.estimate_density_from_neighbordists(
+            nnobs, rho
+        )
+        assert np.abs(rhofit - rho) < 0.1

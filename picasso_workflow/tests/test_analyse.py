@@ -354,6 +354,8 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_tags = ["1", "2"]
         self.ap.combine_channels(0, {})
 
+        shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
+
     @patch(
         "picasso_workflow.analyse.picasso_outpost.convert_zeiss_file",
         MagicMock,
@@ -367,6 +369,10 @@ class TestAnalyseModules(unittest.TestCase):
         logger.debug(f"results: {results}")
         assert results["filename_raw"] == "a.raw"
         assert results["duration"] > -1
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_convert_zeiss_movie")
+        )
 
     # @patch("picasso.postprocess.cluster_combine", MagicMock)
     # def aggregate_cluster(self):
@@ -386,6 +392,8 @@ class TestAnalyseModules(unittest.TestCase):
         # logger.debug(f'parameters: {parameters}')
         logger.debug(f"results: {results}")
         assert results["duration"] > -1
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_density"))
 
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.dbscan")
@@ -415,6 +423,8 @@ class TestAnalyseModules(unittest.TestCase):
         logger.debug(f"results: {results}")
         assert results["duration"] > -1
 
+        shutil.rmtree(os.path.join(self.results_folder, "00_dbscan"))
+
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.hdbscan")
     def hdbscan(self, mock_hdbscan, mock_fcc):
@@ -442,6 +452,8 @@ class TestAnalyseModules(unittest.TestCase):
         # logger.debug(f'parameters: {parameters}')
         logger.debug(f"results: {results}")
         assert results["duration"] > -1
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_hdbscan"))
 
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.cluster")
@@ -471,10 +483,16 @@ class TestAnalyseModules(unittest.TestCase):
         logger.debug(f"results: {results}")
         assert results["duration"] > -1
 
-    @patch("picasso_workflow.analyse.distance.cdist", MagicMock)
-    def nneighbor(self):
+        shutil.rmtree(os.path.join(self.results_folder, "00_smlm_clusterer"))
+
+    @patch("picasso_workflow.analyse.distance.cdist")
+    def nneighbor(self, mock_cdist):
+        mock_cdist.return_value = np.random.rand(len(self.ap.movie), 4)
         self.ap.info = []
-        parameters = {}
+        parameters = {
+            "dims": ["com_x", "com_y"],
+            "nth": 4,
+        }
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -495,7 +513,24 @@ class TestAnalyseModules(unittest.TestCase):
         logger.debug(f"results: {results}")
         assert results["duration"] > -1
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_temp", MagicMock)
+        shutil.rmtree(os.path.join(self.results_folder, "00_nneighbor"))
+
+    def fit_csr(self):
+        self.ap.info = []
+        neighbors = np.array([[2, 5, 7], [3, 5, 8], [2, 4, 6], [2, 4, 7]])
+        parameters = {
+            "nneighbors": neighbors,
+            "dimensionality": 2,
+        }
+
+        parameters, results = self.ap.fit_csr(0, parameters)
+        # logger.debug(f'parameters: {parameters}')
+        logger.debug(f"results: {results}")
+        assert results["duration"] > -1
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
+
+    # @patch("picasso_workflow.analyse.picasso_outpost.spinna_temp", MagicMock)
     def spinna_manual(self):
         info = [{"Width": 1000, "Height": 1000}]
         locs_dtype = [
@@ -517,12 +552,20 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_info = [info]
         self.ap.channel_tags = ["CD86"]
 
-        parameters = {}
+        parameters = {
+            "proposed_labeling_efficiency": 50,
+            "proposed_labeling_uncertainty": 6,
+            "proposed_n_simulate": 50000,
+            "proposed_density": 0.56,
+            "proposed_nn_plotted": 4,
+        }
         # test preparatory stage
         parameters, results = self.ap.spinna_manual(0, parameters)
 
         # test calling spinna
         parameters, results = self.ap.spinna_manual(0, parameters)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_spinna_manual"))
 
 
 # @unittest.skip("")

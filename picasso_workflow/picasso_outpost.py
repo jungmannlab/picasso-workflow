@@ -17,6 +17,10 @@ from aicsimageio import AICSImage
 
 from picasso import localize, render, imageprocess
 
+from scipy.special import gamma as _gamma
+from scipy.special import factorial as _factorial
+from scipy.optimize import minimize
+
 
 logger = logging.getLogger(__name__)
 
@@ -249,9 +253,125 @@ def spinna_temp(parameters_filename):
         fp_fig : list of str
             filepaths of the NND figures
     """
+    print("importing spinna from outpost")
     from picasso_workflow.spinna_main import _spinna_batch_analysis
+
+    print("starting spinna from outpost")
 
     result_dir, fp_summary, fp_fig = _spinna_batch_analysis(
         parameters_filename
     )
+    print("result_dir", result_dir)
+    print("fp_summary", fp_summary)
+    print("fp_fig", fp_fig)
     return result_dir, fp_summary, fp_fig
+
+
+########################################################################
+# Begin Log likelihood CSR estimation
+########################################################################
+
+
+def estimate_density_from_neighbordists(nn_dists, rho_init):
+    """For one point with k nearest neighbor distances (all assumed from
+    a CSR distribution), do a maximum likelihood estimation for the
+    density.
+    Args:
+        nn_dists : array, len k - or 2D array: (N, k)
+            the k nearest neighbor distances (of N spots)
+        rho_init : float
+            the initial estimation of density
+    Returns:
+        mle_rho : float
+            the maximum likelihood estimate for the local density
+            based on the nearest neighbor distances
+    """
+    bounds = [(1e-6, 1e6)]  # rho must be positive
+    mle_rho = minimize(
+        minimization_loglike,
+        x0=[rho_init],
+        args=(nn_dists),
+        bounds=bounds,
+        # tol=1e-8, options={'maxiter': 1e5}, method='Powell'
+        # options={'maxiter': 1e5}, method='L-BFGS-B'
+        # method='BFGS'#,
+        # options={'maxiter': 1e5, 'gtol': 1e-6, 'eps': 1e-9},
+        method="L-BFGS-B",
+        options={
+            "disp": None,
+            "maxcor": 10,
+            "ftol": 2e-12,
+            "gtol": 1e-11,
+            "eps": 1e-13,
+            "maxfun": 15000,
+            "maxiter": 15000,
+            "iprint": -1,
+            "maxls": 100,
+            "finite_diff_rel_step": None,
+        },
+    )
+    # print(mle_rho)
+    return mle_rho.x[0], mle_rho
+
+
+def minimization_loglike(rho, nndist_observed):
+    """The minimization function for nndist loglikelihood fun
+    based on k-th nearest neighbor CSR distributions
+    Args:
+        rho : list, len 1
+            the estimated density
+        nndist_observed : array, len k - or 2D array: (N, k)
+            the k nearest neighbor distances (of N spots)
+    Returns:
+        loglike : float
+            the log likelihood of finding the observed neighbor distances
+            in the model of CSR and given rho
+    """
+    return -nndist_loglikelihood_csr(nndist_observed, rho[0])
+
+
+def nndist_loglikelihood_csr(nndist_observed, rho):
+    """get the Log-Likelihood of observed nearest neighbors assuming
+    a CSR distribution with density rho.
+    Args:
+        nndist_observed : array, len k - or 2D array: (N, k)
+            the k nearest neighbor distances (of one or N spots)
+        rho : float
+            the density
+    Returns:
+        log_like : float
+            the log likelihood of all distances observed being drawn
+            from CSR
+    """
+    log_like = 0
+    for k, dist in enumerate(nndist_observed):
+        prob = nndistribution_from_csr(dist, k + 1, rho)
+        log_like += np.sum(np.log(prob))
+    return log_like
+
+
+def nndistribution_from_csr(r, k, rho, d=2):
+    """The CSR Nearest Neighbor distribution of finding the k-th nearest
+    neighbor at r. with the spatial randomness covering d dimensions
+    Args:
+        r : float or array of floats
+            the distance(s) to evaluate the probability density at
+        k : int
+            evaluation of the k-th nearest neighbor
+        rho : float
+            the density
+        d : int
+            the dimensionality of the problem
+    Returns:
+        p : same as r
+            the probability density of k-th nearest neighbor at r
+    """
+    lam = rho * np.pi ** (d / 2) / _gamma(d / 2 + 1)
+    factor = d / _factorial(k - 1) * lam**k * r ** (d * k - 1)
+    dist = factor * np.exp(-lam * r**d)
+    return dist / np.sum(dist)
+
+
+########################################################################
+# End Log likelihood CSR estimation
+########################################################################

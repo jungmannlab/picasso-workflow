@@ -109,6 +109,12 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def fit_csr(self):
+        """Fit a Completely Spatially Random Distribution to
+        nearest neighbors"""
+        pass
+
+    @abc.abstractmethod
     def save_single_dataset(self):
         """Saves the locs and info of a single dataset; makes loading
         for the aggregation workflow more straightforward."""

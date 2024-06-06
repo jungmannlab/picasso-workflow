@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import distance
 import matplotlib.pyplot as plt
+from matplotlib import cm
 import logging
 from datetime import datetime
 import yaml
@@ -1166,6 +1167,11 @@ class AutoPicasso(AbstractModuleCollection):
                 the index of the module
             parameters: dict
                 with required keys:
+                    dims : list of str
+                        the distance dimensions, e.g. ['x', 'y']
+                        or ['x', 'y', 'z']
+                    nth : int
+                        calculate the 1st to nth nearest neighbor
                 and optional keys:
                     save_locs : bool
                         whether to save the locs into the results folder
@@ -1173,13 +1179,89 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        clusters = np.rec.array(self.locs, dtype=self.locs.dtype)
-        points = np.array(clusters[["com_x", "com_y"]].tolist())
+        points = np.array(self.locs[parameters["dims"]].tolist())
+        # convert all dimensions to nanometers
+        pixelsize = self.analysis_config["camera_info"]["pixelsize"]
+        for i, dim in enumerate(parameters["dims"]):
+            if dim in ["x", "y"]:
+                points[:, i] = points[:, i] * pixelsize
+
         alldist = distance.cdist(points, points)
         alldist[alldist == 0] = float("inf")
-        minvals = np.amin(alldist, axis=0)
-        out_path = os.path.join(results["folder"], "minval.txt")
-        np.savetxt(out_path, minvals, newline="\r\n")
+        nneighbors = np.sort(alldist, axis=0)[:, : parameters["nth"]]
+        out_path = os.path.join(results["folder"], "nneighbors.txt")
+        np.savetxt(out_path, nneighbors, newline="\r\n")
+        results["fp_nneighbors"] = out_path
+
+        return parameters, results
+
+    @module_decorator
+    def fit_csr(self, i, parameters, results):
+        """Fit a Completely Spatially Random Distribution to
+        nearest neighbors
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    nneighbors : str or 2D array
+                        if str: filepath to a txt file of numpy-saved data
+                            (as by module nneighbor above)
+                        if 2D array (N, k): kth nearest neighbor distances
+                            for N points
+                    dimensionality : int
+                        the dimensionality: 2 or 3 - 2D or 3D
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        if isinstance(parameters["nneighbors"], str):
+            nneighbors = np.loadtxt(parameters["nneighbors"], newline="\r\n")
+        else:
+            nneighbors = parameters["nneighbors"]
+        k_max = nneighbors.shape[1]
+        rho_init = np.mean(nneighbors[:, 0])
+        rho_mle, _ = picasso_outpost.estimate_density_from_neighbordists(
+            nneighbors, rho_init
+        )
+        results["density"] = rho_mle
+
+        # plot results
+        fig, ax = plt.subplots()
+        colors = cm.get_cmap("viridis", k_max).colors
+        bin_max = np.quantile(nneighbors[:, -1], 0.95)
+        bins = np.linspace(0, bin_max, num=50)
+        nnhist_obs = np.zeros((len(bins), k_max))
+        nnhist_an = np.zeros_like(nnhist_obs)
+        for i in range(nnhist_an.shape[1]):
+            k = i + 1
+            nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
+            nnhist_an = picasso_outpost.nndistribution_from_csr(
+                bins, k, rho_mle, d=parameters["dimensionality"]
+            )
+            ax.plot(
+                (edges[:-1] + edges[1:]) / 2,
+                nnhist_obs,
+                color=colors[i],
+                linestyle="-",
+                label=f"observed k={k}",
+            )
+            ax.plot(
+                bins,
+                nnhist_an,
+                color=colors[i],
+                linestyle="--",
+                label=f"fitted k={k}",
+            )
+        ax.legend()
+        ax.set_xlabel("Radius")
+        ax.set_ylabel("probability density")
+        ax.set_title("kth nearest neighbor distribution")
+        results["fp_fig"] = os.path.join(results["folder"], "nndist_fit.png")
+        fig.savefig(results["fp_fig"])
 
         return parameters, results
 
@@ -1403,7 +1485,28 @@ class AutoPicasso(AbstractModuleCollection):
                 the index of the module
             parameters: dict
                 with required keys:
+                    proposed_labeling_efficiency : float, range 0-100
+                        labeling efficiency percentage, default for all targets
+                    proposed_labeling_uncertainty : float
+                        labeling uncertainty [nm]; good value is e.g. 5
+                    proposed_n_simulate : int
+                        number of target molecules to simulated;
+                        good value is e.g. 50000
+                    proposed_density : int
+                        density to simulate;
+                        area density if 2D; volume density if 3D
+                    proposed_nn_plotted : int
+                        number of nearest neighbors to plot
                 and optional keys:
+                    structures : list of dict
+                        SPINNA structures. Each structure dict has
+                            "Molecular targets": list of str,
+                            "Structure title": str,
+                            "TARGET_x": list of float,
+                            "TARGET_y": list of float,
+                            "TARGET_z": list of float,
+                        where TARGET is one each of the target names in
+                        "Molecular targets"
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -1416,24 +1519,26 @@ class AutoPicasso(AbstractModuleCollection):
 
         if not prepped:
             # prepare input files for the user to edit, with default values
-            spinna_structs = []
-            for tag in self.channel_tags:
-                struct = {
-                    "Molecular targets": [tag],
-                    "Structure title": f"{tag}-monomer",
-                    f"{tag}_x": [0.0],
-                    f"{tag}_y": [0.0],
-                    f"{tag}_z": [0.0],
-                }
-                spinna_structs.append(struct)
-                struct = {
-                    "Molecular targets": [tag],
-                    "Structure title": f"{tag}-dimer",
-                    f"{tag}_x": [-10.0, 10.0],
-                    f"{tag}_y": [0.0, 0.0],
-                    f"{tag}_z": [0.0, 0.0],
-                }
-                spinna_structs.append(struct)
+            spinna_structs = parameters.get("structures")
+            if spinna_structs is None:
+                spinna_structs = []
+                for tag in self.channel_tags:
+                    struct = {
+                        "Molecular targets": [tag],
+                        "Structure title": f"{tag}-monomer",
+                        f"{tag}_x": [0.0],
+                        f"{tag}_y": [0.0],
+                        f"{tag}_z": [0.0],
+                    }
+                    spinna_structs.append(struct)
+                    struct = {
+                        "Molecular targets": [tag],
+                        "Structure title": f"{tag}-dimer",
+                        f"{tag}_x": [-10.0, 10.0],
+                        f"{tag}_y": [0.0, 0.0],
+                        f"{tag}_z": [0.0, 0.0],
+                    }
+                    spinna_structs.append(struct)
             structs_fn = "spinna_structs.yaml"
             structs_fp = os.path.join(results["folder"], structs_fn)
             with open(structs_fp, "w") as f:
@@ -1449,36 +1554,57 @@ class AutoPicasso(AbstractModuleCollection):
                 io.save_locs(locs_fp, locs, info)
 
                 spinna_config[f"exp_data_{tag}"] = [locs_fp]
-                spinna_config[f"le_{tag}"] = [50]
-                spinna_config[f"label_unc_{tag}"] = [2]
-                spinna_config[f"n_simulated_{tag}"] = [50000]
+                spinna_config[f"le_{tag}"] = [
+                    parameters["proposed_labeling_efficiency"]
+                ]
+                spinna_config[f"label_unc_{tag}"] = [
+                    parameters["proposed_labeling_uncertainty"]
+                ]
+                spinna_config[f"n_simulated_{tag}"] = [
+                    parameters["proposed_n_simulate"]
+                ]
             spinna_config["res_factor"] = [100]
-            spinna_config["fit_NND_bin"] = [5]
-            spinna_config["fit_NND_maxdist"] = [500]
+            # bin size: more than Nyquist subsampling
+            spinna_config["fit_NND_bin"] = [parameters["proposed_density"] / 4]
+            # max dist: 50 times density
+            spinna_config["fit_NND_maxdist"] = [
+                200 * spinna_config["fit_NND_bin"][0]
+            ]
             spinna_config["save_filename"] = ["spinna_results"]
-            spinna_config["nn_plotted"] = [4]
+            spinna_config["nn_plotted"] = [parameters["proposed_nn_plotted"]]
 
             data_2d = "z" not in self.channel_locs[0].dtype.names
             if data_2d:
                 spinna_config["rotation_mode"] = ["2D"]
-                spinna_config["area"] = [10000]
+                area = (
+                    parameters["proposed_n_simulate"]
+                    / parameters["proposed_density"]
+                )
+                spinna_config["area"] = [area]
             else:
                 spinna_config["rotation_mode"] = ["3D"]
-                spinna_config["volume"] = [20000]
-                spinna_config["z_range"] = [5]
+                z_range = int(self.locs["z"].max() - self.locs["z"].min())
+                volume = (
+                    parameters["proposed_n_simulate"]
+                    / parameters["proposed_density"]
+                )
+                spinna_config["volume"] = [volume]
+                spinna_config["z_range"] = [z_range]
 
             # save config to file
             pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
 
             msg = "This is a manual step. Please provide input, "
             msg += "and re-execute the workflow. "
-            msg += f" The file {cfg_fp} has been prepared for you."
+            msg += f" The file {cfg_fp} has been prepared for you"
+            msg += ", based on the parameters given."
             results["message"] = msg
             logger.debug(msg)
             print(msg)
             results["success"] = False
         else:
             # kick off SPINNA analysis
+            print("starting spinna")
             result_dir, fp_summary, fp_fig = picasso_outpost.spinna_temp(
                 cfg_fp
             )
