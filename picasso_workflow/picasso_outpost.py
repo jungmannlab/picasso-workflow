@@ -327,7 +327,7 @@ def minimization_loglike(rho, nndist_observed, kmin=1):
             the log likelihood of finding the observed neighbor distances
             in the model of CSR and given rho
     """
-    return -nndist_loglikelihood_csr(nndist_observed, rho[0], kmin)  # - 200000
+    return -nndist_loglikelihood_csr(nndist_observed, rho[0], kmin)
 
 
 def nndist_loglikelihood_csr(nndist_observed, rho, kmin=1):
@@ -344,9 +344,11 @@ def nndist_loglikelihood_csr(nndist_observed, rho, kmin=1):
             from CSR
     """
     log_like = 0
+    print("nndist_obs shape", nndist_observed.shape)
     for i, dist in enumerate(nndist_observed):
         k = i + kmin
-        print(f"evaluating csr at k={k}, with rho={rho}")
+        print(f"evaluating csr of {len(dist)} spots at k={k}, with rho={rho}")
+        assert False
         prob = nndistribution_from_csr(dist, k, rho)
         log_like += np.sum(np.log(prob))
     return log_like

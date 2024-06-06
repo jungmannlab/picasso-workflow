@@ -1209,18 +1209,17 @@ class AutoPicasso(AbstractModuleCollection):
         nnhist_obs = np.zeros((len(bins), nneighbors.shape[1]))
         for i in range(nnhist_obs.shape[1]):
             k = i + 1
-            nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
-            ax.plot(
-                (edges[:-1] + edges[1:]) / 2,
-                nnhist_obs,
+            _ = ax.hist(
+                nneighbors[:, i],
+                bins=bins,
                 color=colors[i],
-                linestyle="-",
-                label=f"observed k={k}",
+                alpha=0.2,
+                label=f"k={k}",
             )
         ax.legend()
         ax.set_xlabel("Distance [nm]")
         ax.set_ylabel("Frequency")
-        ax.set_title("Nearest Neighbor Histograma")
+        ax.set_title("Nearest Neighbor Histogram")
         results["fp_fig"] = os.path.join(results["folder"], "nndist.png")
         fig.savefig(results["fp_fig"])
 
@@ -1253,10 +1252,14 @@ class AutoPicasso(AbstractModuleCollection):
             nneighbors = np.loadtxt(parameters["nneighbors"])
         else:
             nneighbors = parameters["nneighbors"]
+        # print(nneighbors.shape)
+        # return
         k_max = nneighbors.shape[1]
-        rho_init = np.mean(nneighbors[:, 0])
+        nspots = nneighbors.shape[0]
+        d = parameters["dimensionality"]
+        rho_init = 1 / (2 * d * np.pi * np.mean(nneighbors[:, 0]) ** d)
         rho_mle, _ = picasso_outpost.estimate_density_from_neighbordists(
-            nneighbors, rho_init
+            nneighbors.T, rho_init
         )
         results["density"] = rho_mle
 
@@ -1269,20 +1272,20 @@ class AutoPicasso(AbstractModuleCollection):
         nnhist_an = np.zeros_like(nnhist_obs)
         for i in range(nnhist_an.shape[1]):
             k = i + 1
-            nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
+            # nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
             nnhist_an = picasso_outpost.nndistribution_from_csr(
                 bins, k, rho_mle, d=parameters["dimensionality"]
             )
-            ax.plot(
-                (edges[:-1] + edges[1:]) / 2,
-                nnhist_obs,
+            _ = ax.hist(
+                nneighbors[:, i],
+                bins=bins,
                 color=colors[i],
-                linestyle="-",
+                alpha=0.2,
                 label=f"observed k={k}",
             )
             ax.plot(
-                bins,
-                nnhist_an,
+                bins + (bins[1] - bins[0]),
+                nnhist_an * nspots / 4.9,
                 color=colors[i],
                 linestyle="--",
                 label=f"fitted k={k}",
@@ -1290,7 +1293,10 @@ class AutoPicasso(AbstractModuleCollection):
         ax.legend()
         ax.set_xlabel("Distance [nm]")
         ax.set_ylabel("probability density")
-        ax.set_title("kth nearest neighbor distribution")
+        ax.set_title(
+            "Nearest Neighbor Distribution, "
+            + f"density {rho_mle} nm^{-parameters['dimensionality']}"
+        )
         results["fp_fig"] = os.path.join(results["folder"], "nndist_fit.png")
         fig.savefig(results["fp_fig"])
 
@@ -1323,7 +1329,10 @@ class AutoPicasso(AbstractModuleCollection):
     #             the results this function generates. This is created
     #             in the decorator wrapper
     #     """
-    #     rs = np.arange(0, parameters["rmax"], parameters["deltar"])
+    #     rs = np.arange(
+    #         0,
+    #         parameters["rmax"] + 2 * parameters["deltar"],
+    #         parameters["deltar"])
     #     n_means = np.zeros_like(rs)
     #     d_areas = np.zeros_like(rs)
     #     locs = self.channel_locs[
@@ -1342,13 +1351,25 @@ class AutoPicasso(AbstractModuleCollection):
     #     alldist = np.sort(alldist, axis=1)
 
     #     for i, r in enumerate(rs):
-    #         area = 2 * np.pi * r**2
-    #         n_mean = np.sum(alldist < r) / len(locs)
-    #         crdf[i] = n_mean / area
+    #         # area = 2 * np.pi * r**2
+    #         # n_mean = np.sum(alldist < r) / len(locs)
+    #         # crdf[i] = n_mean / area
     #         d_areas[i] = 2 * np.pi * r * parameters["deltar"]
-    #         n_means[i] = n_mean = np.sum(alldist < r) / len(locs)
+    #         n_means[i] = np.sum(alldist < r) / len(locs)
+    #     d_n_means = n_means[1:] - n_means[:-1]
+    #     rdf = d_n_means / d_areas[1:]
+    #     # rdf = crdf[1:] - crdf[:-1]
 
-    #     rdf = crdf[1:] - crdf[:-1]
+    #     results["density"] = np.median(rdf[int(len(rs) / 2):])
+
+    #     # plot results
+    #     fig, ax = plt.subplots()
+    #     ax.plot(rs[1:], rdf)
+    #     ax.set_xlabel("Radius [nm]")
+    #     ax.set_ylabel("probability density")
+    #     ax.set_title("Radial Distribution Function")
+    #     results["fp_fig"] = os.path.join(results["folder"], "rdf.png")
+    #     fig.savefig(results["fp_fig"])
 
     #     return parameters, results
 
@@ -1574,16 +1595,26 @@ class AutoPicasso(AbstractModuleCollection):
                 with required keys:
                     proposed_labeling_efficiency : float, range 0-100
                         labeling efficiency percentage, default for all targets
+                        used proposed value in spinna_config.csv and can be
+                        altered manually after the first run of this module
                     proposed_labeling_uncertainty : float
                         labeling uncertainty [nm]; good value is e.g. 5
+                        used proposed value in spinna_config.csv and can be
+                         alteredmanually after the first run of this module
                     proposed_n_simulate : int
                         number of target molecules to simulated;
                         good value is e.g. 50000
+                        used proposed value in spinna_config.csv and can be
+                        altered manually after the first run of this module
                     proposed_density : int
                         density to simulate;
                         area density if 2D; volume density if 3D
+                        used proposed value in spinna_config.csv and can be
+                        altered manually after the first run of this module
                     proposed_nn_plotted : int
                         number of nearest neighbors to plot
+                        used proposed value in spinna_config.csv and can be
+                         alteredmanually after the first run of this module
                 and optional keys:
                     structures : list of dict
                         SPINNA structures. Each structure dict has
