@@ -1295,6 +1295,8 @@ class AutoPicasso(AbstractModuleCollection):
                             for N points
                     dimensionality : int
                         the dimensionality: 2 or 3 - 2D or 3D
+                    kmin : int
+                        the minimum-th NN to fit. default 1
                 and optional keys:
                     save_locs : bool
                         whether to save the locs into the results folder
@@ -1314,7 +1316,7 @@ class AutoPicasso(AbstractModuleCollection):
         rho_init = 2 / (2 * d * np.pi * np.median(nneighbors[:, 0]) ** d)
         rho_mle, fitresult = (
             picasso_outpost.estimate_density_from_neighbordists(
-                nneighbors.T, rho_init
+                nneighbors.T, rho_init, kmin=1, rho_bound_factor=10
             )
         )
         print(fitresult)

@@ -273,7 +273,7 @@ def spinna_temp(parameters_filename):
 
 
 def estimate_density_from_neighbordists(
-    nn_dists, rho_init, kmin=1, rho_bound_factor=100
+    nn_dists, rho_init, kmin=1, rho_bound_factor=10
 ):
     """For one point with k nearest neighbor distances (all assumed from
     a CSR distribution), do a maximum likelihood estimation for the
