@@ -1170,8 +1170,14 @@ class AutoPicasso(AbstractModuleCollection):
                     dims : list of str
                         the distance dimensions, e.g. ['x', 'y']
                         or ['x', 'y', 'z']
-                    nth : int
-                        calculate the 1st to nth nearest neighbor
+                    nth_NN : int
+                        calculate the 1st to nth nearest neighbor distances
+                    nth_rdf : int
+                        calculate distances up to the 95th percile of the
+                        nth_rdf nearest neighbor
+                    subsample_1stNN : int
+                        by how much fold to subsample distances from the
+                        median of the 1st nearest nteighbor. Default is 20
                 and optional keys:
                     save_locs : bool
                         whether to save the locs into the results folder
@@ -1196,7 +1202,7 @@ class AutoPicasso(AbstractModuleCollection):
 
         # calculate bins
         NN_median = np.median(alldist[:, 1])
-        deltar = NN_median / 5
+        deltar = NN_median / parameters.get("subsample_1stNN", 20)
         rmax_NN = np.quantile(alldist[:, parameters["nth_NN"]], 0.95)
         rmax_rdf = np.quantile(alldist[:, parameters["nth_rdf"]], 0.95)
 
