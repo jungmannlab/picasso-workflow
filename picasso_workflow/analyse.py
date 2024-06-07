@@ -1239,6 +1239,7 @@ class AutoPicasso(AbstractModuleCollection):
         ax[1].set_ylabel("Frequency")
         ax[1].set_title("Nearest Neighbor Histogram")
         results["fp_fig"] = os.path.join(results["folder"], "nndist.png")
+        plt.tight_layout()
         fig.savefig(results["fp_fig"])
 
         return parameters, results
@@ -1256,7 +1257,7 @@ class AutoPicasso(AbstractModuleCollection):
 
         nspots = alldist.shape[0]
         distarray = np.sort(alldist.flatten())
-        distarray = distarray[distarray < rmax]
+        distarray = distarray[distarray <= np.max(rs)]
 
         # discard columns of alldist that only have larger entries than rmax
 
