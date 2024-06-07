@@ -438,11 +438,17 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     def nneighbor(self):
-        parameters = {"dims": ["x", "y"], "nth": 4, "filepath": "myfile.czi"}
+        parameters = {
+            "dims": ["x", "y"],
+            "nth_NN": 4,
+            "nth_rdf": 10,
+            "filepath": "myfile.czi",
+        }
         results = {
             "start time": "now",
             "duration": 4.12,
             "fp_nneighbors": "/path/to/file",
+            "density_rdf": 43e-6,
         }
         self.cr.nneighbor(0, parameters, results)
 

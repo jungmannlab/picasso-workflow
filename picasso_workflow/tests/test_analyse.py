@@ -492,7 +492,8 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.info = []
         parameters = {
             "dims": ["x", "y"],
-            "nth": 4,
+            "nth_NN": 2,
+            "nth_rdf": 3,
         }
         locs_dtype = [
             ("frame", "u4"),

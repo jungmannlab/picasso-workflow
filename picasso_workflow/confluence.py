@@ -442,15 +442,20 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     def nneighbor(self, i, parameters, results):
         logger.debug("Reporting nneighbor.")
+        d = len(parameters["dims"])
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>nneighbor calculation</strong></p>
+        Radial Distribution Function and Nearest Neighbor Distributions
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         <li>Dimensions taken into account: {parameters['dims']}</li>
-        <li>Calculated up to nearest neighbor #: {parameters['nth']}</li>
+        <li>Displayed NN up to nearest neighbor #: {parameters['nth_NN']}</li>
+        <li>Displayed RDF up to nearest neighbor #: {parameters['nth_rdf']}
+        </li>
         <li>Saved numpy txt file as: {results["fp_nneighbors"]}</li>
+        <li>Density from RDF: {results['density_rdf'] * 1e3**d} µm^{d}</li>
         </ul>"""
 
         text += """

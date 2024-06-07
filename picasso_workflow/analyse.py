@@ -1193,8 +1193,15 @@ class AutoPicasso(AbstractModuleCollection):
         # print(points.shape)
         alldist = distance.cdist(points, points)
         alldist = np.sort(alldist, axis=1)
-        _, density = self._calc_radial_distribution_function(
-            alldist, parameters, ax=ax[0]
+
+        # calculate bins
+        NN_median = np.median(alldist[:, 1])
+        deltar = NN_median / 5
+        rmax_NN = np.quantile(alldist[:, parameters["nth_NN"]], 0.95)
+        rmax_rdf = np.quantile(alldist[:, parameters["nth_rdf"]], 0.95)
+
+        _, _, density = self._calc_radial_distribution_function(
+            alldist, deltar, rmax_rdf, d=len(parameters["dims"]), ax=ax[0]
         )
         results["density_rdf"] = density
         # print(alldist)
@@ -1203,15 +1210,14 @@ class AutoPicasso(AbstractModuleCollection):
         # np.savetxt(out_path, np.sort(alldist, axis=1), newline="\r\n")
         # alldist[alldist == 0] = float("inf")
         # nneighbors = np.sort(alldist, axis=1)[:, : parameters["nth"]]
-        nneighbors = alldist[:, 1 : parameters["nth"] + 1]
+        nneighbors = alldist[:, 1 : parameters["nth_NN"] + 1]
         out_path = os.path.join(results["folder"], "nneighbors.txt")
         np.savetxt(out_path, nneighbors, newline="\r\n")
         results["fp_nneighbors"] = out_path
 
         # plot results
         colors = cm.get_cmap("viridis", nneighbors.shape[1]).colors
-        bin_max = np.quantile(nneighbors[:, -1], 0.95)
-        bins = np.linspace(0, bin_max, num=50)
+        bins = np.arange(0, rmax_NN, step=deltar)
         nnhist_obs = np.zeros((len(bins), nneighbors.shape[1]))
         for i in range(nnhist_obs.shape[1]):
             k = i + 1
@@ -1232,23 +1238,28 @@ class AutoPicasso(AbstractModuleCollection):
         return parameters, results
 
     def _calc_radial_distribution_function(
-        self, alldist_sorted, parameters, ax=None
+        self, alldist, deltar, rmax, d=2, ax=None
     ):
-
         rs = np.arange(
             0,
-            parameters["rmax"] + 2 * parameters["deltar"],
-            parameters["deltar"],
+            rmax + 2 * deltar,
+            deltar,
         )
         n_means = np.zeros_like(rs)
         d_areas = np.zeros_like(rs)
+
+        nspots = alldist.shape[0]
+        distarray = np.sort(alldist.flatten())
+        distarray = distarray[distarray < rmax]
+
+        # discard columns of alldist that only have larger entries than rmax
 
         for i, r in enumerate(rs):
             # area = 2 * np.pi * r**2
             # n_mean = np.sum(alldist < r) / len(locs)
             # crdf[i] = n_mean / area
-            d_areas[i] = 2 * np.pi * r * parameters["deltar"]
-            n_means[i] = np.sum(alldist_sorted < r) / alldist_sorted.shape[0]
+            d_areas[i] = 2 * np.pi * r * deltar
+            n_means[i] = np.sum(distarray <= r) / nspots
         d_n_means = n_means[1:] - n_means[:-1]
         rdf = d_n_means / d_areas[1:]
         # rdf = crdf[1:] - crdf[:-1]
@@ -1256,12 +1267,11 @@ class AutoPicasso(AbstractModuleCollection):
         density = np.median(rdf[int(len(rs) / 2) :])
 
         # plot results
-        fig, ax = plt.subplots()
-        ax.plot(rs[1:], rdf)
+        ax.plot(rs[1:], rdf * 1e3**d)
         ax.set_xlabel("Radius [nm]")
-        ax.set_ylabel("probability density")
+        ax.set_ylabel(f"density [µm^{d}]")
         ax.set_title("Radial Distribution Function")
-        return rdf, density
+        return rs[1:], rdf, density
 
     @module_decorator
     def fit_csr(self, i, parameters, results):
@@ -1728,12 +1738,6 @@ class AutoPicasso(AbstractModuleCollection):
                     parameters["proposed_n_simulate"]
                 ]
             spinna_config["res_factor"] = [100]
-            # bin size: more than Nyquist subsampling
-            spinna_config["fit_NND_bin"] = [parameters["proposed_density"] / 4]
-            # max dist: 50 times density
-            spinna_config["fit_NND_maxdist"] = [
-                200 * spinna_config["fit_NND_bin"][0]
-            ]
             spinna_config["save_filename"] = ["spinna_results"]
             spinna_config["nn_plotted"] = [parameters["proposed_nn_plotted"]]
 
@@ -1745,6 +1749,7 @@ class AutoPicasso(AbstractModuleCollection):
                     / parameters["proposed_density"]
                 )
                 spinna_config["area"] = [area]
+                d = 2
             else:
                 spinna_config["rotation_mode"] = ["3D"]
                 z_range = int(self.locs["z"].max() - self.locs["z"].min())
@@ -1754,6 +1759,14 @@ class AutoPicasso(AbstractModuleCollection):
                 )
                 spinna_config["volume"] = [volume]
                 spinna_config["z_range"] = [z_range]
+                d = 3
+            # bin size: more than Nyquist subsampling
+            expected_1stNN_peak = (
+                2 / (2 * d * np.pi * parameters["proposed_density"])
+            ) ** (1 / d)
+            spinna_config["fit_NND_bin"] = [expected_1stNN_peak / 5]
+            # max dist: a few times the first NN distance peak
+            spinna_config["fit_NND_maxdist"] = [10 * expected_1stNN_peak]
 
             # save config to file
             pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
