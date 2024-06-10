@@ -440,6 +440,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
     def nneighbor(self):
         parameters = {
             "dims": ["x", "y"],
+            "subsample_1stNN": 20,
             "nth_NN": 4,
             "nth_rdf": 10,
             "filepath": "myfile.czi",
