@@ -446,11 +446,18 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>nneighbor calculation</strong></p>
-        Radial Distribution Function and Nearest Neighbor Distributions
+        Radial Distribution Function (RDF) and Nearest Neighbor Distributions.
+        The RDF shows the density of spots in an annulus of a given radius
+        r and thickness delta r, averaged over all spots. If the RDF deviates
+        from the overall density, it means there is structure at that
+        lengthscale in the data. E.g. the RDF is low at small distances due to
+        finite resoltion.
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         <li>Dimensions taken into account: {parameters['dims']}</li>
+        <li>Bin size is the median of the first NN, devided by:
+        {parameters['subsample_1stNN']}
         <li>Displayed NN up to nearest neighbor #: {parameters['nth_NN']}</li>
         <li>Displayed RDF up to nearest neighbor #: {parameters['nth_rdf']}
         </li>
@@ -470,6 +477,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Completely Spatially Random Distribution Fit</strong></p>
+        The distance distributions of the first N neighbors in the data are
+        fitted to the analytical CSR distributions simultaneously, using a
+        maximum likelihood esitmator.
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>

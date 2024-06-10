@@ -1320,7 +1320,7 @@ class AutoPicasso(AbstractModuleCollection):
                 nneighbors.T, rho_init, kmin=1, rho_bound_factor=10
             )
         )
-        print(fitresult)
+        # print(fitresult)
         logger.debug(str(fitresult))
         results["density"] = rho_mle
 
