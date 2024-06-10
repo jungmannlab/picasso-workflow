@@ -292,6 +292,7 @@ class AggregationWorkflowRunner:
             map_dict=self.aggregation_workflow.get(
                 "single_dataset_tileparameters"
             ),
+            command_sign="$$",
         )
         parameters = pce.run(self.aggregation_workflow["aggregation_modules"])
         agg_reporter_config = copy.deepcopy(self.reporter_config)
