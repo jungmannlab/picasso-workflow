@@ -1219,7 +1219,7 @@ class AutoPicasso(AbstractModuleCollection):
         nneighbors = alldist[:, 1 : parameters["nth_NN"] + 1]
         out_path = os.path.join(results["folder"], "nneighbors.txt")
         np.savetxt(out_path, nneighbors, newline="\r\n")
-        results["fp_nneighbors"] = out_path
+        results["nneighbors"] = out_path
 
         # plot results
         colors = cm.get_cmap("viridis", nneighbors.shape[1]).colors
