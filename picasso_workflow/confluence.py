@@ -456,7 +456,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         <li>Dimensions taken into account: {parameters['dims']}</li>
-        <li>Bin size is the median of the first NN, devided by:
+        <li>Bin size is the median of the first NN, divided by:
         {parameters['subsample_1stNN']}</li>
         <li>Displayed NN up to nearest neighbor #: {parameters['nth_NN']}</li>
         <li>Displayed RDF up to nearest neighbor #: {parameters['nth_rdf']}
