@@ -445,7 +445,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         d = len(parameters["dims"])
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>nneighbor calculation</strong></p>
+        <p><strong>Nearest Neighbor analysis</strong></p>
         Radial Distribution Function (RDF) and Nearest Neighbor Distributions.
         The RDF shows the density of spots in an annulus of a given radius
         r and thickness delta r, averaged over all spots. If the RDF deviates
@@ -456,14 +456,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         <li>Dimensions taken into account: {parameters['dims']}</li>
-        <li>Bin size is the median of the first NN, devided by:
-        {parameters['subsample_1stNN']}
+        <li>Bin size is the median of the first NN, divided by:
+        {parameters['subsample_1stNN']}</li>
         <li>Displayed NN up to nearest neighbor #: {parameters['nth_NN']}</li>
         <li>Displayed RDF up to nearest neighbor #: {parameters['nth_rdf']}
         </li>
-        <li>Saved numpy txt file as: {results["fp_nneighbors"]}</li>
+        <li>Saved numpy txt file as: {results["nneighbors"]}</li>
         <li>Density from RDF: {results['density_rdf'] * 1e3**d} µm^{d}</li>
         </ul>"""
+        if fp_fig := results.get("fp_fig"):
+            self.ci.upload_attachment(self.report_page_id, fp_fig)
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
