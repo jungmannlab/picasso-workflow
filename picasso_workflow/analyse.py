@@ -1756,6 +1756,7 @@ class AutoPicasso(AbstractModuleCollection):
                 area = (
                     parameters["proposed_n_simulate"]
                     / parameters["proposed_density"]
+                    / 1e6  # from nm^2 to um^2
                 )
                 spinna_config["area"] = [area]
                 d = 2
@@ -1765,6 +1766,7 @@ class AutoPicasso(AbstractModuleCollection):
                 volume = (
                     parameters["proposed_n_simulate"]
                     / parameters["proposed_density"]
+                    / 1e9  # from nm^3 to um^3
                 )
                 spinna_config["volume"] = [volume]
                 spinna_config["z_range"] = [z_range]
@@ -1773,6 +1775,7 @@ class AutoPicasso(AbstractModuleCollection):
             expected_1stNN_peak = (
                 2 / (2 * d * np.pi * parameters["proposed_density"])
             ) ** (1 / d)
+            spinna_config["density"] = parameters["proposed_density"]
             spinna_config["fit_NND_bin"] = [expected_1stNN_peak / 5]
             # max dist: a few times the first NN distance peak
             spinna_config["fit_NND_maxdist"] = [10 * expected_1stNN_peak]
