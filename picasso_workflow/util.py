@@ -109,6 +109,20 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def fit_csr(self):
+        """Fit a Completely Spatially Random Distribution to
+        nearest neighbors"""
+        pass
+
+    # @abs.abstractmethod
+    # def radial_distribution_function(self):
+    #     """Generate the Radial Distribution Function,
+    #     Whis is the sum of nearest neighbors with geometry factor.
+    #     At long radii, its value is the overall density.
+    #     """
+    # pass
+
+    @abc.abstractmethod
     def save_single_dataset(self):
         """Saves the locs and info of a single dataset; makes loading
         for the aggregation workflow more straightforward."""
@@ -140,6 +154,11 @@ class AbstractModuleCollection(abc.ABC):
     def save_datasets_aggregated(self):
         """save data of multiple single-dataset workflows from one
         aggregation workflow."""
+        pass
+
+    @abc.abstractmethod
+    def spinna_manual(self):
+        """Direct implementation of spinna batch analysis."""
         pass
 
 

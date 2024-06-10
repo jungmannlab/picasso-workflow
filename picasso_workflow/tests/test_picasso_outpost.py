@@ -11,6 +11,10 @@ import unittest
 from unittest.mock import patch
 import numpy as np
 
+# import matplotlib.pyplot as plt
+# from matplotlib import cm
+
+
 from picasso_workflow import picasso_outpost
 
 
@@ -69,3 +73,86 @@ class TestPicassoOutpost(unittest.TestCase):
         filepath_info = os.path.splitext(filepath_raw)[0] + ".yaml"
         os.remove(filepath_raw)
         os.remove(filepath_info)
+
+    def test_04a_nndistribution_from_csr(self):
+        r = np.arange(50)
+        p = picasso_outpost.nndistribution_from_csr(r, 2, 0.3)
+        assert p.shape == r.shape
+
+    def test_04b_nndist_loglikelihood_csr(self):
+        rho = 0.2
+        r = np.linspace(0, 20, num=30)
+        pdists = [
+            picasso_outpost.nndistribution_from_csr(r, k, rho)
+            for k in range(1, 4)
+        ]
+        # test for one spot
+        nnobs = np.array([max(pd) for pd in pdists])
+        loglike = picasso_outpost.nndist_loglikelihood_csr(nnobs, rho)
+        assert loglike <= 0
+
+        # test for multiple spots
+        nspots = 6
+        nnobs = np.array(
+            [
+                np.random.choice(r, size=nspots, p=pd / np.sum(pd))
+                for pd in pdists
+            ]
+        )
+        loglike = picasso_outpost.nndist_loglikelihood_csr(nnobs, rho)
+        assert loglike <= 0
+
+    def test_04c_estimate_density_from_neighbordists(self):
+        rho = 0.3
+        r = np.linspace(0, 10, num=50)
+        kmin = 1
+        kmax = 5
+        pdists = [
+            picasso_outpost.nndistribution_from_csr(r, k, rho)
+            for k in range(kmin, kmax + 1)
+        ]
+        nspots = 20000
+        nnobs = np.array(
+            [
+                np.random.choice(r, size=nspots, p=pd / np.sum(pd))
+                for pd in pdists
+            ]
+        )
+        rho_init = rho * 4 / 3
+        rhofit, fitres = picasso_outpost.estimate_density_from_neighbordists(
+            nnobs, rho_init, kmin
+        )
+        # print(fitres)
+        assert np.abs(rhofit - rho) < 0.1
+
+        # colors = cm.get_cmap("viridis", kmax).colors
+        # fig, ax = plt.subplots()
+        # for k in range(kmin, kmax + 1):
+        #     i = k - kmin
+        #     color = colors[i]
+        #     _ = ax.hist(nnobs[i], bins=r, color=color, alpha=.2,
+        #                 label='drawn spots')
+        #     # factor 4.9 because nndist_f_csr isnot normalized. returning in there
+        #     # dist / np.sum(dist) leads to fitting problems (!?)
+        #     ax.plot(r + (r[1] - r[0]) / 2, pdists[i] * nspots / 4.9, color=color,
+        #             label='base distribution')
+        #     fdist = picasso_outpost.nndistribution_from_csr(r, k, rhofit)
+        #     ax.plot(r + (r[1] - r[0]) / 2, fdist * nspots / 4.9, color=color,
+        #             linestyle=':', label='fitted distribution')
+        # ax.set_title(f'input density {rho:.4f}; fitted density: {rhofit:.4f}')
+        # ax.set_xlabel('r')
+        # ax.legend()
+        # results_folder = os.path.join(
+        #     os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
+        # )
+        # fig.savefig(os.path.join(results_folder, 'nnfit.png'))
+
+        # test_rhos = np.linspace(rho / 4, rho * 2, num=20)
+        # loglikes = np.zeros_like(test_rhos)
+        # for i, trho in enumerate(test_rhos):
+        #     loglikes[i] = picasso_outpost.minimization_loglike([trho], nnobs, kmin)
+        # fig, ax = plt.subplots()
+        # ax.plot(test_rhos, loglikes)
+        # fig.savefig(os.path.join(results_folder, 'loglike_minimization.png'))
+
+        # assert False

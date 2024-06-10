@@ -300,12 +300,42 @@ class AggregationWorkflowRunner:
         )
         agg_analysis_config = copy.deepcopy(self.analysis_config)
         agg_analysis_config["result_location"] = self.result_folder
-        wr = WorkflowRunner.config_from_dicts(
-            agg_reporter_config,
-            agg_analysis_config,
-            parameters,
-            postfix=self.postfix,
-        )
+        # try loading
+        if self.continue_workflow:
+            try:
+                logger.debug(
+                    "loading WorkflowRunner from "
+                    + os.path.join(
+                        self.result_folder,
+                        agg_reporter_config["report_name"]
+                        + "_"
+                        + self.postfix,
+                    )
+                )
+                wr = WorkflowRunner.load(
+                    os.path.join(
+                        self.result_folder,
+                        agg_reporter_config["report_name"]
+                        + "_"
+                        + self.postfix,
+                    )
+                )
+            except Exception:
+                logger.debug("loading did not work. creating from dict.")
+                wr = WorkflowRunner.config_from_dicts(
+                    agg_reporter_config,
+                    agg_analysis_config,
+                    parameters,
+                    postfix=self.postfix,
+                )
+        else:
+            logger.debug("not dontinuing workflow.starting new.")
+            wr = WorkflowRunner.config_from_dicts(
+                agg_reporter_config,
+                agg_analysis_config,
+                parameters,
+                postfix=self.postfix,
+            )
         self.cpage_names.append(wr.reporter_config["report_name"])
         wr.run()
         self.all_results["aggregation"] = wr.results

@@ -17,6 +17,10 @@ from aicsimageio import AICSImage
 
 from picasso import localize, render, imageprocess
 
+from scipy.special import gamma as _gamma
+from scipy.special import factorial as _factorial
+from scipy.optimize import minimize
+
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +191,7 @@ def convert_zeiss_file(filepath_czi, filepath_raw, info=None):
 # for plotting single spots in analyse.AutoPicasso.
 #############################################################################
 
+
 def get_spots(movie, identifications, box, camera_info):
     spots = _cut_spots(movie, identifications, box)
     return localize._to_photons(spots, camera_info)
@@ -201,9 +206,7 @@ def _cut_spots(movie, ids, box):
     return spots
 
 
-def _cut_spots_byrandomframe(
-    movie, ids_frame, ids_x, ids_y, box, spots
-):
+def _cut_spots_byrandomframe(movie, ids_frame, ids_x, ids_y, box, spots):
     """Cuts the spots out of a movie by non-sorted frames.
 
     Args:
@@ -223,7 +226,7 @@ def _cut_spots_byrandomframe(
     r = int(box / 2)
     for j, (fr, xc, yc) in enumerate(zip(ids_frame, ids_x, ids_y)):
         frame = movie[fr]
-        spots[j] = frame[yc - r:yc + r + 1, xc - r:xc + r + 1]
+        spots[j] = frame[yc - r : yc + r + 1, xc - r : xc + r + 1]
     return spots
 
 
@@ -235,3 +238,158 @@ def normalize_spot(spot, maxval=255, dtype=np.uint8):
     sp = sp.astype(np.float32) / imgmax * maxval
     # logger.debug('spot output: ' + str(sp.astype(dtype)))
     return sp.astype(dtype)
+
+
+def spinna_temp(parameters_filename):
+    """While SPINNA is under development (and the paper being written)
+    it is not integrated in the regular picasso package. Here, the
+    corresponding module is being loaded.
+
+    Returns:
+        result_dir : str
+            folder containing the results
+        fp_summary : str
+            the filepath of the summary csv file
+        fp_fig : list of str
+            filepaths of the NND figures
+    """
+    print("importing spinna from outpost")
+    from picasso_workflow.spinna_main import _spinna_batch_analysis
+
+    print("starting spinna from outpost")
+
+    result_dir, fp_summary, fp_fig = _spinna_batch_analysis(
+        parameters_filename
+    )
+    print("result_dir", result_dir)
+    print("fp_summary", fp_summary)
+    print("fp_fig", fp_fig)
+    return result_dir, fp_summary, fp_fig
+
+
+########################################################################
+# Begin Log likelihood CSR estimation
+########################################################################
+
+
+def estimate_density_from_neighbordists(
+    nn_dists, rho_init, kmin=1, rho_bound_factor=10
+):
+    """For one point with k nearest neighbor distances (all assumed from
+    a CSR distribution), do a maximum likelihood estimation for the
+    density.
+    Args:
+        nn_dists : array, len k - or 2D array: (N, k)
+            the k nearest neighbor distances (of N spots)
+        rho_init : float
+            the initial estimation of density
+    Returns:
+        mle_rho : float
+            the maximum likelihood estimate for the local density
+            based on the nearest neighbor distances
+    """
+    bounds = [
+        (rho_init / rho_bound_factor, rho_init * rho_bound_factor)
+    ]  # rho must be positive
+    mle_rho = minimize(
+        minimization_loglike,
+        x0=[rho_init],
+        args=(nn_dists, kmin),
+        bounds=bounds,
+        # tol=1e-8, options={'maxiter': 1e5}, method='Powell'
+        # options={'maxiter': 1e5}, method='L-BFGS-B'
+        # method='BFGS'#,
+        # options={'maxiter': 1e5, 'gtol': 1e-6, 'eps': 1e-9},
+        method="L-BFGS-B",
+        options={
+            "disp": None,
+            "maxcor": 10,
+            "ftol": 2e-15,
+            "gtol": 1e-15,
+            "eps": 1e-15,
+            "maxfun": 150,
+            "maxiter": 150,
+            "iprint": -1,
+            "maxls": 100,
+            "finite_diff_rel_step": None,
+        },
+    )
+    # print(mle_rho)
+    return mle_rho.x[0], mle_rho
+
+
+def minimization_loglike(rho, nndist_observed, kmin=1):
+    """The minimization function for nndist loglikelihood fun
+    based on k-th nearest neighbor CSR distributions
+    Args:
+        rho : list, len 1
+            the estimated density
+        nndist_observed : array, len k - or 2D array: (N, k)
+            the k nearest neighbor distances (of N spots)
+    Returns:
+        loglike : float
+            the log likelihood of finding the observed neighbor distances
+            in the model of CSR and given rho
+    """
+    return -nndist_loglikelihood_csr(nndist_observed, rho[0], kmin)
+
+
+def nndist_loglikelihood_csr(nndist_observed, rho, kmin=1):
+    """get the Log-Likelihood of observed nearest neighbors assuming
+    a CSR distribution with density rho.
+    Args:
+        nndist_observed : array, len k - or 2D array: (N, k)
+            the k nearest neighbor distances (of one or N spots)
+        rho : float
+            the density
+    Returns:
+        log_like : float
+            the log likelihood of all distances observed being drawn
+            from CSR
+    """
+    log_like = 0
+    # print("nndist_obs shape", nndist_observed.shape)
+    for i, dist in enumerate(nndist_observed):
+        k = i + kmin
+        # print(f"evaluating csr of {len(dist)} spots at k={k}, with rho={rho}")
+        # assert False
+        prob = nndistribution_from_csr(dist, k, rho)
+        log_like += np.sum(np.log(prob))
+    return log_like
+
+
+def nndistribution_from_csr(r, k, rho, d=2):
+    """The CSR Nearest Neighbor distribution of finding the k-th nearest
+    neighbor at r. with the spatial randomness covering d dimensions
+    Args:
+        r : float or array of floats
+            the distance(s) to evaluate the probability density at
+        k : int
+            evaluation of the k-th nearest neighbor
+        rho : float
+            the density
+        d : int
+            the dimensionality of the problem
+    Returns:
+        p : same as r
+            the probability density of k-th nearest neighbor at r
+    """
+    # if k != 1:
+    #     print(f'evaluating CSR not at k=1 but k={k}')
+
+    # def gaussian_pdf(x, mean, std):
+    #     factor = (1 / (np.sqrt(2 * np.pi) * std))
+    #     return factor * np.exp(-0.5 * ((x - mean) / std) ** 2)
+
+    # pdf = gaussian_pdf(r, 4, k*rho*4)
+    # # pdf = gaussian_pdf(r, 4+k*rho, .8)
+    # return pdf #/ np.sum(pdf)
+    lam = rho * np.pi ** (d / 2) / _gamma(d / 2 + 1)
+    factor = d / _factorial(k - 1) * lam**k * r ** (d * k - 1)
+    dist = factor * np.exp(-lam * r**d)
+    return dist  # / np.sum(dist)
+
+
+########################################################################
+# End Log likelihood CSR estimation
+########################################################################

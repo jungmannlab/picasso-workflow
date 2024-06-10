@@ -438,12 +438,34 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     def nneighbor(self):
-        parameters = {"filepath": "myfile.czi"}
+        parameters = {
+            "dims": ["x", "y"],
+            "nth_NN": 4,
+            "nth_rdf": 10,
+            "filepath": "myfile.czi",
+        }
         results = {
             "start time": "now",
             "duration": 4.12,
+            "fp_nneighbors": "/path/to/file",
+            "density_rdf": 43e-6,
         }
         self.cr.nneighbor(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def fit_csr(self):
+        parameters = {"nneighbors": np.zeros((9, 4)), "dimensionality": 2}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "density": 0.52,
+        }
+        self.cr.fit_csr(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -477,6 +499,23 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "radius_z": 2,
         }
         self.cr.smlm_clusterer(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def spinna_manual(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "message": "This is my message to you.",
+            "success": False,
+        }
+        self.cr.manual(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(

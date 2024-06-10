@@ -8,6 +8,7 @@ Description: Interaction with Confluence
 import logging
 import os
 import requests
+import pandas as pd
 
 from picasso_workflow.util import AbstractModuleCollection
 
@@ -247,8 +248,8 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-        for label, fp in results.get("filepaths").items():
-            text = f"""{label}"""
+        for label, fp in results.get("labeled filepaths", {}).items():
+            text = f"""<p><strong>{label}</strong></p>"""
             self.ci.update_page_content(
                 self.report_page_name, self.report_page_id, text
             )
@@ -441,16 +442,68 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     def nneighbor(self, i, parameters, results):
         logger.debug("Reporting nneighbor.")
+        d = len(parameters["dims"])
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>nneighbor calculation</strong></p>
+        Radial Distribution Function (RDF) and Nearest Neighbor Distributions.
+        The RDF shows the density of spots in an annulus of a given radius
+        r and thickness delta r, averaged over all spots. If the RDF deviates
+        from the overall density, it means there is structure at that
+        lengthscale in the data. E.g. the RDF is low at small distances due to
+        finite resoltion.
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
+        <li>Dimensions taken into account: {parameters['dims']}</li>
+        <li>Bin size is the median of the first NN, devided by:
+        {parameters['subsample_1stNN']}
+        <li>Displayed NN up to nearest neighbor #: {parameters['nth_NN']}</li>
+        <li>Displayed RDF up to nearest neighbor #: {parameters['nth_rdf']}
+        </li>
+        <li>Saved numpy txt file as: {results["fp_nneighbors"]}</li>
+        <li>Density from RDF: {results['density_rdf'] * 1e3**d} µm^{d}</li>
         </ul>"""
 
         text += """
-        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def fit_csr(self, i, parameters, results):
+        logger.debug("Reporting fit_csr.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Completely Spatially Random Distribution Fit</strong></p>
+        The distance distributions of the first N neighbors in the data are
+        fitted to the analytical CSR distributions simultaneously, using a
+        maximum likelihood esitmator.
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Dimensionality of analytical CSR:
+         {parameters['dimensionality']}</li>"""
+        if isinstance(parameters["nneighbors"], str):
+            text += f"""<li>Experimental Nearest neighbor distances loaded
+             from: {parameters['nneighbors']}</li>"""
+        else:
+            text += f"""<li>Experimental Nearest neighbor distances:
+             {parameters['nneighbors'].shape[0]} spots,
+              {parameters['nneighbors'].shape[1]} neighbors</li>"""
+        text += f"""<li>Density fitted:
+         {results['density']} nm^(-{parameters['dimensionality']})</li>
+        </ul>"""
+        if fp_fig := results.get("fp_fig"):
+            self.ci.upload_attachment(self.report_page_id, fp_fig)
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+        text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(
@@ -576,6 +629,42 @@ class ConfluenceReporter(AbstractModuleCollection):
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
+
+    def spinna_manual(self, i, parameters, results):
+        """ """
+        logger.debug("Reporting spinna_manual.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>SPINNA-Manual</strong></p>
+        <ul><li>file present: {results.get('success')}</li>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        """
+        if not results["success"]:
+            text += "<li>" + results["message"] + "</li>"
+        else:
+            text += f"<li>Result folder: {results['result_dir']}</li>"
+            summary = pd.read_csv(results["fp_summary"])
+            for i, row in summary.iterrows():
+                text += f"<p><strong> Row {i} </strong></p><ul>"
+                for col, val in row.items():
+                    text += f"<li>{col}: {str(val)}</li>"
+                text += "</ul>"
+        text += """</ul>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+        if results["success"]:
+            for fp in results["fp_fig"]:
+                self.ci.upload_attachment(self.report_page_id, fp)
+                self.ci.update_page_content_with_image_attachment(
+                    self.report_page_name,
+                    self.report_page_id,
+                    os.path.split(fp)[1],
+                )
 
 
 class UndriftError(Exception):
