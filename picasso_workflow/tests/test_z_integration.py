@@ -244,8 +244,8 @@ class Test_B_CompleteIntegration(unittest.TestCase):
         # agg_workflow['single_dataset_modules'][0][1][
         #     "load_camera_info"] = True
         agg_workflow["aggregation_modules"][0][1]["filepaths"] = (
-            "$get_prior_result",
-            "all_results, single_dataset, $all, "
+            "$$get_prior_result",
+            "all_results, single_dataset, $$all, "
             + "03_save_single_dataset, "
             + "filepath",
         )

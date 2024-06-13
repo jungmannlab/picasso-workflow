@@ -161,6 +161,44 @@ class AbstractModuleCollection(abc.ABC):
         """Direct implementation of spinna batch analysis."""
         pass
 
+    # @abc.abstractmethod
+    # def molecular_interactions(self):
+    #     """Analysis of molecular interactions.
+    #     1. Ripley's K analysis to see positive interactions
+    #     2a. homo-spinna
+    #     2b. hetero-spinna
+    #     3. dbscan
+    #     4. binary barcodes
+    #     """
+    #     pass
+
+    @abc.abstractmethod
+    def ripleysk(self):
+        pass
+
+    @abc.abstractmethod
+    def protein_interactions(self):
+        pass
+
+    @abc.abstractmethod
+    def create_mask(self):
+        """Create a density mask"""
+        pass
+
+    @abc.abstractmethod
+    def dbscan_molint(self):
+        """TO BE CLEANED UP
+        dbscan implementation for molecular interactions workflow
+        """
+        pass
+
+    @abc.abstractmethod
+    def CSR_sim_in_mask(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
 
 class DictSimpleTyper:
     """Scans a complex dictionary and converts numpy arrays and

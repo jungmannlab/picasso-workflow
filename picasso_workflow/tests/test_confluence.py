@@ -448,7 +448,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         results = {
             "start time": "now",
             "duration": 4.12,
-            "fp_nneighbors": "/path/to/file",
+            "nneighbors": "/path/to/file",
             "density_rdf": 43e-6,
         }
         self.cr.nneighbor(0, parameters, results)
@@ -516,7 +516,94 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "message": "This is my message to you.",
             "success": False,
         }
-        self.cr.manual(0, parameters, results)
+        self.cr.spinna_manual(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def ripleysk(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.ripleysk(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def protein_interactions(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.protein_interactions(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def create_mask(self):
+        """Create a density mask"""
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.create_mask(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def dbscan_molint(self):
+        """TO BE CLEANED UP
+        dbscan implementation for molecular interactions workflow
+        """
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.dbscan_molint(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def CSR_sim_in_mask(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.CSR_sim_in_mask(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(

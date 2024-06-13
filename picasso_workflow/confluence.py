@@ -674,6 +674,98 @@ class ConfluenceReporter(AbstractModuleCollection):
                     os.path.split(fp)[1],
                 )
 
+    def ripleysk(self, i, parameters, results):
+        logger.debug("Reporting ripleysk.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Repley's K Analysis</strong></p>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def protein_interactions(self, i, parameters, results):
+        logger.debug("protein_interactions.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Direct Protein Interaction Analysis</strong></p>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def create_mask(self, i, parameters, results):
+        """Create a density mask"""
+        logger.debug("Reporting create_mask.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Create Density Mask</strong></p>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def dbscan_molint(self, i, parameters, results):
+        """TO BE CLEANED UP
+        dbscan implementation for molecular interactions workflow
+        """
+        logger.debug("Reporting dbscan_molint.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>DBSCAN - Molecular Interaction version</strong></p>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def CSR_sim_in_mask(self, i, parameters, results):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        logger.debug("Reporting CSR_sim_in_mask.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>CSR simulation in density mask</strong></p>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
 
 class UndriftError(Exception):
     pass

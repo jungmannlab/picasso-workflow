@@ -564,6 +564,7 @@ class TestAnalyseModules(unittest.TestCase):
             "proposed_n_simulate": 50000,
             "proposed_density": 0.56,
             "proposed_nn_plotted": 4,
+            "structures_d": 10,
         }
         # test preparatory stage
         parameters, results = self.ap.spinna_manual(0, parameters)
@@ -572,6 +573,35 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.spinna_manual(0, parameters)
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna_manual"))
+
+    def ripleysk(self):
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
+
+    def protein_interactions(self):
+        return
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_protein_interactions")
+        )
+
+    def create_mask(self):
+        """Create a density mask"""
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_create_mask"))
+
+    def dbscan_molint(self):
+        """TO BE CLEANED UP
+        dbscan implementation for molecular interactions workflow
+        """
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_dbscan_molint"))
+
+    def CSR_sim_in_mask(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_CSR_sim_in_mask"))
 
 
 # @unittest.skip("")

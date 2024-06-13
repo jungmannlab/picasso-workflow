@@ -20,10 +20,12 @@ from matplotlib import cm
 import logging
 from datetime import datetime
 import yaml
+import pickle
 
 from picasso_workflow.util import AbstractModuleCollection
 from picasso_workflow import process_brightfield
 from picasso_workflow import picasso_outpost
+from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
 
 logger = logging.getLogger(__name__)
@@ -1594,6 +1596,16 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        combine_map = {tag: i for i, tag in enumerate(self.channel_tags)}
+        results["combine_map"] = combine_map
+        fp_combinemap = os.path.join(results["folder"], "combine_map.yaml")
+        with open(fp_combinemap, "w") as f:
+            yaml.dump(combine_map, f)
+        for i in range(len(self.channel_locs)):
+            locs = self.channel_locs[i]
+            self.channel_locs[i] = lib.append_to_rec(
+                locs, data=i * np.ones(len(locs)), name="combine_id"
+            )
         combined_locs = np.lib.recfunctions.stack_arrays(
             self.channel_locs,
             asrecarray=True,
@@ -1690,6 +1702,10 @@ class AutoPicasso(AbstractModuleCollection):
                             "TARGET_z": list of float,
                         where TARGET is one each of the target names in
                         "Molecular targets"
+                    structures_d : float
+                        distance between molecules within auto-generated
+                        structures, in nm. Only necessary if 'structures'
+                        is not given.
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -1701,33 +1717,41 @@ class AutoPicasso(AbstractModuleCollection):
             prepped = False
 
         if not prepped:
+            spinna_config = {}
+            data_2d = "z" not in self.channel_locs[0].dtype.names
+            if data_2d:
+                spinna_config["rotation_mode"] = ["2D"]
+                area = (
+                    parameters["proposed_n_simulate"]
+                    / parameters["proposed_density"]
+                )
+                spinna_config["area"] = [area]
+                d = 2
+            else:
+                spinna_config["rotation_mode"] = ["3D"]
+                z_range = int(self.locs["z"].max() - self.locs["z"].min())
+                volume = (
+                    parameters["proposed_n_simulate"]
+                    / parameters["proposed_density"]
+                )
+                spinna_config["volume"] = [volume]
+                spinna_config["z_range"] = [z_range]
+                d = 3
+
             # prepare input files for the user to edit, with default values
             spinna_structs = parameters.get("structures")
             if spinna_structs is None:
-                spinna_structs = []
-                for tag in self.channel_tags:
-                    struct = {
-                        "Molecular targets": [tag],
-                        "Structure title": f"{tag}-monomer",
-                        f"{tag}_x": [0.0],
-                        f"{tag}_y": [0.0],
-                        f"{tag}_z": [0.0],
-                    }
-                    spinna_structs.append(struct)
-                    struct = {
-                        "Molecular targets": [tag],
-                        "Structure title": f"{tag}-dimer",
-                        f"{tag}_x": [-10.0, 10.0],
-                        f"{tag}_y": [0.0, 0.0],
-                        f"{tag}_z": [0.0, 0.0],
-                    }
-                    spinna_structs.append(struct)
+                spinna_structs = self._create_spinna_structure(
+                    self.channel_tags,
+                    [[1, 2]] * len(self.channel_tags),
+                    distance=parameters["structures_d"],
+                    dimensionality=d,
+                )
             structs_fn = "spinna_structs.yaml"
             structs_fp = os.path.join(results["folder"], structs_fn)
             with open(structs_fp, "w") as f:
                 yaml.dump_all(spinna_structs, f)
 
-            spinna_config = {}
             spinna_config["structures_filename"] = [structs_fp]
             for locs, info, tag in zip(
                 self.channel_locs, self.channel_info, self.channel_tags
@@ -1750,35 +1774,14 @@ class AutoPicasso(AbstractModuleCollection):
             spinna_config["save_filename"] = ["spinna_results"]
             spinna_config["nn_plotted"] = [parameters["proposed_nn_plotted"]]
 
-            data_2d = "z" not in self.channel_locs[0].dtype.names
-            if data_2d:
-                spinna_config["rotation_mode"] = ["2D"]
-                area = (
-                    parameters["proposed_n_simulate"]
-                    / parameters["proposed_density"]
-                    / 1e6  # from nm^2 to um^2
-                )
-                spinna_config["area"] = [area]
-                d = 2
-            else:
-                spinna_config["rotation_mode"] = ["3D"]
-                z_range = int(self.locs["z"].max() - self.locs["z"].min())
-                volume = (
-                    parameters["proposed_n_simulate"]
-                    / parameters["proposed_density"]
-                    / 1e9  # from nm^3 to um^3
-                )
-                spinna_config["volume"] = [volume]
-                spinna_config["z_range"] = [z_range]
-                d = 3
             # bin size: more than Nyquist subsampling
             expected_1stNN_peak = (
                 2 / (2 * d * np.pi * parameters["proposed_density"])
             ) ** (1 / d)
+            spinna_config["fit_NND_bin"] = [expected_1stNN_peak / 10]
             spinna_config["density"] = parameters["proposed_density"]
-            spinna_config["fit_NND_bin"] = [expected_1stNN_peak / 5]
             # max dist: a few times the first NN distance peak
-            spinna_config["fit_NND_maxdist"] = [10 * expected_1stNN_peak]
+            spinna_config["fit_NND_maxdist"] = [20 * expected_1stNN_peak]
 
             # save config to file
             pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
@@ -1803,6 +1806,519 @@ class AutoPicasso(AbstractModuleCollection):
             results["fp_summary"] = fp_summary
             results["fp_fig"] = fp_fig
             results["success"] = True
+
+        return parameters, results
+
+    def _create_spinna_structure(
+        self, names, multimers, distance, dimensionality=2
+    ):
+        """
+        Args:
+            names : list of str
+                the names of proteins
+            multimers : list of list of int
+                for each name, the homo-multimers to implement
+            distance : float
+                distance between entities, in nm
+        """
+        spinna_structs = []
+        for tag, name_multimers in zip(names, multimers):
+            for n in name_multimers:
+                # create positions on a cubic lattice
+                positions = np.zeros((3, n))
+                ux = np.array([1, 0, 0])
+                uy = np.array([0, 1, 0])
+                uz = np.array([0, 0, 1])
+                edgelength = int(np.ceil(n ** (1 / dimensionality)))
+                for i in range(n):
+                    iz = i // (edgelength**2)
+                    iy = i % (edgelength**2)
+                    ix = i % edgelength
+                    positions[:, i] = ix * ux + iy * uy + iz * uz
+                positions[0, :] -= np.mean(positions[0, :])
+                positions[1, :] -= np.mean(positions[1, :])
+                positions[2, :] -= np.mean(positions[2, :])
+
+                # create structure
+                struct = {
+                    "Molecular targets": [tag],
+                    "Structure title": f"{tag}-{n}-mer",
+                    f"{tag}_x": [float(x) for x in positions[0, :]],
+                    f"{tag}_y": [float(x) for x in positions[1, :]],
+                    f"{tag}_z": [float(x) for x in positions[2, :]],
+                }
+                spinna_structs.append(struct)
+        return spinna_structs
+
+    @module_decorator
+    def ripleysk(self, parameters, results):
+        """Perforn Ripley's K analysis between the channels.
+        Args:
+            parameters:
+                ripleys_n_random_controls : int
+                    number of random controls, default: 100
+                ripleys_rmax : int
+                    the maximum radius, default 200
+                ripleys_threshold : float
+                    the threshold of ripleys integrals above which the
+                    interaction is deemed significant.
+        """
+        # fileIDs = self.tags  # ['MHC-I','MHC-II','CD86','CD80','PDL1','PDL2']
+
+        nRandomControls = parameters.get("ripleys_n_random_controls", 100)
+        radii = np.concatenate(
+            (
+                np.arange(10, 80, 2),
+                np.arange(80, parameters.get("ripleys_rmax", 200), 12),
+            )
+        )
+
+        (ripleysResults, ripleysIntegrals) = (
+            run_ripleysAnalysis.performRipleysMultiAnalysis(
+                path=results["folder"],
+                filename="",
+                fileIDs=self.tags,
+                radii=radii,
+                nRandomControls=nRandomControls,
+                channel_locs=self.channel_locs,
+                pixelsize=self.analysis_config["camera_info"].get("pixelsize"),
+            )
+        )
+
+        results["ripleys_integrals"] = os.path.join(
+            results["folder"], "Ripleys_Integrals.txt"
+        )
+        np.savetxt(results["ripleys_integrals"], ripleysIntegrals)
+
+        # elucidate significant pairs
+        significant_pairs = []
+        for i in range(self.tags):
+            for j in range(i, self.tags):
+                if ripleysIntegrals[i, j] > parameters["ripleys_threshold"]:
+                    significant_pairs.append((self.tags[i], self.tags[j]))
+        results["ripleys_significant"] = significant_pairs
+
+        return parameters, results
+
+    @module_decorator
+    def protein_interactions(self, parameters, results):
+        """Perform interaction analysis on those dataset pairs that showed
+        significance in Ripley's K analysis. The interaction analysis consists
+        of
+        (1) calculating proportion of singly or doubly co-occurring instances
+            of the single receptors (in clusters)
+        (2) calculating the co-occurrence of these single or double events of
+            one receptor with single or double events of another receptor
+            within a cluster (where Ripley's K showed significance)
+        This approach stems from a time of early development of SPINNA.
+        Nowadays, this could be done directly but potentially with slightly
+        different results.
+        Fixed to 2D. Fixed to only using 1st nearest neighbor
+        Args:
+            parameters:
+                labeling_efficiency : dict, channel tag to float, range 0-100
+                    labeling efficiency percentage, default for all targets
+                labeling_uncertainty : dict, channel tag to float
+                    labeling uncertainty [nm]; good value is e.g. 5
+                n_simulate : int
+                    number of target molecules to be simulated;
+                    good value is e.g. 50000
+                density : dict, channel tag to float
+                    density to simulate [nm^2 or nm^3];
+                    area density if 2D; volume density if 3D
+                nn_nth : int
+                    number of nearest neighbors to analyse
+                distance : float
+                    the protein distance in nm
+                res_factor : float
+                    the spinna res_factor
+                sim_repeats : int
+                    number of simulation repeats, for noise reduction
+                interaction_pairs: list of list of two strings
+                    pairs that are able to interact
+        """
+        logger.debug("Molecular interactions")
+
+        # # homo-analysis (proportions of 1- or 2-mers of the same kind)
+        # props = {}
+        dimensionality = 2
+        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        # compound_density = sum(parameters["density"].values())
+        # area = parameters["n_simulate"] / (compound_density / 1e6)
+        # n_sim_targets = {
+        #     tag:
+        #     int(parameters["n_simulate"] * compound_density / den)
+        #     for tag, den in parameters["density"].items()
+        # }
+        # pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        # structures = self._create_spinna_structure(
+        #     self.channel_tags, [1, 2], distance=parameters["distance"])
+        # N_structures = picasso_outpost.generate_N_structures(
+        #     structures, n_sim_targets, parameters["res_factor"]
+        # )
+        # # bin size: more than Nyquist subsampling
+        # expected_1stNN_peak = (
+        #     2 / (2 * dimensionality * np.pi * parameters["density"])
+        # ) ** (1 / dimensionality)
+        # fit_NND_bin = expected_1stNN_peak / 10
+        # # max dist: a few times the first NN distance peak
+        # fit_NND_maxdist = 20 * expected_1stNN_peak
+        # for tag, locs in zip(self.channel_tags, self.channel_locs):
+        #     spinna_parameters = {
+        #         "structures": self._create_spinna_structure(
+        #             [tag], [[1, 2]], parameters["structure_distance"]),
+        #         "label_unc": parameters["labeling_uncertainty"],
+        #         "le": parameters["labeling_efficiency"],
+        #         "mask_dict": None,
+        #         "width": np.sqrt(area * 1e6),
+        #         "height": np.sqrt(area * 1e6),
+        #         "depth": None,
+        #         "random_rot_mode": "2D",
+        #         "exp_data": {tag: np.stack((locs[['x', 'y']] * pixelsize))},
+        #         "sim_repeats": parameters["sim_repeats"],
+        #         "fit_NND_bin": [fit_NND_bin],
+        #         "fit_NND_maxdist": [fit_NND_maxdist],
+        #         "N_structures": N_structures,
+        #         "save_filename": os.path.join(results["folder"], "homo-{tag}"),
+        #         "asynch": True,
+        #         "targets": [tag],
+        #         "apply_mask": False,
+        #         "nn_plotted": parameters["nn_nth"],
+        #         "result_dir": results["folder"],
+        #     }
+        #     result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
+        #     props[tag] = result["Fitted proportions of structures"]
+        # logger.debug(f'found proportions of {props}')
+
+        # hetero-analysis (pairwise up to 2+2-mers)
+        # structures: A, B, AA, BB, AB, AABB
+        props = {}
+        for A, B in parameters["interaction_pairs"]:
+            # find index of A and B in self.channel_locs
+            ia = self.tags.index(A)
+            ib = self.tags.index(B)
+            locs = {
+                A: self.channel_locs[ia][["x", "y"]] * pixelsize,
+                B: self.channel_locs[ib][["x", "y"]] * pixelsize,
+            }
+            structures = self._create_spinna_structure(
+                [A], [[1, 2]], parameters["structure_distance"]
+            )
+            structures += self._create_spinna_structure(
+                [B], [[1, 2]], parameters["structure_distance"]
+            )
+            # heterodimer
+            struct = {
+                "Molecular targets": [A, B],
+                "Structure title": f"{A}-{B}-heterodimer",
+                f"{A}_x": [-parameters["structure_distance"] / 2],
+                f"{A}_y": [0],
+                f"{A}_z": [0],
+                f"{B}_x": [parameters["structure_distance"] / 2],
+                f"{B}_y": [0],
+                f"{B}_z": [0],
+            }
+            structures.append(struct)
+            # heterotetramer, in a square
+            struct = {
+                "Molecular targets": [A, B],
+                "Structure title": f"{A}-{B}-heterotetramer",
+                f"{A}_x": [
+                    -parameters["structure_distance"] / 2,
+                    parameters["structure_distance"] / 2,
+                ],
+                f"{A}_y": [
+                    -parameters["structure_distance"] / 2,
+                    -parameters["structure_distance"] / 2,
+                ],
+                f"{A}_z": [0],
+                f"{B}_x": [
+                    -parameters["structure_distance"] / 2,
+                    parameters["structure_distance"] / 2,
+                ],
+                f"{B}_y": [
+                    parameters["structure_distance"] / 2,
+                    parameters["structure_distance"] / 2,
+                ],
+                f"{B}_z": [0],
+            }
+            structures.append(struct)
+
+            compound_density = (
+                parameters["density"][A] + parameters["density"][B]
+            )
+            area = parameters["n_simulate"] / (compound_density / 1e6)
+            n_sim_targets = {
+                tag: int(
+                    parameters["n_simulate"]
+                    * compound_density
+                    / parameters["density"][tag]
+                )
+                for tag in [A, B]
+            }
+
+            N_structures = picasso_outpost.generate_N_structures(
+                structures, n_sim_targets, parameters["res_factor"]
+            )
+
+            # bin size: more than Nyquist subsampling
+            expected_1stNN_peak = (
+                2 / (2 * dimensionality * np.pi * (compound_density / 2))
+            ) ** (1 / dimensionality)
+            fit_NND_bin = expected_1stNN_peak / 10
+            # max dist: a few times the first NN distance peak
+            fit_NND_maxdist = 20 * expected_1stNN_peak
+
+            spinna_parameters = {
+                "structures": structures,
+                "label_unc": parameters["labeling_uncertainty"],
+                "le": parameters["labeling_efficiency"],
+                "mask_dict": None,
+                "width": np.sqrt(area * 1e6),
+                "height": np.sqrt(area * 1e6),
+                "depth": None,
+                "random_rot_mode": "2D",
+                "exp_data": locs,
+                "sim_repeats": parameters["sim_repeats"],
+                "fit_NND_bin": [fit_NND_bin],
+                "fit_NND_maxdist": [fit_NND_maxdist],
+                "N_structures": N_structures,
+                "save_filename": os.path.join(results["folder"], "homo-{tag}"),
+                "asynch": True,
+                "targets": [A, B],
+                "apply_mask": False,
+                "nn_plotted": parameters["nn_nth"],
+                "result_dir": results["folder"],
+            }
+
+            result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
+            props[(A, B)] = result["Fitted proportions of structures"]
+        logger.debug(f"proportions: {props}")
+        results["Interaction proportions"] = props
+
+        return parameters, results
+
+    @module_decorator
+    def create_mask(self, parameters, results):
+        """
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    margin : float
+                        Size of the added empty margin to the FOV, in nm
+                    binsize : float
+                        Size o fthe 2D histogram bins of the first step, in nm
+                    sigma_mask_blur : int
+                        parameter of the gaussian blur in binsize units
+                    mask_resolution : float
+                        Controls the digital resolution of the mask, in nm
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        from picasso_workflow.dbscan_molint import mask
+
+        # get map
+        with open(parameters["fp_channel_map"], "r") as f:
+            channel_map = yaml.safe_load(f)
+        # get Mask
+        locs = self.channel_locs[0]
+        multi_filename = "multi_ID.hdf5"
+        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        mask_dict = mask.gen_mask(
+            locs["x"],
+            locs["y"],
+            parameters["margin"],
+            parameters["binsize"],
+            parameters["sigma_mask_blur"],
+            parameters["mask_resolution"],
+            pixelsize,
+            results["folder"],
+            filename=multi_filename,
+            plot_figures=True,
+        )
+
+        # get exp coordinates in mask
+        new_info = self.channel_info[0] + [
+            {
+                "Generated by": "picasso-workflow: create_mask",
+            }
+        ]
+        self.channel_info[0] = new_info
+        df_merge_mask, mask_dict = mask.exp_data_in_mask(
+            locs,
+            mask_dict,
+            pixelsize,
+            results["folder"],
+            multi_filename,
+            new_info,
+            plot_figures=True,
+        )
+
+        results["fp_merge_mask"] = os.path.join(
+            results["folder"], "merge_mask.hdf5"
+        )
+        df_merge_mask.to_hdf5(df_merge_mask, results["fp_merge_mask"])
+
+        # Get densities of individual proteins:
+        N_proteins = df_merge_mask.groupby("protein").size()
+
+        for protein, protein_ID in channel_map.items():
+            N = N_proteins.loc[protein_ID]
+            area = mask_dict["area"]
+            density = N / area
+
+            mask_dict["N_exp_" + protein] = N
+            mask_dict["density_exp_" + protein + " (/um^2)"] = density
+
+        mask_dict["info"] = self.channel_info[0]
+        mask_dict["filename"] = results["fp_merge_mask"]
+
+        fp_mask_dict = os.path.join(results["folder"], "mask_dict.pkl")
+        with open(fp_mask_dict, "wb+") as f:
+            pickle.dump(mask_dict, f)
+
+        return parameters, results
+
+    @module_decorator
+    def dbscan_molint(self, parameters, results):
+        """TO BE CLEANED UP
+        dbscan implementation for molecular interactions workflow
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    epsilon_nm : float
+                        dbscan epsilon in nm
+                    minpts : int
+                        minimum number of points
+                    sigma_linker : float
+                        ... in nm
+                    fp_merge_mask : str
+                        filepath to the merge mask (generated in module
+                        'create_mask')
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        from picasso_workflow.dbscan_molint import dbscan
+
+        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        epsilon_nm = parameters["epsilon_nm"]
+        epsilon_px = epsilon_nm / pixelsize
+        sigma_linker_px = parameters["sigma_linker"] / pixelsize
+        new_info = {
+            "Generated by": "picasso-workflow: DBSCAN-MOLECULAR INTERACTIONS",
+            "epsilon": epsilon_px,
+            "minpts": parameters["minpts"],
+            # 'Number of clusters"
+        }
+        self.channel_info[0].append(new_info)
+
+        # DBSCAN on exp data
+        df_merge_mask = pd.read_hdf(parameters["fp_merge_mask"])
+        (
+            db_locs_rec,
+            db_locs_rec_protein_colorcoding,
+            db_cluster_props_rec,
+            db_locs_df,
+            db_cluster_props_df,
+        ) = dbscan.dbscan_f(
+            df_merge_mask, epsilon_px, parameters["minpts"], sigma_linker_px
+        )
+
+        # save locs in dbscan cluster with colorcoding = dbcluster ID
+        dbscan_fp = os.path.join(
+            results["folder"],
+            f'dbscan_{epsilon_nm:.0f}_{parameters["minpts"]}.hdf5',
+        )
+        io.save_locs(dbscan_fp, db_locs_rec, self.channel_info[0])
+        results["fp_dbscan_color-cluster"] = dbscan_fp
+
+        # save locs in dbscan cluster with colorcoding = protein ID
+        dbscan_fp = os.path.join(
+            results["folder"],
+            f'dbscan_{epsilon_nm:.0f}_{parameters["minpts"]}'
+            + "_protein_colorcode.hdf5",
+        )
+        io.save_locs(
+            dbscan_fp, db_locs_rec_protein_colorcoding, self.channel_info[0]
+        )
+        results["fp_dbscan_color-protein"] = dbscan_fp
+
+        # save properties of dbscan clusters
+        # (analygously to DBSCAN output in Picasso)
+        dbclusters_fp = os.path.join(
+            results["folder"],
+            f'dbclusters_{epsilon_nm:.0f}_{parameters["minpts"]}.hdf5',
+        )
+        io.save_locs(dbclusters_fp, db_cluster_props_rec, self.channel_info[0])
+        results["fp_dbclusters"] = dbclusters_fp
+
+        return parameters, results
+
+    @module_decorator
+    def CSR_sim_in_mask(self, parameters, results):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    fp_mask_dict : str
+                        filepath to the mask_dict.pkl file generated in
+                        the 'create_mask' module
+                    N_repeats : int
+                        number of simulation repeats
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        from picasso_workflow.dbscan_molint import mask
+
+        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        # get map
+        with open(parameters["fp_channel_map"], "r") as f:
+            channel_map = yaml.safe_load(f)
+        mask_dict = pickle.load(parameters["fp_mask_dict"])
+        info = mask_dict["info"]
+        # filename_base = mask_dict['filename']
+
+        for s in range(1, parameters["N_repeats"] + 1):
+            # print()
+            # print('repeat', s)
+            # CSR simulation in mask:
+            #     first: for each channel
+            #     second: create multi file
+
+            filename = os.path.join(
+                results["folder"], f"CSR_in_mask_rep_{s}.hdf5"
+            )
+            df_CSR_mask, info_CSR = mask.CSR_sim_in_mask_multi_channel(
+                channel_map,
+                mask_dict,
+                pixelsize,
+                results["folder"],
+                filename,
+                info,
+                plot_figures=True,
+            )
 
         return parameters, results
 

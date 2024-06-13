@@ -244,6 +244,7 @@ def spinna_temp(parameters_filename):
     """While SPINNA is under development (and the paper being written)
     it is not integrated in the regular picasso package. Here, the
     corresponding module is being loaded.
+    This function runs a spinna batch analysis from file.
 
     Returns:
         result_dir : str
@@ -253,10 +254,7 @@ def spinna_temp(parameters_filename):
         fp_fig : list of str
             filepaths of the NND figures
     """
-    print("importing spinna from outpost")
     from picasso_workflow.spinna_main import _spinna_batch_analysis
-
-    print("starting spinna from outpost")
 
     result_dir, fp_summary, fp_fig = _spinna_batch_analysis(
         parameters_filename
@@ -265,6 +263,43 @@ def spinna_temp(parameters_filename):
     print("fp_summary", fp_summary)
     print("fp_fig", fp_fig)
     return result_dir, fp_summary, fp_fig
+
+
+def spinna_sgl_temp(parameters):
+    """While SPINNA is under development (and the paper being written)
+    it is not integrated in the regular picasso package. Here, the
+    corresponding module is being loaded.
+    This function directly runs one spinna simulation.
+
+    Args:
+        parameters : dict with keys:
+            structures, label_unc, le, mask_dict, width, height, depth,
+            random_rot_mode, exp_data, sim_repeats, fit_NND_bin, fit_NND_maxdist,
+            N_structures, save_filename, asynch, targets, apply_mask, nn_plotted,
+            result_dir
+    Returns:
+        result_dir : str
+            folder containing the results
+        fp_summary : str
+            the filepath of the summary csv file
+        fp_fig : list of str
+            filepaths of the NND figures
+    """
+    from picasso_workflow.spinna_main import single_spinna_run
+
+    result_dir, fp_fig = single_spinna_run(**parameters)
+    return result_dir, fp_fig
+
+
+def generate_N_structures(structures, N_total, res_factor, save=""):
+    from picasso_workflow.spinna import generate_N_structures
+
+    return generate_N_structures(
+        structures,
+        N_total,
+        res_factor,
+        save="",
+    )
 
 
 ########################################################################
