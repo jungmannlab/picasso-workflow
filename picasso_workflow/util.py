@@ -607,3 +607,16 @@ def get_caller_name(levels_back=1):
     # Get the name of that function
     function_name = frame.f_code.co_name
     return function_name
+
+
+def multiply_recarray(ra, factor):
+    columns = [it[0] for it in ra.dtype.descr if it[0] != ""]
+
+    column_dtypes = [it[1] for it in ra.dtype.descr if it[0] in columns]
+    dt = column_dtypes[0]
+    if not all([it == dt for it in column_dtypes]):
+        raise AttributeError("Cannot multiply, not all dtypes are the same")
+    for i, col in enumerate(columns):
+        nda = ra[col].astype(dt)
+        ra[col] = nda * factor
+    return ra

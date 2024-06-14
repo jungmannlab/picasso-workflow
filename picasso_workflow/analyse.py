@@ -1187,9 +1187,16 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        if self.locs is not None:
+            locs = self.locs
+        elif self.channel_locs is not None:
+            locs = self.channel_locs[0]
+        else:
+            raise KeyError("No locs loaded")
+
         fig, ax = plt.subplots(nrows=2)
         points = np.array(
-            self.channel_locs[0][parameters["dims"]].tolist()
+            locs[parameters["dims"]].tolist()
         )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
         # convert all dimensions to nanometers
         pixelsize = self.analysis_config["camera_info"]["pixelsize"]
@@ -1200,7 +1207,9 @@ class AutoPicasso(AbstractModuleCollection):
         # print(points)
         # print(points.shape)
         alldist = distance.cdist(points, points)
+        logger.debug("found all distances")
         alldist = np.sort(alldist, axis=1)
+        logger.debug("sorted all distances")
 
         # calculate bins
         NN_median = np.median(alldist[:, 1])
@@ -1208,10 +1217,12 @@ class AutoPicasso(AbstractModuleCollection):
         rmax_NN = np.quantile(alldist[:, parameters["nth_NN"]], 0.95)
         rmax_rdf = np.quantile(alldist[:, parameters["nth_rdf"]], 0.95)
 
+        logger.debug("calculated bin parameters")
         _, _, density = self._calc_radial_distribution_function(
             alldist, deltar, rmax_rdf, d=len(parameters["dims"]), ax=ax[0]
         )
         results["density_rdf"] = density
+        logger.debug("calculated radial distribution function")
         # print(alldist)
         # print(alldist.shape)
         # out_path = os.path.join(results["folder"], "nneighbors_all.txt")
@@ -1257,18 +1268,27 @@ class AutoPicasso(AbstractModuleCollection):
         n_means = np.zeros_like(rs)
         d_areas = np.zeros_like(rs)
 
-        nspots = alldist.shape[0]
-        distarray = np.sort(alldist.flatten())
-        distarray = distarray[distarray <= np.max(rs)]
+        logger.debug(f"calculating {len(rs)} rdf points")
 
-        # discard columns of alldist that only have larger entries than rmax
+        nspots = alldist.shape[0]
+
+        alldist = alldist[:, np.min(alldist, axis=1) <= np.max(rs)]
+        logger.debug("cropped 2d alldist")
+        # distarray = np.sort(alldist.flatten())
+        # logger.debug('flattened distarray')
+        # distarray = alldist.flatten()
+        # logger.debug('flattened distarray')
+        # distarray = distarray[distarray <= np.max(rs)]
+
+        logger.debug("prepared distarray")
 
         for i, r in enumerate(rs):
             # area = 2 * np.pi * r**2
             # n_mean = np.sum(alldist < r) / len(locs)
             # crdf[i] = n_mean / area
             d_areas[i] = 2 * np.pi * r * deltar
-            n_means[i] = np.sum(distarray <= r) / nspots
+            # n_means[i] = np.sum(distarray <= r) / nspots
+            n_means[i] = np.sum(alldist <= r) / nspots
         d_n_means = n_means[1:] - n_means[:-1]
         rdf = d_n_means / d_areas[1:]
         # rdf = crdf[1:] - crdf[:-1]
@@ -1601,6 +1621,7 @@ class AutoPicasso(AbstractModuleCollection):
         fp_combinemap = os.path.join(results["folder"], "combine_map.yaml")
         with open(fp_combinemap, "w") as f:
             yaml.dump(combine_map, f)
+        results["fp_combinemap"] = fp_combinemap
         for i in range(len(self.channel_locs)):
             locs = self.channel_locs[i]
             self.channel_locs[i] = lib.append_to_rec(
@@ -1851,7 +1872,7 @@ class AutoPicasso(AbstractModuleCollection):
         return spinna_structs
 
     @module_decorator
-    def ripleysk(self, parameters, results):
+    def ripleysk(self, i, parameters, results):
         """Perforn Ripley's K analysis between the channels.
         Args:
             parameters:
@@ -1862,9 +1883,9 @@ class AutoPicasso(AbstractModuleCollection):
                 ripleys_threshold : float
                     the threshold of ripleys integrals above which the
                     interaction is deemed significant.
+                fp_combined_locs : str
+                    filepath to the combined locs of all channel_locs
         """
-        # fileIDs = self.tags  # ['MHC-I','MHC-II','CD86','CD80','PDL1','PDL2']
-
         nRandomControls = parameters.get("ripleys_n_random_controls", 100)
         radii = np.concatenate(
             (
@@ -1873,14 +1894,21 @@ class AutoPicasso(AbstractModuleCollection):
             )
         )
 
+        if isinstance(parameters["fp_combined_locs"], list):
+            fp_combined_locs = parameters["fp_combined_locs"][0]
+        else:
+            fp_combined_locs = parameters["fp_combined_locs"]
+        combined_locs, _ = io.load_locs(fp_combined_locs)
+
         (ripleysResults, ripleysIntegrals) = (
             run_ripleysAnalysis.performRipleysMultiAnalysis(
                 path=results["folder"],
                 filename="",
-                fileIDs=self.tags,
+                fileIDs=self.channel_tags,
                 radii=radii,
                 nRandomControls=nRandomControls,
                 channel_locs=self.channel_locs,
+                combined_locs=combined_locs,
                 pixelsize=self.analysis_config["camera_info"].get("pixelsize"),
             )
         )
@@ -1890,18 +1918,48 @@ class AutoPicasso(AbstractModuleCollection):
         )
         np.savetxt(results["ripleys_integrals"], ripleysIntegrals)
 
+        fig, ax = plt.subplots()
+        heatmap = ax.imshow(
+            ripleysIntegrals, cmap="coolwarm_r", vmin=-10, vmax=10
+        )
+        ax.grid(False)
+        ax.set_xticks(np.arange(ripleysIntegrals.shape[0]))
+        ax.set_yticks(np.arange(ripleysIntegrals.shape[1]))
+        # Add number annotations to cells
+        for i in range(ripleysIntegrals.shape[0]):
+            for j in range(ripleysIntegrals.shape[1]):
+                ax.text(
+                    j,
+                    i,
+                    f"{ripleysIntegrals[i, j]:.2f}",
+                    ha="center",
+                    va="center",
+                    color="black",
+                    size=8,
+                )
+        ax.set_xticklabels(self.channel_tags, rotation=45)
+        ax.set_yticklabels(self.channel_tags, rotation=45)
+        ax.set_title("Ripleys Integrals")
+        plt.colorbar(heatmap, format="%.2f")
+        fp_integrals = os.path.join(results["folder"], "RipIntegrals.png")
+        fig.set_size_inches((9, 7))
+        fig.savefig(fp_integrals)
+        results["fp_figintegrals"] = fp_integrals
+
         # elucidate significant pairs
         significant_pairs = []
-        for i in range(self.tags):
-            for j in range(i, self.tags):
+        for i in range(len(self.channel_tags)):
+            for j in range(i, len(self.channel_tags)):
                 if ripleysIntegrals[i, j] > parameters["ripleys_threshold"]:
-                    significant_pairs.append((self.tags[i], self.tags[j]))
+                    significant_pairs.append(
+                        (self.channel_tags[i], self.channel_tags[j])
+                    )
         results["ripleys_significant"] = significant_pairs
 
         return parameters, results
 
     @module_decorator
-    def protein_interactions(self, parameters, results):
+    def protein_interactions(self, i, parameters, results):
         """Perform interaction analysis on those dataset pairs that showed
         significance in Ripley's K analysis. The interaction analysis consists
         of
@@ -1916,6 +1974,9 @@ class AutoPicasso(AbstractModuleCollection):
         Fixed to 2D. Fixed to only using 1st nearest neighbor
         Args:
             parameters:
+                channel_map : dict
+                    maps between channels (protein names, tags before combining)
+                    and index in the combine_id column of combined locs
                 labeling_efficiency : dict, channel tag to float, range 0-100
                     labeling efficiency percentage, default for all targets
                 labeling_uncertainty : dict, channel tag to float
@@ -1928,8 +1989,8 @@ class AutoPicasso(AbstractModuleCollection):
                     area density if 2D; volume density if 3D
                 nn_nth : int
                     number of nearest neighbors to analyse
-                distance : float
-                    the protein distance in nm
+                structure_distance : float
+                    the protein distance between each other in nm
                 res_factor : float
                     the spinna res_factor
                 sim_repeats : int
@@ -1937,12 +1998,23 @@ class AutoPicasso(AbstractModuleCollection):
                 interaction_pairs: list of list of two strings
                     pairs that are able to interact
         """
+        from picasso_workflow.spinna_main import load_structures_from_dict
+
         logger.debug("Molecular interactions")
 
         # # homo-analysis (proportions of 1- or 2-mers of the same kind)
         # props = {}
         dimensionality = 2
         pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        if isinstance(parameters["density"], list):
+            density = {
+                tag: parameters["density"][cid]
+                for tag, cid in parameters["channel_map"].items()
+            }
+        elif isinstance(parameters["density"], dict):
+            density = parameters["density"]
+        else:
+            raise KeyError("density parameter must be list of dict.")
         # compound_density = sum(parameters["density"].values())
         # area = parameters["n_simulate"] / (compound_density / 1e6)
         # n_sim_targets = {
@@ -1994,13 +2066,29 @@ class AutoPicasso(AbstractModuleCollection):
         # structures: A, B, AA, BB, AB, AABB
         props = {}
         for A, B in parameters["interaction_pairs"]:
+            if A == B:  # or should we include homotetramers?
+                continue
+            logger.debug(
+                f"analysing interaction between {A} and {B} with SPINNA."
+            )
             # find index of A and B in self.channel_locs
-            ia = self.tags.index(A)
-            ib = self.tags.index(B)
-            locs = {
-                A: self.channel_locs[ia][["x", "y"]] * pixelsize,
-                B: self.channel_locs[ib][["x", "y"]] * pixelsize,
-            }
+            ia = self.channel_tags.index(A)
+            ib = self.channel_tags.index(B)
+
+            # locs, but as np.ndarray
+            exp_data = {}
+            for i, target in zip([ia, ib], [A, B]):
+                locs = self.channel_locs[i]
+                if hasattr(locs, "z"):
+                    exp_data[target] = np.stack(
+                        (locs.x * pixelsize, locs.y * pixelsize, locs.z)
+                    ).T
+                    # dim = 3
+                else:
+                    exp_data[target] = np.stack(
+                        (locs.x * pixelsize, locs.y * pixelsize)
+                    ).T
+                    # dim = 2
             structures = self._create_spinna_structure(
                 [A], [[1, 2]], parameters["structure_distance"]
             )
@@ -2031,7 +2119,7 @@ class AutoPicasso(AbstractModuleCollection):
                     -parameters["structure_distance"] / 2,
                     -parameters["structure_distance"] / 2,
                 ],
-                f"{A}_z": [0],
+                f"{A}_z": [0, 0],
                 f"{B}_x": [
                     -parameters["structure_distance"] / 2,
                     parameters["structure_distance"] / 2,
@@ -2040,22 +2128,19 @@ class AutoPicasso(AbstractModuleCollection):
                     parameters["structure_distance"] / 2,
                     parameters["structure_distance"] / 2,
                 ],
-                f"{B}_z": [0],
+                f"{B}_z": [0, 0],
             }
             structures.append(struct)
 
-            compound_density = (
-                parameters["density"][A] + parameters["density"][B]
-            )
+            compound_density = density[A] + density[B]
             area = parameters["n_simulate"] / (compound_density / 1e6)
             n_sim_targets = {
                 tag: int(
-                    parameters["n_simulate"]
-                    * compound_density
-                    / parameters["density"][tag]
+                    parameters["n_simulate"] * compound_density / density[tag]
                 )
                 for tag in [A, B]
             }
+            structures, targets = load_structures_from_dict(structures)
 
             N_structures = picasso_outpost.generate_N_structures(
                 structures, n_sim_targets, parameters["res_factor"]
@@ -2078,10 +2163,10 @@ class AutoPicasso(AbstractModuleCollection):
                 "height": np.sqrt(area * 1e6),
                 "depth": None,
                 "random_rot_mode": "2D",
-                "exp_data": locs,
+                "exp_data": exp_data,
                 "sim_repeats": parameters["sim_repeats"],
-                "fit_NND_bin": [fit_NND_bin],
-                "fit_NND_maxdist": [fit_NND_maxdist],
+                "fit_NND_bin": fit_NND_bin,
+                "fit_NND_maxdist": fit_NND_maxdist,
                 "N_structures": N_structures,
                 "save_filename": os.path.join(results["folder"], "homo-{tag}"),
                 "asynch": True,
@@ -2099,7 +2184,7 @@ class AutoPicasso(AbstractModuleCollection):
         return parameters, results
 
     @module_decorator
-    def create_mask(self, parameters, results):
+    def create_mask(self, i, parameters, results):
         """
         Args:
             i : int
@@ -2188,7 +2273,7 @@ class AutoPicasso(AbstractModuleCollection):
         return parameters, results
 
     @module_decorator
-    def dbscan_molint(self, parameters, results):
+    def dbscan_molint(self, i, parameters, results):
         """TO BE CLEANED UP
         dbscan implementation for molecular interactions workflow
 
@@ -2206,71 +2291,404 @@ class AutoPicasso(AbstractModuleCollection):
                     fp_merge_mask : str
                         filepath to the merge mask (generated in module
                         'create_mask')
+                    thresh_type : str
+                        ...
+                    cell_name : str
+                        the name of the cell currently analyzed
                 and optional keys:
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        from picasso_workflow.dbscan_molint import dbscan
+        # from picasso_workflow.dbscan_molint import dbscan
 
         pixelsize = self.analysis_config["camera_info"].get("pixelsize")
         epsilon_nm = parameters["epsilon_nm"]
+        df_mask = pd.read_hdf(parameters["fp_merge_mask"])
+        fp_out_base = os.path.join(results["folder"], "dbscan.hdf5")
+        filepaths = self._do_dbscan_molint(
+            results["folder"],
+            fp_out_base,
+            df_mask,
+            self.channel_info[0],
+            pixelsize,
+            epsilon_nm,
+            parameters["minpts"],
+            parameters["sigma_linker"],
+            parameters["thresh_type"],
+            parameters["cell_name"],
+        )
+        for k, v in filepaths.items():
+            results[k] = v
+
+        return parameters, results
+
+    def _do_dbscan_molint(
+        self,
+        result_folder,
+        fp_out_base,
+        df_mask,
+        info,
+        pixelsize,
+        epsilon_nm,
+        minpts,
+        sigma_linker,
+        thresh_type,
+        cell_name,
+        it=0,
+    ):
+        from picasso_workflow.dbscan_molint import dbscan
+
+        filepaths = {}
+
+        if thresh_type == "area":
+            # Analysis will also be performed seperatetly for clusters
+            # larger or equal than
+            # area thresh and clusters smaller than thresh
+            thresh = 10000  # nm^2
+        elif thresh_type == "density":
+            # Analysis will also be performed seperatetly for clusters
+            # with densities
+            # larger or equal than density thresh
+            # area thresh and clusters smaller than thresh
+            thresh = 100  # molecules / um^2
+            # Change unit to molecules / nm^2
+            thresh = thresh / 1000 / 1000
+
         epsilon_px = epsilon_nm / pixelsize
-        sigma_linker_px = parameters["sigma_linker"] / pixelsize
+        sigma_linker_px = sigma_linker / pixelsize
+
+        # DBSCAN on exp data
         new_info = {
             "Generated by": "picasso-workflow: DBSCAN-MOLECULAR INTERACTIONS",
             "epsilon": epsilon_px,
-            "minpts": parameters["minpts"],
+            "minpts": minpts,
             # 'Number of clusters"
         }
-        self.channel_info[0].append(new_info)
-
-        # DBSCAN on exp data
-        df_merge_mask = pd.read_hdf(parameters["fp_merge_mask"])
+        info = info.append(new_info)
         (
             db_locs_rec,
             db_locs_rec_protein_colorcoding,
             db_cluster_props_rec,
             db_locs_df,
             db_cluster_props_df,
-        ) = dbscan.dbscan_f(
-            df_merge_mask, epsilon_px, parameters["minpts"], sigma_linker_px
-        )
+        ) = dbscan.dbscan_f(df_mask, epsilon_px, minpts, sigma_linker_px)
 
         # save locs in dbscan cluster with colorcoding = dbcluster ID
         dbscan_fp = os.path.join(
-            results["folder"],
-            f'dbscan_{epsilon_nm:.0f}_{parameters["minpts"]}.hdf5',
+            result_folder,
+            f"dbscan_{epsilon_nm:.0f}_{minpts}_{it}.hdf5",
         )
-        io.save_locs(dbscan_fp, db_locs_rec, self.channel_info[0])
-        results["fp_dbscan_color-cluster"] = dbscan_fp
+        io.save_locs(dbscan_fp, db_locs_rec, info)
+        filepaths["fp_dbscan_color-cluster"] = dbscan_fp
 
         # save locs in dbscan cluster with colorcoding = protein ID
         dbscan_fp = os.path.join(
-            results["folder"],
-            f'dbscan_{epsilon_nm:.0f}_{parameters["minpts"]}'
+            result_folder,
+            f"dbscan_{epsilon_nm:.0f}_{minpts}_{it}"
             + "_protein_colorcode.hdf5",
         )
-        io.save_locs(
-            dbscan_fp, db_locs_rec_protein_colorcoding, self.channel_info[0]
-        )
-        results["fp_dbscan_color-protein"] = dbscan_fp
+        io.save_locs(dbscan_fp, db_locs_rec_protein_colorcoding, info)
+        filepaths["fp_dbscan_color-protein"] = dbscan_fp
 
         # save properties of dbscan clusters
         # (analygously to DBSCAN output in Picasso)
         dbclusters_fp = os.path.join(
-            results["folder"],
-            f'dbclusters_{epsilon_nm:.0f}_{parameters["minpts"]}.hdf5',
+            result_folder,
+            f"dbclusters_{epsilon_nm:.0f}_{minpts}_{it}.hdf5",
         )
-        io.save_locs(dbclusters_fp, db_cluster_props_rec, self.channel_info[0])
-        results["fp_dbclusters"] = dbclusters_fp
+        io.save_locs(dbclusters_fp, db_cluster_props_rec, info)
+        filepaths["fp_dbclusters"] = dbclusters_fp
+
+        from picasso_workflow.dbscan_molint import output_metrics
+
+        """
+        ===============================================================================
+        Output of all clusters in one cell
+        ===============================================================================
+        """
+
+        # output for each cluster = [N_per_cluster, area, circularity,
+        #                            N_CD80, ... % CD80, ...]
+
+        # Calculate and save output metrics for all clusters in the cell
+        (
+            cluster_filename,
+            cluster_large_filename,
+            cluster_small_filename,
+            db_cluster_output,
+        ) = output_metrics.output_cell(
+            self.channel_tags,
+            db_locs_df,
+            db_cluster_props_df,
+            fp_out_base,
+            pixelsize,
+            epsilon_nm,
+            minpts,
+            thresh_type,
+            cell_name,
+        )
+
+        filepaths["fpoutput_all_clusters"] = cluster_filename
+        filepaths["fpoutput_large_clusters"] = cluster_large_filename
+        filepaths["fpoutput_small_clusters"] = cluster_small_filename
+        # stimulation_cluster_exp_dict[cell_name] = db_cluster_output
+        # stimulation_cluster_exp_large_dict[cell_name] = db_cluster_output_large
+        # stimulation_cluster_exp_small_dict[cell_name] = db_cluster_output_small
+
+        """
+        ===============================================================================
+        mean output of one cell
+        ===============================================================================
+        """
+        # output for each cluster = [N_per_cluster, area, circularity,
+        #                            N_CD80, ... % CD80, ...]
+        # output for complete cell: [
+        #   N_in_cell, N_in_clusters, N_out_clusters, N_per_cluster_mean,
+        #   N_per_cluster_CI,, area_mean, area_CI, circularity_mean,
+        #   circularity_CI,, N_CD80,, N_CD80_in_clusters, N_CD86_out_clusters,
+        #   ... , N_CD80_mean, N_CD80_CI, ...., %_CD80_mean, %_CD80_CI, ....]
+
+        # Calculate and save mean of output metrics of all clusters in the cell
+        # + some output metrics specific to the whole cell
+        (mean_filename, mean_large_filename, mean_small_filename) = (
+            output_metrics.output_cell_mean(
+                self.channel_tags,
+                fp_out_base,
+                db_locs_df,
+                db_cluster_output,
+                fp_out_base,
+                pixelsize,
+                epsilon_nm,
+                minpts,
+                thresh,
+                thresh_type,
+                cell_name,
+            )
+        )
+
+        filepaths["fpoutput_mean_all"] = mean_filename
+        filepaths["fpoutput_mean_large"] = mean_large_filename
+        filepaths["fpoutput_mean_small"] = mean_small_filename
+        # stimulation_exp_dict[cell_name] = db_cell_output
+        # stimulation_exp_large_dict[cell_name] = db_cell_output_large
+        # stimulation_exp_small_dict[cell_name] = db_cell_output_small
+
+        return filepaths
+
+    @module_decorator
+    def dbscan_merge_cells(self, i, parameters, results):
+        """Merge dataframes containing the cluster properties of
+        all cells of the current stimulation
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    channel_tags : list of str
+                        the channel tags (e.g. protein names)
+                    stimulation_key : str
+                        an identifier of the current stimulation
+                    fp_all_clusters : list of str
+                        filepaths to 'all_clusters' csv DataFrame
+                        from dbscan_molint module
+                        of one cell each, for multiple cells
+                    fp_large_clusters : list of str
+                        filepaths to 'large_clusters' csv DataFrame
+                        from dbscan_molint module
+                        of one cell each, for multiple cells
+                    fp_small_clusters : list of str
+                        filepaths to 'small_clusters' csv DataFrame
+                        from dbscan_molint module
+                        of one cell each, for multiple cells
+                    fp_mean_all : list of str
+                        filepaths to 'mean_all' csv DataFrame
+                        from dbscan_molint module
+                        of one cell each, for multiple cells
+                    fp_mean_large : list of str
+                        filepaths to 'mean_large' csv DataFrame
+                        from dbscan_molint module
+                        of one cell each, for multiple cells
+                    fp_mean_small : list of str
+                        filepaths to 'mean_small' csv DataFrame
+                        from dbscan_molint module
+                        of one cell each, for multiple cells
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+
+        # Create one output csv file containing the clusters'
+        # properties for each cell of this stimulation
+
+        # all clusters
+        results["fp_merged_all_clusters"] = os.path.join(
+            results["folder"], "merged_all_clusters.csv"
+        )
+        _ = self._merge_df_csvs(
+            parameters["fp_all_clusters"], results["fp_merged_all_clusters"]
+        )
+
+        # large clusters
+        results["fp_merged_large_clusters"] = os.path.join(
+            results["folder"], "merged_large_clusters.csv"
+        )
+        _ = self._merge_df_csvs(
+            parameters["fp_large_clusters"],
+            results["fp_merged_large_clusters"],
+        )
+
+        # small clusters
+        results["fp_merged_small_clusters"] = os.path.join(
+            results["folder"], "merged_small_clusters.csv"
+        )
+        _ = self._merge_df_csvs(
+            parameters["fp_small_clusters"],
+            results["fp_merged_small_clusters"],
+        )
+
+        # Merge dataframes containing cell means of this stimulation
+
+        # all clusters
+        results["fp_merged_mean_all"] = os.path.join(
+            results["folder"], "merged_mean_all.csv"
+        )
+        df_merged_mean_all = self._merge_df_csvs(
+            parameters["fp_mean_all"], results["fp_merged_mean_all"]
+        )
+
+        # large clusters
+        results["fp_merged_mean_large"] = os.path.join(
+            results["folder"], "merged_mean_large.csv"
+        )
+        df_merged_mean_large = self._merge_df_csvs(
+            parameters["fp_mean_large"], results["fp_merged_mean_large"]
+        )
+
+        # small clusters
+        results["fp_merged_mean_small"] = os.path.join(
+            results["folder"], "merged_mean_small.csv"
+        )
+        df_merged_mean_small = self._merge_df_csvs(
+            parameters["fp_mean_small"], results["fp_merged_mean_small"]
+        )
+
+        # create summaries of the merged_mean data
+        from picasso_workflow.dbscan_molint import output_metrics
+
+        summary_all = output_metrics.output_stimulation_mean(
+            parameters["channel_tags"],
+            df_merged_mean_all,
+            parameters["stimulation_key"],
+        )
+        fp_summary_all = os.path.join(results["folder"], "summary_all.xlsx")
+        summary_all.to_excel(fp_summary_all)
+        results["fp_summary_all"] = fp_summary_all
+
+        summary_large = output_metrics.output_stimulation_mean(
+            parameters["channel_tags"],
+            df_merged_mean_large,
+            parameters["stimulation_key"],
+        )
+        fp_summary_large = os.path.join(
+            results["folder"], "summary_large.xlsx"
+        )
+        summary_large.to_excel(fp_summary_large)
+        results["fp_summary_large"] = fp_summary_large
+
+        summary_small = output_metrics.output_stimulation_mean(
+            parameters["channel_tags"],
+            df_merged_mean_small,
+            parameters["stimulation_key"],
+        )
+        fp_summary_small = os.path.join(
+            results["folder"], "summary_small.xlsx"
+        )
+        summary_small.to_excel(fp_summary_small)
+        results["fp_summary_small"] = fp_summary_small
+
+        # summary_exp_large_dict[stimulation_key
+        # ] = output_metrics.output_stimulation_mean(
+        #    channel_ID, df_cell_output_large_merge, stimulation_key)
+        # summary_exp_small_dict[stimulation_key
+        # ] = output_metrics.output_stimulation_mean(
+        #    channel_ID, df_cell_output_small_merge, stimulation_key)
+
+        return parameters, results
+
+    def _merge_df_csvs(self, fps, fp_out):
+        """
+        Merge multiple pd.DataFrames saved as csv. Subsequently,
+        save the result as csv and pkl.
+        Args:
+            fps : list of str
+                filepaths of the csvs to merge
+            fp_out : str
+                the output csv file path
+        Returns:
+            df : pd.DataFrame
+                the merged DataFrame
+        """
+        df_merged = pd.concat([pd.read_csv(fp) for fp in fps])
+        df_merged.to_csv(fp_out)
+        df_merged.to_pickle(fp_out.replace(".csv", ".pkl"))
+        return df_merged
+
+    @module_decorator
+    def dbscan_merge_stimulations(self, i, parameters, results):
+        """Merge dataframes containing the information of
+        all stimulations of the current experiment
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_summary_all : list of str
+                        filepaths to 'summary_all' csv DataFrame
+                        from 'dbscan_merge_cells' module
+                        of one stimulation each, for multiple stimulations
+                    fp_summary_large : list of str
+                        filepaths to 'summary_large' csv DataFrame
+                        from 'dbscan_merge_cells' module
+                        of one stimulation each, for multiple stimulations
+                    fp_summary_small : list of str
+                        filepaths to 'summary_small' csv DataFrame
+                        from 'dbscan_merge_cells' module
+                        of one stimulation each, for multiple stimulations
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        # all clusters
+        results["fp_merged_summary_all"] = os.path.join(
+            results["folder"], "merged_summary_all.csv"
+        )
+        _ = self._merge_df_csvs(
+            parameters["fp_summary_all"], results["fp_merged_summary_all"]
+        )
+        # large clusters
+        results["fp_merged_summary_large"] = os.path.join(
+            results["folder"], "merged_summary_large.csv"
+        )
+        _ = self._merge_df_csvs(
+            parameters["fp_summary_large"], results["fp_merged_summary_large"]
+        )
+        # small clusters
+        results["fp_merged_summary_small"] = os.path.join(
+            results["folder"], "merged_summary_small.csv"
+        )
+        _ = self._merge_df_csvs(
+            parameters["fp_summary_small"], results["fp_merged_summary_small"]
+        )
 
         return parameters, results
 
     @module_decorator
-    def CSR_sim_in_mask(self, parameters, results):
+    def CSR_sim_in_mask(self, i, parameters, results):
         """TO BE CLEANED UP
-        simulate CSR within a density mask
+        simulate CSR within a density mask, and perform dbscan as well
         Args:
             i : int
                 the index of the module
@@ -2285,6 +2703,15 @@ class AutoPicasso(AbstractModuleCollection):
                         the 'create_mask' module
                     N_repeats : int
                         number of simulation repeats
+                    epsilon_nm : float
+                        dbscan epsilon in nm
+                    minpts : int
+                        minimum number of points
+                    sigma_linker : float
+                        ... in nm
+                    fp_merge_mask : str
+                        filepath to the merge mask (generated in module
+                        'create_mask')
                 and optional keys:
             results : dict
                 the results this function generates. This is created
@@ -2292,7 +2719,13 @@ class AutoPicasso(AbstractModuleCollection):
         """
         from picasso_workflow.dbscan_molint import mask
 
+        # from picasso_workflow.dbscan_molint import dbscan
+
         pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        epsilon_nm = parameters["epsilon_nm"]
+        epsilon_px = epsilon_nm / pixelsize
+        sigma_linker_px = parameters["sigma_linker"] / pixelsize
+
         # get map
         with open(parameters["fp_channel_map"], "r") as f:
             channel_map = yaml.safe_load(f)
@@ -2300,6 +2733,10 @@ class AutoPicasso(AbstractModuleCollection):
         info = mask_dict["info"]
         # filename_base = mask_dict['filename']
 
+        # dbscan_colcluster_fp = [''] * parameters["N_repeats"]
+        # dbscan_colprot_fp = [''] * parameters["N_repeats"]
+        # dbclusters_fp = [''] * parameters["N_repeats"]
+        results["filepaths"] = []
         for s in range(1, parameters["N_repeats"] + 1):
             # print()
             # print('repeat', s)
@@ -2319,6 +2756,25 @@ class AutoPicasso(AbstractModuleCollection):
                 info,
                 plot_figures=True,
             )
+            fp_out_base = os.path.join(results["folder"], f"dbscan_{s}.hdf5")
+            filepaths = self._do_dbscan_molint(
+                results["folder"],
+                info,
+                fp_out_base,
+                df_CSR_mask,
+                epsilon_nm,
+                epsilon_px,
+                parameters["minpts"],
+                sigma_linker_px,
+                parameters["thresh_type"],
+                parameters["cell_name"],
+                it=s,
+            )
+            results["filepaths"].append(filepaths)
+
+        # results["fp_dbscan_color-cluster"] = dbscan_colcluster_fp
+        # results["fp_dbscan_color-protein"] = dbscan_colprot_fp
+        # results["fp_dbclusters"] = dbclusters_fp
 
         return parameters, results
 

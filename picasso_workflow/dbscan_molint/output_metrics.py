@@ -91,10 +91,13 @@ def output_cell(
         else:
             cluster_output = check_barcode(cluster_output, barcode, channel_ID)
 
-    cluster_output_filename = input_mask_filename.replace(
+    # Add cell_key as column to the dataframes
+    cluster_output.insert(loc=0, column="Cell_ID", value=cell_name)
+
+    cluster_filename = input_mask_filename.replace(
         ".hdf5", "_db-cell-clusters_%s_%d.csv" % (str(epsilon_nm), minpts)
     )
-    cluster_output.to_csv(cluster_output_filename)
+    cluster_output.to_csv(cluster_filename)
 
     # Save the file containing only clusters above the threshold
     if thresh_type == "area":
@@ -105,12 +108,13 @@ def output_cell(
         cluster_output_large = cluster_output[
             cluster_output["density (/nm^2)"] >= thresh
         ]
-    cluster_output_filename = input_mask_filename.replace(
+    cluster_large_filename = input_mask_filename.replace(
         ".hdf5",
         "_db-cell-clusters_%s_%d_above_threshold.csv"
         % (str(epsilon_nm), minpts),
     )
-    cluster_output_large.to_csv(cluster_output_filename)
+    cluster_output_large.insert(loc=0, column="Cell_ID", value=cell_name)
+    cluster_output_large.to_csv(cluster_large_filename)
 
     # below the threshold
     if thresh_type == "area":
@@ -121,18 +125,20 @@ def output_cell(
         cluster_output_small = cluster_output[
             cluster_output["density (/nm^2)"] < thresh
         ]
-    cluster_output_filename = input_mask_filename.replace(
+    cluster_small_filename = input_mask_filename.replace(
         ".hdf5",
         "_db-cell-clusters_%s_%d_below_threshold.csv"
         % (str(epsilon_nm), minpts),
     )
-    cluster_output_small.to_csv(cluster_output_filename)
-
-    # Add cell_key as column to the dataframes
-    cluster_output.insert(loc=0, column="Cell_ID", value=cell_name)
-    cluster_output_large.insert(loc=0, column="Cell_ID", value=cell_name)
     cluster_output_small.insert(loc=0, column="Cell_ID", value=cell_name)
-    return cluster_output, cluster_output_large, cluster_output_small
+    cluster_output_small.to_csv(cluster_small_filename)
+
+    return (
+        cluster_filename,
+        cluster_large_filename,
+        cluster_small_filename,
+        cluster_output,
+    )
 
 
 def _output_cell_mean(
@@ -339,10 +345,10 @@ def output_cell_mean(
         cell,
     )
 
-    mean_output_filename = input_mask_filename.replace(
+    mean_filename = input_mask_filename.replace(
         ".hdf5", "_db-cell-mean_%s_%d.csv" % (str(epsilon_nm), minpts)
     )
-    mean_output.to_csv(mean_output_filename)
+    mean_output.to_csv(mean_filename)
 
     # Save the file containing only clusters above the threshold
     if thresh_type == "area":
@@ -371,11 +377,11 @@ def output_cell_mean(
         minpts,
         cell,
     )
-    mean_output_filename = input_mask_filename.replace(
+    mean_large_filename = input_mask_filename.replace(
         ".hdf5",
         "_db-cell-mean_%s_%d_above_threshold.csv" % (str(epsilon_nm), minpts),
     )
-    mean_output_large.to_csv(mean_output_filename)
+    mean_output_large.to_csv(mean_large_filename)
 
     # Save the file containing only clusters below the threshold
     if thresh_type == "area":
@@ -405,13 +411,13 @@ def output_cell_mean(
         cell,
     )
     # print(mean_output_small)
-    mean_output_filename = input_mask_filename.replace(
+    mean_small_filename = input_mask_filename.replace(
         ".hdf5",
         "_db-cell-mean_%s_%d_below_threshold.csv" % (str(epsilon_nm), minpts),
     )
-    mean_output_small.to_csv(mean_output_filename)
+    mean_output_small.to_csv(mean_small_filename)
 
-    return mean_output, mean_output_large, mean_output_small
+    return mean_filename, mean_large_filename, mean_small_filename
 
 
 def output_stimulation_mean(channel_ID, cell_output_merge, stimulation_key):

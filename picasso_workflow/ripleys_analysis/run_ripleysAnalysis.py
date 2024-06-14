@@ -23,6 +23,7 @@ def performRipleysMultiAnalysis(
     radii,
     nRandomControls=100,
     channel_locs=None,
+    combined_locs=None,
     pixelsize=None,
 ):
 
@@ -33,7 +34,9 @@ def performRipleysMultiAnalysis(
     if channel_locs is None:
         locData = dm.loadLocalizationData(path, filename, fileIDs)
     else:
-        locData = [locs[["x", "y"] * pixelsize] for locs in channel_locs]
+        locData = dm.LocalizationData_fromlocs(
+            channel_locs, combined_locs, fileIDs, pixelsize, path
+        )
 
     #  Mask
 

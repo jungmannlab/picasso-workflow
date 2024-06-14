@@ -612,10 +612,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
+        <li>Combine map: {results["combine_map"]}</li>
         </ul>"""
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
 
     def save_datasets_aggregated(self, i, parameters, results):
         """save data of multiple single-dataset workflows from one
@@ -679,10 +683,27 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Repley's K Analysis</strong></p>
+        <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
+        <li>Integral significance threshold: {parameters["ripleys_threshold"]}</li>
+        <li>Ripleys Integrals location: {results["ripleys_integrals"]}</li>
+        <li>Significantly interacting pairs:
+        {str(results["ripleys_significant"])}</li>
         </ul>"""
+
+        if fp_fig := results.get("fp_figintegrals"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+                _, fp_fig = os.path.split(fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -696,6 +717,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Direct Protein Interaction Analysis</strong></p>
+        <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
@@ -714,6 +736,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Create Density Mask</strong></p>
+        <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
@@ -734,6 +757,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>DBSCAN - Molecular Interaction version</strong></p>
+        <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
@@ -754,6 +778,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>CSR simulation in density mask</strong></p>
+        <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
