@@ -1612,6 +1612,8 @@ class AutoPicasso(AbstractModuleCollection):
                 and optional keys:
                     tag : str
                         the tag / name of the combined dataset
+                    combine_col : str
+                        the column name for the IDs to the different datasets
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -1622,10 +1624,11 @@ class AutoPicasso(AbstractModuleCollection):
         with open(fp_combinemap, "w") as f:
             yaml.dump(combine_map, f)
         results["fp_combinemap"] = fp_combinemap
+        combine_col = parameters.get("combine_col", "combine_id")
         for i in range(len(self.channel_locs)):
             locs = self.channel_locs[i]
             self.channel_locs[i] = lib.append_to_rec(
-                locs, data=i * np.ones(len(locs)), name="combine_id"
+                locs, data=i * np.ones(len(locs)), name=combine_col
             )
         combined_locs = np.lib.recfunctions.stack_arrays(
             self.channel_locs,
@@ -1913,11 +1916,24 @@ class AutoPicasso(AbstractModuleCollection):
             )
         )
 
-        results["ripleys_integrals"] = os.path.join(
+        results["fp_ripleys_integrals"] = os.path.join(
             results["folder"], "Ripleys_Integrals.txt"
         )
-        np.savetxt(results["ripleys_integrals"], ripleysIntegrals)
+        np.savetxt(results["fp_ripleys_integrals"], ripleysIntegrals)
 
+        results["fp_figintegrals"] = self._plot_ripleys_integrals(
+            ripleysIntegrals, results["folder"], self.channel_tags
+        )
+
+        results["ripleys_significant"] = self._find_ripleys_significant(
+            ripleysIntegrals,
+            parameters["ripleys_threshold"],
+            self.channel_tags,
+        )
+
+        return parameters, results
+
+    def _plot_ripleys_integrals(self, ripleysIntegrals, folder, channel_tags):
         fig, ax = plt.subplots()
         heatmap = ax.imshow(
             ripleysIntegrals, cmap="coolwarm_r", vmin=-10, vmax=10
@@ -1937,24 +1953,140 @@ class AutoPicasso(AbstractModuleCollection):
                     color="black",
                     size=8,
                 )
-        ax.set_xticklabels(self.channel_tags, rotation=45)
-        ax.set_yticklabels(self.channel_tags, rotation=45)
+        ax.set_xticklabels(channel_tags, rotation=45)
+        ax.set_yticklabels(channel_tags, rotation=45)
         ax.set_title("Ripleys Integrals")
         plt.colorbar(heatmap, format="%.2f")
-        fp_integrals = os.path.join(results["folder"], "RipIntegrals.png")
+        fp_integrals = os.path.join(folder, "RipIntegrals.png")
         fig.set_size_inches((9, 7))
         fig.savefig(fp_integrals)
-        results["fp_figintegrals"] = fp_integrals
+        return fp_integrals
 
+    def _find_ripleys_significant(
+        self, ripleysIntegrals, threshold, channel_tags
+    ):
         # elucidate significant pairs
         significant_pairs = []
-        for i in range(len(self.channel_tags)):
-            for j in range(i, len(self.channel_tags)):
-                if ripleysIntegrals[i, j] > parameters["ripleys_threshold"]:
+        for i in range(len(channel_tags)):
+            for j in range(i, len(channel_tags)):
+                if ripleysIntegrals[i, j] > threshold:
                     significant_pairs.append(
-                        (self.channel_tags[i], self.channel_tags[j])
+                        (channel_tags[i], channel_tags[j])
                     )
+        return significant_pairs
+
+    @module_decorator
+    def ripleysk_average(self, i, parameters, results):
+        """Average the results of multiple Ripley's K Analyses, analyse
+        the significant pairs after averaging, and save them into the
+        separate workflow manual folders (for further analysis there)
+        Args:
+            parameters:
+                # fp_ripleys_integrals : list of str
+                #     the various single analyses to average, e.g. of
+                #     different workflows
+                fp_workflows : list of str
+                    the paths to the folders of separate workflows
+                    where the separate ripleys analyses have been done
+                report_names : list of str
+                    the report names of those worklfows
+                ripleys_threshold : float
+                    the threshold of ripleys integrals above which the
+                    interaction is deemed significant.
+                # output_folders : list of str
+                #     folders to write the significant pairs into. This can
+                #     e.g. be the 'manual' results folders of the
+                #     workflows, so these can proceed.
+            optional:
+                swkfl_ripleysk_key : str
+                    the results key of the ripleysk module.
+                    e.g. '05_ripleysk'
+                swkfl_manual_key : str
+                    the results key of the manual module to save the
+                    integrals to
+                if those two are not given, saving is not performed
+        """
+        from picasso_workflow.workflow import WorkflowRunner
+
+        # all_integrals = np.concat(
+        #     [np.loadtxt(fp) for fp in parameters["fp_ripleys_integrals"]])
+        # averaged_integrals = np.mean(all_integrals, axis=0)
+
+        # check single intregals based on workflow file
+        fp_ripleys_integrals = [""] * len(parameters["fp_workflows"])
+        output_folders = [""] * len(parameters["fp_workflows"])
+
+        for i, (wkflfolder, report_name) in enumerate(
+            zip(parameters["fp_workflows"], parameters["report_names"])
+        ):
+            # find analysis folder
+            postfix = WorkflowRunner._check_previous_runner(
+                wkflfolder, report_name
+            )
+            # find aggregation WorkflowRunner config
+            fp_wr_cfg = os.path.join(
+                wkflfolder,
+                report_name + "_" + postfix,
+                report_name + "_aggregation_" + postfix,
+                "WorkflowRunner.yaml",
+            )
+            with open(fp_wr_cfg, "r") as f:
+                data = yaml.load(f, Loader=yaml.FullLoader)
+            # check for results of 'ripleysk' module
+            for mod_key, mod_res in data["results"].items():
+                if mod_key == parameters.get("swkfl_ripleysk_key"):
+                    fp_ripleys_integrals[i] = mod_res["fp_ripleys_integrals"]
+                elif mod_key == parameters.get("swkfl_manual_key"):
+                    output_folders[i] = mod_res["folder"]
+            # find AggregationWorkflowRunner config
+            fp_wr_cfg = os.path.join(
+                wkflfolder,
+                report_name + "_" + postfix,
+                "AggregationWorkflowRunner.yaml",
+            )
+            with open(fp_wr_cfg, "r") as f:
+                data = yaml.load(f, Loader=yaml.FullLoader)
+            channel_tags = data["aggregation_workflow"][
+                "single_dataset_tileparameters"
+            ]["#tags"]
+        fp_ripleys_integrals = [fp for fp in fp_ripleys_integrals if fp != ""]
+        output_folders = [fp for fp in output_folders if fp != ""]
+        results["output_folders"] = output_folders
+
+        # load and average the integrals
+        all_integrals = np.stack(
+            [np.loadtxt(fp) for fp in fp_ripleys_integrals]
+        )
+        averaged_integrals = np.mean(all_integrals, axis=0)
+
+        # save into own results folder
+        results["fp_ripleys_integrals"] = os.path.join(
+            results["folder"], "Ripleys_Integrals.txt"
+        )
+        np.savetxt(results["fp_ripleys_integrals"], averaged_integrals)
+
+        results["fp_figintegrals"] = self._plot_ripleys_integrals(
+            averaged_integrals, results["folder"], channel_tags
+        )
+
+        significant_pairs = self._find_ripleys_significant(
+            averaged_integrals, parameters["ripleys_threshold"], channel_tags
+        )
         results["ripleys_significant"] = significant_pairs
+
+        # save significant pairs into given folders
+        results["fp_ripleys_significant"] = os.path.join(
+            results["folder"], "significant_pairs.txt"
+        )
+        save_fp = [
+            os.path.join(fol, "significant_pairs.yaml")
+            for fol in output_folders
+        ]
+        save_fp.append(results["fp_ripleys_significant"])
+        for fp in save_fp:
+            with open(fp, "w") as f:
+                yaml.dump(significant_pairs, f)
+            # np.savetxt(fp, significant_pairs)
 
         return parameters, results
 
@@ -1995,8 +2127,9 @@ class AutoPicasso(AbstractModuleCollection):
                     the spinna res_factor
                 sim_repeats : int
                     number of simulation repeats, for noise reduction
-                interaction_pairs: list of list of two strings
+                interaction_pairs: list of list of two strings, or str
                     pairs that are able to interact
+                    if str: filepath to a yaml file with list of tuples
         """
         from picasso_workflow.spinna_main import load_structures_from_dict
 
@@ -2062,10 +2195,17 @@ class AutoPicasso(AbstractModuleCollection):
         #     props[tag] = result["Fitted proportions of structures"]
         # logger.debug(f'found proportions of {props}')
 
+        if isinstance(parameters["interaction_pairs"], str):
+            with open(parameters["interaction_pairs"], "r") as f:
+                interaction_pairs = yaml.safe_load(f)
+        else:
+            interaction_pairs = parameters["interaction_pairs"]
+            # np.savetxt(fp, significant_pairs)
+
         # hetero-analysis (pairwise up to 2+2-mers)
         # structures: A, B, AA, BB, AB, AABB
         props = {}
-        for A, B in parameters["interaction_pairs"]:
+        for A, B in interaction_pairs:
             if A == B:  # or should we include homotetramers?
                 continue
             logger.debug(
@@ -2168,7 +2308,9 @@ class AutoPicasso(AbstractModuleCollection):
                 "fit_NND_bin": fit_NND_bin,
                 "fit_NND_maxdist": fit_NND_maxdist,
                 "N_structures": N_structures,
-                "save_filename": os.path.join(results["folder"], "homo-{tag}"),
+                "save_filename": os.path.join(
+                    results["folder"], f"interaction-{A}-{B}"
+                ),
                 "asynch": True,
                 "targets": [A, B],
                 "apply_mask": False,
@@ -2203,6 +2345,9 @@ class AutoPicasso(AbstractModuleCollection):
                         parameter of the gaussian blur in binsize units
                     mask_resolution : float
                         Controls the digital resolution of the mask, in nm
+                    combine_col : str
+                        the name of the combine column, e.g. 'combine_id'
+                        or 'protein'. Same as used in 'combine_channels' module
                 and optional keys:
             results : dict
                 the results this function generates. This is created
@@ -2238,7 +2383,7 @@ class AutoPicasso(AbstractModuleCollection):
         ]
         self.channel_info[0] = new_info
         df_merge_mask, mask_dict = mask.exp_data_in_mask(
-            locs,
+            pd.DataFrame(locs),
             mask_dict,
             pixelsize,
             results["folder"],
@@ -2250,10 +2395,10 @@ class AutoPicasso(AbstractModuleCollection):
         results["fp_merge_mask"] = os.path.join(
             results["folder"], "merge_mask.hdf5"
         )
-        df_merge_mask.to_hdf5(df_merge_mask, results["fp_merge_mask"])
+        df_merge_mask.to_hdf(results["fp_merge_mask"], key="locs")
 
         # Get densities of individual proteins:
-        N_proteins = df_merge_mask.groupby("protein").size()
+        N_proteins = df_merge_mask.groupby(parameters["combine_col"]).size()
 
         for protein, protein_ID in channel_map.items():
             N = N_proteins.loc[protein_ID]
@@ -2267,6 +2412,7 @@ class AutoPicasso(AbstractModuleCollection):
         mask_dict["filename"] = results["fp_merge_mask"]
 
         fp_mask_dict = os.path.join(results["folder"], "mask_dict.pkl")
+        results["fp_mask_dict"] = fp_mask_dict
         with open(fp_mask_dict, "wb+") as f:
             pickle.dump(mask_dict, f)
 
@@ -2282,6 +2428,10 @@ class AutoPicasso(AbstractModuleCollection):
                 the index of the module
             parameters: dict
                 with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
                     epsilon_nm : float
                         dbscan epsilon in nm
                     minpts : int
@@ -2301,10 +2451,13 @@ class AutoPicasso(AbstractModuleCollection):
                 in the decorator wrapper
         """
         # from picasso_workflow.dbscan_molint import dbscan
+        # get map
+        with open(parameters["fp_channel_map"], "r") as f:
+            channel_map = yaml.safe_load(f)
 
         pixelsize = self.analysis_config["camera_info"].get("pixelsize")
         epsilon_nm = parameters["epsilon_nm"]
-        df_mask = pd.read_hdf(parameters["fp_merge_mask"])
+        df_mask = pd.read_hdf(parameters["fp_merge_mask"], key="locs")
         fp_out_base = os.path.join(results["folder"], "dbscan.hdf5")
         filepaths = self._do_dbscan_molint(
             results["folder"],
@@ -2317,6 +2470,7 @@ class AutoPicasso(AbstractModuleCollection):
             parameters["sigma_linker"],
             parameters["thresh_type"],
             parameters["cell_name"],
+            channel_map,
         )
         for k, v in filepaths.items():
             results[k] = v
@@ -2335,6 +2489,7 @@ class AutoPicasso(AbstractModuleCollection):
         sigma_linker,
         thresh_type,
         cell_name,
+        channel_map,
         it=0,
     ):
         from picasso_workflow.dbscan_molint import dbscan
@@ -2365,7 +2520,7 @@ class AutoPicasso(AbstractModuleCollection):
             "minpts": minpts,
             # 'Number of clusters"
         }
-        info = info.append(new_info)
+        info.append(new_info)
         (
             db_locs_rec,
             db_locs_rec_protein_colorcoding,
@@ -2397,7 +2552,12 @@ class AutoPicasso(AbstractModuleCollection):
             result_folder,
             f"dbclusters_{epsilon_nm:.0f}_{minpts}_{it}.hdf5",
         )
-        io.save_locs(dbclusters_fp, db_cluster_props_rec, info)
+        # print(db_cluster_props_rec)
+        # print(db_cluster_props_rec.dtype)
+        # THE FOLLOWING LINE DOES NOT WORK BECAUSE db_cluster_props_rec
+        # does not have x, y, lpx, or lpy. fails picasso sanity checks.
+        # io.save_locs(dbclusters_fp, db_cluster_props_rec, info)
+        db_cluster_props_df.to_hdf(dbclusters_fp, key="props")
         filepaths["fp_dbclusters"] = dbclusters_fp
 
         from picasso_workflow.dbscan_molint import output_metrics
@@ -2418,13 +2578,14 @@ class AutoPicasso(AbstractModuleCollection):
             cluster_small_filename,
             db_cluster_output,
         ) = output_metrics.output_cell(
-            self.channel_tags,
+            channel_map,
             db_locs_df,
             db_cluster_props_df,
             fp_out_base,
             pixelsize,
             epsilon_nm,
             minpts,
+            thresh,
             thresh_type,
             cell_name,
         )
@@ -2453,8 +2614,8 @@ class AutoPicasso(AbstractModuleCollection):
         # + some output metrics specific to the whole cell
         (mean_filename, mean_large_filename, mean_small_filename) = (
             output_metrics.output_cell_mean(
-                self.channel_tags,
-                fp_out_base,
+                channel_map,
+                df_mask,
                 db_locs_df,
                 db_cluster_output,
                 fp_out_base,
@@ -2476,6 +2637,65 @@ class AutoPicasso(AbstractModuleCollection):
 
         return filepaths
 
+    def _load_other_workflow_data(self, fp_workflow, report_name, search_keys):
+        """Load result data from a different workflow
+        Args:
+            fp_workflow : str
+                the root folder of the other workflow
+            report_name : str
+                the report name of the other workflow. The
+                workflow result data will be in
+                fp_workflow/report_name_[postfix]
+            search_keys : tuple of
+                1st : str
+                    the module keys (e.g. '04_manual')
+                2nd : str
+                    the result entries (e.g. 'filepath')
+        Returns:
+            loaded_data : dict
+                keys : tuple of (str, str)
+                    tuple of search key & value
+                values : the corresponding loaded data
+            channel_tags : list of str
+                the channel tags
+        """
+        from picasso_workflow.workflow import WorkflowRunner
+
+        loaded_data = []
+
+        # find analysis folder
+        postfix = WorkflowRunner._check_previous_runner(
+            fp_workflow, report_name
+        )
+        # find aggregation WorkflowRunner config
+        fp_wr_cfg = os.path.join(
+            fp_workflow,
+            report_name + "_" + postfix,
+            report_name + "_aggregation_" + postfix,
+            "WorkflowRunner.yaml",
+        )
+        with open(fp_wr_cfg, "r") as f:
+            data = yaml.load(f, Loader=yaml.FullLoader)
+        # check for results of 'ripleysk' module
+        for mod_key, mod_res in data["results"].items():
+            for search_mod, search_res in search_keys:
+                if mod_key == search_mod:
+                    res = mod_res[search_res]
+                    loaded_data[(search_mod, search_res)] = res
+        # find AggregationWorkflowRunner config
+        fp_wr_cfg = os.path.join(
+            fp_workflow,
+            report_name + "_" + postfix,
+            "AggregationWorkflowRunner.yaml",
+        )
+        with open(fp_wr_cfg, "r") as f:
+            data = yaml.load(f, Loader=yaml.FullLoader)
+        channel_tags = data["aggregation_workflow"][
+            "single_dataset_tileparameters"
+        ]["#tags"]
+
+        return loaded_data, channel_tags
+
     @module_decorator
     def dbscan_merge_cells(self, i, parameters, results):
         """Merge dataframes containing the cluster properties of
@@ -2485,39 +2705,65 @@ class AutoPicasso(AbstractModuleCollection):
                 the index of the module
             parameters: dict
                 with required keys:
-                    channel_tags : list of str
-                        the channel tags (e.g. protein names)
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_dbscan_key : str
+                        the results key of the ripleysk module.
+                        e.g. '09_dbscan_molint' or '10_CSR_sim_in_mask'
                     stimulation_key : str
                         an identifier of the current stimulation
-                    fp_all_clusters : list of str
-                        filepaths to 'all_clusters' csv DataFrame
-                        from dbscan_molint module
-                        of one cell each, for multiple cells
-                    fp_large_clusters : list of str
-                        filepaths to 'large_clusters' csv DataFrame
-                        from dbscan_molint module
-                        of one cell each, for multiple cells
-                    fp_small_clusters : list of str
-                        filepaths to 'small_clusters' csv DataFrame
-                        from dbscan_molint module
-                        of one cell each, for multiple cells
-                    fp_mean_all : list of str
-                        filepaths to 'mean_all' csv DataFrame
-                        from dbscan_molint module
-                        of one cell each, for multiple cells
-                    fp_mean_large : list of str
-                        filepaths to 'mean_large' csv DataFrame
-                        from dbscan_molint module
-                        of one cell each, for multiple cells
-                    fp_mean_small : list of str
-                        filepaths to 'mean_small' csv DataFrame
-                        from dbscan_molint module
-                        of one cell each, for multiple cells
                 and optional keys:
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        fp_all_clusters = []
+        fp_large_clusters = []
+        fp_small_clusters = []
+        fp_mean_all = []
+        fp_mean_large = []
+        fp_mean_small = []
+        channel_tags = None
+        dbscan_key = parameters["swkfl_dbscan_key"]
+        search_keys = [
+            (dbscan_key, "fp_all_clusters"),
+            (dbscan_key, "fp_large_clusters"),
+            (dbscan_key, "fp_small_clusters"),
+            (dbscan_key, "fp_mean_all"),
+            (dbscan_key, "fp_mean_large"),
+            (dbscan_key, "fp_mean_small"),
+        ]
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_keys
+            )
+            if fp := loaded_data.get((dbscan_key, "fp_all_clusters")):
+                fp_all_clusters.append(fp)
+            if fp := loaded_data.get((dbscan_key, "fp_large_clusters")):
+                fp_large_clusters.append(fp)
+            if fp := loaded_data.get((dbscan_key, "fp_small_clusters")):
+                fp_small_clusters.append(fp)
+            if fp := loaded_data.get((dbscan_key, "fp_mean_all")):
+                fp_mean_all.append(fp)
+            if fp := loaded_data.get((dbscan_key, "fp_mean_large")):
+                fp_mean_large.append(fp)
+            if fp := loaded_data.get((dbscan_key, "fp_mean_small")):
+                fp_mean_small.append(fp)
+
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
 
         # Create one output csv file containing the clusters'
         # properties for each cell of this stimulation
@@ -2527,7 +2773,7 @@ class AutoPicasso(AbstractModuleCollection):
             results["folder"], "merged_all_clusters.csv"
         )
         _ = self._merge_df_csvs(
-            parameters["fp_all_clusters"], results["fp_merged_all_clusters"]
+            fp_all_clusters, results["fp_merged_all_clusters"]
         )
 
         # large clusters
@@ -2535,8 +2781,7 @@ class AutoPicasso(AbstractModuleCollection):
             results["folder"], "merged_large_clusters.csv"
         )
         _ = self._merge_df_csvs(
-            parameters["fp_large_clusters"],
-            results["fp_merged_large_clusters"],
+            fp_large_clusters, results["fp_merged_large_clusters"]
         )
 
         # small clusters
@@ -2544,8 +2789,7 @@ class AutoPicasso(AbstractModuleCollection):
             results["folder"], "merged_small_clusters.csv"
         )
         _ = self._merge_df_csvs(
-            parameters["fp_small_clusters"],
-            results["fp_merged_small_clusters"],
+            fp_small_clusters, results["fp_merged_small_clusters"]
         )
 
         # Merge dataframes containing cell means of this stimulation
@@ -2555,7 +2799,7 @@ class AutoPicasso(AbstractModuleCollection):
             results["folder"], "merged_mean_all.csv"
         )
         df_merged_mean_all = self._merge_df_csvs(
-            parameters["fp_mean_all"], results["fp_merged_mean_all"]
+            fp_mean_all, results["fp_merged_mean_all"]
         )
 
         # large clusters
@@ -2563,7 +2807,7 @@ class AutoPicasso(AbstractModuleCollection):
             results["folder"], "merged_mean_large.csv"
         )
         df_merged_mean_large = self._merge_df_csvs(
-            parameters["fp_mean_large"], results["fp_merged_mean_large"]
+            fp_mean_large, results["fp_merged_mean_large"]
         )
 
         # small clusters
@@ -2571,14 +2815,14 @@ class AutoPicasso(AbstractModuleCollection):
             results["folder"], "merged_mean_small.csv"
         )
         df_merged_mean_small = self._merge_df_csvs(
-            parameters["fp_mean_small"], results["fp_merged_mean_small"]
+            fp_mean_small, results["fp_merged_mean_small"]
         )
 
         # create summaries of the merged_mean data
         from picasso_workflow.dbscan_molint import output_metrics
 
         summary_all = output_metrics.output_stimulation_mean(
-            parameters["channel_tags"],
+            channel_tags,
             df_merged_mean_all,
             parameters["stimulation_key"],
         )
@@ -2587,7 +2831,7 @@ class AutoPicasso(AbstractModuleCollection):
         results["fp_summary_all"] = fp_summary_all
 
         summary_large = output_metrics.output_stimulation_mean(
-            parameters["channel_tags"],
+            channel_tags,
             df_merged_mean_large,
             parameters["stimulation_key"],
         )
@@ -2598,7 +2842,7 @@ class AutoPicasso(AbstractModuleCollection):
         results["fp_summary_large"] = fp_summary_large
 
         summary_small = output_metrics.output_stimulation_mean(
-            parameters["channel_tags"],
+            channel_tags,
             df_merged_mean_small,
             parameters["stimulation_key"],
         )
@@ -2729,14 +2973,12 @@ class AutoPicasso(AbstractModuleCollection):
         # get map
         with open(parameters["fp_channel_map"], "r") as f:
             channel_map = yaml.safe_load(f)
-        mask_dict = pickle.load(parameters["fp_mask_dict"])
+        with open(parameters["fp_mask_dict"], "rb") as f:
+            mask_dict = pickle.load(f)
         info = mask_dict["info"]
         # filename_base = mask_dict['filename']
 
-        # dbscan_colcluster_fp = [''] * parameters["N_repeats"]
-        # dbscan_colprot_fp = [''] * parameters["N_repeats"]
-        # dbclusters_fp = [''] * parameters["N_repeats"]
-        results["filepaths"] = []
+        all_filepaths = []
         for s in range(1, parameters["N_repeats"] + 1):
             # print()
             # print('repeat', s)
@@ -2759,18 +3001,23 @@ class AutoPicasso(AbstractModuleCollection):
             fp_out_base = os.path.join(results["folder"], f"dbscan_{s}.hdf5")
             filepaths = self._do_dbscan_molint(
                 results["folder"],
-                info,
                 fp_out_base,
                 df_CSR_mask,
+                info,
+                pixelsize,
                 epsilon_nm,
-                epsilon_px,
                 parameters["minpts"],
-                sigma_linker_px,
+                parameters["sigma_linker"],
                 parameters["thresh_type"],
                 parameters["cell_name"],
+                channel_map,
                 it=s,
             )
-            results["filepaths"].append(filepaths)
+            all_filepaths.append(filepaths)
+        # re-organize: save the list of filepath dicts as
+        # different dict values of lists of strings
+        for k in all_filepaths[0].keys():
+            results[k] = [fp[k] for fp in all_filepaths]
 
         # results["fp_dbscan_color-cluster"] = dbscan_colcluster_fp
         # results["fp_dbscan_color-protein"] = dbscan_colprot_fp

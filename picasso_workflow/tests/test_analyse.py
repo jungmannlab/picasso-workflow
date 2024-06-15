@@ -578,6 +578,10 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
 
+    def ripleysk_average(self):
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
+
     def protein_interactions(self):
         return
         shutil.rmtree(

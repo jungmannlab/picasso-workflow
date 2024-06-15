@@ -177,6 +177,10 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def ripleysk_average(self):
+        pass
+
+    @abc.abstractmethod
     def protein_interactions(self):
         pass
 

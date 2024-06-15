@@ -107,7 +107,7 @@ def dbscan_f(df, epsilon, minpts, sigma_linker):
     # This will allow for filtering locs by the size of the cluster to which they belong.
     convex_hull_add = convex_hull.copy()
     if isinstance(convex_hull_add, pd.Series):
-        print("in if")
+        # print("in if")
         convex_hull_add = convex_hull_add.to_frame()
     convex_hull_add = convex_hull_add.rename(columns={0: "convex_area"})
     convex_hull_add["group"] = convex_hull_add.index
@@ -137,7 +137,7 @@ def dbscan_f(df, epsilon, minpts, sigma_linker):
     density_add = density_add.rename_axis(None)
     df_cluster = df_cluster.merge(density_add, on="group", how="left")
 
-    print(df_cluster.keys())
+    # print(df_cluster.keys())
 
     """
     Generating hdf5 file for picasso render with all localizations assigned to a cluster

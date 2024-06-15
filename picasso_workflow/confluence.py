@@ -687,8 +687,51 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>Integral significance threshold: {parameters["ripleys_threshold"]}</li>
-        <li>Ripleys Integrals location: {results["ripleys_integrals"]}</li>
+        <li>Integral significance threshold:
+        {parameters["ripleys_threshold"]}</li>
+        <li>Ripleys Integrals location: {results["fp_ripleys_integrals"]}</li>
+        <li>Significantly interacting pairs:
+        {str(results["ripleys_significant"])}</li>
+        </ul>"""
+
+        if fp_fig := results.get("fp_figintegrals"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+                _, fp_fig = os.path.split(fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def ripleysk_average(self, i, parameters, results):
+        logger.debug("Reporting ripleysk_average.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Averaging of Repley's K Integrals</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Integral significance threshold:
+        {parameters["ripleys_threshold"]}</li>
+        <li>Loaded from workflows:
+        {parameters["report_names"]}</li>
+        <li>in folders:
+        {parameters["fp_workflows"]}</li>
+        <li>Folders to save significant pairs:
+        {results["output_folders"]}</li>
+        <li>Ripleys Integrals location:
+        {results["fp_ripleys_significant"]}</li>
         <li>Significantly interacting pairs:
         {str(results["ripleys_significant"])}</li>
         </ul>"""

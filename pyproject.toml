@@ -12,6 +12,7 @@ dependencies = [
     "matplotlib",
     "numpy",
     "pandas",
+    "pytables",
     "openpyxl==3.1.2",
     "picassosr",
     "moviepy==1.0.3",

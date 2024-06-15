@@ -59,8 +59,9 @@ def output_cell(
 
     db_N_proteins = db_input_locs_df.groupby(["protein", "group"]).size()
 
-    for protein in channel_ID:
-        protein_ID = channel_ID[protein]
+    # for protein in channel_ID:
+    #     protein_ID = channel_ID[protein]
+    for protein, protein_ID in channel_ID.items():
         try:
             cluster_output["N_" + protein + "_per_cluster"] = (
                 db_N_proteins.loc[protein_ID].reindex(
@@ -113,7 +114,7 @@ def output_cell(
         "_db-cell-clusters_%s_%d_above_threshold.csv"
         % (str(epsilon_nm), minpts),
     )
-    cluster_output_large.insert(loc=0, column="Cell_ID", value=cell_name)
+    # cluster_output_large.insert(loc=0, column="Cell_ID", value=cell_name)
     cluster_output_large.to_csv(cluster_large_filename)
 
     # below the threshold
@@ -130,7 +131,7 @@ def output_cell(
         "_db-cell-clusters_%s_%d_below_threshold.csv"
         % (str(epsilon_nm), minpts),
     )
-    cluster_output_small.insert(loc=0, column="Cell_ID", value=cell_name)
+    # cluster_output_small.insert(loc=0, column="Cell_ID", value=cell_name)
     cluster_output_small.to_csv(cluster_small_filename)
 
     return (
