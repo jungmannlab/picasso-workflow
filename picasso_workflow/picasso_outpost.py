@@ -428,3 +428,225 @@ def nndistribution_from_csr(r, k, rho, d=2):
 ########################################################################
 # End Log likelihood CSR estimation
 ########################################################################
+
+
+########################################################################
+# Start DBSCAN analysis for Molecular Interaction Patterns
+########################################################################
+# import pandas as pd
+# import numpy as np
+# import matplotlib.pyplot as plt
+# import os, h5py
+# from matplotlib.ticker import FormatStrFormatter
+# ALL_BARCODES = ['{:0{}b}'.format(i, 6) for i in range(64)][1:]
+
+# # auxiliary functions for searching and loading files
+
+# def get_valid_folders(base, folder_names):
+#     folder_names = [
+#         folder
+#         for folder in folder_names
+#         if not folder.startswith('.')
+#     ]
+#     folder_names = [
+#         folder
+#         for folder in folder_names
+#         if os.path.isdir(os.path.join(base, folder))
+#     ]
+#     try:
+#         folder_names.remove('Dataframe_Backup')
+#     except:
+#         pass
+#     return folder_names
+
+# def get_files(path):
+#     dirs = os.listdir(path)
+
+#     all_csvs = [file for file in dirs if file.endswith('db-cell-clusters_35_3.csv')]
+#     all_csvs = [file for file in all_csvs if '_bc_' not in file] # mhc2 replacement needs to be excluded
+#     csvs_csr = [file for file in all_csvs if 'CSR' in file]
+#     csvs_cell = [file for file in all_csvs if not 'CSR' in file]
+#     csv_csr1 = [file for file in csvs_csr if 'rep_1_' in file][0]
+#     csv_cell = csvs_cell[0]
+
+#     all_hdf5s = [file for file in dirs if file.endswith('_multi_ID.hdf5')]
+#     hdf5_csr = [file for file in all_hdf5s if (('CSR' in file) & ('rep_1_' in file))][0]
+#     hdf5_cell = [file for file in all_hdf5s if file.endswith('_multi_ID.hdf5')][0]
+
+#     return csv_cell, csv_csr1, hdf5_cell, hdf5_csr
+
+
+def DBSCAN_analysis(clusters_csv):
+    """Calculates barcodes and weights (by cluster area) for further
+    DBSCAN data analysis.
+
+    Parameters
+    ----------
+    clusters_csv : str or pd.DataFrame
+        Path to csv file with DBSCAN results
+
+    Returns
+    -------
+    barcodes : np.array
+        Array of shape (N, 6) with binary barcodes for each of
+        N DBSCAN clusters
+    weights : np.array
+        Array of shape (N,) with weights for each of N DBSCAN
+        clusters
+    """
+
+    if isinstance(clusters_csv, str):
+        clusters = pd.read_csv(clusters_csv)  # DBSCAN data
+    elif isinstance(clusters_csv, pd.DataFrame):
+        clusters = clusters_csv
+    else:
+        raise NotImplementedError("Type of clusters_csv not implemented.")
+
+    columns = [
+        "N_MHC-I_per_cluster",
+        "N_MHC-II_per_cluster",
+        "N_CD86_per_cluster",
+        "N_CD80_per_cluster",
+        "N_PDL1_per_cluster",
+        "N_PDL2_per_cluster",
+        "area (nm^2)",
+    ]
+    clusters = clusters[columns]
+
+    areas = clusters.values[:, -1]  # this is for weights later
+
+    # find the all or none (binary) barcodes
+    clusters = clusters[columns[:-1]]
+    idx = np.where(clusters.values > 0)
+    barcodes = clusters.values.copy()
+    barcodes[idx] = 1
+
+    weights = areas
+
+    return barcodes, weights
+
+
+# def analyze_all_cells(path, title=None, savename=None):
+#     """Runs the binary code analysis across all cells in the
+#     given path.
+
+#     Parameters
+#     ----------
+#     path : str
+#         Path to the folder of the given cell type
+#     title : str, optional
+#         Title of the plot produced. If None, no title is shown.
+#     savename : str, optional
+#         Path for saving the final plot. If None, the plot is
+#         displayed but not saved.
+#     """
+
+#     barcodes_cell_ = []
+#     barcodes_csr_ = []
+#     weights_cell_ = []
+#     weights_csr_ = []
+
+#     # extract the names of the folders for each cell
+#     cells = os.listdir(path)
+#     cells = get_valid_folders(path, cells)
+#     cells = [_ for _ in cells if 'Cell' in _]
+#     cells.sort(key=(lambda x: int(x[5:]))) # sort based on the cell number
+#     for cell in cells:
+#         try:
+#             results_path = os.path.join(path, cell, 'results')
+
+#             # get names of the files to run the analysis
+#             clusters_cell_name, clusters_csr_name, _, _ = get_files(results_path)
+#             clusters_name = os.path.join(results_path, clusters_cell_name)
+#             csr_clusters_name = os.path.join(results_path, clusters_csr_name)
+
+#             # get the barcodes and weights for the cell
+#             barcodes_cell, weights_cell = DBSCAN_analysis(
+#                 clusters_name, None, weigh_func=None,
+#             )
+#             # get the barcodes and wegihts for the csr
+#             barcodes_csr, weights_csr = DBSCAN_analysis(
+#                 csr_clusters_name, None, weigh_func=None,
+#             )
+
+#             barcodes_cell_.append(barcodes_cell)
+#             barcodes_csr_.append(barcodes_csr)
+#             weights_cell_.append(weights_cell)
+#             weights_csr_.append(weights_csr)
+#         except:
+#             pass
+
+#     # take the mean across the cell
+#     res_cell = np.zeros((len(cells), len(ALL_BARCODES))) # contains counts for each cell
+#     res_csr = np.zeros((len(cells), len(ALL_BARCODES))) # contains counts for each csr simulation
+#     count = 0
+#     for (barcodes_cell, barcodes_csr, weights_cell, weights_csr) in zip(
+#         barcodes_cell_, barcodes_csr_, weights_cell_, weights_csr_
+#     ):
+#         # get the weighted counts for cell
+#         b = [''.join(_.astype(str)) for _ in barcodes_cell]
+#         for weight, barcode in zip(weights_cell, b):
+#             idx = ALL_BARCODES.index(barcode)
+#             res_cell[count, idx] += weight
+#         res_cell[count, :] /= res_cell[count, :].sum()
+
+#         # get the weighted counts for csr
+#         b = [''.join(_.astype(str)) for _ in barcodes_csr]
+#         for weight, barcode in zip(weights_csr, b):
+#             idx = ALL_BARCODES.index(barcode)
+#             res_csr[count, idx] += weight
+#         res_csr[count, :] /= res_csr[count, :].sum()
+
+#         count += 1
+
+#     # plot
+#     x = np.arange(len(ALL_BARCODES))
+#     width = 0.4
+#     fig = plt.figure(figsize=(10, 4), constrained_layout=True)
+
+#     # take mean and error
+#     cell_mean = res_cell.mean(axis=0)
+#     cell_std = res_cell.std(axis=0)
+#     cell_err = 1.96 * cell_std / np.sqrt(len(cells)) # 95% confidence interval
+#     csr_mean = res_csr.mean(axis=0)
+#     csr_std = res_csr.std(axis=0)
+#     csr_err = 1.96 * csr_std / np.sqrt(len(cells)) # 95% confidence interval
+
+#     # save as txt
+#     np.savetxt(f"{savename}_cell_mean.txt", cell_mean)
+#     np.savetxt(f"{savename}_cell_err.txt", cell_err)
+#     np.savetxt(f"{savename}_csr_mean.txt", csr_mean)
+#     np.savetxt(f"{savename}_csr_err.txt", csr_err)
+
+#     # frequency bar plot
+#     plt.bar(x-width/2, cell_mean, yerr=cell_err, width=width, edgecolor='black', facecolor='lightgray', label="Cell")
+#     plt.bar(x+width/2, csr_mean, yerr=csr_err, width=width, edgecolor='black', facecolor='dimgrey', label="CSR")
+
+#     plt.xticks(np.arange(63), labels=ALL_BARCODES, rotation=90, fontsize=8)
+#     plt.ylabel("Weighted counts", fontsize=12)
+#     plt.xlabel("Barcodes", fontsize=12)
+#     plt.legend()
+#     fig.axes[0].yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+#     if title is not None:
+#         plt.title(title, fontsize=20)
+
+#     if savename is not None:
+#         savename = os.path.splitext(savename)[0]
+#         plt.savefig(savename + ".png", dpi=300, transparent=True)
+#         plt.savefig(savename + ".svg")
+#         plt.close()
+#     else:
+#         plt.show()
+
+# # Mean across cells of the given type
+# # the subfolders in path are named 'Cell 1, Cell 2, etc', each of which has the subfolder 'results'
+# # where the DBSCAN analysis results are summarized as .csv files
+# path = r"Z:\users\hellmeier\DC_Atlas_2\2024_03_16 B16F10 PDL1 T123R\B16F10_6h_PDL1_T123R\B16F10_6h_PDL1_T123R\6h stimulation"
+
+# title = f"B16F10 PD-L1 T123R 6h stimulation"
+# savename = f"plots/B16F10_PDL1_T123R_6h_stimulation.png"
+# # savename = None
+# analyze_all_cells(path, title=title, savename=savename)
+########################################################################
+# End DBSCAN analysis for Molecular Interaction Patterns
+########################################################################

@@ -834,6 +834,71 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    def dbscan_merge_cells(self, i, parameters, results):
+        logger.debug("dbscan_merge_cells.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Merge DBSCAN results over multiple cells</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def dbscan_merge_stimulations(self, i, parameters, results):
+        logger.debug("dbscan_merge_stimulations.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Merge DBSCAN results over multiple stimulations</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def binary_barcodes(self, i, parameters, results):
+        logger.debug("binary_barcodes.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Analyse and plot binary barcodes</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+        if fp_fig := results.get("fp_fig"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+                _, fp_fig = os.path.split(fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
 
 class UndriftError(Exception):
     pass

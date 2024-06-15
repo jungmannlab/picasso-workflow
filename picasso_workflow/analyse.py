@@ -2035,8 +2035,12 @@ class AutoPicasso(AbstractModuleCollection):
             # check for results of 'ripleysk' module
             for mod_key, mod_res in data["results"].items():
                 if mod_key == parameters.get("swkfl_ripleysk_key"):
+                    print(mod_key, mod_res)
+                    print(parameters.get("swkfl_ripleysk_key"))
                     fp_ripleys_integrals[i] = mod_res["fp_ripleys_integrals"]
                 elif mod_key == parameters.get("swkfl_manual_key"):
+                    print(mod_key, mod_res)
+                    print(parameters.get("swkfl_manual_key"))
                     output_folders[i] = mod_res["folder"]
             # find AggregationWorkflowRunner config
             fp_wr_cfg = os.path.join(
@@ -2597,6 +2601,17 @@ class AutoPicasso(AbstractModuleCollection):
         # stimulation_cluster_exp_large_dict[cell_name] = db_cluster_output_large
         # stimulation_cluster_exp_small_dict[cell_name] = db_cluster_output_small
 
+        # perform Rafal's analysis (binary barcode)
+        barcodes, weights = picasso_outpost.DBSCAN_analysis(db_cluster_output)
+        filepaths["fp_binary_barcode"] = os.path.join(
+            result_folder, "binary_barcode.txt"
+        )
+        np.savetxt(filepaths["fp_binary_barcode"], barcodes)
+        filepaths["fp_binary_barcode_weights"] = os.path.join(
+            result_folder, "binary_barcode_weights.txt"
+        )
+        np.savetxt(filepaths["fp_binary_barcode_weights"], weights)
+
         """
         ===============================================================================
         mean output of one cell
@@ -2711,7 +2726,7 @@ class AutoPicasso(AbstractModuleCollection):
                     report_names : list of str
                         the report names of those worklfows
                     swkfl_dbscan_key : str
-                        the results key of the ripleysk module.
+                        the results key of the dbscan module.
                         e.g. '09_dbscan_molint' or '10_CSR_sim_in_mask'
                     stimulation_key : str
                         an identifier of the current stimulation
@@ -2967,8 +2982,6 @@ class AutoPicasso(AbstractModuleCollection):
 
         pixelsize = self.analysis_config["camera_info"].get("pixelsize")
         epsilon_nm = parameters["epsilon_nm"]
-        epsilon_px = epsilon_nm / pixelsize
-        sigma_linker_px = parameters["sigma_linker"] / pixelsize
 
         # get map
         with open(parameters["fp_channel_map"], "r") as f:
@@ -3022,6 +3035,191 @@ class AutoPicasso(AbstractModuleCollection):
         # results["fp_dbscan_color-cluster"] = dbscan_colcluster_fp
         # results["fp_dbscan_color-protein"] = dbscan_colprot_fp
         # results["fp_dbclusters"] = dbclusters_fp
+
+        return parameters, results
+
+    @module_decorator
+    def binary_barcodes(self, i, parameters, results):
+        """Analyses the binary barcode results of _do_dbscan_molint.
+        Compares experimental to CSR data.
+        Merged for multiple cells
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_dbscan_molint_key : str
+                        the results key of the dbscan module.
+                        e.g. '09_dbscan_molint'
+                    swkfl_CSR_sim_in_mask_key : str
+                        the results key of the CSR dbscan module.
+                        e.g. '10_CSR_sim_in_mask'
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        from matplotlib.ticker import FormatStrFormatter
+
+        # use fpoutput_all_clusters of _do_dbscan_molint, from output_metrics.
+
+        # of _do_dbscan_molint
+        # fp_binary_barcode
+        # fp_binary_barcode_weights
+        fp_binbc_exp = []  # will be a list of strings (1 for each cell)
+        fp_binbc_weights_exp = []  # same as above
+        fp_binbc_csr = []  # will be list of list of strings as in each
+        fp_binbc_weights_csr = []  # workflow, multiple CSR sims are done
+        channel_tags = None
+        exp_key = parameters["swkfl_dbscan_molint_key"]
+        csr_key = parameters["swkfl_CSR_sim_in_mask_key"]
+        search_keys = [
+            (exp_key, "fp_binary_barcode"),
+            (exp_key, "fp_binary_barcode_weights"),
+            (csr_key, "fp_binary_barcode"),
+            (csr_key, "fp_binary_barcode_weights"),
+        ]
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_keys
+            )
+            if fp := loaded_data.get((exp_key, "fp_binary_barcode")):
+                fp_binbc_exp.append(fp)
+            if fp := loaded_data.get((exp_key, "fp_binary_barcode_weights")):
+                fp_binbc_weights_exp.append(fp)
+            if fp := loaded_data.get((csr_key, "fp_binary_barcode")):
+                fp_binbc_csr.append(fp)
+            if fp := loaded_data.get((csr_key, "fp_binary_barcode_weights")):
+                fp_binbc_weights_csr.append(fp)
+
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
+
+        all_bc_list = [
+            "{:0{}b}".format(i, len(channel_tags))
+            for i in range(len(channel_tags**2 + 1))
+        ][1:]
+
+        # take the mean across the cell
+        res_cell = np.zeros(  # contains counts for each cell
+            (len(parameters["fp_workflows"]), len(all_bc_list))
+        )
+        res_csr = np.zeros(  # contains counts for each csr simulation
+            (len(parameters["fp_workflows"]), len(all_bc_list))
+        )
+        count = 0
+        for fp_bc_exp, fp_bc_csr, fp_weights_exp, fp_weights_csr in zip(
+            fp_binbc_exp,
+            fp_binbc_csr,
+            fp_binbc_weights_exp,
+            fp_binbc_weights_csr,
+        ):
+            barcodes_cell = np.loadtxt(fp_bc_exp)
+            barcodes_csr = np.loadtxt(fp_bc_csr)
+            weights_cell = np.loadtxt(fp_weights_exp)
+            weights_csr = np.loadtxt(fp_weights_csr)
+            # get the weighted counts for cell
+            b = ["".join(_.astype(str)) for _ in barcodes_cell]
+            for weight, barcode in zip(weights_cell, b):
+                idx = all_bc_list.index(barcode)
+                res_cell[count, idx] += weight
+            res_cell[count, :] /= res_cell[count, :].sum()
+
+            # get the weighted counts for csr
+            b = ["".join(_.astype(str)) for _ in barcodes_csr]
+            for weight, barcode in zip(weights_csr, b):
+                idx = all_bc_list.index(barcode)
+                res_csr[count, idx] += weight
+            res_csr[count, :] /= res_csr[count, :].sum()
+
+            count += 1
+
+        # plot
+        x = np.arange(len(all_bc_list))
+        width = 0.4
+        fig = plt.figure(figsize=(10, 4), constrained_layout=True)
+
+        # take mean and error
+        cell_mean = res_cell.mean(axis=0)
+        cell_std = res_cell.std(axis=0)
+        cell_err = (
+            1.96 * cell_std / np.sqrt(len(cells))
+        )  # 95% confidence interval
+        csr_mean = res_csr.mean(axis=0)
+        csr_std = res_csr.std(axis=0)
+        csr_err = (
+            1.96 * csr_std / np.sqrt(len(cells))
+        )  # 95% confidence interval
+
+        # save as txt
+        results["fp_cell_mean"] = os.path.join(
+            results["folder"], "cell_mean.txt"
+        )
+        np.savetxt(results["fp_cell_mean"], cell_mean)
+        results["fp_cell_err"] = os.path.join(
+            results["folder"], "cell_err.txt"
+        )
+        np.savetxt(results["fp_cell_err"], cell_err)
+        results["fp_csr_mean"] = os.path.join(
+            results["folder"], "csr_mean.txt"
+        )
+        np.savetxt(results["fp_csr_mean"], csr_mean)
+        results["fp_csr_err"] = os.path.join(results["folder"], "csr_err.txt")
+        np.savetxt(results["fp_csr_err"], csr_err)
+
+        # frequency bar plot
+        plt.bar(
+            x - width / 2,
+            cell_mean,
+            yerr=cell_err,
+            width=width,
+            edgecolor="black",
+            facecolor="lightgray",
+            label="Cell",
+        )
+        plt.bar(
+            x + width / 2,
+            csr_mean,
+            yerr=csr_err,
+            width=width,
+            edgecolor="black",
+            facecolor="dimgrey",
+            label="CSR",
+        )
+
+        plt.xticks(
+            np.arange(len(all_bc_list)),
+            labels=all_bc_list,
+            rotation=90,
+            fontsize=8,
+        )
+        plt.ylabel("Weighted counts", fontsize=12)
+        plt.xlabel("Barcodes", fontsize=12)
+        plt.legend()
+        fig.axes[0].yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+        # if title is not None:
+        #     plt.title(title, fontsize=20)
+
+        results["fp_fig"] = os.path.join(
+            results["folder"], "binary_barcodes.png"
+        )
+        savename = os.path.splitext(results["fp_fig"])[0]
+        plt.savefig(savename + ".png", dpi=300, transparent=True)
+        plt.savefig(savename + ".svg")
 
         return parameters, results
 

@@ -203,6 +203,27 @@ class AbstractModuleCollection(abc.ABC):
         """
         pass
 
+    @abc.abstractmethod
+    def dbscan_merge_cells(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
+    @abc.abstractmethod
+    def dbscan_merge_stimulations(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
+    @abc.abstractmethod
+    def binary_barcodes(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
 
 class DictSimpleTyper:
     """Scans a complex dictionary and converts numpy arrays and
