@@ -56,6 +56,30 @@ class ConfluenceReporter(AbstractModuleCollection):
                 Continuing on the pre-existing page"""
             )
 
+    def dummy_module(self, i, parameters, results):
+        """A module that does nothing, for quickly removing
+        modules in a workflow without having to renumber the
+        following result idcs. Only for workflow debugging,
+        remove when done.
+        """
+        logger.debug("dummy_module.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Dummy Module</strong></p>
+        Only for debugging purposes. Remove when workflow works.
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
     ##########################################################################
     # Single dataset modules
     ##########################################################################

@@ -112,10 +112,29 @@ class AutoPicasso(AbstractModuleCollection):
                         as used by picasso. Only necessary if not loaded by
                         module load_dataset
                     always_save : bool
-                        whether every module should end in saving the current locs
+                        whether every module should end in saving the current
+                        locs
         """
         self.results_folder = results_folder
         self.analysis_config = analysis_config
+
+    @module_decorator
+    def dummy_module(self, i, parameters, results):
+        """A module that does nothing, for quickly removing
+        modules in a workflow without having to renumber the
+        following result idcs. Only for workflow debugging,
+        remove when done.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        return parameters, results
 
     ##########################################################################
     # Single dataset modules

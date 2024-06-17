@@ -27,6 +27,15 @@ class AbstractModuleCollection(abc.ABC):
     def __init__(self):
         pass
 
+    @abc.abstractmethod
+    def dummy_module(self):
+        """A module that does nothing, for quickly removing
+        modules in a workflow without having to renumber the
+        following result idcs. Only for workflow debugging,
+        remove when done.
+        """
+        pass
+
     ##########################################################################
     # Single-dataset workflow modules
     ##########################################################################
