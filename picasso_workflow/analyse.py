@@ -1236,11 +1236,6 @@ class AutoPicasso(AbstractModuleCollection):
         rmax_NN = np.quantile(alldist[:, parameters["nth_NN"]], 0.95)
         rmax_rdf = np.quantile(alldist[:, parameters["nth_rdf"]], 0.95)
 
-        logger.debug("calculated bin parameters")
-        _, _, density = self._calc_radial_distribution_function(
-            alldist, deltar, rmax_rdf, d=len(parameters["dims"]), ax=ax[0]
-        )
-        results["density_rdf"] = density
         logger.debug("calculated radial distribution function")
         # print(alldist)
         # print(alldist.shape)
@@ -1252,6 +1247,28 @@ class AutoPicasso(AbstractModuleCollection):
         out_path = os.path.join(results["folder"], "nneighbors.txt")
         np.savetxt(out_path, nneighbors, newline="\r\n")
         results["nneighbors"] = out_path
+
+        logger.debug("calculated bin parameters")
+        # as alldist can be large, reduce it here already, so memory can be
+        # freed
+        nspots = alldist.shape[0]
+        alldist = alldist[:, np.min(alldist, axis=1) <= rmax_rdf]
+        logger.debug("cropped 2d alldist")
+        alldist = np.sort(alldist.flatten())
+        logger.debug("flattened alldist")
+        # distarray = alldist.flatten()
+        # logger.debug('flattened distarray')
+        alldist = alldist[alldist <= rmax_rdf]
+        logger.debug("prepared alldist")
+        _, _, density = self._calc_radial_distribution_function(
+            alldist,
+            deltar,
+            rmax_rdf,
+            nspots,
+            d=len(parameters["dims"]),
+            ax=ax[0],
+        )
+        results["density_rdf"] = density
 
         # plot results
         colors = cm.get_cmap("viridis", nneighbors.shape[1]).colors
@@ -1277,41 +1294,34 @@ class AutoPicasso(AbstractModuleCollection):
         return parameters, results
 
     def _calc_radial_distribution_function(
-        self, alldist, deltar, rmax, d=2, ax=None
+        self, alldist, deltar, rmax, nspots, d=2, ax=None
     ):
         rs = np.arange(
             0,
-            rmax + 2 * deltar,
+            rmax + 1 * deltar,
             deltar,
         )
-        n_means = np.zeros_like(rs)
-        d_areas = np.zeros_like(rs)
+        # n_means = np.zeros_like(rs)
+        # d_areas = np.zeros_like(rs)
 
-        logger.debug(f"calculating {len(rs)} rdf points")
+        # logger.debug(f"calculating {len(rs)} rdf points")
 
-        nspots = alldist.shape[0]
+        # for i, r in enumerate(rs):
+        #     # area = 2 * np.pi * r**2
+        #     # n_mean = np.sum(alldist < r) / len(locs)
+        #     # crdf[i] = n_mean / area
+        #     d_areas[i] = 2 * np.pi * r * deltar
+        #     # n_means[i] = np.sum(distarray <= r) / nspots
+        #     n_means[i] = np.sum(alldist <= r) / nspots
+        # d_n_means = n_means[1:] - n_means[:-1]
 
-        alldist = alldist[:, np.min(alldist, axis=1) <= np.max(rs)]
-        logger.debug("cropped 2d alldist")
-        # distarray = np.sort(alldist.flatten())
-        # logger.debug('flattened distarray')
-        # distarray = alldist.flatten()
-        # logger.debug('flattened distarray')
-        # distarray = distarray[distarray <= np.max(rs)]
-
-        logger.debug("prepared distarray")
-
-        for i, r in enumerate(rs):
-            # area = 2 * np.pi * r**2
-            # n_mean = np.sum(alldist < r) / len(locs)
-            # crdf[i] = n_mean / area
-            d_areas[i] = 2 * np.pi * r * deltar
-            # n_means[i] = np.sum(distarray <= r) / nspots
-            n_means[i] = np.sum(alldist <= r) / nspots
-        d_n_means = n_means[1:] - n_means[:-1]
+        d_areas = 2 * np.pi * rs * deltar
+        d_n_means, _ = np.histogram(alldist, bins=rs)
         rdf = d_n_means / d_areas[1:]
         # rdf = crdf[1:] - crdf[:-1]
 
+        # assuming the RDF converged to the bulk density in
+        # its second half
         density = np.median(rdf[int(len(rs) / 2) :])
 
         # plot results
