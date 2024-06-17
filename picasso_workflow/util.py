@@ -36,6 +36,11 @@ class AbstractModuleCollection(abc.ABC):
         """
         pass
 
+    @abc.abstractmethod
+    def analysis_documentation(self):
+        """Document the parameters of the analysis machine and software."""
+        pass
+
     ##########################################################################
     # Single-dataset workflow modules
     ##########################################################################

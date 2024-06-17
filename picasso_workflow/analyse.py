@@ -9,6 +9,8 @@ from picasso import lib, io, localize, gausslq, postprocess, clusterer
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import os
+import platform
+import psutil
 import time
 from concurrent import futures as _futures
 from tqdm import tqdm
@@ -139,6 +141,52 @@ class AutoPicasso(AbstractModuleCollection):
     ##########################################################################
     # Single dataset modules
     ##########################################################################
+
+    @module_decorator
+    def analysis_documentation(self, i, parameters, results):
+        """This module documents where and how analysis is being performed
+        Args:
+            parameters : dict
+                necessary items:
+                    filename : str
+                        the (main) file name to load.
+                optional items:
+                    sample_movie : dict, used for creating a subsampled movie
+                        keywords as used in method create_sample_movie
+                    load_camera_info : bool
+                        whether to load the camera information for the camera
+                        used from picasso.CONFIG
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        results["picasso version"] = picassoversion
+        results["picasso-workflow version"] = "N/A"
+        results["Architecutre"] = platform.machine()
+        results["OS"] = platform.system()
+        results["host"] = platform.node()
+        results["processor"] = platform.processor()
+        results["CPU Frequency [MHz]"] = psutil.cpu_freq().current
+        results["CPU cores"] = psutil.cpu_count()
+        results["Memory total [GB]"] = psutil.virtual_memory().total // (
+            1024**3
+        )
+        results["Memory available [GB]"] = (
+            psutil.virtual_memory().available // (1024**3)
+        )
+        try:
+            gpu_info = psutil.virtual_memory().gpu
+        except AttributeError:
+            gpu_info = None
+        if gpu_info:
+            results["GPU"] = gpu_info.name
+            results["GPU memory"] = gpu_info.memory_total // (1024**3)
+        else:
+            results["GPU"] = "N/A"
+            results["GPU memory [GB]"] = 0
+        return parameters, results
 
     @module_decorator
     def convert_zeiss_movie(self, i, parameters, results):
@@ -1252,13 +1300,13 @@ class AutoPicasso(AbstractModuleCollection):
         # as alldist can be large, reduce it here already, so memory can be
         # freed
         nspots = alldist.shape[0]
-        alldist = alldist[:, np.min(alldist, axis=1) <= rmax_rdf]
+        alldist = alldist[:, np.min(alldist, axis=1) <= (rmax_rdf + deltar)]
         logger.debug("cropped 2d alldist")
         alldist = np.sort(alldist.flatten())
         logger.debug("flattened alldist")
         # distarray = alldist.flatten()
         # logger.debug('flattened distarray')
-        alldist = alldist[alldist <= rmax_rdf]
+        alldist = alldist[alldist <= (rmax_rdf + deltar)]
         logger.debug("prepared alldist")
         _, _, density = self._calc_radial_distribution_function(
             alldist,
@@ -1298,7 +1346,7 @@ class AutoPicasso(AbstractModuleCollection):
     ):
         rs = np.arange(
             0,
-            rmax + 1 * deltar,
+            rmax + deltar,
             deltar,
         )
         # n_means = np.zeros_like(rs)
@@ -1317,7 +1365,9 @@ class AutoPicasso(AbstractModuleCollection):
 
         d_areas = 2 * np.pi * rs * deltar
         d_n_means, _ = np.histogram(alldist, bins=rs)
-        rdf = d_n_means / d_areas[1:]
+        d_n_means = d_n_means / nspots
+        rdf = d_n_means[1:] / d_areas[2:]
+        rs = rs[2:]
         # rdf = crdf[1:] - crdf[:-1]
 
         # assuming the RDF converged to the bulk density in
@@ -1325,11 +1375,11 @@ class AutoPicasso(AbstractModuleCollection):
         density = np.median(rdf[int(len(rs) / 2) :])
 
         # plot results
-        ax.plot(rs[1:], rdf * 1e3**d)
+        ax.plot(rs, rdf * 1e3**d)
         ax.set_xlabel("Radius [nm]")
         ax.set_ylabel(f"density [µm^{d}]")
         ax.set_title("Radial Distribution Function")
-        return rs[1:], rdf, density
+        return rs, rdf, density
 
     @module_decorator
     def fit_csr(self, i, parameters, results):
@@ -2048,10 +2098,10 @@ class AutoPicasso(AbstractModuleCollection):
         channel_tags = None
         search_dict = {
             (
-                "swkfl_ripleysk_key",
+                parameters["swkfl_ripleysk_key"],
                 "fp_ripleys_integrals",
             ): fp_ripleys_integrals,
-            ("swkfl_manual_key", "folder"): output_folders,
+            (parameters["swkfl_manual_key"], "folder"): output_folders,
         }
         for folder, name in zip(
             parameters["fp_workflows"], parameters["report_names"]
@@ -2397,6 +2447,9 @@ class AutoPicasso(AbstractModuleCollection):
                         filepath to the map from 'combine_channels' module,
                         which is a dict from channel name to ID int in the
                         locs['combine_id']
+                    fp_combined_locs : str
+                        filepath to the locs combined in 'combine_channels'
+                        module
                     margin : float
                         Size of the added empty margin to the FOV, in nm
                     binsize : float
@@ -2418,13 +2471,18 @@ class AutoPicasso(AbstractModuleCollection):
         # get map
         with open(parameters["fp_channel_map"], "r") as f:
             channel_map = yaml.safe_load(f)
-        # get Mask
-        locs = self.channel_locs[0]
+        # locs for the mask are the combined locs
+        if isinstance(parameters["fp_combined_locs"], list):
+            fp_combined_locs = parameters["fp_combined_locs"][0]
+        else:
+            fp_combined_locs = parameters["fp_combined_locs"]
+        combined_locs, combined_info = io.load_locs(fp_combined_locs)
+        # self.channel_locs = [combined_locs]
         multi_filename = "multi_ID.hdf5"
         pixelsize = self.analysis_config["camera_info"].get("pixelsize")
         mask_dict = mask.gen_mask(
-            locs["x"],
-            locs["y"],
+            combined_locs["x"],
+            combined_locs["y"],
             parameters["margin"],
             parameters["binsize"],
             parameters["sigma_mask_blur"],
@@ -2436,14 +2494,14 @@ class AutoPicasso(AbstractModuleCollection):
         )
 
         # get exp coordinates in mask
-        new_info = self.channel_info[0] + [
+        new_info = combined_info + [
             {
                 "Generated by": "picasso-workflow: create_mask",
             }
         ]
-        self.channel_info[0] = new_info
+        # self.channel_info = [new_info]
         df_merge_mask, mask_dict = mask.exp_data_in_mask(
-            pd.DataFrame(locs),
+            pd.DataFrame(combined_locs),
             mask_dict,
             pixelsize,
             results["folder"],
@@ -2468,7 +2526,7 @@ class AutoPicasso(AbstractModuleCollection):
             mask_dict["N_exp_" + protein] = N
             mask_dict["density_exp_" + protein + " (/um^2)"] = density
 
-        mask_dict["info"] = self.channel_info[0]
+        mask_dict["info"] = new_info
         mask_dict["filename"] = results["fp_merge_mask"]
 
         fp_mask_dict = os.path.join(results["folder"], "mask_dict.pkl")
@@ -2732,7 +2790,7 @@ class AutoPicasso(AbstractModuleCollection):
         """
         from picasso_workflow.workflow import WorkflowRunner
 
-        loaded_data = []
+        loaded_data = {}
 
         # find analysis folder
         postfix = WorkflowRunner._check_previous_runner(

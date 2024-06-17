@@ -80,6 +80,24 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    def analysis_documentation(self, i, parameters, results):
+        """This module documents where and how analysis is being performed"""
+        logger.debug("Reporting analysis_documentation.")
+        text = """
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Analysis Hard- and Software</strong></p>
+        <ul>
+        """
+        for k, v in results.items():
+            text += f"<li>{k}: {v}</li>"
+        text += """
+        </ul>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
     ##########################################################################
     # Single dataset modules
     ##########################################################################
@@ -486,7 +504,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Displayed RDF up to nearest neighbor #: {parameters['nth_rdf']}
         </li>
         <li>Saved numpy txt file as: {results["nneighbors"]}</li>
-        <li>Density from RDF: {results['density_rdf'] * 1e3**d} µm^{d}</li>
+        <li>Density from RDF: {results['density_rdf'] * 1e3**d:.02f} µm^{d}
+        </li>
         </ul>"""
         if fp_fig := results.get("fp_fig"):
             self.ci.upload_attachment(self.report_page_id, fp_fig)
