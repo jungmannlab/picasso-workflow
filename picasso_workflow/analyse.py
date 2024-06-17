@@ -1936,7 +1936,7 @@ class AutoPicasso(AbstractModuleCollection):
     def _plot_ripleys_integrals(self, ripleysIntegrals, folder, channel_tags):
         fig, ax = plt.subplots()
         heatmap = ax.imshow(
-            ripleysIntegrals, cmap="coolwarm_r", vmin=-10, vmax=10
+            ripleysIntegrals, cmap="coolwarm_r", vmin=-1, vmax=1
         )
         ax.grid(False)
         ax.set_xticks(np.arange(ripleysIntegrals.shape[0]))
@@ -2006,62 +2006,89 @@ class AutoPicasso(AbstractModuleCollection):
                     integrals to
                 if those two are not given, saving is not performed
         """
-        from picasso_workflow.workflow import WorkflowRunner
+        # from picasso_workflow.workflow import WorkflowRunner
 
         # all_integrals = np.concat(
         #     [np.loadtxt(fp) for fp in parameters["fp_ripleys_integrals"]])
         # averaged_integrals = np.mean(all_integrals, axis=0)
 
         # check single intregals based on workflow file
-        fp_ripleys_integrals = [""] * len(parameters["fp_workflows"])
-        output_folders = [""] * len(parameters["fp_workflows"])
+        fp_ripleys_integrals = []  # [""] * len(parameters["fp_workflows"])
+        output_folders = []  # [""] * len(parameters["fp_workflows"])
 
-        for i, (wkflfolder, report_name) in enumerate(
-            zip(parameters["fp_workflows"], parameters["report_names"])
+        channel_tags = None
+        search_dict = {
+            (
+                "swkfl_ripleysk_key",
+                "fp_ripleys_integrals",
+            ): fp_ripleys_integrals,
+            ("swkfl_manual_key", "folder"): output_folders,
+        }
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
         ):
-            # find analysis folder
-            postfix = WorkflowRunner._check_previous_runner(
-                wkflfolder, report_name
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_dict.keys()
             )
-            # find aggregation WorkflowRunner config
-            fp_wr_cfg = os.path.join(
-                wkflfolder,
-                report_name + "_" + postfix,
-                report_name + "_aggregation_" + postfix,
-                "WorkflowRunner.yaml",
-            )
-            with open(fp_wr_cfg, "r") as f:
-                data = yaml.load(f, Loader=yaml.FullLoader)
-            # check for results of 'ripleysk' module
-            for mod_key, mod_res in data["results"].items():
-                if mod_key == parameters.get("swkfl_ripleysk_key"):
-                    print(mod_key, mod_res)
-                    print(parameters.get("swkfl_ripleysk_key"))
-                    fp_ripleys_integrals[i] = mod_res["fp_ripleys_integrals"]
-                elif mod_key == parameters.get("swkfl_manual_key"):
-                    print(mod_key, mod_res)
-                    print(parameters.get("swkfl_manual_key"))
-                    output_folders[i] = mod_res["folder"]
-            # find AggregationWorkflowRunner config
-            fp_wr_cfg = os.path.join(
-                wkflfolder,
-                report_name + "_" + postfix,
-                "AggregationWorkflowRunner.yaml",
-            )
-            with open(fp_wr_cfg, "r") as f:
-                data = yaml.load(f, Loader=yaml.FullLoader)
-            channel_tags = data["aggregation_workflow"][
-                "single_dataset_tileparameters"
-            ]["#tags"]
-        fp_ripleys_integrals = [fp for fp in fp_ripleys_integrals if fp != ""]
-        output_folders = [fp for fp in output_folders if fp != ""]
+            for key, res in loaded_data.items():
+                search_dict[key].append(res)
+
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
+
+        # for i, (wkflfolder, report_name) in enumerate(
+        #     zip(parameters["fp_workflows"], parameters["report_names"])
+        # ):
+        #     # find analysis folder
+        #     postfix = WorkflowRunner._check_previous_runner(
+        #         wkflfolder, report_name
+        #     )
+        #     # find aggregation WorkflowRunner config
+        #     fp_wr_cfg = os.path.join(
+        #         wkflfolder,
+        #         report_name + "_" + postfix,
+        #         report_name + "_aggregation_" + postfix,
+        #         "WorkflowRunner.yaml",
+        #     )
+        #     with open(fp_wr_cfg, "r") as f:
+        #         data = yaml.load(f, Loader=yaml.FullLoader)
+        #     # check for results of 'ripleysk' module
+        #     for mod_key, mod_res in data["results"].items():
+        #         if mod_key == parameters.get("swkfl_ripleysk_key"):
+        #             print(mod_key, mod_res)
+        #             print(parameters.get("swkfl_ripleysk_key"))
+        #             fp_ripleys_integrals[i] = mod_res["fp_ripleys_integrals"]
+        #         elif mod_key == parameters.get("swkfl_manual_key"):
+        #             print(mod_key, mod_res)
+        #             print(parameters.get("swkfl_manual_key"))
+        #             output_folders[i] = mod_res["folder"]
+        #     # find AggregationWorkflowRunner config
+        #     fp_wr_cfg = os.path.join(
+        #         wkflfolder,
+        #         report_name + "_" + postfix,
+        #         "AggregationWorkflowRunner.yaml",
+        #     )
+        #     with open(fp_wr_cfg, "r") as f:
+        #         data = yaml.load(f, Loader=yaml.FullLoader)
+        #     channel_tags = data["aggregation_workflow"][
+        #         "single_dataset_tileparameters"
+        #     ]["#tags"]
+        # fp_ripleys_integrals = [fp for fp in fp_ripleys_integrals if fp != ""]
+        # output_folders = [fp for fp in output_folders if fp != ""]
         results["output_folders"] = output_folders
 
         # load and average the integrals
         all_integrals = np.stack(
             [np.loadtxt(fp) for fp in fp_ripleys_integrals]
         )
-        averaged_integrals = np.mean(all_integrals, axis=0)
+        averaged_integrals = np.nanmean(all_integrals, axis=0)
 
         # save into own results folder
         results["fp_ripleys_integrals"] = os.path.join(
@@ -3157,12 +3184,12 @@ class AutoPicasso(AbstractModuleCollection):
         cell_mean = res_cell.mean(axis=0)
         cell_std = res_cell.std(axis=0)
         cell_err = (
-            1.96 * cell_std / np.sqrt(len(cells))
+            1.96 * cell_std / np.sqrt(len(parameters["fp_workflows"]))
         )  # 95% confidence interval
         csr_mean = res_csr.mean(axis=0)
         csr_std = res_csr.std(axis=0)
         csr_err = (
-            1.96 * csr_std / np.sqrt(len(cells))
+            1.96 * csr_std / np.sqrt(len(parameters["fp_workflows"]))
         )  # 95% confidence interval
 
         # save as txt

@@ -578,9 +578,9 @@ class WorkflowRunner:
                 module_parameters, curr_rootidx=i
             )
             success = self.call_module(module_name, i, module_parameters)
+            self.save(self.result_folder)
             if not success:
                 break
-            self.save(self.result_folder)
         else:
             success = True
         return success
