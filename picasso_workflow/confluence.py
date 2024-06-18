@@ -732,12 +732,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s</li>
         <li>Integral significance threshold:
         {parameters["ripleys_threshold"]}</li>
-        <li>Ripleys Integrals location: {results["fp_ripleys_integrals"]}</li>
+        <li>Ripleys Integrals location: {results["fp_ripleys_meanval"]}</li>
         <li>Significantly interacting pairs:
         {str(results["ripleys_significant"])}</li>
         </ul>"""
 
-        if fp_fig := results.get("fp_figintegrals"):
+        if fp_fig := results.get("fp_fig_ripleys_meanval"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)
                 _, fp_fig = os.path.split(fp_fig)
@@ -808,6 +808,82 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         </ul>"""
+        # text += """
+        # <table>
+        # <tr>
+        #     <td></td>
+        #     <td>
+        #         AB
+        #     </td>
+        # </tr>
+        # <tr>
+        #     <td>
+        #         C
+        #     </td>
+        #     <td>
+        #         D
+        #     </td>
+        # </tr>
+        # </table>
+        # """
+        if props := results.get("Interaction proportions"):
+            text += "<table>"
+            text += "<tr>"
+            for c in ["", "A", "AA", "B", "BB", "AB", "AABB"]:
+                text += f"<td><b>{c}</b></td>"
+            text += "</tr>"
+            for pair, p in props.items():
+                text += "<tr>"
+                a, b = pair.split(",")
+                text += f"<td>A:<b>{a}</b>, B:<b>{b}</b></td>"
+                for c in p:
+                    text += f"<td>{c:.4f}</td>"
+                text += "</tr>"
+            text += "</table>"
+
+        if fp_fig := results.get("fp_allfigs"):
+            # fp_combi = fp_fig[0][0]
+            # try:
+            #     self.ci.upload_attachment(
+            #         self.report_page_id, fp_combi)
+            #     _, fp_combi = os.path.split(fp_combi)
+            # except ConfluenceInterfaceError:
+            #     pass
+            # _, fp_combi = os.path.split(fp_combi)
+            # text += f"""
+            #   <ac:image ac:height="150"><ri:attachment ri:filename="{fp_combi}" />
+            #   </ac:image>"""
+
+            text += "<table>"
+            for i, fp_pairs in enumerate(fp_fig):
+                text += "<tr>"
+                for j, fp_combi in enumerate(fp_pairs):
+                    try:
+                        self.ci.upload_attachment(
+                            self.report_page_id, fp_combi
+                        )
+                    except ConfluenceInterfaceError:
+                        pass
+                    _, fp_combi = os.path.split(fp_combi)
+                    text += "<td>"
+                    text += f"""
+                      <ac:image ac:height="150">
+                      <ri:attachment ri:filename="{fp_combi}" />
+                      </ac:image>"""
+                    # text += f"""
+                    #   <ac:structured-macro ac:name="image">
+                    #     <ac:parameter ac:name="width">20%</ac:parameter>
+                    #     <ac:parameter ac:name="height">20%</ac:parameter>
+                    #     <ac:parameter ac:name="src">"{fp_combi}"</ac:parameter>
+                    #   </ac:structured-macro>"""
+                    # text += (
+                    #     "<ul><ac:image><ri:attachment "
+                    #     + f'ri:filename="{fp_fig}" />'
+                    #     + "</ac:image></ul>"
+                    # )
+                    text += "</td>"
+                text += "</tr>"
+            text += "</table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>

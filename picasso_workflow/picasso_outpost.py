@@ -10,6 +10,7 @@ Description: This is a collection of exploratory DNA-PAINT analysis / picasso
 """
 import logging
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import yaml
 import os

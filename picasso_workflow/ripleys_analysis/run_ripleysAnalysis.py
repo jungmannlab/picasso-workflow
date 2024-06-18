@@ -104,7 +104,9 @@ def performRipleysMultiAnalysis(
     integralfile = os.path.join(path, f"{filename}_ripleysIntegrals")
     np.save(integralfile, ripleysIntegrals)
 
-    return ripleysResults, ripleysIntegrals
+    ripleysMeanVal = ripleysIntegrals / np.max(radii)
+
+    return ripleysResults, ripleysIntegrals, ripleysMeanVal
 
 
 # Set file paths and parameters

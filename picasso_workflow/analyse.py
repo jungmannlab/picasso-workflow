@@ -1982,7 +1982,7 @@ class AutoPicasso(AbstractModuleCollection):
             fp_combined_locs = parameters["fp_combined_locs"]
         combined_locs, _ = io.load_locs(fp_combined_locs)
 
-        (ripleysResults, ripleysIntegrals) = (
+        (ripleysResults, ripleysIntegrals, ripleysMeanVal) = (
             run_ripleysAnalysis.performRipleysMultiAnalysis(
                 path=results["folder"],
                 filename="",
@@ -1995,38 +1995,36 @@ class AutoPicasso(AbstractModuleCollection):
             )
         )
 
-        results["fp_ripleys_integrals"] = os.path.join(
-            results["folder"], "Ripleys_Integrals.txt"
+        results["fp_ripleys_meanval"] = os.path.join(
+            results["folder"], "Ripleys_IntegralsMean.txt"
         )
-        np.savetxt(results["fp_ripleys_integrals"], ripleysIntegrals)
+        np.savetxt(results["fp_ripleys_meanval"], ripleysMeanVal)
 
-        results["fp_figintegrals"] = self._plot_ripleys_integrals(
-            ripleysIntegrals, results["folder"], self.channel_tags
+        results["fp_fig_ripleys_meanval"] = self._plot_ripleys_integrals(
+            ripleysMeanVal, results["folder"], self.channel_tags
         )
 
         results["ripleys_significant"] = self._find_ripleys_significant(
-            ripleysIntegrals,
+            ripleysMeanVal,
             parameters["ripleys_threshold"],
             self.channel_tags,
         )
 
         return parameters, results
 
-    def _plot_ripleys_integrals(self, ripleysIntegrals, folder, channel_tags):
+    def _plot_ripleys_integrals(self, ripleysMeanVal, folder, channel_tags):
         fig, ax = plt.subplots()
-        heatmap = ax.imshow(
-            ripleysIntegrals, cmap="coolwarm_r", vmin=-1, vmax=1
-        )
+        heatmap = ax.imshow(ripleysMeanVal, cmap="coolwarm_r", vmin=-1, vmax=1)
         ax.grid(False)
-        ax.set_xticks(np.arange(ripleysIntegrals.shape[0]))
-        ax.set_yticks(np.arange(ripleysIntegrals.shape[1]))
+        ax.set_xticks(np.arange(ripleysMeanVal.shape[0]))
+        ax.set_yticks(np.arange(ripleysMeanVal.shape[1]))
         # Add number annotations to cells
-        for i in range(ripleysIntegrals.shape[0]):
-            for j in range(ripleysIntegrals.shape[1]):
+        for i in range(ripleysMeanVal.shape[0]):
+            for j in range(ripleysMeanVal.shape[1]):
                 ax.text(
                     j,
                     i,
-                    f"{ripleysIntegrals[i, j]:.2f}",
+                    f"{ripleysMeanVal[i, j]:.2f}",
                     ha="center",
                     va="center",
                     color="black",
@@ -2034,9 +2032,9 @@ class AutoPicasso(AbstractModuleCollection):
                 )
         ax.set_xticklabels(channel_tags, rotation=45)
         ax.set_yticklabels(channel_tags, rotation=45)
-        ax.set_title("Ripleys Integrals")
+        ax.set_title("Ripleys Mean Value")
         plt.colorbar(heatmap, format="%.2f")
-        fp_integrals = os.path.join(folder, "RipIntegrals.png")
+        fp_integrals = os.path.join(folder, "ripleysMeanVal.png")
         fig.set_size_inches((9, 7))
         fig.savefig(fp_integrals)
         return fp_integrals
@@ -2099,7 +2097,7 @@ class AutoPicasso(AbstractModuleCollection):
         search_dict = {
             (
                 parameters["swkfl_ripleysk_key"],
-                "fp_ripleys_integrals",
+                "fp_ripleys_meanval",
             ): fp_ripleys_integrals,
             (parameters["swkfl_manual_key"], "folder"): output_folders,
         }
@@ -2315,6 +2313,7 @@ class AutoPicasso(AbstractModuleCollection):
         # hetero-analysis (pairwise up to 2+2-mers)
         # structures: A, B, AA, BB, AB, AABB
         props = {}
+        fp_allfigs = []
         for A, B in interaction_pairs:
             if A == B:  # or should we include homotetramers?
                 continue
@@ -2383,10 +2382,12 @@ class AutoPicasso(AbstractModuleCollection):
             structures.append(struct)
 
             compound_density = density[A] + density[B]
-            area = parameters["n_simulate"] / (compound_density / 1e6)
+            # area = parameters["n_simulate"] / (compound_density / 1e6)
+            # area = parameters["n_simulate"] / (compound_density)
+            area = parameters["n_simulate"] / (compound_density * 1e6)
             n_sim_targets = {
                 tag: int(
-                    parameters["n_simulate"] * compound_density / density[tag]
+                    parameters["n_simulate"] * density[tag] / compound_density
                 )
                 for tag in [A, B]
             }
@@ -2429,9 +2430,109 @@ class AutoPicasso(AbstractModuleCollection):
             }
 
             result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
-            props[(A, B)] = result["Fitted proportions of structures"]
+            plt.close("all")
+            props[f"{A},{B}"] = result["Fitted proportions of structures"]
+            fp_allfigs.append(fp_fig)
+
         logger.debug(f"proportions: {props}")
+        results["fp_allfigs"] = fp_allfigs
         results["Interaction proportions"] = props
+        results["fp_proportions"] = os.path.join(
+            results["folder"], "interaction_proportions.yaml"
+        )
+        with open(results["fp_proportions"], "w") as f:
+            yaml.dump(props, f)
+
+        results["fp_proportions"] = os.path.join(
+            results["folder"], "interaction_proportions.pkl"
+        )
+        with open(results["fp_proportions"], "wb") as f:
+            pickle.dump(props, f)
+
+        # import json
+        # results["fp_proportions"] = os.path.join(
+        #     results["folder"], "interaction_proportions.json")
+        # with open(results["fp_proportions"], 'w') as f:
+        #     json.dump(props, f)
+
+        cols = ["A", "AA", "B", "BB", "AB", "AABB"]
+        df = pd.DataFrame(columns=cols, index=props.keys())
+        for k, v in props.items():
+            df.loc[k, :] = v
+        results["fp_proportions"] = os.path.join(
+            results["folder"], "interaction_proportions.xlsx"
+        )
+        df.to_excel(results["fp_proportions"])
+
+        return parameters, results
+
+    @module_decorator
+    def protein_interactions_average(self, i, parameters, results):
+        """Average the results of multiple "protein_interactions" analyses.
+        Create a bar plot with mean and stddev of the different proportions
+        of interaction partners.
+        Args:
+            parameters:
+                fp_workflows : list of str
+                    the paths to the folders of separate workflows
+                    where the separate ripleys analyses have been done
+                report_names : list of str
+                    the report names of those worklfows
+                swkfl_protein_interactions_key : str
+                    the results key of the ripleysk module.
+                    e.g. '05_protein_interactions'
+            optional:
+        """
+        # check single intregals based on workflow file
+        fp_proportions = []
+
+        channel_tags = None
+        search_dict = {
+            (
+                parameters["swkfl_protein_interactions_key"],
+                "fp_proportions",
+            ): fp_proportions,
+        }
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_dict.keys()
+            )
+            for key, res in loaded_data.items():
+                search_dict[key].append(res)
+
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
+
+        # load proportions and calculate mean & std dev
+        all_props = []
+        for fp in fp_proportions:
+            all_props.append(pd.read_excel(fp))
+            # with open(fp, "r") as f:
+            #     all_props.append(json.load(f))
+        df_props = pd.concat(all_props)
+
+        means = df_props.mean()
+        stdevs = df_props.std()
+
+        # n_
+        fig, ax = plt.subplots()
+        x = np.arange(len(df_props.columns))
+        # borders = np.arange(5, )
+        ax.errorbar(x, means, stdevs)
+        ax.set_ylabel("proportions")
+        ax.set_title("A, AA, B, BB, AB, AABB proportions")
+        ax.set_xticklabels(df_props.columns, rotation=45)
+        results["fp_fig"] = os.path.join(results["folder"], "proportions.png")
+        fig.savefig(results["fp_fig"])
 
         return parameters, results
 
