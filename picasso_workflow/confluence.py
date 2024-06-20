@@ -748,6 +748,10 @@ class ConfluenceReporter(AbstractModuleCollection):
                 + f'ri:filename="{fp_fig}" />'
                 + "</ac:image></ul>"
             )
+            text += (
+                "The Ripley's mean value is the Ripley's K integral"
+                + ", divided by the maximum integration distance."
+            )
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -779,7 +783,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         {str(results["ripleys_significant"])}</li>
         </ul>"""
 
-        if fp_fig := results.get("fp_figintegrals"):
+        if fp_fig := results.get("fp_figmeanvals"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)
                 _, fp_fig = os.path.split(fp_fig)
@@ -807,25 +811,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
+        <li>Interaction pairs analyzed:
+        {parameters["interaction_pairs"]}</li>
         </ul>"""
-        # text += """
-        # <table>
-        # <tr>
-        #     <td></td>
-        #     <td>
-        #         AB
-        #     </td>
-        # </tr>
-        # <tr>
-        #     <td>
-        #         C
-        #     </td>
-        #     <td>
-        #         D
-        #     </td>
-        # </tr>
-        # </table>
-        # """
         if props := results.get("Interaction proportions"):
             text += "<table>"
             text += "<tr>"
@@ -835,25 +823,20 @@ class ConfluenceReporter(AbstractModuleCollection):
             for pair, p in props.items():
                 text += "<tr>"
                 a, b = pair.split(",")
-                text += f"<td>A:<b>{a}</b>, B:<b>{b}</b></td>"
-                for c in p:
-                    text += f"<td>{c:.4f}</td>"
+                text += f"<td><p>A: <b>{a}</b></p><p>B: <b>{b}</b></p></td>"
+                if a == b:
+                    p_disp = [
+                        f"{c:.2f} %" if i < 2 else "NA"
+                        for i, c in enumerate(p)
+                    ]
+                else:
+                    p_disp = [f"{c:.2f} %" for i, c in enumerate(p)]
+                for c in p_disp:
+                    text += f"<td>{c}</td>"
                 text += "</tr>"
             text += "</table>"
 
         if fp_fig := results.get("fp_allfigs"):
-            # fp_combi = fp_fig[0][0]
-            # try:
-            #     self.ci.upload_attachment(
-            #         self.report_page_id, fp_combi)
-            #     _, fp_combi = os.path.split(fp_combi)
-            # except ConfluenceInterfaceError:
-            #     pass
-            # _, fp_combi = os.path.split(fp_combi)
-            # text += f"""
-            #   <ac:image ac:height="150"><ri:attachment ri:filename="{fp_combi}" />
-            #   </ac:image>"""
-
             text += "<table>"
             for i, fp_pairs in enumerate(fp_fig):
                 text += "<tr>"
@@ -863,6 +846,12 @@ class ConfluenceReporter(AbstractModuleCollection):
                             self.report_page_id, fp_combi
                         )
                     except ConfluenceInterfaceError:
+                        # aid = self.ci.get_attachment_id(
+                        #     self.report_page_id, fp_combi)
+                        # self.ci.delete_attachment(self.report_page_id, aid)
+                        # self.ci.upload_attachment(
+                        #     self.report_page_id, fp_combi
+                        # )
                         pass
                     _, fp_combi = os.path.split(fp_combi)
                     text += "<td>"
@@ -870,17 +859,6 @@ class ConfluenceReporter(AbstractModuleCollection):
                       <ac:image ac:height="150">
                       <ri:attachment ri:filename="{fp_combi}" />
                       </ac:image>"""
-                    # text += f"""
-                    #   <ac:structured-macro ac:name="image">
-                    #     <ac:parameter ac:name="width">20%</ac:parameter>
-                    #     <ac:parameter ac:name="height">20%</ac:parameter>
-                    #     <ac:parameter ac:name="src">"{fp_combi}"</ac:parameter>
-                    #   </ac:structured-macro>"""
-                    # text += (
-                    #     "<ul><ac:image><ri:attachment "
-                    #     + f'ri:filename="{fp_fig}" />'
-                    #     + "</ac:image></ul>"
-                    # )
                     text += "</td>"
                 text += "</tr>"
             text += "</table>"
@@ -903,6 +881,36 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         </ul>"""
+        if fp_fig_mask := results.get("fp_fig_mask"):
+            fp_fig_blur = results["fp_fig_blur"]
+            for fp in [fp_fig_blur, fp_fig_mask]:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+            fp_fig_mask = os.path.split(fp_fig_mask)[1]
+            fp_fig_blur = os.path.split(fp_fig_blur)[1]
+
+            text += "<table>"
+            text += """
+                <tr>
+                <td><b>Blurred Combined Data</b></td>
+                <td><b>Final Mask</b></td>
+                </tr>"""
+            text += f"""
+                <tr>
+                <td>
+                      <ac:image ac:height="350">
+                      <ri:attachment ri:filename="{fp_fig_blur}" />
+                      </ac:image>
+                </td>
+                <td>
+                      <ac:image ac:height="350">
+                      <ri:attachment ri:filename="{fp_fig_mask}" />
+                      </ac:image>
+                </td>
+                </tr>"""
+            text += "</table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -1204,12 +1212,90 @@ class ConfluenceInterface:
         with open(filename, "rb") as f:
             files = {"file": f}
             response = requests.post(url, headers=headers, files=files)
+            # response = requests.put(url, headers=headers, files=files)
         if response.status_code != 200:
             logger.error("Failed to upload attachment.")
             raise ConfluenceInterfaceError("Failed to upload attachment.")
 
         attachment_id = response.json()["results"][0]["id"]
         return attachment_id
+
+    def get_attachment_id(self, page_id, filename):
+        """Get the id of an attachment to a page
+        Args:
+            page_id : str
+                the page id the attachment should be saved to.
+            filename : str
+                the local filename of the file to retreive
+        Returns:
+            attachment_id : str
+                the id of the attachment
+        """
+        url = self.base_url + f"/rest/api/content/{page_id}/child/attachment"
+        headers = {
+            "Authorization": "Bearer {:s}".format(self.bearer_token),
+            "X-Atlassian-Token": "nocheck",
+        }
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            logger.error("Failed to upload attachment.")
+            raise ConfluenceInterfaceError("Failed to upload attachment.")
+        print(response.json())
+        print(response.json().keys())
+        print(response.json()["results"])
+        # print(response.json()["results"].keys())
+        results = response.json()["results"]
+        for attachment in results:
+            if attachment["title"].lower() == filename.lower():
+                attachment_id = attachment["id"]
+                break
+
+        return attachment_id
+
+    def delete_attachment(self, page_id, attachment_id):
+        """Deletes an attachment to a page
+        Args:
+            page_id : str
+                the page id the attachment should be saved to.
+            attachment_id : str
+                the id of the attachment
+        Returns:
+        """
+        # https://pypi.org/project/atlassian-python-api/
+        # https://github.com/atlassian-api/atlassian-python-api
+        #   /blob/master/atlassian/confluence.py
+        #
+        # return self.delete(
+        #     "rest/experimental/content/" +
+        # "{id}/version/{versionId}".format(
+        #       id=attachment_id, versionId=version)
+        # )
+
+        # or
+
+        # params = {"pageId": page_id, "fileName": filename}
+        #         if version:
+        #             params["version"] = version
+        #         return self.post(
+        #             "json/removeattachment.action",
+        #             params=params,
+        #             headers=self.form_token_headers,
+        #         )
+        #
+        # https://github.com/atlassian-api/atlassian-python-api
+        #   /blob/master/atlassian/rest_client.py
+        url = (
+            self.base_url
+            + f"/rest/api/content/{page_id}/child/attachment/{attachment_id}"
+        )
+        headers = {
+            "Authorization": "Bearer {:s}".format(self.bearer_token),
+            "X-Atlassian-Token": "nocheck",
+        }
+        response = requests.delete(url, headers=headers)
+        if response.status_code != 200:
+            logger.error("Failed to delete attachment.")
+            raise ConfluenceInterfaceError("Failed to delete attachment.")
 
     def update_page_content(self, page_name, page_id, body_update):
         prev_version = self.get_page_version(page_name)

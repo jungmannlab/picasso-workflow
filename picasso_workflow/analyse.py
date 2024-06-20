@@ -2090,7 +2090,7 @@ class AutoPicasso(AbstractModuleCollection):
         # averaged_integrals = np.mean(all_integrals, axis=0)
 
         # check single intregals based on workflow file
-        fp_ripleys_integrals = []  # [""] * len(parameters["fp_workflows"])
+        fp_ripleys_meanvals = []  # [""] * len(parameters["fp_workflows"])
         output_folders = []  # [""] * len(parameters["fp_workflows"])
 
         channel_tags = None
@@ -2098,7 +2098,7 @@ class AutoPicasso(AbstractModuleCollection):
             (
                 parameters["swkfl_ripleysk_key"],
                 "fp_ripleys_meanval",
-            ): fp_ripleys_integrals,
+            ): fp_ripleys_meanvals,
             (parameters["swkfl_manual_key"], "folder"): output_folders,
         }
         for folder, name in zip(
@@ -2163,17 +2163,17 @@ class AutoPicasso(AbstractModuleCollection):
 
         # load and average the integrals
         all_integrals = np.stack(
-            [np.loadtxt(fp) for fp in fp_ripleys_integrals]
+            [np.loadtxt(fp) for fp in fp_ripleys_meanvals]
         )
         averaged_integrals = np.nanmean(all_integrals, axis=0)
 
         # save into own results folder
-        results["fp_ripleys_integrals"] = os.path.join(
-            results["folder"], "Ripleys_Integrals.txt"
+        results["fp_ripleys_meanvals"] = os.path.join(
+            results["folder"], "Ripleys_MeanVals.txt"
         )
-        np.savetxt(results["fp_ripleys_integrals"], averaged_integrals)
+        np.savetxt(results["fp_ripleys_meanvals"], averaged_integrals)
 
-        results["fp_figintegrals"] = self._plot_ripleys_integrals(
+        results["fp_figmeanvals"] = self._plot_ripleys_integrals(
             averaged_integrals, results["folder"], channel_tags
         )
 
@@ -2256,6 +2256,13 @@ class AutoPicasso(AbstractModuleCollection):
             density = parameters["density"]
         else:
             raise KeyError("density parameter must be list of dict.")
+
+        # ground thruth density, adjusted by labeling efficiency
+        density_gt = {
+            tag: density[tag] / parameters["labeling_efficiency"][tag]
+            for tag in density.keys()
+        }
+
         # compound_density = sum(parameters["density"].values())
         # area = parameters["n_simulate"] / (compound_density / 1e6)
         # n_sim_targets = {
@@ -2315,8 +2322,8 @@ class AutoPicasso(AbstractModuleCollection):
         props = {}
         fp_allfigs = []
         for A, B in interaction_pairs:
-            if A == B:  # or should we include homotetramers?
-                continue
+            # if A == B:  # or should we include homotetramers?
+            #     continue
             logger.debug(
                 f"analysing interaction between {A} and {B} with SPINNA."
             )
@@ -2341,56 +2348,66 @@ class AutoPicasso(AbstractModuleCollection):
             structures = self._create_spinna_structure(
                 [A], [[1, 2]], parameters["structure_distance"]
             )
-            structures += self._create_spinna_structure(
-                [B], [[1, 2]], parameters["structure_distance"]
-            )
-            # heterodimer
-            struct = {
-                "Molecular targets": [A, B],
-                "Structure title": f"{A}-{B}-heterodimer",
-                f"{A}_x": [-parameters["structure_distance"] / 2],
-                f"{A}_y": [0],
-                f"{A}_z": [0],
-                f"{B}_x": [parameters["structure_distance"] / 2],
-                f"{B}_y": [0],
-                f"{B}_z": [0],
-            }
-            structures.append(struct)
-            # heterotetramer, in a square
-            struct = {
-                "Molecular targets": [A, B],
-                "Structure title": f"{A}-{B}-heterotetramer",
-                f"{A}_x": [
-                    -parameters["structure_distance"] / 2,
-                    parameters["structure_distance"] / 2,
-                ],
-                f"{A}_y": [
-                    -parameters["structure_distance"] / 2,
-                    -parameters["structure_distance"] / 2,
-                ],
-                f"{A}_z": [0, 0],
-                f"{B}_x": [
-                    -parameters["structure_distance"] / 2,
-                    parameters["structure_distance"] / 2,
-                ],
-                f"{B}_y": [
-                    parameters["structure_distance"] / 2,
-                    parameters["structure_distance"] / 2,
-                ],
-                f"{B}_z": [0, 0],
-            }
-            structures.append(struct)
-
-            compound_density = density[A] + density[B]
-            # area = parameters["n_simulate"] / (compound_density / 1e6)
-            # area = parameters["n_simulate"] / (compound_density)
-            area = parameters["n_simulate"] / (compound_density * 1e6)
-            n_sim_targets = {
-                tag: int(
-                    parameters["n_simulate"] * density[tag] / compound_density
+            if A != B:
+                structures += self._create_spinna_structure(
+                    [B], [[1, 2]], parameters["structure_distance"]
                 )
-                for tag in [A, B]
-            }
+                # heterodimer
+                struct = {
+                    "Molecular targets": [A, B],
+                    "Structure title": f"{A}-{B}-heterodimer",
+                    f"{A}_x": [-parameters["structure_distance"] / 2],
+                    f"{A}_y": [0],
+                    f"{A}_z": [0],
+                    f"{B}_x": [parameters["structure_distance"] / 2],
+                    f"{B}_y": [0],
+                    f"{B}_z": [0],
+                }
+                structures.append(struct)
+                # heterotetramer, in a square
+                struct = {
+                    "Molecular targets": [A, B],
+                    "Structure title": f"{A}-{B}-heterotetramer",
+                    f"{A}_x": [
+                        -parameters["structure_distance"] / 2,
+                        parameters["structure_distance"] / 2,
+                    ],
+                    f"{A}_y": [
+                        -parameters["structure_distance"] / 2,
+                        -parameters["structure_distance"] / 2,
+                    ],
+                    f"{A}_z": [0, 0],
+                    f"{B}_x": [
+                        -parameters["structure_distance"] / 2,
+                        parameters["structure_distance"] / 2,
+                    ],
+                    f"{B}_y": [
+                        parameters["structure_distance"] / 2,
+                        parameters["structure_distance"] / 2,
+                    ],
+                    f"{B}_z": [0, 0],
+                }
+                structures.append(struct)
+
+                compound_density = (
+                    density_gt[A] / parameters["labeling_efficiency"][A]
+                    + density_gt[B] / parameters["labeling_efficiency"][B]
+                )
+                # area = parameters["n_simulate"] / (compound_density / 1e6)
+                # area = parameters["n_simulate"] / (compound_density)
+                area = parameters["n_simulate"] / (compound_density * 1e6)
+                n_sim_targets = {
+                    tag: int(
+                        parameters["n_simulate"]
+                        * density_gt[tag]
+                        / compound_density
+                    )
+                    for tag in [A, B]
+                }
+            else:
+                compound_density = density_gt[A]
+                area = parameters["n_simulate"] / (density_gt[A] * 1e6)
+                n_sim_targets = {A: int(parameters["n_simulate"])}
             structures, targets = load_structures_from_dict(structures)
 
             N_structures = picasso_outpost.generate_N_structures(
@@ -2401,7 +2418,7 @@ class AutoPicasso(AbstractModuleCollection):
             expected_1stNN_peak = (
                 2 / (2 * dimensionality * np.pi * (compound_density / 2))
             ) ** (1 / dimensionality)
-            fit_NND_bin = expected_1stNN_peak / 10
+            fit_NND_bin = expected_1stNN_peak / 3
             # max dist: a few times the first NN distance peak
             fit_NND_maxdist = 20 * expected_1stNN_peak
 
@@ -2433,6 +2450,7 @@ class AutoPicasso(AbstractModuleCollection):
             plt.close("all")
             props[f"{A},{B}"] = result["Fitted proportions of structures"]
             fp_allfigs.append(fp_fig)
+            # break
 
         logger.debug(f"proportions: {props}")
         results["fp_allfigs"] = fp_allfigs
@@ -2458,7 +2476,13 @@ class AutoPicasso(AbstractModuleCollection):
         cols = ["A", "AA", "B", "BB", "AB", "AABB"]
         df = pd.DataFrame(columns=cols, index=props.keys())
         for k, v in props.items():
-            df.loc[k, :] = v
+            if len(v) == len(df.columns):
+                df.loc[k, :] = v
+            elif len(v) == 2:
+                # this is homo-analysis, only A, and AA
+                df.loc[k, ["A", "AA"]] = v
+            else:
+                raise NotImplementedError("")
         results["fp_proportions"] = os.path.join(
             results["folder"], "interaction_proportions.xlsx"
         )
@@ -2609,6 +2633,12 @@ class AutoPicasso(AbstractModuleCollection):
             multi_filename,
             new_info,
             plot_figures=True,
+        )
+        results["fp_fig_blur"] = os.path.join(
+            results["folder"], "mask", "multi_ID_blurred_exp_data.png"
+        )
+        results["fp_fig_mask"] = os.path.join(
+            results["folder"], "mask", "multi_ID_mask_final.png"
         )
 
         results["fp_merge_mask"] = os.path.join(
@@ -2906,7 +2936,7 @@ class AutoPicasso(AbstractModuleCollection):
         )
         with open(fp_wr_cfg, "r") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
-        # check for results of 'ripleysk' module
+        # check for results of the modules
         for mod_key, mod_res in data["results"].items():
             for search_mod, search_res in search_keys:
                 if mod_key == search_mod:
