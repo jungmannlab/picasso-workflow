@@ -47,6 +47,31 @@ class RipleysInterface:
         }
         return ripleysRandomControlCurves
 
+    def getRipleysRandomControlCurves2(self, data, otherData=None, area=None):
+        K = []
+        L = []
+        H = []
+        print("Generating random controls...")
+        for j in tqdm(range(self.nControls)):
+            ripleysCurves, data_rnd = self.getRandomizedRipleysCurves(
+                data, otherData, area=area
+            )
+            if j == 0:
+                self.representativeData_control = data_rnd
+            K.append(ripleysCurves["K"])
+            L.append(ripleysCurves["H"])
+            H.append(ripleysCurves["L"])
+
+        meanControl = calculateRipleysMean(K)
+
+        ripleysRandomControlCurves = {
+            "K": np.array(K),
+            "L": np.array(L),
+            "H": np.array(H),
+            "mean": np.array(meanControl),
+        }
+        return ripleysRandomControlCurves
+
     def getRipleysDataCurves(self, data, otherData=None, area=None):
         ripleysCurves = self.getRipleysCurves(data, otherData, area=area)
         ripleysCurves["normalized"] = self.normalizeCurve(ripleysCurves["K"])
@@ -75,8 +100,68 @@ class RipleysInterface:
         L = np.sqrt(K / np.pi)
         H = L - self.radii
 
+        K = nNeighbors / N  # / density
+        # now this is the radial distribution function
+        n_means = nNeighbors / N
+        d_n_means = n_means[1:] - n_means[:-1]
+        mean_r = (self.radii[1:] + self.radii[:-1]) / 2
+        d_r = self.radii[1:] - self.radii[:-1]
+        d_areas = 2 * np.pi * mean_r * d_r
+        rdf = d_n_means / d_areas
+        K[:-1] = rdf
+        K[-1] = rdf[-1]
+
         ripleysCurves = {"K": np.array(K), "L": np.array(L), "H": np.array(H)}
         return ripleysCurves
+
+    def getRandomizedRipleysCurves(self, data, otherData=None, area=None):
+        """Randomize the data for each radius at the respective length scale"""
+        assert (
+            area is not None
+        ), "Input parameter area not specified, area is None"
+
+        if isTree(data):
+            N = data.n
+        else:
+            N = data.shape[0]
+        density = N / area
+
+        nNeighbors = np.zeros(len(self.radii))
+        # print('nNeighbors shape', nNeighbors.shape)
+
+        for i, r in enumerate(self.radii):
+            # create uniform random data in a circle of radius r
+            data_rnd = self.randomize_data(data, r)
+            if otherData is None:
+                tree = getTree(data_rnd)
+                # print('tree count neighbors: ', tree.count_neighbors(tree, r))
+                nNeighbors[i] = tree.count_neighbors(tree, r) - N
+            else:
+                tree = getTree(data)
+                other_data_rnd = self.randomize_data(otherData, r)
+                otherTree = getTree(other_data_rnd)
+                # print('tree count neighbors: ', tree.count_neighbors(tree, r))
+                nNeighbors[i] = tree.count_neighbors(otherTree, r)
+
+        K = (nNeighbors / N) / density
+        L = np.sqrt(K / np.pi)
+        H = L - self.radii
+
+        ripleysCurves = {"K": np.array(K), "L": np.array(L), "H": np.array(H)}
+        return ripleysCurves, data_rnd
+
+    def randomize_data(self, data, r):
+        # create uniform random data in a circle of radius r
+        N = data.shape[0]
+        phase_rnd = np.exp(1j * 2 * np.pi * np.random.random(N))
+        r_rnd = r * np.random.power(a=3, size=N)  # quadratic
+        cart_rnd = np.stack(
+            [
+                r_rnd * np.real(phase_rnd),
+                r_rnd * np.imag(phase_rnd),
+            ]
+        ).T
+        return data + cart_rnd
 
     def normalizeCurve(self, K, ci=0.95):
         ripleysMean = self.getRipleysMean()
@@ -226,8 +311,11 @@ class RipleysInterface:
 class RipleysAnalysis(RipleysInterface):
     def __init__(self, data, radii, cellMask, nControls):
         super().__init__(radii, cellMask, nControls)
-        self.ripleysCurves_controls = self.getRipleysRandomControlCurves(
-            getNumberPoints(data), cellMask
+        # self.ripleysCurves_controls = self.getRipleysRandomControlCurves(
+        #     getNumberPoints(data), cellMask
+        # )  # dictionary: K, H, L, normalized (lists)
+        self.ripleysCurves_controls = self.getRipleysRandomControlCurves2(
+            data, area=cellMask.area
         )  # dictionary: K, H, L, normalized (lists)
         self.ripleysCurves_data = self.getRipleysDataCurves(
             data, area=cellMask.area
@@ -239,8 +327,11 @@ class RipleysAnalysis(RipleysInterface):
 class CrossRipleysAnalysis(RipleysInterface):
     def __init__(self, data, otherData, radii, cellMask, nControls):
         super().__init__(radii, cellMask, nControls)
-        self.ripleysCurves_controls = self.getRipleysRandomControlCurves(
-            getNumberPoints(data), cellMask, otherData
+        # self.ripleysCurves_controls = self.getRipleysRandomControlCurves(
+        #     getNumberPoints(data), cellMask, otherData
+        # )  # dictionary: K, H, L, normalized (lists)
+        self.ripleysCurves_controls = self.getRipleysRandomControlCurves2(
+            data, area=cellMask.area
         )  # dictionary: K, H, L, normalized (lists)
         self.ripleysCurves_data = self.getRipleysDataCurves(
             data, otherData, area=cellMask.area

@@ -48,7 +48,8 @@ class Mask:
         points = np.random.uniform(
             0, self.mask.shape[0], size=(nSample, 2)
         )  # create points in units of pixels
-        # TODO: get borders of mask in order to make random number generation a bit more efficient
+        # TODO: get borders of mask in order to make random
+        # number generation a bit more efficient
 
         # Reject points outside of mask
         (steps_x, steps_y) = (1, 1)
@@ -73,6 +74,16 @@ class Mask:
             axes.set_title(title)
         plt.xlabel("x")
         plt.ylabel("y")
+
+    def crop(self, data):
+        """Crop data and return only points that lie with in the mask"""
+        # map x and y values of data to look up in mask
+        x_lut = (data.x / self.pixelsize).astype(np.int32)
+        y_lut = (data.y / self.pixelsize).astype(np.int32)
+        # do inverse operation of the one in createMask
+        fudr_mask = np.rot90(np.flipud(self.mask), k=-1)
+        inmask = fudr_mask[x_lut, y_lut]
+        return data[inmask]
 
 
 def loadMask(path, filename, pixelsize):

@@ -463,16 +463,24 @@ def nndistribution_from_csr(r, k, rho, d=2):
 # def get_files(path):
 #     dirs = os.listdir(path)
 
-#     all_csvs = [file for file in dirs if file.endswith('db-cell-clusters_35_3.csv')]
-#     all_csvs = [file for file in all_csvs if '_bc_' not in file] # mhc2 replacement needs to be excluded
+#     all_csvs = [
+#         file for file in dirs
+#         if file.endswith('db-cell-clusters_35_3.csv')]
+#     all_csvs = [
+#         file for file in all_csvs
+#         if '_bc_' not in file]  # mhc2 replacement needs to be excluded
 #     csvs_csr = [file for file in all_csvs if 'CSR' in file]
 #     csvs_cell = [file for file in all_csvs if not 'CSR' in file]
 #     csv_csr1 = [file for file in csvs_csr if 'rep_1_' in file][0]
 #     csv_cell = csvs_cell[0]
 
 #     all_hdf5s = [file for file in dirs if file.endswith('_multi_ID.hdf5')]
-#     hdf5_csr = [file for file in all_hdf5s if (('CSR' in file) & ('rep_1_' in file))][0]
-#     hdf5_cell = [file for file in all_hdf5s if file.endswith('_multi_ID.hdf5')][0]
+#     hdf5_csr = [
+#         file for file in all_hdf5s
+#         if (('CSR' in file) & ('rep_1_' in file))][0]
+#     hdf5_cell = [
+#         file for file in all_hdf5s
+#         if file.endswith('_multi_ID.hdf5')][0]
 
 #     return csv_cell, csv_csr1, hdf5_cell, hdf5_csr
 
@@ -527,6 +535,73 @@ def DBSCAN_analysis(clusters_csv):
     return barcodes, weights
 
 
+def DBSCAN_analysis_pd(clusters_csv):
+    """Calculates barcodes and weights (by cluster area) for further
+    DBSCAN data analysis.
+
+    Parameters
+    ----------
+    clusters_csv : str or pd.DataFrame
+        Path to csv file with DBSCAN results
+
+    Returns
+    -------
+    barcodes_df : pd.DataFrame, columns 'barcode', 'weight'
+        Array of shape (N, 6) with binary barcodes for each of
+        N DBSCAN clusters
+    barcodes_agg : pd.DataFrame, columns are barcodes
+        Descriptive aggregation of barcodes_df. with indexes
+        count, mean, std, 25%, 50%, 75%
+    barcode_map : pd.DataFrame
+        index: arange
+        cols: 'barcode': string with the binary barcode
+            {target}_per_cluster:
+    """
+
+    if isinstance(clusters_csv, str):
+        clusters = pd.read_csv(clusters_csv)  # DBSCAN data
+    elif isinstance(clusters_csv, pd.DataFrame):
+        clusters = clusters_csv
+    else:
+        raise NotImplementedError("Type of clusters_csv not implemented.")
+
+    per_cluster_cols = [
+        col for col in clusters.columns if col.endswith("per_cluster")
+    ]
+    targets = [col[: -len("_per_cluster")] for col in per_cluster_cols]
+
+    barcode_df = pd.DataFrame(
+        index=clusters.index, columns=["barcode", "weight"] + per_cluster_cols
+    )
+
+    def assemble_barcode(df, cols):
+        barcode = np.zeros(len(df.index), dtype=np.int32)
+        for i, col in enumerate(cols[::-1]):
+            barcode += 2**i * (df[col] > 0)
+        return barcode
+
+    barcode_df["barcode"] = assemble_barcode(clusters, per_cluster_cols)
+    barcode_df["weight"] = clusters["area (nm^2)"]
+    for col in per_cluster_cols:
+        barcode_df.loc[:, col] = clusters[col]
+
+    barcodes_agg = barcode_df.groupby("barcode").describe()
+
+    barcode_map = pd.DataFrame(
+        index=np.arange(2 ** len(targets)),
+        columns=["barcode"] + targets,
+    )
+
+    def decimal_to_binary(decimal):
+        return bin(decimal)[2:]
+
+    barcode_map["barcode"] = np.vectorize(decimal_to_binary)(barcode_map.index)
+    for i, col in enumerate(targets):
+        barcode_map[col] = barcode_map["barcode"].str[i] == "1"
+
+    return barcode_df, barcodes_agg, barcode_map
+
+
 # def analyze_all_cells(path, title=None, savename=None):
 #     """Runs the binary code analysis across all cells in the
 #     given path.
@@ -557,7 +632,8 @@ def DBSCAN_analysis(clusters_csv):
 #             results_path = os.path.join(path, cell, 'results')
 
 #             # get names of the files to run the analysis
-#             clusters_cell_name, clusters_csr_name, _, _ = get_files(results_path)
+#             (clusters_cell_name, clusters_csr_name, _, _
+#              ) = get_files(results_path)
 #             clusters_name = os.path.join(results_path, clusters_cell_name)
 #             csr_clusters_name = os.path.join(results_path, clusters_csr_name)
 
@@ -578,8 +654,10 @@ def DBSCAN_analysis(clusters_csv):
 #             pass
 
 #     # take the mean across the cell
-#     res_cell = np.zeros((len(cells), len(ALL_BARCODES))) # contains counts for each cell
-#     res_csr = np.zeros((len(cells), len(ALL_BARCODES))) # contains counts for each csr simulation
+#     res_cell = np.zeros((len(cells), len(ALL_BARCODES)))
+#     # contains counts for each cell
+#     res_csr = np.zeros((len(cells), len(ALL_BARCODES)))
+#     # contains counts for each csr simulation
 #     count = 0
 #     for (barcodes_cell, barcodes_csr, weights_cell, weights_csr) in zip(
 #         barcodes_cell_, barcodes_csr_, weights_cell_, weights_csr_
@@ -608,7 +686,7 @@ def DBSCAN_analysis(clusters_csv):
 #     # take mean and error
 #     cell_mean = res_cell.mean(axis=0)
 #     cell_std = res_cell.std(axis=0)
-#     cell_err = 1.96 * cell_std / np.sqrt(len(cells)) # 95% confidence interval
+#     cell_err = 1.96 * cell_std / np.sqrt(len(cells))  # 95% confidence interval
 #     csr_mean = res_csr.mean(axis=0)
 #     csr_std = res_csr.std(axis=0)
 #     csr_err = 1.96 * csr_std / np.sqrt(len(cells)) # 95% confidence interval
@@ -620,8 +698,12 @@ def DBSCAN_analysis(clusters_csv):
 #     np.savetxt(f"{savename}_csr_err.txt", csr_err)
 
 #     # frequency bar plot
-#     plt.bar(x-width/2, cell_mean, yerr=cell_err, width=width, edgecolor='black', facecolor='lightgray', label="Cell")
-#     plt.bar(x+width/2, csr_mean, yerr=csr_err, width=width, edgecolor='black', facecolor='dimgrey', label="CSR")
+#     plt.bar(
+#         x-width/2, cell_mean, yerr=cell_err, width=width,
+#         edgecolor='black', facecolor='lightgray', label="Cell")
+#     plt.bar(
+#         x+width/2, csr_mean, yerr=csr_err, width=width,
+#         edgecolor='black', facecolor='dimgrey', label="CSR")
 
 #     plt.xticks(np.arange(63), labels=ALL_BARCODES, rotation=90, fontsize=8)
 #     plt.ylabel("Weighted counts", fontsize=12)
@@ -640,9 +722,11 @@ def DBSCAN_analysis(clusters_csv):
 #         plt.show()
 
 # # Mean across cells of the given type
-# # the subfolders in path are named 'Cell 1, Cell 2, etc', each of which has the subfolder 'results'
+# # the subfolders in path are named 'Cell 1, Cell 2, etc',
+# # each of which has the subfolder 'results'
 # # where the DBSCAN analysis results are summarized as .csv files
-# path = r"Z:\users\hellmeier\DC_Atlas_2\2024_03_16 B16F10 PDL1 T123R\B16F10_6h_PDL1_T123R\B16F10_6h_PDL1_T123R\6h stimulation"
+# path = r"Z:\users\hellmeier\DC_Atlas_2\2024_03_16 B16F10 PDL1 T123R\
+# B16F10_6h_PDL1_T123R\B16F10_6h_PDL1_T123R\6h stimulation"
 
 # title = f"B16F10 PD-L1 T123R 6h stimulation"
 # savename = f"plots/B16F10_PDL1_T123R_6h_stimulation.png"

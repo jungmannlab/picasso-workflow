@@ -16,7 +16,7 @@ from concurrent import futures as _futures
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
-from scipy.spatial import distance
+from scipy.spatial import distance, KDTree
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import logging
@@ -1296,20 +1296,21 @@ class AutoPicasso(AbstractModuleCollection):
         np.savetxt(out_path, nneighbors, newline="\r\n")
         results["nneighbors"] = out_path
 
-        logger.debug("calculated bin parameters")
-        # as alldist can be large, reduce it here already, so memory can be
-        # freed
+        # logger.debug("calculated bin parameters")
+        # # as alldist can be large, reduce it here already, so memory can be
+        # # freed
         nspots = alldist.shape[0]
-        alldist = alldist[:, np.min(alldist, axis=1) <= (rmax_rdf + deltar)]
-        logger.debug("cropped 2d alldist")
-        alldist = np.sort(alldist.flatten())
-        logger.debug("flattened alldist")
-        # distarray = alldist.flatten()
-        # logger.debug('flattened distarray')
-        alldist = alldist[alldist <= (rmax_rdf + deltar)]
-        logger.debug("prepared alldist")
+        # alldist = alldist[:, np.min(alldist, axis=1) <= (rmax_rdf + deltar)]
+        # logger.debug("cropped 2d alldist")
+        # alldist = np.sort(alldist.flatten())
+        # logger.debug("flattened alldist")
+        # # distarray = alldist.flatten()
+        # # logger.debug('flattened distarray')
+        # alldist = alldist[alldist <= (rmax_rdf + deltar)]
+        # logger.debug("prepared alldist")
         _, _, density = self._calc_radial_distribution_function(
-            alldist,
+            # alldist,
+            points,
             deltar,
             rmax_rdf,
             nspots,
@@ -1341,7 +1342,7 @@ class AutoPicasso(AbstractModuleCollection):
 
         return parameters, results
 
-    def _calc_radial_distribution_function(
+    def _calc_radial_distribution_function_legacy(
         self, alldist, deltar, rmax, nspots, d=2, ax=None
     ):
         rs = np.arange(
@@ -1368,6 +1369,35 @@ class AutoPicasso(AbstractModuleCollection):
         d_n_means = d_n_means / nspots
         rdf = d_n_means[1:] / d_areas[2:]
         rs = rs[2:]
+        # rdf = crdf[1:] - crdf[:-1]
+
+        # assuming the RDF converged to the bulk density in
+        # its second half
+        density = np.median(rdf[int(len(rs) / 2) :])
+
+        # plot results
+        ax.plot(rs, rdf * 1e3**d)
+        ax.set_xlabel("Radius [nm]")
+        ax.set_ylabel(f"density [µm^{d}]")
+        ax.set_title("Radial Distribution Function")
+        return rs, rdf, density
+
+    def _calc_radial_distribution_function(  # _KD(
+        self, locs, deltar, rmax, nspots, d=2, ax=None
+    ):
+        rs = np.arange(
+            0,
+            rmax + deltar,
+            deltar,
+        )
+
+        tree = KDTree(locs)
+        n_means = tree.count_neighbors(tree, rs) / nspots - 1
+        d_n_means = n_means[1:] - n_means[:-1]
+
+        d_areas = 2 * np.pi * rs * deltar
+        rdf = d_n_means / d_areas[1:]
+        rs = rs[1:]
         # rdf = crdf[1:] - crdf[:-1]
 
         # assuming the RDF converged to the bulk density in
@@ -2857,6 +2887,21 @@ class AutoPicasso(AbstractModuleCollection):
         )
         np.savetxt(filepaths["fp_binary_barcode_weights"], weights)
 
+        # perform adapteation of Rafal's analysis
+        (barcode_df, barcode_agg, barcode_map) = (
+            picasso_outpost.DBSCAN_analysis_pd(db_cluster_output)
+        )
+        filepaths["fp_barcode"] = os.path.join(result_folder, "barcode.xlsx")
+        barcode_df.to_excel(filepaths["fp_barcode"])
+        filepaths["fp_barcode_agg"] = os.path.join(
+            result_folder, "barcode_described.xlsx"
+        )
+        barcode_agg.to_excel(filepaths["fp_barcode_agg"])
+        filepaths["fp_barcode_map"] = os.path.join(
+            result_folder, "barcode_map.xlsx"
+        )
+        barcode_map.to_excel(filepaths["fp_barcode_map"])
+
         """
         ===============================================================================
         mean output of one cell
@@ -3467,6 +3512,250 @@ class AutoPicasso(AbstractModuleCollection):
         plt.savefig(savename + ".svg")
 
         return parameters, results
+
+    # @module_decorator
+    # def find_cluster_motifs(self, i, parameters, results):
+    #     """Analyses the binary barcode results of _do_dbscan_molint.
+    #     Compares experimental to CSR data.
+    #     Merged for multiple cells
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #                 fp_workflows : list of str
+    #                     the paths to the folders of separate workflows
+    #                     where the separate ripleys analyses have been done
+    #                 report_names : list of str
+    #                     the report names of those worklfows
+    #                 swkfl_dbscan_molint_key : str
+    #                     the results key of the dbscan module.
+    #                     e.g. '09_dbscan_molint'
+    #                 swkfl_CSR_sim_in_mask_key : str
+    #                     the results key of the CSR dbscan module.
+    #                     e.g. '10_CSR_sim_in_mask'
+    #             and optional keys:
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     from matplotlib.ticker import FormatStrFormatter
+
+    #     fp_exp_bc = []  # will be a list of strings (1 for each cell)
+    #     fp_exp_bcagg = []  # same as above
+    #     fp_exp_bcmap = []  # same as above
+    #     fp_csr_bc = []  # will be list of list of strings as in each
+    #     fp_csr_bcagg = []  # same as above
+    #     fp_csr_bcmap = []  # same as above
+    #     exp_key = parameters["swkfl_dbscan_molint_key"]
+    #     csr_key = parameters["swkfl_CSR_sim_in_mask_key"]
+    #     search_dict = {
+    #         (
+    #             exp_key,
+    #             "fp_barcode",
+    #         ): fp_exp_bc,
+    #         (
+    #             exp_key,
+    #             "fp_barcode_described",
+    #         ): fp_exp_bcagg,
+    #         (
+    #             exp_key,
+    #             "fp_barcode_map",
+    #         ): fp_exp_bcmap,
+    #         (
+    #             csr_key,
+    #             "fp_barcode",
+    #         ): fp_csr_bc,
+    #         (
+    #             csr_key,
+    #             "fp_barcode_described",
+    #         ): fp_csr_bcagg,
+    #         (
+    #             csr_key,
+    #             "fp_barcode_map",
+    #         ): fp_csr_bcmap,
+    #     }
+    #     for folder, name in zip(
+    #         parameters["fp_workflows"], parameters["report_names"]
+    #     ):
+    #         loaded_data, wf_channel_tags = self._load_other_workflow_data(
+    #             folder, name, search_dict.keys()
+    #         )
+    #         for key, res in loaded_data.items():
+    #             search_dict[key].append(res)
+
+    #         # make sure all channel tags (e.g. protein names)
+    #         # are the same across workflows to be merged
+    #         if channel_tags is None:
+    #             channel_tags = wf_channel_tags
+    #         else:
+    #             if channel_tags != wf_channel_tags:
+    #                 raise KeyError(
+    #                     "Loaded datasets have different channel tags!"
+    #                 )
+
+    #     # load all data
+    #     barcode_map = None
+    #     barcodes_exp = None
+    #     barcodes_exp_agg = None
+    #     barcodes_csr = None
+    #     barcodes_csr_agg = None
+
+    #     for fp in fp_exp_bcmap:
+    #         df = pd.read_excel(fp)
+    #         if barcode_map is None:
+    #             barcode_map = df
+    #         else:
+    #             if not barcode_map.equals(fp):
+    #                 raise KeyError(
+    #                     "The different workflows used "
+    #                     + "different barcode maps"
+    #                 )
+    #     for fplist in fp_csr_bcmap:
+    #         for fp in fplist:
+    #             df = pd.read_excel(fp)
+    #             if barcode_map is None:
+    #                 barcode_map = df
+    #             else:
+    #                 if not barcode_map.equals(fp):
+    #                     raise KeyError(
+    #                         "The different workflows used "
+    #                         + "different barcode maps"
+    #                     )
+
+    #     for fp, name in zip(fp_exp_bc, parameters["report_names"]):
+    #         df = pd.read_excel(fp)
+    #         df["name"] = name
+    #         if barcodes_exp is None:
+    #             barcodes_exp = df
+    #         else:
+    #             barcodes_exp = pd.concat([barcodes_exp, df])
+    #     for fp, name in zip(barcodes_exp_agg, parameters["report_names"]):
+    #         df = pd.read_excel(fp)
+    #         df["name"] = name
+    #         df["metric"] = df.index
+    #         df = df.reset_index()
+    #         if barcodes_exp_agg is None:
+    #             barcodes_exp_agg = df
+    #         else:
+    #             barcodes_exp_agg = pd.concat([barcodes_exp_agg, df])
+    #     # for fplist, name in zip(barcodes_csr, parameters["report_names"]):
+    #     #     for i, fp in fplist
+    #     #     df = pd.read_excel(fp)
+    #     #     df["name"] = name
+    #     #     if barcodes_exp is None:
+    #     #         barcodes_exp = df
+    #     #     else:
+    #     #         barcodes_exp = pd.concat([barcodes_exp, df])
+
+    #     # take the mean across the cell
+    #     res_cell = np.zeros(  # contains counts for each cell
+    #         (len(parameters["fp_workflows"]), len(all_bc_list))
+    #     )
+    #     res_csr = np.zeros(  # contains counts for each csr simulation
+    #         (len(parameters["fp_workflows"]), len(all_bc_list))
+    #     )
+    #     count = 0
+    #     for fp_bc_exp, fp_bc_csr, fp_weights_exp, fp_weights_csr in zip(
+    #         fp_binbc_exp,
+    #         fp_binbc_csr,
+    #         fp_binbc_weights_exp,
+    #         fp_binbc_weights_csr,
+    #     ):
+    #         barcodes_cell = np.loadtxt(fp_bc_exp)
+    #         barcodes_csr = np.loadtxt(fp_bc_csr)
+    #         weights_cell = np.loadtxt(fp_weights_exp)
+    #         weights_csr = np.loadtxt(fp_weights_csr)
+    #         # get the weighted counts for cell
+    #         b = ["".join(_.astype(str)) for _ in barcodes_cell]
+    #         for weight, barcode in zip(weights_cell, b):
+    #             idx = all_bc_list.index(barcode)
+    #             res_cell[count, idx] += weight
+    #         res_cell[count, :] /= res_cell[count, :].sum()
+
+    #         # get the weighted counts for csr
+    #         b = ["".join(_.astype(str)) for _ in barcodes_csr]
+    #         for weight, barcode in zip(weights_csr, b):
+    #             idx = all_bc_list.index(barcode)
+    #             res_csr[count, idx] += weight
+    #         res_csr[count, :] /= res_csr[count, :].sum()
+
+    #         count += 1
+
+    #     # plot
+    #     x = np.arange(len(all_bc_list))
+    #     width = 0.4
+    #     fig = plt.figure(figsize=(10, 4), constrained_layout=True)
+
+    #     # take mean and error
+    #     cell_mean = res_cell.mean(axis=0)
+    #     cell_std = res_cell.std(axis=0)
+    #     cell_err = (
+    #         1.96 * cell_std / np.sqrt(len(parameters["fp_workflows"]))
+    #     )  # 95% confidence interval
+    #     csr_mean = res_csr.mean(axis=0)
+    #     csr_std = res_csr.std(axis=0)
+    #     csr_err = (
+    #         1.96 * csr_std / np.sqrt(len(parameters["fp_workflows"]))
+    #     )  # 95% confidence interval
+
+    #     # save as txt
+    #     results["fp_cell_mean"] = os.path.join(
+    #         results["folder"], "cell_mean.txt"
+    #     )
+    #     np.savetxt(results["fp_cell_mean"], cell_mean)
+    #     results["fp_cell_err"] = os.path.join(
+    #         results["folder"], "cell_err.txt"
+    #     )
+    #     np.savetxt(results["fp_cell_err"], cell_err)
+    #     results["fp_csr_mean"] = os.path.join(
+    #         results["folder"], "csr_mean.txt"
+    #     )
+    #     np.savetxt(results["fp_csr_mean"], csr_mean)
+    #     results["fp_csr_err"] = os.path.join(results["folder"], "csr_err.txt")
+    #     np.savetxt(results["fp_csr_err"], csr_err)
+
+    #     # frequency bar plot
+    #     plt.bar(
+    #         x - width / 2,
+    #         cell_mean,
+    #         yerr=cell_err,
+    #         width=width,
+    #         edgecolor="black",
+    #         facecolor="lightgray",
+    #         label="Cell",
+    #     )
+    #     plt.bar(
+    #         x + width / 2,
+    #         csr_mean,
+    #         yerr=csr_err,
+    #         width=width,
+    #         edgecolor="black",
+    #         facecolor="dimgrey",
+    #         label="CSR",
+    #     )
+
+    #     plt.xticks(
+    #         np.arange(len(all_bc_list)),
+    #         labels=all_bc_list,
+    #         rotation=90,
+    #         fontsize=8,
+    #     )
+    #     plt.ylabel("Weighted counts", fontsize=12)
+    #     plt.xlabel("Barcodes", fontsize=12)
+    #     plt.legend()
+    #     fig.axes[0].yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+    #     # if title is not None:
+    #     #     plt.title(title, fontsize=20)
+
+    #     results["fp_fig"] = os.path.join(
+    #         results["folder"], "binary_barcodes.png"
+    #     )
+    #     savename = os.path.splitext(results["fp_fig"])[0]
+    #     plt.savefig(savename + ".png", dpi=300, transparent=True)
+    #     plt.savefig(savename + ".svg")
+
+    #     return parameters, results
 
 
 class AutoPicassoError(Exception):

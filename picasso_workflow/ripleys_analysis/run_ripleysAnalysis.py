@@ -49,6 +49,8 @@ def performRipleysMultiAnalysis(
     cellMask.plot()
     cellMask.save(path, f"{filename}_mask")
 
+    locData.applyMask(cellMask)
+
     # Perform Ripley's analysis for all data pairs
     ripleysResults = rm.initializeResultsMatrix(nFiles)
     ripleysIntegrals = np.zeros((nFiles, nFiles))
@@ -57,13 +59,23 @@ def performRipleysMultiAnalysis(
         for k in range(nFiles):
             print(f"Analyzing files {fileIDs[j]} with {fileIDs[k]}...")
             if j == k:
+                # ripleysResults[j][k] = rm.RipleysAnalysis(
+                #     locData.forest[j], radii, cellMask, nRandomControls
+                # )
                 ripleysResults[j][k] = rm.RipleysAnalysis(
-                    locData.forest[j], radii, cellMask, nRandomControls
+                    locData.data[j], radii, cellMask, nRandomControls
                 )
             else:
+                # ripleysResults[j][k] = rm.CrossRipleysAnalysis(
+                #     locData.forest[j],
+                #     locData.forest[k],
+                #     radii,
+                #     cellMask,
+                #     nRandomControls,
+                # )
                 ripleysResults[j][k] = rm.CrossRipleysAnalysis(
-                    locData.forest[j],
-                    locData.forest[k],
+                    locData.data[j],
+                    locData.data[k],
                     radii,
                     cellMask,
                     nRandomControls,
@@ -104,7 +116,7 @@ def performRipleysMultiAnalysis(
     integralfile = os.path.join(path, f"{filename}_ripleysIntegrals")
     np.save(integralfile, ripleysIntegrals)
 
-    ripleysMeanVal = ripleysIntegrals / np.max(radii)
+    ripleysMeanVal = ripleysIntegrals / (2 * np.max(radii))
 
     return ripleysResults, ripleysIntegrals, ripleysMeanVal
 

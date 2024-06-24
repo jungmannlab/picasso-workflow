@@ -9,7 +9,8 @@ import os
 from tqdm import tqdm
 import pandas as pd
 import yaml
-import h5py
+
+# import h5py
 from scipy.spatial import KDTree
 import matplotlib.pyplot as plt
 
@@ -113,6 +114,10 @@ class LocalizationData_fromlocs:
             locs = pd.DataFrame(locs[["x", "y"]]) * self.pixelsize
             data.append(locs)
         return data
+
+    def applyMask(self, mask):
+        for k in range(len(self.data)):
+            self.data[k] = mask.crop(self.data[k])
 
     def buildForest(self):
         print("Building forest...")
