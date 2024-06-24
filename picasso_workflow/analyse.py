@@ -9,21 +9,25 @@ from picasso import lib, io, localize, gausslq, postprocess, clusterer
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import os
+import platform
+import psutil
 import time
 from concurrent import futures as _futures
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
-from scipy.spatial import distance
+from scipy.spatial import distance, KDTree
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import logging
 from datetime import datetime
 import yaml
+import pickle
 
 from picasso_workflow.util import AbstractModuleCollection
 from picasso_workflow import process_brightfield
 from picasso_workflow import picasso_outpost
+from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
 
 logger = logging.getLogger(__name__)
@@ -110,14 +114,79 @@ class AutoPicasso(AbstractModuleCollection):
                         as used by picasso. Only necessary if not loaded by
                         module load_dataset
                     always_save : bool
-                        whether every module should end in saving the current locs
+                        whether every module should end in saving the current
+                        locs
         """
         self.results_folder = results_folder
         self.analysis_config = analysis_config
 
+    @module_decorator
+    def dummy_module(self, i, parameters, results):
+        """A module that does nothing, for quickly removing
+        modules in a workflow without having to renumber the
+        following result idcs. Only for workflow debugging,
+        remove when done.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        return parameters, results
+
     ##########################################################################
     # Single dataset modules
     ##########################################################################
+
+    @module_decorator
+    def analysis_documentation(self, i, parameters, results):
+        """This module documents where and how analysis is being performed
+        Args:
+            parameters : dict
+                necessary items:
+                    filename : str
+                        the (main) file name to load.
+                optional items:
+                    sample_movie : dict, used for creating a subsampled movie
+                        keywords as used in method create_sample_movie
+                    load_camera_info : bool
+                        whether to load the camera information for the camera
+                        used from picasso.CONFIG
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        results["picasso version"] = picassoversion
+        results["picasso-workflow version"] = "N/A"
+        results["Architecutre"] = platform.machine()
+        results["OS"] = platform.system()
+        results["host"] = platform.node()
+        results["processor"] = platform.processor()
+        results["CPU Frequency [MHz]"] = psutil.cpu_freq().current
+        results["CPU cores"] = psutil.cpu_count()
+        results["Memory total [GB]"] = psutil.virtual_memory().total // (
+            1024**3
+        )
+        results["Memory available [GB]"] = (
+            psutil.virtual_memory().available // (1024**3)
+        )
+        try:
+            gpu_info = psutil.virtual_memory().gpu
+        except AttributeError:
+            gpu_info = None
+        if gpu_info:
+            results["GPU"] = gpu_info.name
+            results["GPU memory"] = gpu_info.memory_total // (1024**3)
+        else:
+            results["GPU"] = "N/A"
+            results["GPU memory [GB]"] = 0
+        return parameters, results
 
     @module_decorator
     def convert_zeiss_movie(self, i, parameters, results):
@@ -1185,9 +1254,16 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        if self.locs is not None:
+            locs = self.locs
+        elif self.channel_locs is not None:
+            locs = self.channel_locs[0]
+        else:
+            raise KeyError("No locs loaded")
+
         fig, ax = plt.subplots(nrows=2)
         points = np.array(
-            self.channel_locs[0][parameters["dims"]].tolist()
+            locs[parameters["dims"]].tolist()
         )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
         # convert all dimensions to nanometers
         pixelsize = self.analysis_config["camera_info"]["pixelsize"]
@@ -1198,7 +1274,9 @@ class AutoPicasso(AbstractModuleCollection):
         # print(points)
         # print(points.shape)
         alldist = distance.cdist(points, points)
+        logger.debug("found all distances")
         alldist = np.sort(alldist, axis=1)
+        logger.debug("sorted all distances")
 
         # calculate bins
         NN_median = np.median(alldist[:, 1])
@@ -1206,10 +1284,7 @@ class AutoPicasso(AbstractModuleCollection):
         rmax_NN = np.quantile(alldist[:, parameters["nth_NN"]], 0.95)
         rmax_rdf = np.quantile(alldist[:, parameters["nth_rdf"]], 0.95)
 
-        _, _, density = self._calc_radial_distribution_function(
-            alldist, deltar, rmax_rdf, d=len(parameters["dims"]), ax=ax[0]
-        )
-        results["density_rdf"] = density
+        logger.debug("calculated radial distribution function")
         # print(alldist)
         # print(alldist.shape)
         # out_path = os.path.join(results["folder"], "nneighbors_all.txt")
@@ -1220,6 +1295,29 @@ class AutoPicasso(AbstractModuleCollection):
         out_path = os.path.join(results["folder"], "nneighbors.txt")
         np.savetxt(out_path, nneighbors, newline="\r\n")
         results["nneighbors"] = out_path
+
+        # logger.debug("calculated bin parameters")
+        # # as alldist can be large, reduce it here already, so memory can be
+        # # freed
+        nspots = alldist.shape[0]
+        # alldist = alldist[:, np.min(alldist, axis=1) <= (rmax_rdf + deltar)]
+        # logger.debug("cropped 2d alldist")
+        # alldist = np.sort(alldist.flatten())
+        # logger.debug("flattened alldist")
+        # # distarray = alldist.flatten()
+        # # logger.debug('flattened distarray')
+        # alldist = alldist[alldist <= (rmax_rdf + deltar)]
+        # logger.debug("prepared alldist")
+        _, _, density = self._calc_radial_distribution_function(
+            # alldist,
+            points,
+            deltar,
+            rmax_rdf,
+            nspots,
+            d=len(parameters["dims"]),
+            ax=ax[0],
+        )
+        results["density_rdf"] = density
 
         # plot results
         colors = cm.get_cmap("viridis", nneighbors.shape[1]).colors
@@ -1244,41 +1342,74 @@ class AutoPicasso(AbstractModuleCollection):
 
         return parameters, results
 
-    def _calc_radial_distribution_function(
-        self, alldist, deltar, rmax, d=2, ax=None
+    def _calc_radial_distribution_function_legacy(
+        self, alldist, deltar, rmax, nspots, d=2, ax=None
     ):
         rs = np.arange(
             0,
-            rmax + 2 * deltar,
+            rmax + deltar,
             deltar,
         )
-        n_means = np.zeros_like(rs)
-        d_areas = np.zeros_like(rs)
+        # n_means = np.zeros_like(rs)
+        # d_areas = np.zeros_like(rs)
 
-        nspots = alldist.shape[0]
-        distarray = np.sort(alldist.flatten())
-        distarray = distarray[distarray <= np.max(rs)]
+        # logger.debug(f"calculating {len(rs)} rdf points")
 
-        # discard columns of alldist that only have larger entries than rmax
+        # for i, r in enumerate(rs):
+        #     # area = 2 * np.pi * r**2
+        #     # n_mean = np.sum(alldist < r) / len(locs)
+        #     # crdf[i] = n_mean / area
+        #     d_areas[i] = 2 * np.pi * r * deltar
+        #     # n_means[i] = np.sum(distarray <= r) / nspots
+        #     n_means[i] = np.sum(alldist <= r) / nspots
+        # d_n_means = n_means[1:] - n_means[:-1]
 
-        for i, r in enumerate(rs):
-            # area = 2 * np.pi * r**2
-            # n_mean = np.sum(alldist < r) / len(locs)
-            # crdf[i] = n_mean / area
-            d_areas[i] = 2 * np.pi * r * deltar
-            n_means[i] = np.sum(distarray <= r) / nspots
-        d_n_means = n_means[1:] - n_means[:-1]
-        rdf = d_n_means / d_areas[1:]
+        d_areas = 2 * np.pi * rs * deltar
+        d_n_means, _ = np.histogram(alldist, bins=rs)
+        d_n_means = d_n_means / nspots
+        rdf = d_n_means[1:] / d_areas[2:]
+        rs = rs[2:]
         # rdf = crdf[1:] - crdf[:-1]
 
+        # assuming the RDF converged to the bulk density in
+        # its second half
         density = np.median(rdf[int(len(rs) / 2) :])
 
         # plot results
-        ax.plot(rs[1:], rdf * 1e3**d)
+        ax.plot(rs, rdf * 1e3**d)
         ax.set_xlabel("Radius [nm]")
         ax.set_ylabel(f"density [µm^{d}]")
         ax.set_title("Radial Distribution Function")
-        return rs[1:], rdf, density
+        return rs, rdf, density
+
+    def _calc_radial_distribution_function(  # _KD(
+        self, locs, deltar, rmax, nspots, d=2, ax=None
+    ):
+        rs = np.arange(
+            0,
+            rmax + deltar,
+            deltar,
+        )
+
+        tree = KDTree(locs)
+        n_means = tree.count_neighbors(tree, rs) / nspots - 1
+        d_n_means = n_means[1:] - n_means[:-1]
+
+        d_areas = 2 * np.pi * rs * deltar
+        rdf = d_n_means / d_areas[1:]
+        rs = rs[1:]
+        # rdf = crdf[1:] - crdf[:-1]
+
+        # assuming the RDF converged to the bulk density in
+        # its second half
+        density = np.median(rdf[int(len(rs) / 2) :])
+
+        # plot results
+        ax.plot(rs, rdf * 1e3**d)
+        ax.set_xlabel("Radius [nm]")
+        ax.set_ylabel(f"density [µm^{d}]")
+        ax.set_title("Radial Distribution Function")
+        return rs, rdf, density
 
     @module_decorator
     def fit_csr(self, i, parameters, results):
@@ -1590,10 +1721,24 @@ class AutoPicasso(AbstractModuleCollection):
                 and optional keys:
                     tag : str
                         the tag / name of the combined dataset
+                    combine_col : str
+                        the column name for the IDs to the different datasets
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        combine_map = {tag: i for i, tag in enumerate(self.channel_tags)}
+        results["combine_map"] = combine_map
+        fp_combinemap = os.path.join(results["folder"], "combine_map.yaml")
+        with open(fp_combinemap, "w") as f:
+            yaml.dump(combine_map, f)
+        results["fp_combinemap"] = fp_combinemap
+        combine_col = parameters.get("combine_col", "combine_id")
+        for i in range(len(self.channel_locs)):
+            locs = self.channel_locs[i]
+            self.channel_locs[i] = lib.append_to_rec(
+                locs, data=i * np.ones(len(locs)), name=combine_col
+            )
         combined_locs = np.lib.recfunctions.stack_arrays(
             self.channel_locs,
             asrecarray=True,
@@ -1690,6 +1835,10 @@ class AutoPicasso(AbstractModuleCollection):
                             "TARGET_z": list of float,
                         where TARGET is one each of the target names in
                         "Molecular targets"
+                    structures_d : float
+                        distance between molecules within auto-generated
+                        structures, in nm. Only necessary if 'structures'
+                        is not given.
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -1701,33 +1850,41 @@ class AutoPicasso(AbstractModuleCollection):
             prepped = False
 
         if not prepped:
+            spinna_config = {}
+            data_2d = "z" not in self.channel_locs[0].dtype.names
+            if data_2d:
+                spinna_config["rotation_mode"] = ["2D"]
+                area = (
+                    parameters["proposed_n_simulate"]
+                    / parameters["proposed_density"]
+                )
+                spinna_config["area"] = [area]
+                d = 2
+            else:
+                spinna_config["rotation_mode"] = ["3D"]
+                z_range = int(self.locs["z"].max() - self.locs["z"].min())
+                volume = (
+                    parameters["proposed_n_simulate"]
+                    / parameters["proposed_density"]
+                )
+                spinna_config["volume"] = [volume]
+                spinna_config["z_range"] = [z_range]
+                d = 3
+
             # prepare input files for the user to edit, with default values
             spinna_structs = parameters.get("structures")
             if spinna_structs is None:
-                spinna_structs = []
-                for tag in self.channel_tags:
-                    struct = {
-                        "Molecular targets": [tag],
-                        "Structure title": f"{tag}-monomer",
-                        f"{tag}_x": [0.0],
-                        f"{tag}_y": [0.0],
-                        f"{tag}_z": [0.0],
-                    }
-                    spinna_structs.append(struct)
-                    struct = {
-                        "Molecular targets": [tag],
-                        "Structure title": f"{tag}-dimer",
-                        f"{tag}_x": [-10.0, 10.0],
-                        f"{tag}_y": [0.0, 0.0],
-                        f"{tag}_z": [0.0, 0.0],
-                    }
-                    spinna_structs.append(struct)
+                spinna_structs = self._create_spinna_structure(
+                    self.channel_tags,
+                    [[1, 2]] * len(self.channel_tags),
+                    distance=parameters["structures_d"],
+                    dimensionality=d,
+                )
             structs_fn = "spinna_structs.yaml"
             structs_fp = os.path.join(results["folder"], structs_fn)
             with open(structs_fp, "w") as f:
                 yaml.dump_all(spinna_structs, f)
 
-            spinna_config = {}
             spinna_config["structures_filename"] = [structs_fp]
             for locs, info, tag in zip(
                 self.channel_locs, self.channel_info, self.channel_tags
@@ -1750,35 +1907,14 @@ class AutoPicasso(AbstractModuleCollection):
             spinna_config["save_filename"] = ["spinna_results"]
             spinna_config["nn_plotted"] = [parameters["proposed_nn_plotted"]]
 
-            data_2d = "z" not in self.channel_locs[0].dtype.names
-            if data_2d:
-                spinna_config["rotation_mode"] = ["2D"]
-                area = (
-                    parameters["proposed_n_simulate"]
-                    / parameters["proposed_density"]
-                    / 1e6  # from nm^2 to um^2
-                )
-                spinna_config["area"] = [area]
-                d = 2
-            else:
-                spinna_config["rotation_mode"] = ["3D"]
-                z_range = int(self.locs["z"].max() - self.locs["z"].min())
-                volume = (
-                    parameters["proposed_n_simulate"]
-                    / parameters["proposed_density"]
-                    / 1e9  # from nm^3 to um^3
-                )
-                spinna_config["volume"] = [volume]
-                spinna_config["z_range"] = [z_range]
-                d = 3
             # bin size: more than Nyquist subsampling
             expected_1stNN_peak = (
                 2 / (2 * d * np.pi * parameters["proposed_density"])
             ) ** (1 / d)
+            spinna_config["fit_NND_bin"] = [expected_1stNN_peak / 10]
             spinna_config["density"] = parameters["proposed_density"]
-            spinna_config["fit_NND_bin"] = [expected_1stNN_peak / 5]
             # max dist: a few times the first NN distance peak
-            spinna_config["fit_NND_maxdist"] = [10 * expected_1stNN_peak]
+            spinna_config["fit_NND_maxdist"] = [20 * expected_1stNN_peak]
 
             # save config to file
             pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
@@ -1805,6 +1941,1821 @@ class AutoPicasso(AbstractModuleCollection):
             results["success"] = True
 
         return parameters, results
+
+    def _create_spinna_structure(
+        self, names, multimers, distance, dimensionality=2
+    ):
+        """
+        Args:
+            names : list of str
+                the names of proteins
+            multimers : list of list of int
+                for each name, the homo-multimers to implement
+            distance : float
+                distance between entities, in nm
+        """
+        spinna_structs = []
+        for tag, name_multimers in zip(names, multimers):
+            for n in name_multimers:
+                # create positions on a cubic lattice
+                positions = np.zeros((3, n))
+                ux = np.array([1, 0, 0])
+                uy = np.array([0, 1, 0])
+                uz = np.array([0, 0, 1])
+                edgelength = int(np.ceil(n ** (1 / dimensionality)))
+                for i in range(n):
+                    iz = i // (edgelength**2)
+                    iy = i % (edgelength**2)
+                    ix = i % edgelength
+                    positions[:, i] = ix * ux + iy * uy + iz * uz
+                positions[0, :] -= np.mean(positions[0, :])
+                positions[1, :] -= np.mean(positions[1, :])
+                positions[2, :] -= np.mean(positions[2, :])
+
+                # create structure
+                struct = {
+                    "Molecular targets": [tag],
+                    "Structure title": f"{tag}-{n}-mer",
+                    f"{tag}_x": [float(x) for x in positions[0, :]],
+                    f"{tag}_y": [float(x) for x in positions[1, :]],
+                    f"{tag}_z": [float(x) for x in positions[2, :]],
+                }
+                spinna_structs.append(struct)
+        return spinna_structs
+
+    @module_decorator
+    def ripleysk(self, i, parameters, results):
+        """Perforn Ripley's K analysis between the channels.
+        Args:
+            parameters:
+                ripleys_n_random_controls : int
+                    number of random controls, default: 100
+                ripleys_rmax : int
+                    the maximum radius, default 200
+                ripleys_threshold : float
+                    the threshold of ripleys integrals above which the
+                    interaction is deemed significant.
+                fp_combined_locs : str
+                    filepath to the combined locs of all channel_locs
+        """
+        nRandomControls = parameters.get("ripleys_n_random_controls", 100)
+        radii = np.concatenate(
+            (
+                np.arange(10, 80, 2),
+                np.arange(80, parameters.get("ripleys_rmax", 200), 12),
+            )
+        )
+
+        if isinstance(parameters["fp_combined_locs"], list):
+            fp_combined_locs = parameters["fp_combined_locs"][0]
+        else:
+            fp_combined_locs = parameters["fp_combined_locs"]
+        combined_locs, _ = io.load_locs(fp_combined_locs)
+
+        (ripleysResults, ripleysIntegrals, ripleysMeanVal) = (
+            run_ripleysAnalysis.performRipleysMultiAnalysis(
+                path=results["folder"],
+                filename="",
+                fileIDs=self.channel_tags,
+                radii=radii,
+                nRandomControls=nRandomControls,
+                channel_locs=self.channel_locs,
+                combined_locs=combined_locs,
+                pixelsize=self.analysis_config["camera_info"].get("pixelsize"),
+            )
+        )
+
+        results["fp_ripleys_meanval"] = os.path.join(
+            results["folder"], "Ripleys_IntegralsMean.txt"
+        )
+        np.savetxt(results["fp_ripleys_meanval"], ripleysMeanVal)
+
+        results["fp_fig_ripleys_meanval"] = self._plot_ripleys_integrals(
+            ripleysMeanVal, results["folder"], self.channel_tags
+        )
+
+        results["ripleys_significant"] = self._find_ripleys_significant(
+            ripleysMeanVal,
+            parameters["ripleys_threshold"],
+            self.channel_tags,
+        )
+
+        return parameters, results
+
+    def _plot_ripleys_integrals(self, ripleysMeanVal, folder, channel_tags):
+        fig, ax = plt.subplots()
+        heatmap = ax.imshow(ripleysMeanVal, cmap="coolwarm_r", vmin=-1, vmax=1)
+        ax.grid(False)
+        ax.set_xticks(np.arange(ripleysMeanVal.shape[0]))
+        ax.set_yticks(np.arange(ripleysMeanVal.shape[1]))
+        # Add number annotations to cells
+        for i in range(ripleysMeanVal.shape[0]):
+            for j in range(ripleysMeanVal.shape[1]):
+                ax.text(
+                    j,
+                    i,
+                    f"{ripleysMeanVal[i, j]:.2f}",
+                    ha="center",
+                    va="center",
+                    color="black",
+                    size=8,
+                )
+        ax.set_xticklabels(channel_tags, rotation=45)
+        ax.set_yticklabels(channel_tags, rotation=45)
+        ax.set_title("Ripleys Mean Value")
+        plt.colorbar(heatmap, format="%.2f")
+        fp_integrals = os.path.join(folder, "ripleysMeanVal.png")
+        fig.set_size_inches((9, 7))
+        fig.savefig(fp_integrals)
+        return fp_integrals
+
+    def _find_ripleys_significant(
+        self, ripleysIntegrals, threshold, channel_tags
+    ):
+        # elucidate significant pairs
+        significant_pairs = []
+        for i in range(len(channel_tags)):
+            for j in range(i, len(channel_tags)):
+                if ripleysIntegrals[i, j] > threshold:
+                    significant_pairs.append(
+                        (channel_tags[i], channel_tags[j])
+                    )
+        return significant_pairs
+
+    @module_decorator
+    def ripleysk_average(self, i, parameters, results):
+        """Average the results of multiple Ripley's K Analyses, analyse
+        the significant pairs after averaging, and save them into the
+        separate workflow manual folders (for further analysis there)
+        Args:
+            parameters:
+                # fp_ripleys_integrals : list of str
+                #     the various single analyses to average, e.g. of
+                #     different workflows
+                fp_workflows : list of str
+                    the paths to the folders of separate workflows
+                    where the separate ripleys analyses have been done
+                report_names : list of str
+                    the report names of those worklfows
+                ripleys_threshold : float
+                    the threshold of ripleys integrals above which the
+                    interaction is deemed significant.
+                # output_folders : list of str
+                #     folders to write the significant pairs into. This can
+                #     e.g. be the 'manual' results folders of the
+                #     workflows, so these can proceed.
+            optional:
+                swkfl_ripleysk_key : str
+                    the results key of the ripleysk module.
+                    e.g. '05_ripleysk'
+                swkfl_manual_key : str
+                    the results key of the manual module to save the
+                    integrals to
+                if those two are not given, saving is not performed
+        """
+        # from picasso_workflow.workflow import WorkflowRunner
+
+        # all_integrals = np.concat(
+        #     [np.loadtxt(fp) for fp in parameters["fp_ripleys_integrals"]])
+        # averaged_integrals = np.mean(all_integrals, axis=0)
+
+        # check single intregals based on workflow file
+        fp_ripleys_meanvals = []  # [""] * len(parameters["fp_workflows"])
+        output_folders = []  # [""] * len(parameters["fp_workflows"])
+
+        channel_tags = None
+        search_dict = {
+            (
+                parameters["swkfl_ripleysk_key"],
+                "fp_ripleys_meanval",
+            ): fp_ripleys_meanvals,
+            (parameters["swkfl_manual_key"], "folder"): output_folders,
+        }
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_dict.keys()
+            )
+            for key, res in loaded_data.items():
+                search_dict[key].append(res)
+
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
+
+        # for i, (wkflfolder, report_name) in enumerate(
+        #     zip(parameters["fp_workflows"], parameters["report_names"])
+        # ):
+        #     # find analysis folder
+        #     postfix = WorkflowRunner._check_previous_runner(
+        #         wkflfolder, report_name
+        #     )
+        #     # find aggregation WorkflowRunner config
+        #     fp_wr_cfg = os.path.join(
+        #         wkflfolder,
+        #         report_name + "_" + postfix,
+        #         report_name + "_aggregation_" + postfix,
+        #         "WorkflowRunner.yaml",
+        #     )
+        #     with open(fp_wr_cfg, "r") as f:
+        #         data = yaml.load(f, Loader=yaml.FullLoader)
+        #     # check for results of 'ripleysk' module
+        #     for mod_key, mod_res in data["results"].items():
+        #         if mod_key == parameters.get("swkfl_ripleysk_key"):
+        #             print(mod_key, mod_res)
+        #             print(parameters.get("swkfl_ripleysk_key"))
+        #             fp_ripleys_integrals[i] = mod_res["fp_ripleys_integrals"]
+        #         elif mod_key == parameters.get("swkfl_manual_key"):
+        #             print(mod_key, mod_res)
+        #             print(parameters.get("swkfl_manual_key"))
+        #             output_folders[i] = mod_res["folder"]
+        #     # find AggregationWorkflowRunner config
+        #     fp_wr_cfg = os.path.join(
+        #         wkflfolder,
+        #         report_name + "_" + postfix,
+        #         "AggregationWorkflowRunner.yaml",
+        #     )
+        #     with open(fp_wr_cfg, "r") as f:
+        #         data = yaml.load(f, Loader=yaml.FullLoader)
+        #     channel_tags = data["aggregation_workflow"][
+        #         "single_dataset_tileparameters"
+        #     ]["#tags"]
+        # fp_ripleys_integrals = [fp for fp in fp_ripleys_integrals if fp != ""]
+        # output_folders = [fp for fp in output_folders if fp != ""]
+        results["output_folders"] = output_folders
+
+        # load and average the integrals
+        all_integrals = np.stack(
+            [np.loadtxt(fp) for fp in fp_ripleys_meanvals]
+        )
+        averaged_integrals = np.nanmean(all_integrals, axis=0)
+
+        # save into own results folder
+        results["fp_ripleys_meanvals"] = os.path.join(
+            results["folder"], "Ripleys_MeanVals.txt"
+        )
+        np.savetxt(results["fp_ripleys_meanvals"], averaged_integrals)
+
+        results["fp_figmeanvals"] = self._plot_ripleys_integrals(
+            averaged_integrals, results["folder"], channel_tags
+        )
+
+        significant_pairs = self._find_ripleys_significant(
+            averaged_integrals, parameters["ripleys_threshold"], channel_tags
+        )
+        results["ripleys_significant"] = significant_pairs
+
+        # save significant pairs into given folders
+        results["fp_ripleys_significant"] = os.path.join(
+            results["folder"], "significant_pairs.txt"
+        )
+        save_fp = [
+            os.path.join(fol, "significant_pairs.yaml")
+            for fol in output_folders
+        ]
+        save_fp.append(results["fp_ripleys_significant"])
+        for fp in save_fp:
+            with open(fp, "w") as f:
+                yaml.dump(significant_pairs, f)
+            # np.savetxt(fp, significant_pairs)
+
+        return parameters, results
+
+    @module_decorator
+    def protein_interactions(self, i, parameters, results):
+        """Perform interaction analysis on those dataset pairs that showed
+        significance in Ripley's K analysis. The interaction analysis consists
+        of
+        (1) calculating proportion of singly or doubly co-occurring instances
+            of the single receptors (in clusters)
+        (2) calculating the co-occurrence of these single or double events of
+            one receptor with single or double events of another receptor
+            within a cluster (where Ripley's K showed significance)
+        This approach stems from a time of early development of SPINNA.
+        Nowadays, this could be done directly but potentially with slightly
+        different results.
+        Fixed to 2D. Fixed to only using 1st nearest neighbor
+        Args:
+            parameters:
+                channel_map : dict
+                    maps between channels (protein names, tags before combining)
+                    and index in the combine_id column of combined locs
+                labeling_efficiency : dict, channel tag to float, range 0-100
+                    labeling efficiency percentage, default for all targets
+                labeling_uncertainty : dict, channel tag to float
+                    labeling uncertainty [nm]; good value is e.g. 5
+                n_simulate : int
+                    number of target molecules to be simulated;
+                    good value is e.g. 50000
+                density : dict, channel tag to float
+                    density to simulate [nm^2 or nm^3];
+                    area density if 2D; volume density if 3D
+                nn_nth : int
+                    number of nearest neighbors to analyse
+                structure_distance : float
+                    the protein distance between each other in nm
+                res_factor : float
+                    the spinna res_factor
+                sim_repeats : int
+                    number of simulation repeats, for noise reduction
+                interaction_pairs: list of list of two strings, or str
+                    pairs that are able to interact
+                    if str: filepath to a yaml file with list of tuples
+        """
+        from picasso_workflow.spinna_main import load_structures_from_dict
+
+        logger.debug("Molecular interactions")
+
+        # # homo-analysis (proportions of 1- or 2-mers of the same kind)
+        # props = {}
+        dimensionality = 2
+        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        if isinstance(parameters["density"], list):
+            density = {
+                tag: parameters["density"][cid]
+                for tag, cid in parameters["channel_map"].items()
+            }
+        elif isinstance(parameters["density"], dict):
+            density = parameters["density"]
+        else:
+            raise KeyError("density parameter must be list of dict.")
+
+        # ground thruth density, adjusted by labeling efficiency
+        density_gt = {
+            tag: density[tag] / parameters["labeling_efficiency"][tag]
+            for tag in density.keys()
+        }
+
+        # compound_density = sum(parameters["density"].values())
+        # area = parameters["n_simulate"] / (compound_density / 1e6)
+        # n_sim_targets = {
+        #     tag:
+        #     int(parameters["n_simulate"] * compound_density / den)
+        #     for tag, den in parameters["density"].items()
+        # }
+        # pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        # structures = self._create_spinna_structure(
+        #     self.channel_tags, [1, 2], distance=parameters["distance"])
+        # N_structures = picasso_outpost.generate_N_structures(
+        #     structures, n_sim_targets, parameters["res_factor"]
+        # )
+        # # bin size: more than Nyquist subsampling
+        # expected_1stNN_peak = (
+        #     2 / (2 * dimensionality * np.pi * parameters["density"])
+        # ) ** (1 / dimensionality)
+        # fit_NND_bin = expected_1stNN_peak / 10
+        # # max dist: a few times the first NN distance peak
+        # fit_NND_maxdist = 20 * expected_1stNN_peak
+        # for tag, locs in zip(self.channel_tags, self.channel_locs):
+        #     spinna_parameters = {
+        #         "structures": self._create_spinna_structure(
+        #             [tag], [[1, 2]], parameters["structure_distance"]),
+        #         "label_unc": parameters["labeling_uncertainty"],
+        #         "le": parameters["labeling_efficiency"],
+        #         "mask_dict": None,
+        #         "width": np.sqrt(area * 1e6),
+        #         "height": np.sqrt(area * 1e6),
+        #         "depth": None,
+        #         "random_rot_mode": "2D",
+        #         "exp_data": {tag: np.stack((locs[['x', 'y']] * pixelsize))},
+        #         "sim_repeats": parameters["sim_repeats"],
+        #         "fit_NND_bin": [fit_NND_bin],
+        #         "fit_NND_maxdist": [fit_NND_maxdist],
+        #         "N_structures": N_structures,
+        #         "save_filename": os.path.join(results["folder"], "homo-{tag}"),
+        #         "asynch": True,
+        #         "targets": [tag],
+        #         "apply_mask": False,
+        #         "nn_plotted": parameters["nn_nth"],
+        #         "result_dir": results["folder"],
+        #     }
+        #     result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
+        #     props[tag] = result["Fitted proportions of structures"]
+        # logger.debug(f'found proportions of {props}')
+
+        if isinstance(parameters["interaction_pairs"], str):
+            with open(parameters["interaction_pairs"], "r") as f:
+                interaction_pairs = yaml.safe_load(f)
+        else:
+            interaction_pairs = parameters["interaction_pairs"]
+            # np.savetxt(fp, significant_pairs)
+
+        # hetero-analysis (pairwise up to 2+2-mers)
+        # structures: A, B, AA, BB, AB, AABB
+        props = {}
+        fp_allfigs = []
+        for A, B in interaction_pairs:
+            # if A == B:  # or should we include homotetramers?
+            #     continue
+            logger.debug(
+                f"analysing interaction between {A} and {B} with SPINNA."
+            )
+            # find index of A and B in self.channel_locs
+            ia = self.channel_tags.index(A)
+            ib = self.channel_tags.index(B)
+
+            # locs, but as np.ndarray
+            exp_data = {}
+            for i, target in zip([ia, ib], [A, B]):
+                locs = self.channel_locs[i]
+                if hasattr(locs, "z"):
+                    exp_data[target] = np.stack(
+                        (locs.x * pixelsize, locs.y * pixelsize, locs.z)
+                    ).T
+                    # dim = 3
+                else:
+                    exp_data[target] = np.stack(
+                        (locs.x * pixelsize, locs.y * pixelsize)
+                    ).T
+                    # dim = 2
+            structures = self._create_spinna_structure(
+                [A], [[1, 2]], parameters["structure_distance"]
+            )
+            if A != B:
+                structures += self._create_spinna_structure(
+                    [B], [[1, 2]], parameters["structure_distance"]
+                )
+                # heterodimer
+                struct = {
+                    "Molecular targets": [A, B],
+                    "Structure title": f"{A}-{B}-heterodimer",
+                    f"{A}_x": [-parameters["structure_distance"] / 2],
+                    f"{A}_y": [0],
+                    f"{A}_z": [0],
+                    f"{B}_x": [parameters["structure_distance"] / 2],
+                    f"{B}_y": [0],
+                    f"{B}_z": [0],
+                }
+                structures.append(struct)
+                # heterotetramer, in a square
+                struct = {
+                    "Molecular targets": [A, B],
+                    "Structure title": f"{A}-{B}-heterotetramer",
+                    f"{A}_x": [
+                        -parameters["structure_distance"] / 2,
+                        parameters["structure_distance"] / 2,
+                    ],
+                    f"{A}_y": [
+                        -parameters["structure_distance"] / 2,
+                        -parameters["structure_distance"] / 2,
+                    ],
+                    f"{A}_z": [0, 0],
+                    f"{B}_x": [
+                        -parameters["structure_distance"] / 2,
+                        parameters["structure_distance"] / 2,
+                    ],
+                    f"{B}_y": [
+                        parameters["structure_distance"] / 2,
+                        parameters["structure_distance"] / 2,
+                    ],
+                    f"{B}_z": [0, 0],
+                }
+                structures.append(struct)
+
+                compound_density = (
+                    density_gt[A] / parameters["labeling_efficiency"][A]
+                    + density_gt[B] / parameters["labeling_efficiency"][B]
+                )
+                # area = parameters["n_simulate"] / (compound_density / 1e6)
+                # area = parameters["n_simulate"] / (compound_density)
+                area = parameters["n_simulate"] / (compound_density * 1e6)
+                n_sim_targets = {
+                    tag: int(
+                        parameters["n_simulate"]
+                        * density_gt[tag]
+                        / compound_density
+                    )
+                    for tag in [A, B]
+                }
+            else:
+                compound_density = density_gt[A]
+                area = parameters["n_simulate"] / (density_gt[A] * 1e6)
+                n_sim_targets = {A: int(parameters["n_simulate"])}
+            structures, targets = load_structures_from_dict(structures)
+
+            N_structures = picasso_outpost.generate_N_structures(
+                structures, n_sim_targets, parameters["res_factor"]
+            )
+
+            # bin size: more than Nyquist subsampling
+            expected_1stNN_peak = (
+                2 / (2 * dimensionality * np.pi * (compound_density / 2))
+            ) ** (1 / dimensionality)
+            fit_NND_bin = expected_1stNN_peak / 3
+            # max dist: a few times the first NN distance peak
+            fit_NND_maxdist = 20 * expected_1stNN_peak
+
+            spinna_parameters = {
+                "structures": structures,
+                "label_unc": parameters["labeling_uncertainty"],
+                "le": parameters["labeling_efficiency"],
+                "mask_dict": None,
+                "width": np.sqrt(area * 1e6),
+                "height": np.sqrt(area * 1e6),
+                "depth": None,
+                "random_rot_mode": "2D",
+                "exp_data": exp_data,
+                "sim_repeats": parameters["sim_repeats"],
+                "fit_NND_bin": fit_NND_bin,
+                "fit_NND_maxdist": fit_NND_maxdist,
+                "N_structures": N_structures,
+                "save_filename": os.path.join(
+                    results["folder"], f"interaction-{A}-{B}"
+                ),
+                "asynch": True,
+                "targets": [A, B],
+                "apply_mask": False,
+                "nn_plotted": parameters["nn_nth"],
+                "result_dir": results["folder"],
+            }
+
+            result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
+            plt.close("all")
+            props[f"{A},{B}"] = result["Fitted proportions of structures"]
+            fp_allfigs.append(fp_fig)
+            # break
+
+        logger.debug(f"proportions: {props}")
+        results["fp_allfigs"] = fp_allfigs
+        results["Interaction proportions"] = props
+        results["fp_proportions"] = os.path.join(
+            results["folder"], "interaction_proportions.yaml"
+        )
+        with open(results["fp_proportions"], "w") as f:
+            yaml.dump(props, f)
+
+        results["fp_proportions"] = os.path.join(
+            results["folder"], "interaction_proportions.pkl"
+        )
+        with open(results["fp_proportions"], "wb") as f:
+            pickle.dump(props, f)
+
+        # import json
+        # results["fp_proportions"] = os.path.join(
+        #     results["folder"], "interaction_proportions.json")
+        # with open(results["fp_proportions"], 'w') as f:
+        #     json.dump(props, f)
+
+        cols = ["A", "AA", "B", "BB", "AB", "AABB"]
+        df = pd.DataFrame(columns=cols, index=props.keys())
+        for k, v in props.items():
+            if len(v) == len(df.columns):
+                df.loc[k, :] = v
+            elif len(v) == 2:
+                # this is homo-analysis, only A, and AA
+                df.loc[k, ["A", "AA"]] = v
+            else:
+                raise NotImplementedError("")
+        results["fp_proportions"] = os.path.join(
+            results["folder"], "interaction_proportions.xlsx"
+        )
+        df.to_excel(results["fp_proportions"])
+
+        return parameters, results
+
+    @module_decorator
+    def protein_interactions_average(self, i, parameters, results):
+        """Average the results of multiple "protein_interactions" analyses.
+        Create a bar plot with mean and stddev of the different proportions
+        of interaction partners.
+        Args:
+            parameters:
+                fp_workflows : list of str
+                    the paths to the folders of separate workflows
+                    where the separate ripleys analyses have been done
+                report_names : list of str
+                    the report names of those worklfows
+                swkfl_protein_interactions_key : str
+                    the results key of the ripleysk module.
+                    e.g. '05_protein_interactions'
+            optional:
+        """
+        # check single intregals based on workflow file
+        fp_proportions = []
+
+        channel_tags = None
+        search_dict = {
+            (
+                parameters["swkfl_protein_interactions_key"],
+                "fp_proportions",
+            ): fp_proportions,
+        }
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_dict.keys()
+            )
+            for key, res in loaded_data.items():
+                search_dict[key].append(res)
+
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
+
+        # load proportions and calculate mean & std dev
+        all_props = []
+        for fp in fp_proportions:
+            all_props.append(pd.read_excel(fp))
+            # with open(fp, "r") as f:
+            #     all_props.append(json.load(f))
+        df_props = pd.concat(all_props)
+
+        means = df_props.mean()
+        stdevs = df_props.std()
+
+        # n_
+        fig, ax = plt.subplots()
+        x = np.arange(len(df_props.columns))
+        # borders = np.arange(5, )
+        ax.errorbar(x, means, stdevs)
+        ax.set_ylabel("proportions")
+        ax.set_title("A, AA, B, BB, AB, AABB proportions")
+        ax.set_xticklabels(df_props.columns, rotation=45)
+        results["fp_fig"] = os.path.join(results["folder"], "proportions.png")
+        fig.savefig(results["fp_fig"])
+
+        return parameters, results
+
+    @module_decorator
+    def create_mask(self, i, parameters, results):
+        """
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    fp_combined_locs : str
+                        filepath to the locs combined in 'combine_channels'
+                        module
+                    margin : float
+                        Size of the added empty margin to the FOV, in nm
+                    binsize : float
+                        Size o fthe 2D histogram bins of the first step, in nm
+                    sigma_mask_blur : int
+                        parameter of the gaussian blur in binsize units
+                    mask_resolution : float
+                        Controls the digital resolution of the mask, in nm
+                    combine_col : str
+                        the name of the combine column, e.g. 'combine_id'
+                        or 'protein'. Same as used in 'combine_channels' module
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        from picasso_workflow.dbscan_molint import mask
+
+        # get map
+        with open(parameters["fp_channel_map"], "r") as f:
+            channel_map = yaml.safe_load(f)
+        # locs for the mask are the combined locs
+        if isinstance(parameters["fp_combined_locs"], list):
+            fp_combined_locs = parameters["fp_combined_locs"][0]
+        else:
+            fp_combined_locs = parameters["fp_combined_locs"]
+        combined_locs, combined_info = io.load_locs(fp_combined_locs)
+        # self.channel_locs = [combined_locs]
+        multi_filename = "multi_ID.hdf5"
+        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        mask_dict = mask.gen_mask(
+            combined_locs["x"],
+            combined_locs["y"],
+            parameters["margin"],
+            parameters["binsize"],
+            parameters["sigma_mask_blur"],
+            parameters["mask_resolution"],
+            pixelsize,
+            results["folder"],
+            filename=multi_filename,
+            plot_figures=True,
+        )
+
+        # get exp coordinates in mask
+        new_info = combined_info + [
+            {
+                "Generated by": "picasso-workflow: create_mask",
+            }
+        ]
+        # self.channel_info = [new_info]
+        df_merge_mask, mask_dict = mask.exp_data_in_mask(
+            pd.DataFrame(combined_locs),
+            mask_dict,
+            pixelsize,
+            results["folder"],
+            multi_filename,
+            new_info,
+            plot_figures=True,
+        )
+        results["fp_fig_blur"] = os.path.join(
+            results["folder"], "mask", "multi_ID_blurred_exp_data.png"
+        )
+        results["fp_fig_mask"] = os.path.join(
+            results["folder"], "mask", "multi_ID_mask_final.png"
+        )
+
+        results["fp_merge_mask"] = os.path.join(
+            results["folder"], "merge_mask.hdf5"
+        )
+        df_merge_mask.to_hdf(results["fp_merge_mask"], key="locs")
+
+        # Get densities of individual proteins:
+        N_proteins = df_merge_mask.groupby(parameters["combine_col"]).size()
+
+        for protein, protein_ID in channel_map.items():
+            N = N_proteins.loc[protein_ID]
+            area = mask_dict["area"]
+            density = N / area
+
+            mask_dict["N_exp_" + protein] = N
+            mask_dict["density_exp_" + protein + " (/um^2)"] = density
+
+        mask_dict["info"] = new_info
+        mask_dict["filename"] = results["fp_merge_mask"]
+
+        fp_mask_dict = os.path.join(results["folder"], "mask_dict.pkl")
+        results["fp_mask_dict"] = fp_mask_dict
+        with open(fp_mask_dict, "wb+") as f:
+            pickle.dump(mask_dict, f)
+
+        return parameters, results
+
+    @module_decorator
+    def dbscan_molint(self, i, parameters, results):
+        """TO BE CLEANED UP
+        dbscan implementation for molecular interactions workflow
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    epsilon_nm : float
+                        dbscan epsilon in nm
+                    minpts : int
+                        minimum number of points
+                    sigma_linker : float
+                        ... in nm
+                    fp_merge_mask : str
+                        filepath to the merge mask (generated in module
+                        'create_mask')
+                    thresh_type : str
+                        ...
+                    cell_name : str
+                        the name of the cell currently analyzed
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        # from picasso_workflow.dbscan_molint import dbscan
+        # get map
+        with open(parameters["fp_channel_map"], "r") as f:
+            channel_map = yaml.safe_load(f)
+
+        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        epsilon_nm = parameters["epsilon_nm"]
+        df_mask = pd.read_hdf(parameters["fp_merge_mask"], key="locs")
+        fp_out_base = os.path.join(results["folder"], "dbscan.hdf5")
+        filepaths = self._do_dbscan_molint(
+            results["folder"],
+            fp_out_base,
+            df_mask,
+            self.channel_info[0],
+            pixelsize,
+            epsilon_nm,
+            parameters["minpts"],
+            parameters["sigma_linker"],
+            parameters["thresh_type"],
+            parameters["cell_name"],
+            channel_map,
+        )
+        for k, v in filepaths.items():
+            results[k] = v
+
+        return parameters, results
+
+    def _do_dbscan_molint(
+        self,
+        result_folder,
+        fp_out_base,
+        df_mask,
+        info,
+        pixelsize,
+        epsilon_nm,
+        minpts,
+        sigma_linker,
+        thresh_type,
+        cell_name,
+        channel_map,
+        it=0,
+    ):
+        from picasso_workflow.dbscan_molint import dbscan
+
+        filepaths = {}
+
+        if thresh_type == "area":
+            # Analysis will also be performed seperatetly for clusters
+            # larger or equal than
+            # area thresh and clusters smaller than thresh
+            thresh = 10000  # nm^2
+        elif thresh_type == "density":
+            # Analysis will also be performed seperatetly for clusters
+            # with densities
+            # larger or equal than density thresh
+            # area thresh and clusters smaller than thresh
+            thresh = 100  # molecules / um^2
+            # Change unit to molecules / nm^2
+            thresh = thresh / 1000 / 1000
+
+        epsilon_px = epsilon_nm / pixelsize
+        sigma_linker_px = sigma_linker / pixelsize
+
+        # DBSCAN on exp data
+        new_info = {
+            "Generated by": "picasso-workflow: DBSCAN-MOLECULAR INTERACTIONS",
+            "epsilon": epsilon_px,
+            "minpts": minpts,
+            # 'Number of clusters"
+        }
+        info.append(new_info)
+        (
+            db_locs_rec,
+            db_locs_rec_protein_colorcoding,
+            db_cluster_props_rec,
+            db_locs_df,
+            db_cluster_props_df,
+        ) = dbscan.dbscan_f(df_mask, epsilon_px, minpts, sigma_linker_px)
+
+        # save locs in dbscan cluster with colorcoding = dbcluster ID
+        dbscan_fp = os.path.join(
+            result_folder,
+            f"dbscan_{epsilon_nm:.0f}_{minpts}_{it}.hdf5",
+        )
+        io.save_locs(dbscan_fp, db_locs_rec, info)
+        filepaths["fp_dbscan_color-cluster"] = dbscan_fp
+
+        # save locs in dbscan cluster with colorcoding = protein ID
+        dbscan_fp = os.path.join(
+            result_folder,
+            f"dbscan_{epsilon_nm:.0f}_{minpts}_{it}"
+            + "_protein_colorcode.hdf5",
+        )
+        io.save_locs(dbscan_fp, db_locs_rec_protein_colorcoding, info)
+        filepaths["fp_dbscan_color-protein"] = dbscan_fp
+
+        # save properties of dbscan clusters
+        # (analygously to DBSCAN output in Picasso)
+        dbclusters_fp = os.path.join(
+            result_folder,
+            f"dbclusters_{epsilon_nm:.0f}_{minpts}_{it}.hdf5",
+        )
+        # print(db_cluster_props_rec)
+        # print(db_cluster_props_rec.dtype)
+        # THE FOLLOWING LINE DOES NOT WORK BECAUSE db_cluster_props_rec
+        # does not have x, y, lpx, or lpy. fails picasso sanity checks.
+        # io.save_locs(dbclusters_fp, db_cluster_props_rec, info)
+        db_cluster_props_df.to_hdf(dbclusters_fp, key="props")
+        filepaths["fp_dbclusters"] = dbclusters_fp
+
+        from picasso_workflow.dbscan_molint import output_metrics
+
+        """
+        ===============================================================================
+        Output of all clusters in one cell
+        ===============================================================================
+        """
+
+        # output for each cluster = [N_per_cluster, area, circularity,
+        #                            N_CD80, ... % CD80, ...]
+
+        # Calculate and save output metrics for all clusters in the cell
+        (
+            cluster_filename,
+            cluster_large_filename,
+            cluster_small_filename,
+            db_cluster_output,
+        ) = output_metrics.output_cell(
+            channel_map,
+            db_locs_df,
+            db_cluster_props_df,
+            fp_out_base,
+            pixelsize,
+            epsilon_nm,
+            minpts,
+            thresh,
+            thresh_type,
+            cell_name,
+        )
+
+        filepaths["fpoutput_all_clusters"] = cluster_filename
+        filepaths["fpoutput_large_clusters"] = cluster_large_filename
+        filepaths["fpoutput_small_clusters"] = cluster_small_filename
+        # stimulation_cluster_exp_dict[cell_name] = db_cluster_output
+        # stimulation_cluster_exp_large_dict[cell_name] = db_cluster_output_large
+        # stimulation_cluster_exp_small_dict[cell_name] = db_cluster_output_small
+
+        # perform Rafal's analysis (binary barcode)
+        barcodes, weights = picasso_outpost.DBSCAN_analysis(db_cluster_output)
+        filepaths["fp_binary_barcode"] = os.path.join(
+            result_folder, "binary_barcode.txt"
+        )
+        np.savetxt(filepaths["fp_binary_barcode"], barcodes)
+        filepaths["fp_binary_barcode_weights"] = os.path.join(
+            result_folder, "binary_barcode_weights.txt"
+        )
+        np.savetxt(filepaths["fp_binary_barcode_weights"], weights)
+
+        # perform adapteation of Rafal's analysis
+        (barcode_df, barcode_agg, barcode_map) = (
+            picasso_outpost.DBSCAN_analysis_pd(db_cluster_output)
+        )
+        filepaths["fp_barcode"] = os.path.join(result_folder, "barcode.xlsx")
+        barcode_df.to_excel(filepaths["fp_barcode"])
+        filepaths["fp_barcode_agg"] = os.path.join(
+            result_folder, "barcode_described.xlsx"
+        )
+        barcode_agg.to_excel(filepaths["fp_barcode_agg"])
+        filepaths["fp_barcode_map"] = os.path.join(
+            result_folder, "barcode_map.xlsx"
+        )
+        barcode_map.to_excel(filepaths["fp_barcode_map"])
+
+        """
+        ===============================================================================
+        mean output of one cell
+        ===============================================================================
+        """
+        # output for each cluster = [N_per_cluster, area, circularity,
+        #                            N_CD80, ... % CD80, ...]
+        # output for complete cell: [
+        #   N_in_cell, N_in_clusters, N_out_clusters, N_per_cluster_mean,
+        #   N_per_cluster_CI,, area_mean, area_CI, circularity_mean,
+        #   circularity_CI,, N_CD80,, N_CD80_in_clusters, N_CD86_out_clusters,
+        #   ... , N_CD80_mean, N_CD80_CI, ...., %_CD80_mean, %_CD80_CI, ....]
+
+        # Calculate and save mean of output metrics of all clusters in the cell
+        # + some output metrics specific to the whole cell
+        (mean_filename, mean_large_filename, mean_small_filename) = (
+            output_metrics.output_cell_mean(
+                channel_map,
+                df_mask,
+                db_locs_df,
+                db_cluster_output,
+                fp_out_base,
+                pixelsize,
+                epsilon_nm,
+                minpts,
+                thresh,
+                thresh_type,
+                cell_name,
+            )
+        )
+
+        filepaths["fpoutput_mean_all"] = mean_filename
+        filepaths["fpoutput_mean_large"] = mean_large_filename
+        filepaths["fpoutput_mean_small"] = mean_small_filename
+        # stimulation_exp_dict[cell_name] = db_cell_output
+        # stimulation_exp_large_dict[cell_name] = db_cell_output_large
+        # stimulation_exp_small_dict[cell_name] = db_cell_output_small
+
+        return filepaths
+
+    def _load_other_workflow_data(self, fp_workflow, report_name, search_keys):
+        """Load result data from a different workflow
+        Args:
+            fp_workflow : str
+                the root folder of the other workflow
+            report_name : str
+                the report name of the other workflow. The
+                workflow result data will be in
+                fp_workflow/report_name_[postfix]
+            search_keys : tuple of
+                1st : str
+                    the module keys (e.g. '04_manual')
+                2nd : str
+                    the result entries (e.g. 'filepath')
+        Returns:
+            loaded_data : dict
+                keys : tuple of (str, str)
+                    tuple of search key & value
+                values : the corresponding loaded data
+            channel_tags : list of str
+                the channel tags
+        """
+        from picasso_workflow.workflow import WorkflowRunner
+
+        loaded_data = {}
+
+        # find analysis folder
+        postfix = WorkflowRunner._check_previous_runner(
+            fp_workflow, report_name
+        )
+        # find aggregation WorkflowRunner config
+        fp_wr_cfg = os.path.join(
+            fp_workflow,
+            report_name + "_" + postfix,
+            report_name + "_aggregation_" + postfix,
+            "WorkflowRunner.yaml",
+        )
+        with open(fp_wr_cfg, "r") as f:
+            data = yaml.load(f, Loader=yaml.FullLoader)
+        # check for results of the modules
+        for mod_key, mod_res in data["results"].items():
+            for search_mod, search_res in search_keys:
+                if mod_key == search_mod:
+                    res = mod_res[search_res]
+                    loaded_data[(search_mod, search_res)] = res
+        # find AggregationWorkflowRunner config
+        fp_wr_cfg = os.path.join(
+            fp_workflow,
+            report_name + "_" + postfix,
+            "AggregationWorkflowRunner.yaml",
+        )
+        with open(fp_wr_cfg, "r") as f:
+            data = yaml.load(f, Loader=yaml.FullLoader)
+        channel_tags = data["aggregation_workflow"][
+            "single_dataset_tileparameters"
+        ]["#tags"]
+
+        return loaded_data, channel_tags
+
+    @module_decorator
+    def dbscan_merge_cells(self, i, parameters, results):
+        """Merge dataframes containing the cluster properties of
+        all cells of the current stimulation
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_dbscan_key : str
+                        the results key of the dbscan module.
+                        e.g. '09_dbscan_molint' or '10_CSR_sim_in_mask'
+                    stimulation_key : str
+                        an identifier of the current stimulation
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        fp_all_clusters = []
+        fp_large_clusters = []
+        fp_small_clusters = []
+        fp_mean_all = []
+        fp_mean_large = []
+        fp_mean_small = []
+        channel_tags = None
+        dbscan_key = parameters["swkfl_dbscan_key"]
+        search_keys = [
+            (dbscan_key, "fp_all_clusters"),
+            (dbscan_key, "fp_large_clusters"),
+            (dbscan_key, "fp_small_clusters"),
+            (dbscan_key, "fp_mean_all"),
+            (dbscan_key, "fp_mean_large"),
+            (dbscan_key, "fp_mean_small"),
+        ]
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_keys
+            )
+            if fp := loaded_data.get((dbscan_key, "fp_all_clusters")):
+                fp_all_clusters.append(fp)
+            if fp := loaded_data.get((dbscan_key, "fp_large_clusters")):
+                fp_large_clusters.append(fp)
+            if fp := loaded_data.get((dbscan_key, "fp_small_clusters")):
+                fp_small_clusters.append(fp)
+            if fp := loaded_data.get((dbscan_key, "fp_mean_all")):
+                fp_mean_all.append(fp)
+            if fp := loaded_data.get((dbscan_key, "fp_mean_large")):
+                fp_mean_large.append(fp)
+            if fp := loaded_data.get((dbscan_key, "fp_mean_small")):
+                fp_mean_small.append(fp)
+
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
+
+        # Create one output csv file containing the clusters'
+        # properties for each cell of this stimulation
+
+        # all clusters
+        results["fp_merged_all_clusters"] = os.path.join(
+            results["folder"], "merged_all_clusters.csv"
+        )
+        _ = self._merge_df_csvs(
+            fp_all_clusters, results["fp_merged_all_clusters"]
+        )
+
+        # large clusters
+        results["fp_merged_large_clusters"] = os.path.join(
+            results["folder"], "merged_large_clusters.csv"
+        )
+        _ = self._merge_df_csvs(
+            fp_large_clusters, results["fp_merged_large_clusters"]
+        )
+
+        # small clusters
+        results["fp_merged_small_clusters"] = os.path.join(
+            results["folder"], "merged_small_clusters.csv"
+        )
+        _ = self._merge_df_csvs(
+            fp_small_clusters, results["fp_merged_small_clusters"]
+        )
+
+        # Merge dataframes containing cell means of this stimulation
+
+        # all clusters
+        results["fp_merged_mean_all"] = os.path.join(
+            results["folder"], "merged_mean_all.csv"
+        )
+        df_merged_mean_all = self._merge_df_csvs(
+            fp_mean_all, results["fp_merged_mean_all"]
+        )
+
+        # large clusters
+        results["fp_merged_mean_large"] = os.path.join(
+            results["folder"], "merged_mean_large.csv"
+        )
+        df_merged_mean_large = self._merge_df_csvs(
+            fp_mean_large, results["fp_merged_mean_large"]
+        )
+
+        # small clusters
+        results["fp_merged_mean_small"] = os.path.join(
+            results["folder"], "merged_mean_small.csv"
+        )
+        df_merged_mean_small = self._merge_df_csvs(
+            fp_mean_small, results["fp_merged_mean_small"]
+        )
+
+        # create summaries of the merged_mean data
+        from picasso_workflow.dbscan_molint import output_metrics
+
+        summary_all = output_metrics.output_stimulation_mean(
+            channel_tags,
+            df_merged_mean_all,
+            parameters["stimulation_key"],
+        )
+        fp_summary_all = os.path.join(results["folder"], "summary_all.xlsx")
+        summary_all.to_excel(fp_summary_all)
+        results["fp_summary_all"] = fp_summary_all
+
+        summary_large = output_metrics.output_stimulation_mean(
+            channel_tags,
+            df_merged_mean_large,
+            parameters["stimulation_key"],
+        )
+        fp_summary_large = os.path.join(
+            results["folder"], "summary_large.xlsx"
+        )
+        summary_large.to_excel(fp_summary_large)
+        results["fp_summary_large"] = fp_summary_large
+
+        summary_small = output_metrics.output_stimulation_mean(
+            channel_tags,
+            df_merged_mean_small,
+            parameters["stimulation_key"],
+        )
+        fp_summary_small = os.path.join(
+            results["folder"], "summary_small.xlsx"
+        )
+        summary_small.to_excel(fp_summary_small)
+        results["fp_summary_small"] = fp_summary_small
+
+        # summary_exp_large_dict[stimulation_key
+        # ] = output_metrics.output_stimulation_mean(
+        #    channel_ID, df_cell_output_large_merge, stimulation_key)
+        # summary_exp_small_dict[stimulation_key
+        # ] = output_metrics.output_stimulation_mean(
+        #    channel_ID, df_cell_output_small_merge, stimulation_key)
+
+        return parameters, results
+
+    def _merge_df_csvs(self, fps, fp_out):
+        """
+        Merge multiple pd.DataFrames saved as csv. Subsequently,
+        save the result as csv and pkl.
+        Args:
+            fps : list of str
+                filepaths of the csvs to merge
+            fp_out : str
+                the output csv file path
+        Returns:
+            df : pd.DataFrame
+                the merged DataFrame
+        """
+        df_merged = pd.concat([pd.read_csv(fp) for fp in fps])
+        df_merged.to_csv(fp_out)
+        df_merged.to_pickle(fp_out.replace(".csv", ".pkl"))
+        return df_merged
+
+    @module_decorator
+    def dbscan_merge_stimulations(self, i, parameters, results):
+        """Merge dataframes containing the information of
+        all stimulations of the current experiment
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_summary_all : list of str
+                        filepaths to 'summary_all' csv DataFrame
+                        from 'dbscan_merge_cells' module
+                        of one stimulation each, for multiple stimulations
+                    fp_summary_large : list of str
+                        filepaths to 'summary_large' csv DataFrame
+                        from 'dbscan_merge_cells' module
+                        of one stimulation each, for multiple stimulations
+                    fp_summary_small : list of str
+                        filepaths to 'summary_small' csv DataFrame
+                        from 'dbscan_merge_cells' module
+                        of one stimulation each, for multiple stimulations
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        # all clusters
+        results["fp_merged_summary_all"] = os.path.join(
+            results["folder"], "merged_summary_all.csv"
+        )
+        _ = self._merge_df_csvs(
+            parameters["fp_summary_all"], results["fp_merged_summary_all"]
+        )
+        # large clusters
+        results["fp_merged_summary_large"] = os.path.join(
+            results["folder"], "merged_summary_large.csv"
+        )
+        _ = self._merge_df_csvs(
+            parameters["fp_summary_large"], results["fp_merged_summary_large"]
+        )
+        # small clusters
+        results["fp_merged_summary_small"] = os.path.join(
+            results["folder"], "merged_summary_small.csv"
+        )
+        _ = self._merge_df_csvs(
+            parameters["fp_summary_small"], results["fp_merged_summary_small"]
+        )
+
+        return parameters, results
+
+    @module_decorator
+    def CSR_sim_in_mask(self, i, parameters, results):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask, and perform dbscan as well
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    fp_mask_dict : str
+                        filepath to the mask_dict.pkl file generated in
+                        the 'create_mask' module
+                    N_repeats : int
+                        number of simulation repeats
+                    epsilon_nm : float
+                        dbscan epsilon in nm
+                    minpts : int
+                        minimum number of points
+                    sigma_linker : float
+                        ... in nm
+                    fp_merge_mask : str
+                        filepath to the merge mask (generated in module
+                        'create_mask')
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        from picasso_workflow.dbscan_molint import mask
+
+        # from picasso_workflow.dbscan_molint import dbscan
+
+        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        epsilon_nm = parameters["epsilon_nm"]
+
+        # get map
+        with open(parameters["fp_channel_map"], "r") as f:
+            channel_map = yaml.safe_load(f)
+        with open(parameters["fp_mask_dict"], "rb") as f:
+            mask_dict = pickle.load(f)
+        info = mask_dict["info"]
+        # filename_base = mask_dict['filename']
+
+        all_filepaths = []
+        for s in range(1, parameters["N_repeats"] + 1):
+            # print()
+            # print('repeat', s)
+            # CSR simulation in mask:
+            #     first: for each channel
+            #     second: create multi file
+
+            filename = os.path.join(
+                results["folder"], f"CSR_in_mask_rep_{s}.hdf5"
+            )
+            df_CSR_mask, info_CSR = mask.CSR_sim_in_mask_multi_channel(
+                channel_map,
+                mask_dict,
+                pixelsize,
+                results["folder"],
+                filename,
+                info,
+                plot_figures=True,
+            )
+            fp_out_base = os.path.join(results["folder"], f"dbscan_{s}.hdf5")
+            filepaths = self._do_dbscan_molint(
+                results["folder"],
+                fp_out_base,
+                df_CSR_mask,
+                info,
+                pixelsize,
+                epsilon_nm,
+                parameters["minpts"],
+                parameters["sigma_linker"],
+                parameters["thresh_type"],
+                parameters["cell_name"],
+                channel_map,
+                it=s,
+            )
+            all_filepaths.append(filepaths)
+        # re-organize: save the list of filepath dicts as
+        # different dict values of lists of strings
+        for k in all_filepaths[0].keys():
+            results[k] = [fp[k] for fp in all_filepaths]
+
+        # results["fp_dbscan_color-cluster"] = dbscan_colcluster_fp
+        # results["fp_dbscan_color-protein"] = dbscan_colprot_fp
+        # results["fp_dbclusters"] = dbclusters_fp
+
+        return parameters, results
+
+    @module_decorator
+    def binary_barcodes(self, i, parameters, results):
+        """Analyses the binary barcode results of _do_dbscan_molint.
+        Compares experimental to CSR data.
+        Merged for multiple cells
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_dbscan_molint_key : str
+                        the results key of the dbscan module.
+                        e.g. '09_dbscan_molint'
+                    swkfl_CSR_sim_in_mask_key : str
+                        the results key of the CSR dbscan module.
+                        e.g. '10_CSR_sim_in_mask'
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        from matplotlib.ticker import FormatStrFormatter
+
+        # use fpoutput_all_clusters of _do_dbscan_molint, from output_metrics.
+
+        # of _do_dbscan_molint
+        # fp_binary_barcode
+        # fp_binary_barcode_weights
+        fp_binbc_exp = []  # will be a list of strings (1 for each cell)
+        fp_binbc_weights_exp = []  # same as above
+        fp_binbc_csr = []  # will be list of list of strings as in each
+        fp_binbc_weights_csr = []  # workflow, multiple CSR sims are done
+        channel_tags = None
+        exp_key = parameters["swkfl_dbscan_molint_key"]
+        csr_key = parameters["swkfl_CSR_sim_in_mask_key"]
+        search_keys = [
+            (exp_key, "fp_binary_barcode"),
+            (exp_key, "fp_binary_barcode_weights"),
+            (csr_key, "fp_binary_barcode"),
+            (csr_key, "fp_binary_barcode_weights"),
+        ]
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_keys
+            )
+            if fp := loaded_data.get((exp_key, "fp_binary_barcode")):
+                fp_binbc_exp.append(fp)
+            if fp := loaded_data.get((exp_key, "fp_binary_barcode_weights")):
+                fp_binbc_weights_exp.append(fp)
+            if fp := loaded_data.get((csr_key, "fp_binary_barcode")):
+                fp_binbc_csr.append(fp)
+            if fp := loaded_data.get((csr_key, "fp_binary_barcode_weights")):
+                fp_binbc_weights_csr.append(fp)
+
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
+
+        all_bc_list = [
+            "{:0{}b}".format(i, len(channel_tags))
+            for i in range(len(channel_tags**2 + 1))
+        ][1:]
+
+        # take the mean across the cell
+        res_cell = np.zeros(  # contains counts for each cell
+            (len(parameters["fp_workflows"]), len(all_bc_list))
+        )
+        res_csr = np.zeros(  # contains counts for each csr simulation
+            (len(parameters["fp_workflows"]), len(all_bc_list))
+        )
+        count = 0
+        for fp_bc_exp, fp_bc_csr, fp_weights_exp, fp_weights_csr in zip(
+            fp_binbc_exp,
+            fp_binbc_csr,
+            fp_binbc_weights_exp,
+            fp_binbc_weights_csr,
+        ):
+            barcodes_cell = np.loadtxt(fp_bc_exp)
+            barcodes_csr = np.loadtxt(fp_bc_csr)
+            weights_cell = np.loadtxt(fp_weights_exp)
+            weights_csr = np.loadtxt(fp_weights_csr)
+            # get the weighted counts for cell
+            b = ["".join(_.astype(str)) for _ in barcodes_cell]
+            for weight, barcode in zip(weights_cell, b):
+                idx = all_bc_list.index(barcode)
+                res_cell[count, idx] += weight
+            res_cell[count, :] /= res_cell[count, :].sum()
+
+            # get the weighted counts for csr
+            b = ["".join(_.astype(str)) for _ in barcodes_csr]
+            for weight, barcode in zip(weights_csr, b):
+                idx = all_bc_list.index(barcode)
+                res_csr[count, idx] += weight
+            res_csr[count, :] /= res_csr[count, :].sum()
+
+            count += 1
+
+        # plot
+        x = np.arange(len(all_bc_list))
+        width = 0.4
+        fig = plt.figure(figsize=(10, 4), constrained_layout=True)
+
+        # take mean and error
+        cell_mean = res_cell.mean(axis=0)
+        cell_std = res_cell.std(axis=0)
+        cell_err = (
+            1.96 * cell_std / np.sqrt(len(parameters["fp_workflows"]))
+        )  # 95% confidence interval
+        csr_mean = res_csr.mean(axis=0)
+        csr_std = res_csr.std(axis=0)
+        csr_err = (
+            1.96 * csr_std / np.sqrt(len(parameters["fp_workflows"]))
+        )  # 95% confidence interval
+
+        # save as txt
+        results["fp_cell_mean"] = os.path.join(
+            results["folder"], "cell_mean.txt"
+        )
+        np.savetxt(results["fp_cell_mean"], cell_mean)
+        results["fp_cell_err"] = os.path.join(
+            results["folder"], "cell_err.txt"
+        )
+        np.savetxt(results["fp_cell_err"], cell_err)
+        results["fp_csr_mean"] = os.path.join(
+            results["folder"], "csr_mean.txt"
+        )
+        np.savetxt(results["fp_csr_mean"], csr_mean)
+        results["fp_csr_err"] = os.path.join(results["folder"], "csr_err.txt")
+        np.savetxt(results["fp_csr_err"], csr_err)
+
+        # frequency bar plot
+        plt.bar(
+            x - width / 2,
+            cell_mean,
+            yerr=cell_err,
+            width=width,
+            edgecolor="black",
+            facecolor="lightgray",
+            label="Cell",
+        )
+        plt.bar(
+            x + width / 2,
+            csr_mean,
+            yerr=csr_err,
+            width=width,
+            edgecolor="black",
+            facecolor="dimgrey",
+            label="CSR",
+        )
+
+        plt.xticks(
+            np.arange(len(all_bc_list)),
+            labels=all_bc_list,
+            rotation=90,
+            fontsize=8,
+        )
+        plt.ylabel("Weighted counts", fontsize=12)
+        plt.xlabel("Barcodes", fontsize=12)
+        plt.legend()
+        fig.axes[0].yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+        # if title is not None:
+        #     plt.title(title, fontsize=20)
+
+        results["fp_fig"] = os.path.join(
+            results["folder"], "binary_barcodes.png"
+        )
+        savename = os.path.splitext(results["fp_fig"])[0]
+        plt.savefig(savename + ".png", dpi=300, transparent=True)
+        plt.savefig(savename + ".svg")
+
+        return parameters, results
+
+    # @module_decorator
+    # def find_cluster_motifs(self, i, parameters, results):
+    #     """Analyses the binary barcode results of _do_dbscan_molint.
+    #     Compares experimental to CSR data.
+    #     Merged for multiple cells
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #                 fp_workflows : list of str
+    #                     the paths to the folders of separate workflows
+    #                     where the separate ripleys analyses have been done
+    #                 report_names : list of str
+    #                     the report names of those worklfows
+    #                 swkfl_dbscan_molint_key : str
+    #                     the results key of the dbscan module.
+    #                     e.g. '09_dbscan_molint'
+    #                 swkfl_CSR_sim_in_mask_key : str
+    #                     the results key of the CSR dbscan module.
+    #                     e.g. '10_CSR_sim_in_mask'
+    #             and optional keys:
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     from matplotlib.ticker import FormatStrFormatter
+
+    #     fp_exp_bc = []  # will be a list of strings (1 for each cell)
+    #     fp_exp_bcagg = []  # same as above
+    #     fp_exp_bcmap = []  # same as above
+    #     fp_csr_bc = []  # will be list of list of strings as in each
+    #     fp_csr_bcagg = []  # same as above
+    #     fp_csr_bcmap = []  # same as above
+    #     exp_key = parameters["swkfl_dbscan_molint_key"]
+    #     csr_key = parameters["swkfl_CSR_sim_in_mask_key"]
+    #     search_dict = {
+    #         (
+    #             exp_key,
+    #             "fp_barcode",
+    #         ): fp_exp_bc,
+    #         (
+    #             exp_key,
+    #             "fp_barcode_described",
+    #         ): fp_exp_bcagg,
+    #         (
+    #             exp_key,
+    #             "fp_barcode_map",
+    #         ): fp_exp_bcmap,
+    #         (
+    #             csr_key,
+    #             "fp_barcode",
+    #         ): fp_csr_bc,
+    #         (
+    #             csr_key,
+    #             "fp_barcode_described",
+    #         ): fp_csr_bcagg,
+    #         (
+    #             csr_key,
+    #             "fp_barcode_map",
+    #         ): fp_csr_bcmap,
+    #     }
+    #     for folder, name in zip(
+    #         parameters["fp_workflows"], parameters["report_names"]
+    #     ):
+    #         loaded_data, wf_channel_tags = self._load_other_workflow_data(
+    #             folder, name, search_dict.keys()
+    #         )
+    #         for key, res in loaded_data.items():
+    #             search_dict[key].append(res)
+
+    #         # make sure all channel tags (e.g. protein names)
+    #         # are the same across workflows to be merged
+    #         if channel_tags is None:
+    #             channel_tags = wf_channel_tags
+    #         else:
+    #             if channel_tags != wf_channel_tags:
+    #                 raise KeyError(
+    #                     "Loaded datasets have different channel tags!"
+    #                 )
+
+    #     # load all data
+    #     barcode_map = None
+    #     barcodes_exp = None
+    #     barcodes_exp_agg = None
+    #     barcodes_csr = None
+    #     barcodes_csr_agg = None
+
+    #     for fp in fp_exp_bcmap:
+    #         df = pd.read_excel(fp)
+    #         if barcode_map is None:
+    #             barcode_map = df
+    #         else:
+    #             if not barcode_map.equals(fp):
+    #                 raise KeyError(
+    #                     "The different workflows used "
+    #                     + "different barcode maps"
+    #                 )
+    #     for fplist in fp_csr_bcmap:
+    #         for fp in fplist:
+    #             df = pd.read_excel(fp)
+    #             if barcode_map is None:
+    #                 barcode_map = df
+    #             else:
+    #                 if not barcode_map.equals(fp):
+    #                     raise KeyError(
+    #                         "The different workflows used "
+    #                         + "different barcode maps"
+    #                     )
+
+    #     for fp, name in zip(fp_exp_bc, parameters["report_names"]):
+    #         df = pd.read_excel(fp)
+    #         df["name"] = name
+    #         if barcodes_exp is None:
+    #             barcodes_exp = df
+    #         else:
+    #             barcodes_exp = pd.concat([barcodes_exp, df])
+    #     for fp, name in zip(barcodes_exp_agg, parameters["report_names"]):
+    #         df = pd.read_excel(fp)
+    #         df["name"] = name
+    #         df["metric"] = df.index
+    #         df = df.reset_index()
+    #         if barcodes_exp_agg is None:
+    #             barcodes_exp_agg = df
+    #         else:
+    #             barcodes_exp_agg = pd.concat([barcodes_exp_agg, df])
+    #     # for fplist, name in zip(barcodes_csr, parameters["report_names"]):
+    #     #     for i, fp in fplist
+    #     #     df = pd.read_excel(fp)
+    #     #     df["name"] = name
+    #     #     if barcodes_exp is None:
+    #     #         barcodes_exp = df
+    #     #     else:
+    #     #         barcodes_exp = pd.concat([barcodes_exp, df])
+
+    #     # take the mean across the cell
+    #     res_cell = np.zeros(  # contains counts for each cell
+    #         (len(parameters["fp_workflows"]), len(all_bc_list))
+    #     )
+    #     res_csr = np.zeros(  # contains counts for each csr simulation
+    #         (len(parameters["fp_workflows"]), len(all_bc_list))
+    #     )
+    #     count = 0
+    #     for fp_bc_exp, fp_bc_csr, fp_weights_exp, fp_weights_csr in zip(
+    #         fp_binbc_exp,
+    #         fp_binbc_csr,
+    #         fp_binbc_weights_exp,
+    #         fp_binbc_weights_csr,
+    #     ):
+    #         barcodes_cell = np.loadtxt(fp_bc_exp)
+    #         barcodes_csr = np.loadtxt(fp_bc_csr)
+    #         weights_cell = np.loadtxt(fp_weights_exp)
+    #         weights_csr = np.loadtxt(fp_weights_csr)
+    #         # get the weighted counts for cell
+    #         b = ["".join(_.astype(str)) for _ in barcodes_cell]
+    #         for weight, barcode in zip(weights_cell, b):
+    #             idx = all_bc_list.index(barcode)
+    #             res_cell[count, idx] += weight
+    #         res_cell[count, :] /= res_cell[count, :].sum()
+
+    #         # get the weighted counts for csr
+    #         b = ["".join(_.astype(str)) for _ in barcodes_csr]
+    #         for weight, barcode in zip(weights_csr, b):
+    #             idx = all_bc_list.index(barcode)
+    #             res_csr[count, idx] += weight
+    #         res_csr[count, :] /= res_csr[count, :].sum()
+
+    #         count += 1
+
+    #     # plot
+    #     x = np.arange(len(all_bc_list))
+    #     width = 0.4
+    #     fig = plt.figure(figsize=(10, 4), constrained_layout=True)
+
+    #     # take mean and error
+    #     cell_mean = res_cell.mean(axis=0)
+    #     cell_std = res_cell.std(axis=0)
+    #     cell_err = (
+    #         1.96 * cell_std / np.sqrt(len(parameters["fp_workflows"]))
+    #     )  # 95% confidence interval
+    #     csr_mean = res_csr.mean(axis=0)
+    #     csr_std = res_csr.std(axis=0)
+    #     csr_err = (
+    #         1.96 * csr_std / np.sqrt(len(parameters["fp_workflows"]))
+    #     )  # 95% confidence interval
+
+    #     # save as txt
+    #     results["fp_cell_mean"] = os.path.join(
+    #         results["folder"], "cell_mean.txt"
+    #     )
+    #     np.savetxt(results["fp_cell_mean"], cell_mean)
+    #     results["fp_cell_err"] = os.path.join(
+    #         results["folder"], "cell_err.txt"
+    #     )
+    #     np.savetxt(results["fp_cell_err"], cell_err)
+    #     results["fp_csr_mean"] = os.path.join(
+    #         results["folder"], "csr_mean.txt"
+    #     )
+    #     np.savetxt(results["fp_csr_mean"], csr_mean)
+    #     results["fp_csr_err"] = os.path.join(results["folder"], "csr_err.txt")
+    #     np.savetxt(results["fp_csr_err"], csr_err)
+
+    #     # frequency bar plot
+    #     plt.bar(
+    #         x - width / 2,
+    #         cell_mean,
+    #         yerr=cell_err,
+    #         width=width,
+    #         edgecolor="black",
+    #         facecolor="lightgray",
+    #         label="Cell",
+    #     )
+    #     plt.bar(
+    #         x + width / 2,
+    #         csr_mean,
+    #         yerr=csr_err,
+    #         width=width,
+    #         edgecolor="black",
+    #         facecolor="dimgrey",
+    #         label="CSR",
+    #     )
+
+    #     plt.xticks(
+    #         np.arange(len(all_bc_list)),
+    #         labels=all_bc_list,
+    #         rotation=90,
+    #         fontsize=8,
+    #     )
+    #     plt.ylabel("Weighted counts", fontsize=12)
+    #     plt.xlabel("Barcodes", fontsize=12)
+    #     plt.legend()
+    #     fig.axes[0].yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+    #     # if title is not None:
+    #     #     plt.title(title, fontsize=20)
+
+    #     results["fp_fig"] = os.path.join(
+    #         results["folder"], "binary_barcodes.png"
+    #     )
+    #     savename = os.path.splitext(results["fp_fig"])[0]
+    #     plt.savefig(savename + ".png", dpi=300, transparent=True)
+    #     plt.savefig(savename + ".svg")
+
+    #     return parameters, results
 
 
 class AutoPicassoError(Exception):

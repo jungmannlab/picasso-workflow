@@ -12,6 +12,7 @@ dependencies = [
     "matplotlib",
     "numpy",
     "pandas",
+    "tables",
     "openpyxl==3.1.2",
     "picassosr",
     "moviepy==1.0.3",
@@ -24,6 +25,7 @@ dependencies = [
     "aicspylibczi>=3.1.1",
     "fsspec>=2022.8.0",
     "aicsimageio",
+    "psutil",
 ]
 keywords = ["picasso"]
 

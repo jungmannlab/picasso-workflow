@@ -27,6 +27,20 @@ class AbstractModuleCollection(abc.ABC):
     def __init__(self):
         pass
 
+    @abc.abstractmethod
+    def dummy_module(self):
+        """A module that does nothing, for quickly removing
+        modules in a workflow without having to renumber the
+        following result idcs. Only for workflow debugging,
+        remove when done.
+        """
+        pass
+
+    @abc.abstractmethod
+    def analysis_documentation(self):
+        """Document the parameters of the analysis machine and software."""
+        pass
+
     ##########################################################################
     # Single-dataset workflow modules
     ##########################################################################
@@ -159,6 +173,69 @@ class AbstractModuleCollection(abc.ABC):
     @abc.abstractmethod
     def spinna_manual(self):
         """Direct implementation of spinna batch analysis."""
+        pass
+
+    # @abc.abstractmethod
+    # def molecular_interactions(self):
+    #     """Analysis of molecular interactions.
+    #     1. Ripley's K analysis to see positive interactions
+    #     2a. homo-spinna
+    #     2b. hetero-spinna
+    #     3. dbscan
+    #     4. binary barcodes
+    #     """
+    #     pass
+
+    @abc.abstractmethod
+    def ripleysk(self):
+        pass
+
+    @abc.abstractmethod
+    def ripleysk_average(self):
+        pass
+
+    @abc.abstractmethod
+    def protein_interactions(self):
+        pass
+
+    @abc.abstractmethod
+    def create_mask(self):
+        """Create a density mask"""
+        pass
+
+    @abc.abstractmethod
+    def dbscan_molint(self):
+        """TO BE CLEANED UP
+        dbscan implementation for molecular interactions workflow
+        """
+        pass
+
+    @abc.abstractmethod
+    def CSR_sim_in_mask(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
+    @abc.abstractmethod
+    def dbscan_merge_cells(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
+    @abc.abstractmethod
+    def dbscan_merge_stimulations(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
+    @abc.abstractmethod
+    def binary_barcodes(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
         pass
 
 
@@ -569,3 +646,16 @@ def get_caller_name(levels_back=1):
     # Get the name of that function
     function_name = frame.f_code.co_name
     return function_name
+
+
+def multiply_recarray(ra, factor):
+    columns = [it[0] for it in ra.dtype.descr if it[0] != ""]
+
+    column_dtypes = [it[1] for it in ra.dtype.descr if it[0] in columns]
+    dt = column_dtypes[0]
+    if not all([it == dt for it in column_dtypes]):
+        raise AttributeError("Cannot multiply, not all dtypes are the same")
+    for i, col in enumerate(columns):
+        nda = ra[col].astype(dt)
+        ra[col] = nda * factor
+    return ra
