@@ -100,16 +100,18 @@ class RipleysInterface:
         L = np.sqrt(K / np.pi)
         H = L - self.radii
 
-        K = nNeighbors / N  # / density
+        # FOR TESTING: exchange K with RDF
         # now this is the radial distribution function
-        n_means = nNeighbors / N
-        d_n_means = n_means[1:] - n_means[:-1]
-        mean_r = (self.radii[1:] + self.radii[:-1]) / 2
-        d_r = self.radii[1:] - self.radii[:-1]
-        d_areas = 2 * np.pi * mean_r * d_r
-        rdf = d_n_means / d_areas
-        K[:-1] = rdf
-        K[-1] = rdf[-1]
+        if self.atype == "RDF":
+            K = nNeighbors / N  # / density
+            n_means = nNeighbors / N
+            d_n_means = n_means[1:] - n_means[:-1]
+            mean_r = (self.radii[1:] + self.radii[:-1]) / 2
+            d_r = self.radii[1:] - self.radii[:-1]
+            d_areas = 2 * np.pi * mean_r * d_r
+            rdf = d_n_means / d_areas
+            K[:-1] = rdf
+            K[-1] = rdf[-1]
 
         ripleysCurves = {"K": np.array(K), "L": np.array(L), "H": np.array(H)}
         return ripleysCurves
@@ -132,12 +134,11 @@ class RipleysInterface:
         for i, r in enumerate(self.radii):
             # create uniform random data in a circle of radius r
             data_rnd = self.randomize_data(data, r)
+            tree = getTree(data_rnd)
             if otherData is None:
-                tree = getTree(data_rnd)
                 # print('tree count neighbors: ', tree.count_neighbors(tree, r))
                 nNeighbors[i] = tree.count_neighbors(tree, r) - N
             else:
-                tree = getTree(data)
                 other_data_rnd = self.randomize_data(otherData, r)
                 otherTree = getTree(other_data_rnd)
                 # print('tree count neighbors: ', tree.count_neighbors(tree, r))
@@ -146,6 +147,19 @@ class RipleysInterface:
         K = (nNeighbors / N) / density
         L = np.sqrt(K / np.pi)
         H = L - self.radii
+
+        # FOR TESTING: exchange K with RDF
+        # now this is the radial distribution function
+        if self.atype == "RDF":
+            K = nNeighbors / N  # / density
+            n_means = nNeighbors / N
+            d_n_means = n_means[1:] - n_means[:-1]
+            mean_r = (self.radii[1:] + self.radii[:-1]) / 2
+            d_r = self.radii[1:] - self.radii[:-1]
+            d_areas = 2 * np.pi * mean_r * d_r
+            rdf = d_n_means / d_areas
+            K[:-1] = rdf
+            K[-1] = rdf[-1]  # just appending to match lengths
 
         ripleysCurves = {"K": np.array(K), "L": np.array(L), "H": np.array(H)}
         return ripleysCurves, data_rnd
@@ -172,11 +186,22 @@ class RipleysInterface:
         # Divide all positive values by high quantile:
         idxPos = Knormalized >= 0
         quantilesHigh = self.getRipleysQuantiles(quantileHigh)
+        if self.atype == "RDF":
+            # reset very low quantiles
+            quantilesHigh[
+                np.abs(quantilesHigh)
+                < 0.25 * np.nanmean(np.abs(quantilesHigh))
+            ] = 0.25 * np.nanmean(quantilesHigh)
         Knormalized[idxPos] /= abs(
             (quantilesHigh[idxPos] - ripleysMean[idxPos])
         )
         # Divide all negative values by low quantile:
         quantilesLow = self.getRipleysQuantiles(quantileLow)
+        if self.atype == "RDF":
+            # reset very low quantiles
+            quantilesLow[
+                np.abs(quantilesLow) < 0.25 * np.nanmean(np.abs(quantilesLow))
+            ] = 0.25 * np.nanmean(quantilesLow)
         Knormalized[~idxPos] /= abs(
             (quantilesLow[~idxPos] - ripleysMean[~idxPos])
         )
@@ -243,7 +268,10 @@ class RipleysInterface:
                 linewidth=2.0,
             )
             axes.set_xlabel("d (nm)", fontsize=labelFontsize)
-            axes.set_ylabel("Normalized K(d)", fontsize=labelFontsize)
+            if self.atype == "Ripleys":
+                axes.set_ylabel("Normalized K(d)", fontsize=labelFontsize)
+            elif self.atype == "RDF":
+                axes.set_ylabel("Normalized RDF(d)", fontsize=labelFontsize)
         else:
             if showControls:
                 for k in range(self.nControls):
@@ -284,7 +312,10 @@ class RipleysInterface:
                 linewidth=1.0,
             )
             axes.set_xlabel("d (nm)", fontsize=labelFontsize)
-            axes.set_ylabel("K(d)", fontsize=labelFontsize)
+            if self.atype == "Ripleys":
+                axes.set_ylabel("K(d)", fontsize=labelFontsize)
+            elif self.atype == "RDF":
+                axes.set_ylabel("RDF(d)", fontsize=labelFontsize)
 
         handles, labels = plt.gca().get_legend_handles_labels()
         by_label = dict(zip(labels, handles))
@@ -309,14 +340,19 @@ class RipleysInterface:
 
 
 class RipleysAnalysis(RipleysInterface):
-    def __init__(self, data, radii, cellMask, nControls):
+    def __init__(self, data, radii, cellMask, nControls, atype="Ripleys"):
         super().__init__(radii, cellMask, nControls)
-        # self.ripleysCurves_controls = self.getRipleysRandomControlCurves(
-        #     getNumberPoints(data), cellMask
-        # )  # dictionary: K, H, L, normalized (lists)
-        self.ripleysCurves_controls = self.getRipleysRandomControlCurves2(
-            data, area=cellMask.area
-        )  # dictionary: K, H, L, normalized (lists)
+        self.atype = atype
+        if atype == "Ripleys":
+            self.ripleysCurves_controls = self.getRipleysRandomControlCurves(
+                getNumberPoints(data), cellMask
+            )  # dictionary: K, H, L, normalized (lists)
+        elif atype == "RDF":
+            self.ripleysCurves_controls = self.getRipleysRandomControlCurves2(
+                data, area=cellMask.area
+            )  # dictionary: K, H, L, normalized (lists)
+        else:
+            raise NotImplementedError()
         self.ripleysCurves_data = self.getRipleysDataCurves(
             data, area=cellMask.area
         )  # dictionary: K, H, L, normalized
@@ -325,14 +361,21 @@ class RipleysAnalysis(RipleysInterface):
 
 
 class CrossRipleysAnalysis(RipleysInterface):
-    def __init__(self, data, otherData, radii, cellMask, nControls):
+    def __init__(
+        self, data, otherData, radii, cellMask, nControls, atype="Ripleys"
+    ):
         super().__init__(radii, cellMask, nControls)
-        # self.ripleysCurves_controls = self.getRipleysRandomControlCurves(
-        #     getNumberPoints(data), cellMask, otherData
-        # )  # dictionary: K, H, L, normalized (lists)
-        self.ripleysCurves_controls = self.getRipleysRandomControlCurves2(
-            data, area=cellMask.area
-        )  # dictionary: K, H, L, normalized (lists)
+        self.atype = atype
+        if atype == "Ripleys":
+            self.ripleysCurves_controls = self.getRipleysRandomControlCurves(
+                getNumberPoints(data), cellMask, otherData
+            )  # dictionary: K, H, L, normalized (lists)
+        elif atype == "RDF":
+            self.ripleysCurves_controls = self.getRipleysRandomControlCurves2(
+                data, area=cellMask.area
+            )  # dictionary: K, H, L, normalized (lists)
+        else:
+            raise NotImplementedError()
         self.ripleysCurves_data = self.getRipleysDataCurves(
             data, otherData, area=cellMask.area
         )  # dictionary: K, H, L, normalized

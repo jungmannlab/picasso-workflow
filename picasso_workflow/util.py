@@ -238,6 +238,27 @@ class AbstractModuleCollection(abc.ABC):
         """
         pass
 
+    @abc.abstractmethod
+    def find_cluster_motifs(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
+    @abc.abstractmethod
+    def interaction_graph(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
+    @abc.abstractmethod
+    def plot_densities(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
 
 class DictSimpleTyper:
     """Scans a complex dictionary and converts numpy arrays and
@@ -422,7 +443,8 @@ class ParameterCommandExecutor(DictSimpleTyper):
             if aritexp is not None:
 
                 def is_valid_expression(expression):
-                    pattern = r"^[\d+\-*/\s()]+$"
+                    # pattern = r"^[\d+\-*/\s()]+$"
+                    pattern = r"^[-+]?([0-9]*\.[0-9]+|[0-9]+)$"
                     return re.match(pattern, expression) is not None
 
                 if not is_valid_expression(aritexp):
@@ -468,7 +490,7 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 try:
                     if isinstance(root_att, list):
                         logger.debug(
-                            f"Getting all {att_name}attributes of {root_att}"
+                            f"Getting all {att_name} attributes of {root_att}"
                         )
                         root_att = [
                             self.get_attribute(list_att, att_name)

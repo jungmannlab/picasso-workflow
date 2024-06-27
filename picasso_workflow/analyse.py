@@ -18,11 +18,15 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import distance, KDTree
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FormatStrFormatter
+import seaborn as sns
 from matplotlib import cm
 import logging
 from datetime import datetime
 import yaml
 import pickle
+import matplotlib.lines as mlines
+from scipy import stats
 
 from picasso_workflow.util import AbstractModuleCollection
 from picasso_workflow import process_brightfield
@@ -300,21 +304,33 @@ class AutoPicasso(AbstractModuleCollection):
         return parameters, results
 
     def _create_sample_movie(
-        self, filename, n_sample=30, min_quantile=0, max_quantile=0.9998, fps=1
+        self,
+        filename,
+        start_sample_pct=0,
+        n_sample=30,
+        min_quantile=0,
+        max_quantile=0.9998,
+        fps=1,
     ):
         """Create a subsampled movie of the movie loaded. The movie is saved
         to disk and referenced by filename.
         Args:
             filename : str
                 the file name to save the subsamled movie as (.mp4)
+            start_sample_pct : float
+                percentage of movie frames from which to start sampling
+                This can be useful if the first frames are different due to
+                residual autofluorescence or such.
             rest: as in save_movie
         """
         results = {}
         if len(self.movie) < n_sample:
             n_sample = len(self.movie)
 
-        dn = int(len(self.movie) / (n_sample - 1))
-        frame_numbers = np.arange(0, len(self.movie), dn)
+        start_idx = int(start_sample_pct / 100 * len(self.movie))
+        len_subsample = len(self.movie) - start_idx
+        dn = int(len_subsample / (n_sample - 1))
+        frame_numbers = np.arange(start_idx, len_subsample, dn)
         results["sample_frame_idx"] = frame_numbers
 
         subsampled_frames = np.array([self.movie[i] for i in frame_numbers])
@@ -1220,11 +1236,14 @@ class AutoPicasso(AbstractModuleCollection):
             "Wrapped by": "picasso-workflow : smlm_clusterer",
         }
         self.info.append(smlm_cluster_info)
-        filepath = os.path.join(results["folder"], "locs_smlm.hdf5")
+        filepath = os.path.join(results["folder"], "cluster_smlm_locs.hdf5")
         self._save_locs(filepath)
 
         self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
         logger.warning("saving cluster centeras as locs. Is that intended?")
+
+        filepath = os.path.join(results["folder"], "cluster_smlm_centers.hdf5")
+        self._save_locs(filepath)
 
         return parameters, results
 
@@ -1997,12 +2016,28 @@ class AutoPicasso(AbstractModuleCollection):
                     interaction is deemed significant.
                 fp_combined_locs : str
                     filepath to the combined locs of all channel_locs
+                atype : str
+                    the type of analysis: 'Ripleys' for the standard
+                    Ripley's K analysis, or 'RDF' for calculation of the
+                    radial distribution function instead of K, and random
+                    controls by relocating each point by a random x/y in a
+                    circle with the currently investigated r, which preserves
+                    the density fluctuations (instead of CSR simulation)
         """
         nRandomControls = parameters.get("ripleys_n_random_controls", 100)
+        # radii = np.concatenate(
+        #     (
+        #         np.arange(0, 100, 2),
+        #         np.arange(100, parameters.get("ripleys_rmax", 200), 12),
+        #     )
+        # )
         radii = np.concatenate(
             (
-                np.arange(10, 80, 2),
-                np.arange(80, parameters.get("ripleys_rmax", 200), 12),
+                np.arange(
+                    0,
+                    parameters.get("ripleys_rmax", 200),
+                    parameters.get("ripleys_dr", 5),
+                ),
             )
         )
 
@@ -2022,6 +2057,7 @@ class AutoPicasso(AbstractModuleCollection):
                 channel_locs=self.channel_locs,
                 combined_locs=combined_locs,
                 pixelsize=self.analysis_config["camera_info"].get("pixelsize"),
+                atype=parameters["atype"],
             )
         )
 
@@ -2031,7 +2067,16 @@ class AutoPicasso(AbstractModuleCollection):
         np.savetxt(results["fp_ripleys_meanval"], ripleysMeanVal)
 
         results["fp_fig_ripleys_meanval"] = self._plot_ripleys_integrals(
-            ripleysMeanVal, results["folder"], self.channel_tags
+            ripleysMeanVal,
+            results["folder"],
+            self.channel_tags,
+            parameters["atype"],
+        )
+        results["fp_fig_unnormalized"] = os.path.join(
+            results["folder"], f"{parameters['atype']}_unnormalized.png"
+        )
+        results["fp_fig_normalized"] = os.path.join(
+            results["folder"], f"{parameters['atype']}_normalized.png"
         )
 
         results["ripleys_significant"] = self._find_ripleys_significant(
@@ -2042,7 +2087,9 @@ class AutoPicasso(AbstractModuleCollection):
 
         return parameters, results
 
-    def _plot_ripleys_integrals(self, ripleysMeanVal, folder, channel_tags):
+    def _plot_ripleys_integrals(
+        self, ripleysMeanVal, folder, channel_tags, atype
+    ):
         fig, ax = plt.subplots()
         heatmap = ax.imshow(ripleysMeanVal, cmap="coolwarm_r", vmin=-1, vmax=1)
         ax.grid(False)
@@ -2064,7 +2111,7 @@ class AutoPicasso(AbstractModuleCollection):
         ax.set_yticklabels(channel_tags, rotation=45)
         ax.set_title("Ripleys Mean Value")
         plt.colorbar(heatmap, format="%.2f")
-        fp_integrals = os.path.join(folder, "ripleysMeanVal.png")
+        fp_integrals = os.path.join(folder, f"{atype}_ripleysMeanVal.png")
         fig.set_size_inches((9, 7))
         fig.savefig(fp_integrals)
         return fp_integrals
@@ -2100,6 +2147,8 @@ class AutoPicasso(AbstractModuleCollection):
                 ripleys_threshold : float
                     the threshold of ripleys integrals above which the
                     interaction is deemed significant.
+                atype : str
+                    "Ripleys" or "RDF"
                 # output_folders : list of str
                 #     folders to write the significant pairs into. This can
                 #     e.g. be the 'manual' results folders of the
@@ -2204,7 +2253,10 @@ class AutoPicasso(AbstractModuleCollection):
         np.savetxt(results["fp_ripleys_meanvals"], averaged_integrals)
 
         results["fp_figmeanvals"] = self._plot_ripleys_integrals(
-            averaged_integrals, results["folder"], channel_tags
+            averaged_integrals,
+            results["folder"],
+            channel_tags,
+            parameters["atype"],
         )
 
         significant_pairs = self._find_ripleys_significant(
@@ -2286,6 +2338,9 @@ class AutoPicasso(AbstractModuleCollection):
             density = parameters["density"]
         else:
             raise KeyError("density parameter must be list of dict.")
+        results["fp_density"] = os.path.join(results["folder"], "density.yaml")
+        with open(results["fp_density"], "w") as f:
+            yaml.dump(density, f)
 
         # ground thruth density, adjusted by labeling efficiency
         density_gt = {
@@ -2888,20 +2943,118 @@ class AutoPicasso(AbstractModuleCollection):
         np.savetxt(filepaths["fp_binary_barcode_weights"], weights)
 
         # perform adapteation of Rafal's analysis
+        channel_map_r = {v: k for k, v in channel_map.items()}
+        targets = [channel_map_r[i] for i in sorted(channel_map_r.keys())]
         (barcode_df, barcode_agg, barcode_map) = (
-            picasso_outpost.DBSCAN_analysis_pd(db_cluster_output)
+            picasso_outpost.DBSCAN_analysis_pd(db_cluster_output, targets)
         )
-        filepaths["fp_barcode"] = os.path.join(result_folder, "barcode.xlsx")
+        filepaths["fp_barcode"] = os.path.join(
+            result_folder, f"barcode_{it}.xlsx"
+        )
         barcode_df.to_excel(filepaths["fp_barcode"])
         filepaths["fp_barcode_agg"] = os.path.join(
-            result_folder, "barcode_described.xlsx"
+            result_folder, f"barcode_described_{it}.xlsx"
         )
         barcode_agg.to_excel(filepaths["fp_barcode_agg"])
         filepaths["fp_barcode_map"] = os.path.join(
-            result_folder, "barcode_map.xlsx"
+            result_folder, f"barcode_map_{it}.xlsx"
         )
         barcode_map.to_excel(filepaths["fp_barcode_map"])
 
+        # number of nonclustered
+        cluster_info = {
+            "n_input_locs": len(df_mask.index),
+            "n_clustered_locs": len(db_locs_df.index),
+            "n_nonclustered_locs": len(df_mask.index) - len(db_locs_df.index),
+            "n_clusters": len(db_cluster_props_df.index),
+        }
+        fp_cluster_info = os.path.join(
+            result_folder, f"cluster_info_{it}.yaml"
+        )
+        filepaths["fp_cluster_info"] = fp_cluster_info
+        with open(fp_cluster_info, "w") as f:
+            yaml.dump(cluster_info, f)
+
+        # plot results
+        fig, ax = plt.subplots(nrows=3, sharex=True)
+        # barplot: number of clusters
+        ax[0].bar(
+            np.arange(len(barcode_agg.index)),
+            barcode_agg[("area (nm^2)", "count")],
+        )
+        ax[0].set_ylabel("# clusters found")
+
+        fig.set_size_inches((13, 9))
+        filepaths["fp_fig"] = os.path.join(result_folder, "barcodes.png")
+        fig.savefig(filepaths["fp_fig"])
+
+        # boxplot: area distribution of clusters
+        # sns.boxplot(data=barcode_df, x='barcode', y='area (nm^2)', ax=ax[1])
+        dflist = [
+            subdf.values
+            for idx, subdf in barcode_df.groupby("barcode")["area (nm^2)"]
+        ]
+        ax[1].boxplot(
+            dflist,
+            positions=np.arange(len(barcode_agg.index)),
+            showfliers=False,
+        )
+        ax[1].set_ylabel("area per cluster (nm^2)")
+        # boxplots: number of targets per cluster, for each target
+
+        fig.set_size_inches((13, 9))
+        filepaths["fp_fig"] = os.path.join(result_folder, "barcodes.png")
+        fig.savefig(filepaths["fp_fig"])
+
+        bxwidth = 1 / (len(targets) + 2)
+        bxpos_init = (
+            np.arange(len(barcode_agg.index)) - bxwidth * len(targets) / 2
+        )
+
+        target_colors = [
+            "tab:blue",
+            "tab:orange",
+            "tab:green",
+            "tab:red",
+            "tab:purple",
+            "tab:brown",
+        ]
+        legend_handles = []
+        import matplotlib.lines as mlines
+
+        for i, tgt in enumerate(targets):
+            col = f"N_{tgt}_per_cluster"
+            dflist = [
+                subdf.values if idx[2 + i] == "1" else np.array([])
+                for idx, subdf in barcode_df.groupby("barcode")[col]
+            ]
+            # remove values (zeros) if target is not in barcode
+            lineprops = {"color": target_colors[i]}
+            ax[2].boxplot(
+                dflist,
+                positions=bxpos_init + i * bxwidth,
+                widths=bxwidth,
+                showfliers=False,
+                boxprops=lineprops,
+                whiskerprops=lineprops,
+                medianprops=lineprops,
+                capprops=lineprops,
+            )
+            line = mlines.Line2D([], [], color=target_colors[i], label=tgt)
+            legend_handles.append(line)
+        ax[2].set_ylabel("# targets per cluster")
+        ax[2].set_xticks(np.arange(len(barcode_agg.index)))
+        xtilabels = [ti[2:] for ti in barcode_agg.index]
+        ax[2].set_xticklabels(xtilabels, rotation=90)
+        # plot separator lines
+        xpos = np.arange(len(barcode_agg.index) - 1) + 0.5
+        ylims = ax[2].get_ylim()
+        for x in xpos:
+            ax[2].plot([x, x], ylims, color="gray")
+        ax[2].legend(handles=legend_handles)
+        fig.set_size_inches((15, 9))
+        filepaths["fp_fig"] = os.path.join(result_folder, f"barcodes_{it}.png")
+        fig.savefig(filepaths["fp_fig"])
         """
         ===============================================================================
         mean output of one cell
@@ -3354,10 +3507,6 @@ class AutoPicasso(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        from matplotlib.ticker import FormatStrFormatter
-
-        # use fpoutput_all_clusters of _do_dbscan_molint, from output_metrics.
-
         # of _do_dbscan_molint
         # fp_binary_barcode
         # fp_binary_barcode_weights
@@ -3513,249 +3662,789 @@ class AutoPicasso(AbstractModuleCollection):
 
         return parameters, results
 
-    # @module_decorator
-    # def find_cluster_motifs(self, i, parameters, results):
-    #     """Analyses the binary barcode results of _do_dbscan_molint.
-    #     Compares experimental to CSR data.
-    #     Merged for multiple cells
-    #     Args:
-    #         i : int
-    #             the index of the module
-    #         parameters: dict
-    #             with required keys:
-    #                 fp_workflows : list of str
-    #                     the paths to the folders of separate workflows
-    #                     where the separate ripleys analyses have been done
-    #                 report_names : list of str
-    #                     the report names of those worklfows
-    #                 swkfl_dbscan_molint_key : str
-    #                     the results key of the dbscan module.
-    #                     e.g. '09_dbscan_molint'
-    #                 swkfl_CSR_sim_in_mask_key : str
-    #                     the results key of the CSR dbscan module.
-    #                     e.g. '10_CSR_sim_in_mask'
-    #             and optional keys:
-    #         results : dict
-    #             the results this function generates. This is created
-    #             in the decorator wrapper
-    #     """
-    #     from matplotlib.ticker import FormatStrFormatter
+    @module_decorator
+    def plot_densities(self, i, parameters, results):
+        """Aggregate densities and cell areas of multiple datasets and
+        plot them
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_create_mask_key : str
+                        the results key of the dbscan module.
+                        e.g. '11_create_mask'
+                    swkfl_protint_key : str
+                        the results key of the protein_interactions module.
+                        e.g. '09_protein_interactions'
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        # get density and channel tags
+        fp_density = []  # workflow, multiple CSR sims are done
+        fp_maskdict = []
+        channel_tags = None
+        protint_key = parameters["swkfl_protint_key"]
+        crmask_key = parameters["swkfl_create_mask_key"]
+        search_dict = {
+            (protint_key, "fp_density"): fp_density,
+            (crmask_key, "fp_mask_dict"): fp_maskdict,
+        }
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_dict.keys()
+            )
+            for key, res in loaded_data.items():
+                search_dict[key].append(res)
 
-    #     fp_exp_bc = []  # will be a list of strings (1 for each cell)
-    #     fp_exp_bcagg = []  # same as above
-    #     fp_exp_bcmap = []  # same as above
-    #     fp_csr_bc = []  # will be list of list of strings as in each
-    #     fp_csr_bcagg = []  # same as above
-    #     fp_csr_bcmap = []  # same as above
-    #     exp_key = parameters["swkfl_dbscan_molint_key"]
-    #     csr_key = parameters["swkfl_CSR_sim_in_mask_key"]
-    #     search_dict = {
-    #         (
-    #             exp_key,
-    #             "fp_barcode",
-    #         ): fp_exp_bc,
-    #         (
-    #             exp_key,
-    #             "fp_barcode_described",
-    #         ): fp_exp_bcagg,
-    #         (
-    #             exp_key,
-    #             "fp_barcode_map",
-    #         ): fp_exp_bcmap,
-    #         (
-    #             csr_key,
-    #             "fp_barcode",
-    #         ): fp_csr_bc,
-    #         (
-    #             csr_key,
-    #             "fp_barcode_described",
-    #         ): fp_csr_bcagg,
-    #         (
-    #             csr_key,
-    #             "fp_barcode_map",
-    #         ): fp_csr_bcmap,
-    #     }
-    #     for folder, name in zip(
-    #         parameters["fp_workflows"], parameters["report_names"]
-    #     ):
-    #         loaded_data, wf_channel_tags = self._load_other_workflow_data(
-    #             folder, name, search_dict.keys()
-    #         )
-    #         for key, res in loaded_data.items():
-    #             search_dict[key].append(res)
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
 
-    #         # make sure all channel tags (e.g. protein names)
-    #         # are the same across workflows to be merged
-    #         if channel_tags is None:
-    #             channel_tags = wf_channel_tags
-    #         else:
-    #             if channel_tags != wf_channel_tags:
-    #                 raise KeyError(
-    #                     "Loaded datasets have different channel tags!"
-    #                 )
+        # load densities from nneighbor analysis
+        all_densities_rdf = {k: [] for k in channel_tags}
+        for fp in fp_density:
+            with open(fp, "r") as f:
+                d = yaml.safe_load(f)
+                for k, v in d.items():
+                    all_densities_rdf[k].append(v)
 
-    #     # load all data
-    #     barcode_map = None
-    #     barcodes_exp = None
-    #     barcodes_exp_agg = None
-    #     barcodes_csr = None
-    #     barcodes_csr_agg = None
+        # load mask parameters
+        all_densities_mask = {k: [] for k in channel_tags}
+        all_areas_mask = []
+        for fp in fp_maskdict:
+            with open(fp, "rb") as f:
+                mask_dict = pickle.load(f)
+            all_areas_mask.append(mask_dict["area"])
+            for tgt in channel_tags:
+                all_densities_mask[tgt].append(
+                    mask_dict["density_exp_" + tgt + " (/um^2)"]
+                )
 
-    #     for fp in fp_exp_bcmap:
-    #         df = pd.read_excel(fp)
-    #         if barcode_map is None:
-    #             barcode_map = df
-    #         else:
-    #             if not barcode_map.equals(fp):
-    #                 raise KeyError(
-    #                     "The different workflows used "
-    #                     + "different barcode maps"
-    #                 )
-    #     for fplist in fp_csr_bcmap:
-    #         for fp in fplist:
-    #             df = pd.read_excel(fp)
-    #             if barcode_map is None:
-    #                 barcode_map = df
-    #             else:
-    #                 if not barcode_map.equals(fp):
-    #                     raise KeyError(
-    #                         "The different workflows used "
-    #                         + "different barcode maps"
-    #                     )
+        print(all_densities_rdf)
+        print(all_densities_mask)
+        print(all_areas_mask)
 
-    #     for fp, name in zip(fp_exp_bc, parameters["report_names"]):
-    #         df = pd.read_excel(fp)
-    #         df["name"] = name
-    #         if barcodes_exp is None:
-    #             barcodes_exp = df
-    #         else:
-    #             barcodes_exp = pd.concat([barcodes_exp, df])
-    #     for fp, name in zip(barcodes_exp_agg, parameters["report_names"]):
-    #         df = pd.read_excel(fp)
-    #         df["name"] = name
-    #         df["metric"] = df.index
-    #         df = df.reset_index()
-    #         if barcodes_exp_agg is None:
-    #             barcodes_exp_agg = df
-    #         else:
-    #             barcodes_exp_agg = pd.concat([barcodes_exp_agg, df])
-    #     # for fplist, name in zip(barcodes_csr, parameters["report_names"]):
-    #     #     for i, fp in fplist
-    #     #     df = pd.read_excel(fp)
-    #     #     df["name"] = name
-    #     #     if barcodes_exp is None:
-    #     #         barcodes_exp = df
-    #     #     else:
-    #     #         barcodes_exp = pd.concat([barcodes_exp, df])
+        fig, ax = plt.subplots(nrows=2, sharex=True)
+        ax[0].violinplot(
+            [all_densities_rdf[k] for k in channel_tags], showmedians=True
+        )
+        ax[0].set_ylabel("RDF density")
+        ax[1].violinplot(
+            [all_densities_mask[k] for k in channel_tags], showmedians=True
+        )
+        ax[1].set_ylabel("density from mask")
+        ax[1].set_xticklabels(channel_tags, rotation=90)
+        fp_fig_density = os.path.join(results["folder"], "density.png")
+        fig.savefig(fp_fig_density)
+        results["fp_fig_density"] = fp_fig_density
 
-    #     # take the mean across the cell
-    #     res_cell = np.zeros(  # contains counts for each cell
-    #         (len(parameters["fp_workflows"]), len(all_bc_list))
-    #     )
-    #     res_csr = np.zeros(  # contains counts for each csr simulation
-    #         (len(parameters["fp_workflows"]), len(all_bc_list))
-    #     )
-    #     count = 0
-    #     for fp_bc_exp, fp_bc_csr, fp_weights_exp, fp_weights_csr in zip(
-    #         fp_binbc_exp,
-    #         fp_binbc_csr,
-    #         fp_binbc_weights_exp,
-    #         fp_binbc_weights_csr,
-    #     ):
-    #         barcodes_cell = np.loadtxt(fp_bc_exp)
-    #         barcodes_csr = np.loadtxt(fp_bc_csr)
-    #         weights_cell = np.loadtxt(fp_weights_exp)
-    #         weights_csr = np.loadtxt(fp_weights_csr)
-    #         # get the weighted counts for cell
-    #         b = ["".join(_.astype(str)) for _ in barcodes_cell]
-    #         for weight, barcode in zip(weights_cell, b):
-    #             idx = all_bc_list.index(barcode)
-    #             res_cell[count, idx] += weight
-    #         res_cell[count, :] /= res_cell[count, :].sum()
+        # save data into results folder
+        fp_density_rdf = os.path.join(results["folder"], "density_rdf.pkl")
+        with open(fp_density_rdf, "wb") as f:
+            pickle.dump(all_densities_rdf, f)
+        results["fp_density_rdf"] = fp_density_rdf
+        fp_density_mask = os.path.join(results["folder"], "density_mask.pkl")
+        with open(fp_density_mask, "wb") as f:
+            pickle.dump(all_densities_mask, f)
+        results["fp_density_mask"] = fp_density_mask
 
-    #         # get the weighted counts for csr
-    #         b = ["".join(_.astype(str)) for _ in barcodes_csr]
-    #         for weight, barcode in zip(weights_csr, b):
-    #             idx = all_bc_list.index(barcode)
-    #             res_csr[count, idx] += weight
-    #         res_csr[count, :] /= res_csr[count, :].sum()
+        fig, ax = plt.subplots()
+        ax.violinplot(all_areas_mask)
+        # additionally show the data points
+        sns.stripplot(all_areas_mask, jitter=True, color="k", alpha=0.4, ax=ax)
+        ax.set_ylabel("area")
+        fp_fig_area = os.path.join(results["folder"], "area.png")
+        fig.savefig(fp_fig_area)
+        results["fp_fig_area"] = fp_fig_area
 
-    #         count += 1
+        fp_area_mask = os.path.join(results["folder"], "area_mask.pkl")
+        with open(fp_area_mask, "wb") as f:
+            pickle.dump(all_areas_mask, f)
+        results["fp_area_mask"] = fp_area_mask
 
-    #     # plot
-    #     x = np.arange(len(all_bc_list))
-    #     width = 0.4
-    #     fig = plt.figure(figsize=(10, 4), constrained_layout=True)
+        return parameters, results
 
-    #     # take mean and error
-    #     cell_mean = res_cell.mean(axis=0)
-    #     cell_std = res_cell.std(axis=0)
-    #     cell_err = (
-    #         1.96 * cell_std / np.sqrt(len(parameters["fp_workflows"]))
-    #     )  # 95% confidence interval
-    #     csr_mean = res_csr.mean(axis=0)
-    #     csr_std = res_csr.std(axis=0)
-    #     csr_err = (
-    #         1.96 * csr_std / np.sqrt(len(parameters["fp_workflows"]))
-    #     )  # 95% confidence interval
+    @module_decorator
+    def find_cluster_motifs(self, i, parameters, results):
+        """Analyses the binary barcode results of _do_dbscan_molint.
+        Compares experimental to CSR data.
+        Merged for multiple cells
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_dbscan_molint_key : str
+                        the results key of the dbscan module.
+                        e.g. '09_dbscan_molint'
+                    swkfl_CSR_sim_in_mask_key : str
+                        the results key of the CSR dbscan module.
+                        e.g. '10_CSR_sim_in_mask'
+                    population_threshold : float, 0 - 1
+                        only select barcodes with a relative population
+                        larger than this
+                    channel_colors : list of str
+                        colors to describe the receptors with
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        channel_tags = None
+        fp_exp_bc = []  # will be a list of strings (1 for each cell)
+        fp_exp_bcagg = []  # same as above
+        fp_exp_bcmap = []  # same as above
+        fp_csr_bc = []  # will be list of list of strings as in each
+        fp_csr_bcagg = []  # same as above
+        fp_csr_bcmap = []  # same as above
+        fp_cluster_info_exp = []
+        fp_cluster_info_csr = []
+        exp_key = parameters["swkfl_dbscan_molint_key"]
+        csr_key = parameters["swkfl_CSR_sim_in_mask_key"]
+        search_dict = {
+            (
+                exp_key,
+                "fp_barcode",
+            ): fp_exp_bc,
+            (
+                exp_key,
+                "fp_barcode_agg",
+            ): fp_exp_bcagg,
+            (
+                exp_key,
+                "fp_barcode_map",
+            ): fp_exp_bcmap,
+            (
+                exp_key,
+                "fp_cluster_info",
+            ): fp_cluster_info_exp,
+            (
+                csr_key,
+                "fp_barcode",
+            ): fp_csr_bc,
+            (
+                csr_key,
+                "fp_barcode_agg",
+            ): fp_csr_bcagg,
+            (
+                csr_key,
+                "fp_barcode_map",
+            ): fp_csr_bcmap,
+            (
+                csr_key,
+                "fp_cluster_info",
+            ): fp_cluster_info_csr,
+        }
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_dict.keys()
+            )
+            for key, res in loaded_data.items():
+                search_dict[key].append(res)
 
-    #     # save as txt
-    #     results["fp_cell_mean"] = os.path.join(
-    #         results["folder"], "cell_mean.txt"
-    #     )
-    #     np.savetxt(results["fp_cell_mean"], cell_mean)
-    #     results["fp_cell_err"] = os.path.join(
-    #         results["folder"], "cell_err.txt"
-    #     )
-    #     np.savetxt(results["fp_cell_err"], cell_err)
-    #     results["fp_csr_mean"] = os.path.join(
-    #         results["folder"], "csr_mean.txt"
-    #     )
-    #     np.savetxt(results["fp_csr_mean"], csr_mean)
-    #     results["fp_csr_err"] = os.path.join(results["folder"], "csr_err.txt")
-    #     np.savetxt(results["fp_csr_err"], csr_err)
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
 
-    #     # frequency bar plot
-    #     plt.bar(
-    #         x - width / 2,
-    #         cell_mean,
-    #         yerr=cell_err,
-    #         width=width,
-    #         edgecolor="black",
-    #         facecolor="lightgray",
-    #         label="Cell",
-    #     )
-    #     plt.bar(
-    #         x + width / 2,
-    #         csr_mean,
-    #         yerr=csr_err,
-    #         width=width,
-    #         edgecolor="black",
-    #         facecolor="dimgrey",
-    #         label="CSR",
-    #     )
+        # load all data
+        barcode_map = None
+        barcodes_exp = None
+        barcodes_exp_agg = None
+        barcodes_csr = None
+        barcodes_csr_agg = None
 
-    #     plt.xticks(
-    #         np.arange(len(all_bc_list)),
-    #         labels=all_bc_list,
-    #         rotation=90,
-    #         fontsize=8,
-    #     )
-    #     plt.ylabel("Weighted counts", fontsize=12)
-    #     plt.xlabel("Barcodes", fontsize=12)
-    #     plt.legend()
-    #     fig.axes[0].yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
-    #     # if title is not None:
-    #     #     plt.title(title, fontsize=20)
+        for fp in fp_exp_bcmap:
+            df = pd.read_excel(fp, index_col=0, header=0)
+            if barcode_map is None:
+                barcode_map = df
+            else:
+                if not barcode_map.equals(df):
+                    # raise KeyError(
+                    #     "The different workflows used "
+                    #     + "different barcode maps"
+                    # )
+                    logger.error(
+                        "The different workflows used "
+                        + "different barcode maps"
+                    )
+                    print(
+                        "ERROR: The different workflows used "
+                        + "different barcode maps"
+                    )
+        for fplist in fp_csr_bcmap:
+            for fp in fplist:
+                df = pd.read_excel(fp, index_col=0, header=0)
+                if barcode_map is None:
+                    barcode_map = df
+                else:
+                    if not barcode_map.equals(df):
+                        # raise KeyError(
+                        #     "The different workflows used "
+                        #     + "different barcode maps"
+                        # )
+                        logger.error(
+                            "The different workflows used "
+                            + "different barcode maps"
+                        )
+                        print(
+                            "ERROR: The different workflows used "
+                            + "different barcode maps"
+                        )
 
-    #     results["fp_fig"] = os.path.join(
-    #         results["folder"], "binary_barcodes.png"
-    #     )
-    #     savename = os.path.splitext(results["fp_fig"])[0]
-    #     plt.savefig(savename + ".png", dpi=300, transparent=True)
-    #     plt.savefig(savename + ".svg")
+        for fp, name in zip(fp_exp_bc, parameters["report_names"]):
+            df = pd.read_excel(fp, index_col=0, header=0)
+            df["name"] = name
+            df["iter"] = 0
+            if barcodes_exp is None:
+                barcodes_exp = df
+            else:
+                barcodes_exp = pd.concat([barcodes_exp, df], ignore_index=True)
+        for fp, name in zip(fp_exp_bcagg, parameters["report_names"]):
+            df = pd.read_excel(fp, index_col=0, header=[0, 1])
+            df["name"] = name
+            df["metric"] = df.index
+            df = df.reset_index()
+            if barcodes_exp_agg is None:
+                barcodes_exp_agg = df
+            else:
+                barcodes_exp_agg = pd.concat(
+                    [barcodes_exp_agg, df], ignore_index=True
+                )
+        for fplist, name in zip(fp_csr_bc, parameters["report_names"]):
+            for i, fp in enumerate(fplist):
+                df = pd.read_excel(fp, index_col=0, header=[0])
+                df["name"] = name
+                df["iter"] = i
+                if barcodes_csr is None:
+                    barcodes_csr = df
+                else:
+                    barcodes_csr = pd.concat(
+                        [barcodes_csr, df], ignore_index=True
+                    )
+        for fplist, name in zip(fp_csr_bcagg, parameters["report_names"]):
+            for i, fp in enumerate(fplist):
+                df = pd.read_excel(fp, index_col=0, header=[0, 1])
+                df["name"] = name
+                df["metric"] = df.index
+                if barcodes_csr_agg is None:
+                    barcodes_csr_agg = df
+                else:
+                    barcodes_csr_agg = pd.concat(
+                        [barcodes_csr_agg, df], ignore_index=True
+                    )
+        cluster_info_exp = {}
+        for fp in fp_cluster_info_exp:
+            with open(fp, "r") as f:
+                cluster_info = yaml.safe_load(f)
+            for k, v in cluster_info.items():
+                if k in cluster_info_exp.keys():
+                    cluster_info_exp[k].append(v)
+                else:
+                    cluster_info_exp[k] = [v]
+        cluster_info_csr = {}
+        all_fp_cluster_info_csr = []
+        for fplist in fp_cluster_info_csr:
+            all_fp_cluster_info_csr += fplist
+        for fp in all_fp_cluster_info_csr:
+            with open(fp, "r") as f:
+                cluster_info = yaml.safe_load(f)
+            for k, v in cluster_info.items():
+                if k in cluster_info_csr.keys():
+                    cluster_info_csr[k].append(v)
+                else:
+                    cluster_info_csr[k] = [v]
 
-    #     return parameters, results
+        targets = channel_tags
+        # target_colors = parameters["channel_colors"]
+        origin_colors = ["blue", "gray"]
+
+        # plot number of clustered vs non-clustered locs
+        categories = ["non-clustered", "clustered"]
+        fig, ax = plt.subplots()
+        bxwidth = 1 / (len(origin_colors) + 2)
+        bxpos_init = (
+            np.arange(len(categories))
+            - bxwidth * len(origin_colors) / 2
+            + bxwidth / 2
+        )
+        legend_handles = []
+        data = {
+            "exp": [
+                cluster_info_exp["n_nonclustered_locs"],
+                cluster_info_exp["n_clustered_locs"],
+            ],
+            "csr": [
+                cluster_info_exp["n_nonclustered_locs"],
+                cluster_info_exp["n_clustered_locs"],
+            ],
+        }
+        for i, org in enumerate(["exp", "csr"]):
+            parts = ax.violinplot(
+                data[org],
+                positions=bxpos_init + i * bxwidth,
+                widths=bxwidth,
+                showmedians=True,
+            )
+            for pc in parts["bodies"]:
+                pc.set_facecolor(origin_colors[i])
+                pc.set_edgecolor(origin_colors[i])
+            line = mlines.Line2D([], [], color=origin_colors[i], label=org)
+            legend_handles.append(line)
+        ax.set_ylabel("# localizations per cell")
+        ax.set_xticks(np.arange(len(categories)))
+        ax.set_xticklabels(categories, rotation=90)
+        ax.set_title("degree of clustering")
+        ax.legend(handles=legend_handles)
+        fig.set_size_inches((8, 5))
+        fp_fig = os.path.join(results["folder"], "degree_of_clustering.png")
+        fig.savefig(fp_fig)
+        plt.close(fig)
+        results["fp_fig_degreeofclustering"] = fp_fig
+
+        # take the mean across the cell
+        barcodes_exp_pc = barcodes_exp.groupby("barcode").describe()
+        barcodes_csr_pc = barcodes_csr.groupby("barcode").describe()
+
+        barcodes_exp.to_excel(
+            os.path.join(results["folder"], "barcodes_exp.xlsx")
+        )
+        barcodes_csr.to_excel(
+            os.path.join(results["folder"], "barcodes_csr.xlsx")
+        )
+        barcodes_exp_pc.to_excel(
+            os.path.join(results["folder"], "barcodes_exp_percell.xlsx")
+        )
+        barcodes_csr_pc.to_excel(
+            os.path.join(results["folder"], "barcodes_csr_percell.xlsx")
+        )
+        barcodes_exp_agg.to_excel(
+            os.path.join(results["folder"], "barcodes_exp_agg.xlsx")
+        )
+        barcodes_csr_agg.to_excel(
+            os.path.join(results["folder"], "barcodes_csr_agg.xlsx")
+        )
+
+        barcodes_exp["origin"] = "exp"
+        barcodes_csr["origin"] = "csr"
+        bc_all = pd.concat([barcodes_exp, barcodes_csr], ignore_index=True)
+
+        barcode_numbers = pd.pivot_table(
+            bc_all[["barcode", "origin", "name", "iter"]],
+            index="barcode",
+            columns=["origin", "name", "iter"],
+            aggfunc=len,
+            fill_value=0,
+        )
+        barcode_numbers.to_excel(
+            os.path.join(results["folder"], "barcodes_numbers.xlsx")
+        )
+
+        # plot distribution of number of barcodes
+        fig, ax = plt.subplots(nrows=1, sharex=True)
+
+        legend_handles = []
+        bxwidth = 1 / (len(origin_colors) + 2)
+        bxpos_init = (
+            np.arange(len(barcode_numbers.index))
+            - bxwidth * len(origin_colors) / 2
+            + bxwidth / 2
+        )
+        all_occurrence_lists = {}
+        for i, org in enumerate(["exp", "csr"]):
+            dflist = [
+                row[org].values for bc, row in barcode_numbers.iterrows()
+            ]
+            all_occurrence_lists[org] = dflist
+            # remove values (zeros) if target is not in barcode
+            lineprops = {"color": origin_colors[i]}
+            ax.boxplot(
+                dflist,
+                positions=bxpos_init + i * bxwidth,
+                widths=bxwidth,
+                showfliers=False,
+                boxprops=lineprops,
+                whiskerprops=lineprops,
+                medianprops=lineprops,
+                capprops=lineprops,
+            )
+            # print(bplot.keys())
+            # for patch in bplot['boxes']:
+            #     patch.set_edgecolor(target_colors[i])
+            line = mlines.Line2D([], [], color=origin_colors[i], label=org)
+            legend_handles.append(line)
+        ax.set_ylabel("# barcodes found")
+        ax.set_xticks(np.arange(len(barcode_numbers.index)))
+        xtilabels = [ti[2:] for ti in barcode_numbers.index]
+        ax.set_xticklabels(xtilabels, rotation=90)
+        # # plot separator lines
+        # xpos = np.arange(len(barcode_numbers.index) - 1) + .5
+        ylims = ax.get_ylim()
+        # for x in xpos:
+        #     ax.plot([x, x], ylims, color='gray')
+        ax.legend(handles=legend_handles)
+        results["fp_fig_nbarcodesbox"] = os.path.join(
+            results["folder"], "n_barcodes_boxplot.png"
+        )
+        fig.set_size_inches((15, 6))
+        fig.savefig(results["fp_fig_nbarcodesbox"])
+
+        # test for significant difference in the number of barcodes found
+        # between exp and csr
+        p_values = np.ones(len(barcode_numbers.index))
+        t_stats = np.ones(len(barcode_numbers.index))
+        for i, (n_exp, n_csr) in enumerate(
+            zip(all_occurrence_lists["exp"], all_occurrence_lists["csr"])
+        ):
+            t_stats[i], p_values[i] = stats.ttest_ind(n_exp, n_csr)
+
+        significant_barcodes_idx = np.argwhere(p_values < 0.05).flatten()
+        print(significant_barcodes_idx)
+
+        # select for barcodes that have a relevant population
+        fraction_barcodes_exp = np.array(
+            [sum(occ) for occ in all_occurrence_lists["exp"]], dtype=np.float64
+        )
+        fraction_barcodes_exp /= np.sum(fraction_barcodes_exp)
+        print(fraction_barcodes_exp)
+        relevant_barcodes_idx = np.argwhere(
+            fraction_barcodes_exp > parameters["population_threshold"]
+        ).flatten()
+        print(relevant_barcodes_idx)
+        significant_barcodes_idx = [
+            idx
+            for idx in significant_barcodes_idx
+            if idx in relevant_barcodes_idx
+        ]
+
+        print(significant_barcodes_idx)
+
+        for pos in significant_barcodes_idx:
+            ax.text(
+                pos,
+                0.8 * ylims[1],
+                "*",
+                fontsize=14,
+                color="k",
+                horizontalalignment="center",
+                verticalalignment="center",
+            )
+
+        significant_barcodes = [
+            barcode_numbers.index[i] for i in significant_barcodes_idx
+        ]
+        results["significant_barcodes"] = significant_barcodes
+
+        fig.set_size_inches((15, 6))
+        fig.savefig(results["fp_fig_nbarcodesbox"])
+        plt.close(fig)
+
+        # plot number of targets for each significant barcode
+        fp_fig_ntargets = []
+        for bc in significant_barcodes:
+            df = bc_all.loc[bc_all["barcode"] == bc, :]
+            fig, ax = plt.subplots()
+            bxwidth = 1 / (len(origin_colors) + 2)
+            bxpos_init = (
+                np.arange(len(targets))
+                - bxwidth * len(origin_colors) / 2
+                + bxwidth / 2
+            )
+            legend_handles = []
+            for i, org in enumerate(["exp", "csr"]):
+                subdf = df.loc[df["origin"] == org]
+                dflist = [
+                    (
+                        subdf[f"N_{tgt}_per_cluster"]
+                        if bc[2 + k] == "1"
+                        else np.array([np.nan] * 3)
+                    )
+                    for k, tgt in enumerate(targets)
+                ]
+                # remove values (zeros) if target is not in barcode
+                if org == "exp":
+                    lineprops = {"color": origin_colors[i]}
+                else:
+                    lineprops = {"color": "gray"}
+                # bplot = ax.boxplot(
+                #     dflist,
+                #     positions=bxpos_init + i * bxwidth, widths=bxwidth,
+                #     showfliers=False,
+                #     boxprops=lineprops, whiskerprops=lineprops,
+                #     medianprops=lineprops, capprops=lineprops)
+                parts = ax.violinplot(
+                    dflist,
+                    positions=bxpos_init + i * bxwidth,
+                    widths=bxwidth,
+                    # showfliers=False,
+                    # boxprops=lineprops, whiskerprops=lineprops,
+                    # medianprops=lineprops, capprops=lineprops,
+                    showmedians=True,
+                )
+                for pc in parts["bodies"]:
+                    pc.set_facecolor(origin_colors[i])
+                    pc.set_edgecolor(origin_colors[i])
+                    # pc.set_alpha(1)
+                # print(bplot.keys())
+                # for patch in bplot['boxes']:
+                #     patch.set_edgecolor(target_colors[i])
+                # print(bplot.keys())
+
+                line = mlines.Line2D([], [], color=origin_colors[i], label=org)
+                legend_handles.append(line)
+                # if org == 'exp':
+                #     for j, (tgt, col) in enumerate(
+                #         zip(targets, target_colors)
+                #     ):
+                #         bplot['boxes'][j].set_color(col)
+                #         bplot['whiskers'][j].set_color(col)
+                #         bplot['caps'][j].set_color(col)
+                #         line = mlines.Line2D([], [], color=col, label=org)
+                #         legend_handles.append(line)
+                # else:
+                #     line = mlines.Line2D([], [], color='gray', label=org)
+                #     legend_handles.append(line)
+            ax.set_ylabel("# targets per cluster")
+            ax.set_xticks(np.arange(len(targets)))
+            ax.set_xticklabels(targets, rotation=90)
+            ax.set_title(f"Significantly altered barcode {bc[2:]}")
+            # try:
+            # # plot separator lines
+            # xpos = np.arange(len(barcode_agg.index) - 1) + .5
+            # ylims = ax[2].get_ylim()
+            # for x in xpos:
+            #     ax[2].plot([x, x], ylims, color='gray')
+            ax.legend(handles=legend_handles)
+            fig.set_size_inches((8, 5))
+            fp_fig = os.path.join(
+                results["folder"], f"ntargets_barcode_{bc[2:]}.png"
+            )
+            fig.savefig(fp_fig)
+            plt.close(fig)
+            fp_fig_ntargets.append(fp_fig)
+        results["fp_fig_ntargets"] = fp_fig_ntargets
+
+        return parameters, results
+
+    @module_decorator
+    def interaction_graph(self, i, parameters, results):
+        """Plot the interaction graph, displaying the different targets
+        and their interactions in a graph. The node sizes denote the
+        density, and the ripley interaction matrix is represented in the
+        edges.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_protint_key : str
+                        the results key of the protein_interactions module.
+                        e.g. '09_protein_interactions'
+                    fp_density : str
+                        fp to the denfsities of the channels.
+                    fp_ripleys_meanvals : str
+                        the filepath to the interaction matrix
+                    edge_factor : float
+                        factor to display useful sizes
+                    node_factor : float
+                        factor to display useful sizes
+                    channel_colors : list of str
+                        colors to describe the receptors with
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        # get density and channel tags
+        fp_density = []  # workflow, multiple CSR sims are done
+        channel_tags = None
+        protint_key = parameters["swkfl_protint_key"]
+        search_dict = {(protint_key, "fp_density"): fp_density}
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_dict.keys()
+            )
+            for key, res in loaded_data.items():
+                search_dict[key].append(res)
+
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
+
+        # load densities and average
+        all_densities = {k: [] for k in channel_tags}
+        for fp in fp_density:
+            with open(fp, "r") as f:
+                d = yaml.safe_load(f)
+                for k, v in d.items():
+                    all_densities[k].append(v)
+
+        mean_densities = {k: np.mean(v) for k, v in all_densities.items()}
+        densities = np.array([mean_densities[tgt] for tgt in channel_tags])
+
+        targets = channel_tags
+        meanvals = np.loadtxt(parameters["fp_ripleys_meanvals"])
+        fig, ax = self._plot_interaction_graph(
+            densities * parameters["node_factor"],
+            meanvals * parameters["edge_factor"],
+            parameters["channel_colors"],
+            targets,
+        )
+        results["fp_fig"] = os.path.join(
+            results["folder"], "interaction_graph.png"
+        )
+        fig.set_size_inches((7, 7))
+        fig.savefig(results["fp_fig"])
+        return parameters, results
+
+    def _plot_interaction_graph(
+        self,
+        node_sizes: np.ndarray,
+        edge_sizes: np.ndarray,
+        target_colors: list,
+        targets: list,
+    ):
+        """Create an interaction graph plot to show both density of proteins
+        (node sizes), and interaction strength (edge sizes)
+        Args:
+            node_sizes : np array (N,)
+                the size of the nodes
+            edge_sizes : np array (N, N)
+                the interaction strength between edges, including self
+        """
+        from matplotlib.lines import Line2D
+        import matplotlib.patches as mpatches
+
+        N = len(node_sizes)
+        # Create a figure and a subplot
+        fig, ax = plt.subplots()
+        ax.set_xlim([-1.5, 1.5])
+        ax.set_ylim([-1.5, 1.5])
+        ax.set_aspect("equal")
+        # Calculate the positions of the nodes
+        theta = np.linspace(0, 2 * np.pi, N, endpoint=False)
+        x = np.cos(theta)
+        y = np.sin(theta)
+        # Draw the edges
+        for i in range(N):
+            for j in range(N):
+                if i != j:
+                    # ax.plot(
+                    #     [x[i], x[j]], [y[i], y[j]],
+                    #     color='black', linewidth=edge_sizes[i][j])
+                    # pass
+                    offset_dist = np.abs(edge_sizes[i][j]) + np.abs(
+                        edge_sizes[j][i]
+                    )
+                    offset_dir = np.array([(y[j] - y[i]), (x[j] - x[i])])
+                    offset_dir = offset_dir / np.sqrt(np.sum(offset_dir**2))
+                    offset = offset_dist * offset_dir
+                    trans = ax.transData
+                    coords_start = np.array([x[i], y[i]])
+                    coords_end = np.array([x[j], y[j]])
+                    coords_start_pt = trans.transform(coords_start)
+                    coords_end_pt = trans.transform(coords_end)
+                    coords_start = trans.inverted().transform(
+                        coords_start_pt + offset
+                    )
+                    coords_end = trans.inverted().transform(
+                        coords_end_pt + offset
+                    )
+                    x_coords = [coords_start[0], coords_end[0]]
+                    y_coords = [coords_start[1], coords_end[1]]
+                    lineprops = dict(
+                        color=target_colors[i],
+                        linewidth=edge_sizes[i][j],
+                        solid_capstyle="round",
+                    )
+                    if edge_sizes[j][i] < 0:
+                        lineprops["linestyle"] = ":"
+                    line = Line2D(x_coords, y_coords, **lineprops)
+                    ax.add_line(line)
+                else:
+                    # Draw a circular arrow for self-interaction
+                    start_angle = 180 / np.pi * theta[i]
+                    aA = start_angle + 0
+                    aB = start_angle + 225
+                    ax.annotate(
+                        "",
+                        xy=(1.1 * x[i], 1.1 * y[i]),
+                        xytext=(1.5 * x[i], 1.5 * y[i]),
+                        arrowprops=dict(
+                            arrowstyle="<-",
+                            # connectionstyle="arc,rad=.7,angleA=0,angleB=225",
+                            connectionstyle=f"angle3,angleA={aA},angleB={aB}",
+                            linewidth=edge_sizes[i][i],
+                            color=target_colors[i],
+                        ),
+                    )
+        # Draw the nodes
+        for i in range(N):
+            start_angle = 0
+            end_angle = 360
+            radius = np.sqrt(node_sizes[i])
+            wedge = mpatches.Wedge(
+                (x[i], y[i]),
+                radius,
+                start_angle,
+                end_angle,
+                facecolor=target_colors[i],
+            )
+            ax.add_patch(wedge)
+            ax.text(
+                1.2 * x[i],
+                1.2 * y[i],
+                targets[i],
+                fontsize=14,
+                color=target_colors[i],
+                horizontalalignment="center",
+                verticalalignment="center",
+            )
+        # ax.scatter(x, y, s=node_sizes, color='blue')
+        ax.axis("off")
+
+        return fig, ax
 
 
 class AutoPicassoError(Exception):

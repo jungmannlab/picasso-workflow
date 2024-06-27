@@ -535,7 +535,7 @@ def DBSCAN_analysis(clusters_csv):
     return barcodes, weights
 
 
-def DBSCAN_analysis_pd(clusters_csv):
+def DBSCAN_analysis_pd(clusters_csv, channel_tags):
     """Calculates barcodes and weights (by cluster area) for further
     DBSCAN data analysis.
 
@@ -543,6 +543,8 @@ def DBSCAN_analysis_pd(clusters_csv):
     ----------
     clusters_csv : str or pd.DataFrame
         Path to csv file with DBSCAN results
+    channel_tags : list of str
+        the names of the channels, in the correct order
 
     Returns
     -------
@@ -565,14 +567,26 @@ def DBSCAN_analysis_pd(clusters_csv):
     else:
         raise NotImplementedError("Type of clusters_csv not implemented.")
 
-    per_cluster_cols = [
-        col for col in clusters.columns if col.endswith("per_cluster")
-    ]
-    targets = [col[: -len("_per_cluster")] for col in per_cluster_cols]
+    # per_cluster_cols = [
+    #     col for col in clusters.columns
+    #     if col.endswith("_per_cluster") and col.startswith('N_')
+    # ]
+    targets = channel_tags  # [col[: -len("_per_cluster")] for col in per_cluster_cols]
+    # sort per cluster cols
+    per_cluster_cols = [f"N_{target}_per_cluster" for target in targets]
 
     barcode_df = pd.DataFrame(
-        index=clusters.index, columns=["barcode", "weight"] + per_cluster_cols
+        index=clusters.index,
+        columns=["barcode", "area (nm^2)"] + per_cluster_cols,
     )
+
+    def decimal_to_binary(decimal, digits):
+        binstr = bin(decimal)
+        if len(binstr) - 2 < digits:
+            binstr = (
+                binstr[:2] + "0" * (digits - (len(binstr) - 2)) + binstr[2:]
+            )
+        return binstr
 
     def assemble_barcode(df, cols):
         barcode = np.zeros(len(df.index), dtype=np.int32)
@@ -580,24 +594,28 @@ def DBSCAN_analysis_pd(clusters_csv):
             barcode += 2**i * (df[col] > 0)
         return barcode
 
-    barcode_df["barcode"] = assemble_barcode(clusters, per_cluster_cols)
-    barcode_df["weight"] = clusters["area (nm^2)"]
+    barcode_df["barcode"] = np.vectorize(decimal_to_binary)(
+        assemble_barcode(clusters, per_cluster_cols), len(targets)
+    )
+    barcode_df["area (nm^2)"] = clusters["area (nm^2)"]
     for col in per_cluster_cols:
         barcode_df.loc[:, col] = clusters[col]
 
     barcodes_agg = barcode_df.groupby("barcode").describe()
+    print(barcodes_agg.columns)
 
     barcode_map = pd.DataFrame(
         index=np.arange(2 ** len(targets)),
         columns=["barcode"] + targets,
     )
 
-    def decimal_to_binary(decimal):
-        return bin(decimal)[2:]
-
-    barcode_map["barcode"] = np.vectorize(decimal_to_binary)(barcode_map.index)
+    barcode_map["barcode"] = np.vectorize(decimal_to_binary)(
+        barcode_map.index, len(targets)
+    )
     for i, col in enumerate(targets):
-        barcode_map[col] = barcode_map["barcode"].str[i] == "1"
+        barcode_map[col] = (barcode_map["barcode"].str[2 + i] == "1").astype(
+            np.int32
+        )
 
     return barcode_df, barcodes_agg, barcode_map
 
