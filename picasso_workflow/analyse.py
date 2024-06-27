@@ -19,7 +19,6 @@ import pandas as pd
 from scipy.spatial import distance, KDTree
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FormatStrFormatter
-import seaborn as sns
 from matplotlib import cm
 import logging
 from datetime import datetime
@@ -3736,17 +3735,36 @@ class AutoPicasso(AbstractModuleCollection):
                     mask_dict["density_exp_" + tgt + " (/um^2)"]
                 )
 
-        print(all_densities_rdf)
-        print(all_densities_mask)
-        print(all_areas_mask)
+        def stripplot(data, positions, jitter, ax, color, alpha=1):
+            for pos, d in zip(positions, data):
+                x = pos * np.ones(len(d))
+                x += np.random.uniform(-jitter / 2, jitter / 2, size=len(d))
+                ax.scatter(x, d, color=color, alpha=alpha)
 
         fig, ax = plt.subplots(nrows=2, sharex=True)
-        ax[0].violinplot(
-            [all_densities_rdf[k] for k in channel_tags], showmedians=True
+        data = [all_densities_rdf[k] for k in channel_tags]
+        # sns.violinplot(data, showmedians=True, ax=ax[0])
+        # sns.violinplot(data, ax=ax[0])
+        # sns.stripplot(data, jitter=True, palette='dark:k', alpha=0.4, ax=ax[0])
+        ax[0].violinplot(data, showmedians=True)
+        stripplot(
+            data,
+            np.arange(1, 1 + len(channel_tags)),
+            0.3,
+            ax[0],
+            "k",
+            alpha=0.5,
         )
         ax[0].set_ylabel("RDF density")
-        ax[1].violinplot(
-            [all_densities_mask[k] for k in channel_tags], showmedians=True
+        data = [all_densities_mask[k] for k in channel_tags]
+        ax[1].violinplot(data, showmedians=True)
+        stripplot(
+            data,
+            np.arange(1, 1 + len(channel_tags)),
+            0.3,
+            ax[1],
+            "k",
+            alpha=0.5,
         )
         ax[1].set_ylabel("density from mask")
         ax[1].set_xticklabels(channel_tags, rotation=90)
@@ -3765,10 +3783,12 @@ class AutoPicasso(AbstractModuleCollection):
         results["fp_density_mask"] = fp_density_mask
 
         fig, ax = plt.subplots()
-        ax.violinplot(all_areas_mask)
-        # additionally show the data points
-        sns.stripplot(all_areas_mask, jitter=True, color="k", alpha=0.4, ax=ax)
+        ax.violinplot(all_areas_mask, showmedians=True)
+        stripplot([all_areas_mask], [1], 0.3, ax, "k", alpha=0.5)
         ax.set_ylabel("area")
+        ylim = ax.get_ylim()
+        ax.set_ylim([0, 1.3 * ylim[1]])
+        ax.set_xticklabels([])
         fp_fig_area = os.path.join(results["folder"], "area.png")
         fig.savefig(fp_fig_area)
         results["fp_fig_area"] = fp_fig_area
@@ -4003,10 +4023,17 @@ class AutoPicasso(AbstractModuleCollection):
                 cluster_info_exp["n_clustered_locs"],
             ],
             "csr": [
-                cluster_info_exp["n_nonclustered_locs"],
-                cluster_info_exp["n_clustered_locs"],
+                cluster_info_csr["n_nonclustered_locs"],
+                cluster_info_csr["n_clustered_locs"],
             ],
         }
+
+        def stripplot(data, positions, jitter, ax, color, alpha=1):
+            for pos, d in zip(positions, data):
+                x = pos * np.ones(len(d))
+                x += np.random.uniform(-jitter / 2, jitter / 2, size=len(d))
+                ax.scatter(x, d, color=color, alpha=alpha)
+
         for i, org in enumerate(["exp", "csr"]):
             parts = ax.violinplot(
                 data[org],
@@ -4017,11 +4044,19 @@ class AutoPicasso(AbstractModuleCollection):
             for pc in parts["bodies"]:
                 pc.set_facecolor(origin_colors[i])
                 pc.set_edgecolor(origin_colors[i])
+            stripplot(
+                data[org],
+                bxpos_init + i * bxwidth,
+                bxwidth,
+                ax,
+                origin_colors[i],
+                alpha=0.5,
+            )
             line = mlines.Line2D([], [], color=origin_colors[i], label=org)
             legend_handles.append(line)
         ax.set_ylabel("# localizations per cell")
         ax.set_xticks(np.arange(len(categories)))
-        ax.set_xticklabels(categories, rotation=90)
+        ax.set_xticklabels(categories)  # , rotation=90)
         ax.set_title("degree of clustering")
         ax.legend(handles=legend_handles)
         fig.set_size_inches((8, 5))
@@ -4127,25 +4162,23 @@ class AutoPicasso(AbstractModuleCollection):
             t_stats[i], p_values[i] = stats.ttest_ind(n_exp, n_csr)
 
         significant_barcodes_idx = np.argwhere(p_values < 0.05).flatten()
-        print(significant_barcodes_idx)
+        # print(significant_barcodes_idx)
 
         # select for barcodes that have a relevant population
         fraction_barcodes_exp = np.array(
             [sum(occ) for occ in all_occurrence_lists["exp"]], dtype=np.float64
         )
         fraction_barcodes_exp /= np.sum(fraction_barcodes_exp)
-        print(fraction_barcodes_exp)
+        # print(fraction_barcodes_exp)
         relevant_barcodes_idx = np.argwhere(
             fraction_barcodes_exp > parameters["population_threshold"]
         ).flatten()
-        print(relevant_barcodes_idx)
+        # print(relevant_barcodes_idx)
         significant_barcodes_idx = [
             idx
             for idx in significant_barcodes_idx
             if idx in relevant_barcodes_idx
         ]
-
-        print(significant_barcodes_idx)
 
         for pos in significant_barcodes_idx:
             ax.text(
