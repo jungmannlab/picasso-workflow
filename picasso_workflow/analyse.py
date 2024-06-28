@@ -4365,7 +4365,7 @@ class AutoPicasso(AbstractModuleCollection):
             targets,
         )
         results["fp_fig"] = os.path.join(
-            results["folder"], "interaction_graph.png"
+            results["folder"], f"interaction_graph_mod{i}.png"
         )
         fig.set_size_inches((7, 7))
         fig.savefig(results["fp_fig"])
