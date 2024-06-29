@@ -50,7 +50,7 @@ def module_decorator(method):
             pass
 
         results = {
-            "folder": module_result_dir,
+            "folder": os.path.normpath(module_result_dir),
             "start time": datetime.now().strftime("%y-%m-%d %H:%M:%S"),
         }
 
@@ -120,7 +120,7 @@ class AutoPicasso(AbstractModuleCollection):
                         whether every module should end in saving the current
                         locs
         """
-        self.results_folder = results_folder
+        self.results_folder = os.path.normpath(results_folder)
         self.analysis_config = analysis_config
 
     @module_decorator
