@@ -1134,6 +1134,10 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
+        <li>Threshold Cluster Population:
+        {100 * parameters["population_threshold"]:.1f}%</li>
+        <li>t-Test threshold p-value:
+        {parameters["ttest_pvalue_max"]:.3f}</li>
         <li>Significant Barcodes: {results["significant_barcodes"]}</li>
         </ul>"""
         if fp_fig := results.get("fp_fig_degreeofclustering"):

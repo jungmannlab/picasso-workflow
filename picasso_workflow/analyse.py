@@ -3743,10 +3743,11 @@ class AutoPicasso(AbstractModuleCollection):
 
         fig, ax = plt.subplots(nrows=2, sharex=True)
         data = [all_densities_rdf[k] for k in channel_tags]
+        x = np.arange(len(channel_tags))
         # sns.violinplot(data, showmedians=True, ax=ax[0])
         # sns.violinplot(data, ax=ax[0])
         # sns.stripplot(data, jitter=True, palette='dark:k', alpha=0.4, ax=ax[0])
-        ax[0].violinplot(data, showmedians=True)
+        ax[0].violinplot(x, data, showmedians=True)
         stripplot(
             data,
             np.arange(1, 1 + len(channel_tags)),
@@ -3757,7 +3758,7 @@ class AutoPicasso(AbstractModuleCollection):
         )
         ax[0].set_ylabel("RDF density")
         data = [all_densities_mask[k] for k in channel_tags]
-        ax[1].violinplot(data, showmedians=True)
+        ax[1].violinplot(x, data, showmedians=True)
         stripplot(
             data,
             np.arange(1, 1 + len(channel_tags)),
@@ -3824,6 +3825,10 @@ class AutoPicasso(AbstractModuleCollection):
                     population_threshold : float, 0 - 1
                         only select barcodes with a relative population
                         larger than this
+                    ttest_pvalue_max : float, < 0
+                        the pvalue below which the difference between number
+                        of clusters found for a barcode between exp and csr
+                        is deemed significant
                     channel_colors : list of str
                         colors to describe the receptors with
                 and optional keys:
@@ -4161,7 +4166,10 @@ class AutoPicasso(AbstractModuleCollection):
         ):
             t_stats[i], p_values[i] = stats.ttest_ind(n_exp, n_csr)
 
-        significant_barcodes_idx = np.argwhere(p_values < 0.05).flatten()
+        significant_barcodes_idx = np.argwhere(
+            p_values < parameters["ttest_pvalue_max"]
+        ).flatten()
+        results["ttest_pvalues"] = p_values
         # print(significant_barcodes_idx)
 
         # select for barcodes that have a relevant population
@@ -4428,7 +4436,7 @@ class AutoPicasso(AbstractModuleCollection):
                     y_coords = [coords_start[1], coords_end[1]]
                     lineprops = dict(
                         color=target_colors[i],
-                        linewidth=edge_sizes[i][j],
+                        linewidth=np.abs(edge_sizes[i][j]),
                         solid_capstyle="round",
                     )
                     if edge_sizes[j][i] < 0:
