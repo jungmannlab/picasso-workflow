@@ -3743,11 +3743,7 @@ class AutoPicasso(AbstractModuleCollection):
 
         fig, ax = plt.subplots(nrows=2, sharex=True)
         data = [all_densities_rdf[k] for k in channel_tags]
-        x = np.arange(len(channel_tags))
-        # sns.violinplot(data, showmedians=True, ax=ax[0])
-        # sns.violinplot(data, ax=ax[0])
-        # sns.stripplot(data, jitter=True, palette='dark:k', alpha=0.4, ax=ax[0])
-        ax[0].violinplot(x, data, showmedians=True)
+        ax[0].violinplot(data, showmedians=True)
         stripplot(
             data,
             np.arange(1, 1 + len(channel_tags)),
@@ -3758,7 +3754,7 @@ class AutoPicasso(AbstractModuleCollection):
         )
         ax[0].set_ylabel("RDF density")
         data = [all_densities_mask[k] for k in channel_tags]
-        ax[1].violinplot(x, data, showmedians=True)
+        ax[1].violinplot(data, showmedians=True)
         stripplot(
             data,
             np.arange(1, 1 + len(channel_tags)),
@@ -3768,6 +3764,7 @@ class AutoPicasso(AbstractModuleCollection):
             alpha=0.5,
         )
         ax[1].set_ylabel("density from mask")
+        ax[1].set_xticks(np.arange(1, 1 + len(channel_tags)))
         ax[1].set_xticklabels(channel_tags, rotation=90)
         fp_fig_density = os.path.join(results["folder"], "density.png")
         fig.savefig(fp_fig_density)
@@ -4070,33 +4067,33 @@ class AutoPicasso(AbstractModuleCollection):
         plt.close(fig)
         results["fp_fig_degreeofclustering"] = fp_fig
 
-        # take the mean across the cell
-        barcodes_exp_pc = barcodes_exp.groupby("barcode").describe()
-        barcodes_csr_pc = barcodes_csr.groupby("barcode").describe()
+        # # take the mean across the cell
+        # barcodes_exp_pc = barcodes_exp.groupby("barcode").describe()
+        # barcodes_csr_pc = barcodes_csr.groupby("barcode").describe()
 
-        barcodes_exp.to_excel(
-            os.path.join(results["folder"], "barcodes_exp.xlsx")
-        )
-        barcodes_csr.to_excel(
-            os.path.join(results["folder"], "barcodes_csr.xlsx")
-        )
-        barcodes_exp_pc.to_excel(
-            os.path.join(results["folder"], "barcodes_exp_percell.xlsx")
-        )
-        barcodes_csr_pc.to_excel(
-            os.path.join(results["folder"], "barcodes_csr_percell.xlsx")
-        )
-        barcodes_exp_agg.to_excel(
-            os.path.join(results["folder"], "barcodes_exp_agg.xlsx")
-        )
-        barcodes_csr_agg.to_excel(
-            os.path.join(results["folder"], "barcodes_csr_agg.xlsx")
-        )
+        # barcodes_exp_pc.to_excel(
+        #     os.path.join(results["folder"], "barcodes_exp_percell.xlsx")
+        # )
+        # barcodes_csr_pc.to_excel(
+        #     os.path.join(results["folder"], "barcodes_csr_percell.xlsx")
+        # )
+        # barcodes_exp_agg.to_excel(
+        #     os.path.join(results["folder"], "barcodes_exp_agg.xlsx")
+        # )
+        # barcodes_csr_agg.to_excel(
+        #     os.path.join(results["folder"], "barcodes_csr_agg.xlsx")
+        # )
 
         barcodes_exp["origin"] = "exp"
         barcodes_csr["origin"] = "csr"
         bc_all = pd.concat([barcodes_exp, barcodes_csr], ignore_index=True)
 
+        results["fp_barcodes"] = os.path.join(
+            results["folder"], "barcodes.hdf5"
+        )
+        bc_all.to_hdf(results["fp_barcodes"], key="barcodes")
+
+        # number of barcodes
         barcode_numbers = pd.pivot_table(
             bc_all[["barcode", "origin", "name", "iter"]],
             index="barcode",
@@ -4107,22 +4104,118 @@ class AutoPicasso(AbstractModuleCollection):
         barcode_numbers.to_excel(
             os.path.join(results["folder"], "barcodes_numbers.xlsx")
         )
+        results["fp_fig_nbarcodesbox"] = os.path.join(
+            results["folder"], "n_barcodes_boxplot.png"
+        )
+        significant_barcodes, p_values = self._plot_and_compare_barcodes(
+            barcode_numbers,
+            origin_colors,
+            targets,
+            parameters["ttest_pvalue_max"],
+            parameters["population_threshold"],
+            results["fp_fig_nbarcodesbox"],
+            title="Barcode Occurrence",
+            ylabel="# barcodes found",
+        )
+        # results["significant_barcodes"] = significant_barcodes
+        # results["ttest_pvalues"] = p_values
 
+        # area of barcodes
+        barcode_areas = pd.pivot_table(
+            bc_all[["barcode", "origin", "name", "iter"]],
+            index="barcode",
+            columns=["origin", "name", "iter"],
+            values="area (nm^2)",
+            aggfunc=np.mean,
+            fill_value=0,
+        )
+        barcode_areas.to_excel(
+            os.path.join(results["folder"], "barcodes_areas.xlsx")
+        )
+        results["fp_fig_abarcodesbox"] = os.path.join(
+            results["folder"], "a_barcodes_boxplot.png"
+        )
+        significant_barcodes, p_values = self._plot_and_compare_barcodes(
+            barcode_areas,
+            origin_colors,
+            targets,
+            parameters["ttest_pvalue_max"],
+            parameters["population_threshold"],
+            results["fp_fig_abarcodesbox"],
+            title="Barcode Areas",
+            ylabel="cluster area",
+        )
+        results["significant_barcodes"] = significant_barcodes
+        results["ttest_pvalues"] = p_values
+
+        # plot number of targets for each significant barcode
+        fp_fig_ntargets = []
+        for bc in significant_barcodes:
+            df = bc_all.loc[bc_all["barcode"] == bc, :]
+            fp_fig = os.path.join(
+                results["folder"], f"ntargets_barcode_{bc[2:]}.png"
+            )
+            self._plot_and_compare_ntargets_in_barcodes(
+                df, bc, origin_colors, targets, fp_fig
+            )
+            fp_fig_ntargets.append(fp_fig)
+        results["fp_fig_ntargets"] = fp_fig_ntargets
+
+        return parameters, results
+
+    def _plot_and_compare_barcodes(
+        self,
+        pivot_table,
+        origin_colors,
+        targets,
+        ttest_pvalue_max,
+        population_threshold,
+        fp_fig,
+        title="",
+        ylabel="",
+    ):
+        """Plot the comparison of barcodes between experiment and simulation,
+        and perform a t-test to evaluate whether the distributions are
+        different.
+        Args:
+            pivot_table : pd.DataFrame
+                index: barcodes (str, 0b...)
+                columns: multiindex, first index: origin (['exp', 'csr'])
+            origin_colors : list of str
+                the colors to use for the two conditions
+            targets : list of str
+                the protein targets
+            ttest_pvalue_max : float
+                the pvalue above which no significance is attributed to
+                the difference of exp and csr
+            population_threshold : float
+                the relative population a barcode needs to be significant
+                (e.g. 1% of all clusters need to have a barcode for it
+                to pop up)
+            fp_fig : str
+                the filepath to save the figure at
+            title : str
+                the title addition for the plot
+        Returns:
+            significant_barcodes : list of str
+                the barcodes that evaluated as significantly changed between
+                exp and csr
+            p_values : list of float
+                the p_values of the t-test for all barcodes
+        """
         # plot distribution of number of barcodes
         fig, ax = plt.subplots(nrows=1, sharex=True)
 
         legend_handles = []
         bxwidth = 1 / (len(origin_colors) + 2)
         bxpos_init = (
-            np.arange(len(barcode_numbers.index))
+            np.arange(len(pivot_table.index))
             - bxwidth * len(origin_colors) / 2
             + bxwidth / 2
         )
         all_occurrence_lists = {}
         for i, org in enumerate(["exp", "csr"]):
-            dflist = [
-                row[org].values for bc, row in barcode_numbers.iterrows()
-            ]
+            dflist = [row[org].values for bc, row in pivot_table.iterrows()]
             all_occurrence_lists[org] = dflist
             # remove values (zeros) if target is not in barcode
             lineprops = {"color": origin_colors[i]}
@@ -4141,9 +4234,10 @@ class AutoPicasso(AbstractModuleCollection):
             #     patch.set_edgecolor(target_colors[i])
             line = mlines.Line2D([], [], color=origin_colors[i], label=org)
             legend_handles.append(line)
-        ax.set_ylabel("# barcodes found")
-        ax.set_xticks(np.arange(len(barcode_numbers.index)))
-        xtilabels = [ti[2:] for ti in barcode_numbers.index]
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"{title}; barcoding: " + "-".join(targets))
+        ax.set_xticks(np.arange(len(pivot_table.index)))
+        xtilabels = [ti[2:] for ti in pivot_table.index]
         ax.set_xticklabels(xtilabels, rotation=90)
         # # plot separator lines
         # xpos = np.arange(len(barcode_numbers.index) - 1) + .5
@@ -4151,25 +4245,19 @@ class AutoPicasso(AbstractModuleCollection):
         # for x in xpos:
         #     ax.plot([x, x], ylims, color='gray')
         ax.legend(handles=legend_handles)
-        results["fp_fig_nbarcodesbox"] = os.path.join(
-            results["folder"], "n_barcodes_boxplot.png"
-        )
-        fig.set_size_inches((15, 6))
-        fig.savefig(results["fp_fig_nbarcodesbox"])
 
         # test for significant difference in the number of barcodes found
         # between exp and csr
-        p_values = np.ones(len(barcode_numbers.index))
-        t_stats = np.ones(len(barcode_numbers.index))
+        p_values = np.ones(len(pivot_table.index))
+        t_stats = np.ones(len(pivot_table.index))
         for i, (n_exp, n_csr) in enumerate(
             zip(all_occurrence_lists["exp"], all_occurrence_lists["csr"])
         ):
             t_stats[i], p_values[i] = stats.ttest_ind(n_exp, n_csr)
 
         significant_barcodes_idx = np.argwhere(
-            p_values < parameters["ttest_pvalue_max"]
+            p_values < ttest_pvalue_max
         ).flatten()
-        results["ttest_pvalues"] = p_values
         # print(significant_barcodes_idx)
 
         # select for barcodes that have a relevant population
@@ -4179,7 +4267,7 @@ class AutoPicasso(AbstractModuleCollection):
         fraction_barcodes_exp /= np.sum(fraction_barcodes_exp)
         # print(fraction_barcodes_exp)
         relevant_barcodes_idx = np.argwhere(
-            fraction_barcodes_exp > parameters["population_threshold"]
+            fraction_barcodes_exp > population_threshold
         ).flatten()
         # print(relevant_barcodes_idx)
         significant_barcodes_idx = [
@@ -4200,100 +4288,95 @@ class AutoPicasso(AbstractModuleCollection):
             )
 
         significant_barcodes = [
-            barcode_numbers.index[i] for i in significant_barcodes_idx
+            pivot_table.index[i] for i in significant_barcodes_idx
         ]
-        results["significant_barcodes"] = significant_barcodes
 
         fig.set_size_inches((15, 6))
-        fig.savefig(results["fp_fig_nbarcodesbox"])
+        fig.savefig(fp_fig)
         plt.close(fig)
 
-        # plot number of targets for each significant barcode
-        fp_fig_ntargets = []
-        for bc in significant_barcodes:
-            df = bc_all.loc[bc_all["barcode"] == bc, :]
-            fig, ax = plt.subplots()
-            bxwidth = 1 / (len(origin_colors) + 2)
-            bxpos_init = (
-                np.arange(len(targets))
-                - bxwidth * len(origin_colors) / 2
-                + bxwidth / 2
-            )
-            legend_handles = []
-            for i, org in enumerate(["exp", "csr"]):
-                subdf = df.loc[df["origin"] == org]
-                dflist = [
-                    (
-                        subdf[f"N_{tgt}_per_cluster"]
-                        if bc[2 + k] == "1"
-                        else np.array([np.nan] * 3)
-                    )
-                    for k, tgt in enumerate(targets)
-                ]
-                # remove values (zeros) if target is not in barcode
-                if org == "exp":
-                    lineprops = {"color": origin_colors[i]}
-                else:
-                    lineprops = {"color": "gray"}
-                # bplot = ax.boxplot(
-                #     dflist,
-                #     positions=bxpos_init + i * bxwidth, widths=bxwidth,
-                #     showfliers=False,
-                #     boxprops=lineprops, whiskerprops=lineprops,
-                #     medianprops=lineprops, capprops=lineprops)
-                parts = ax.violinplot(
-                    dflist,
-                    positions=bxpos_init + i * bxwidth,
-                    widths=bxwidth,
-                    # showfliers=False,
-                    # boxprops=lineprops, whiskerprops=lineprops,
-                    # medianprops=lineprops, capprops=lineprops,
-                    showmedians=True,
+        return significant_barcodes, p_values
+
+    def _plot_and_compare_ntargets_in_barcodes(
+        self, df, bc, origin_colors, targets, fp_fig
+    ):
+        """For a significant cluster, plot the distribution of
+        number of targets for exp and csr cases, and determine
+        whether they are stastistically differnt
+        Args:
+            df : DataFrame
+                the list of all clusters with this barcode
+            bc : str
+                the barcode ('0b...')
+            origin_colors : list of str
+                the colors for exp and csr
+            targets : list of str
+                the protein target names
+            fp_fig : str
+                the filepath to save the figure as
+        """
+        fig, ax = plt.subplots()
+        bxwidth = 1 / (len(origin_colors) + 2)
+        bxpos_init = (
+            np.arange(len(targets))
+            - bxwidth * len(origin_colors) / 2
+            + bxwidth / 2
+        )
+        legend_handles = []
+        for i, org in enumerate(["exp", "csr"]):
+            subdf = df.loc[df["origin"] == org]
+            dflist = [
+                (
+                    subdf[f"N_{tgt}_per_cluster"]
+                    if bc[2 + k] == "1"
+                    else np.array([np.nan] * 3)
                 )
-                for pc in parts["bodies"]:
-                    pc.set_facecolor(origin_colors[i])
-                    pc.set_edgecolor(origin_colors[i])
-                    # pc.set_alpha(1)
-                # print(bplot.keys())
-                # for patch in bplot['boxes']:
-                #     patch.set_edgecolor(target_colors[i])
-                # print(bplot.keys())
-
-                line = mlines.Line2D([], [], color=origin_colors[i], label=org)
-                legend_handles.append(line)
-                # if org == 'exp':
-                #     for j, (tgt, col) in enumerate(
-                #         zip(targets, target_colors)
-                #     ):
-                #         bplot['boxes'][j].set_color(col)
-                #         bplot['whiskers'][j].set_color(col)
-                #         bplot['caps'][j].set_color(col)
-                #         line = mlines.Line2D([], [], color=col, label=org)
-                #         legend_handles.append(line)
-                # else:
-                #     line = mlines.Line2D([], [], color='gray', label=org)
-                #     legend_handles.append(line)
-            ax.set_ylabel("# targets per cluster")
-            ax.set_xticks(np.arange(len(targets)))
-            ax.set_xticklabels(targets, rotation=90)
-            ax.set_title(f"Significantly altered barcode {bc[2:]}")
-            # try:
-            # # plot separator lines
-            # xpos = np.arange(len(barcode_agg.index) - 1) + .5
-            # ylims = ax[2].get_ylim()
-            # for x in xpos:
-            #     ax[2].plot([x, x], ylims, color='gray')
-            ax.legend(handles=legend_handles)
-            fig.set_size_inches((8, 5))
-            fp_fig = os.path.join(
-                results["folder"], f"ntargets_barcode_{bc[2:]}.png"
+                for k, tgt in enumerate(targets)
+            ]
+            parts = ax.violinplot(
+                dflist,
+                positions=bxpos_init + i * bxwidth,
+                widths=bxwidth,
+                showmedians=True,
             )
-            fig.savefig(fp_fig)
-            plt.close(fig)
-            fp_fig_ntargets.append(fp_fig)
-        results["fp_fig_ntargets"] = fp_fig_ntargets
+            for pc in parts["bodies"]:
+                pc.set_facecolor(origin_colors[i])
+                pc.set_edgecolor(origin_colors[i])
+            line = mlines.Line2D([], [], color=origin_colors[i], label=org)
+            legend_handles.append(line)
+        ax.set_ylabel("# targets per cluster")
+        ax.set_xticks(np.arange(len(targets)))
+        ax.set_xticklabels(targets, rotation=90)
+        ax.set_title(f"Significantly altered barcode {bc[2:]}")
+        ax.legend(handles=legend_handles)
 
-        return parameters, results
+        # evaluate statistical difference
+        p_values = np.ones(len(targets))
+        t_stats = np.ones(len(targets))
+        ylims = ax.get_ylim()
+        for i, tgt in enumerate(targets):
+            exp_data = df.loc[df["origin"] == "exp", f"N_{tgt}_per_cluster"]
+            csr_data = df.loc[df["origin"] == "csr", f"N_{tgt}_per_cluster"]
+            t_stats[i], p_values[i] = stats.ttest_ind(exp_data, csr_data)
+            if p_values[i] < 1e-3:
+                siglabel = "p < 0.001"
+            elif p_values[i] < 1e-2:
+                siglabel = "p < 0.01"
+            else:
+                siglabel = "n.s."
+            ax.text(
+                i + 1,
+                0.8 * ylims[1],
+                siglabel,
+                fontsize=14,
+                color="k",
+                horizontalalignment="center",
+                verticalalignment="center",
+            )
+
+        fig.set_size_inches((8, 5))
+        fig.savefig(fp_fig)
+        plt.close(fig)
 
     @module_decorator
     def interaction_graph(self, i, parameters, results):
@@ -4404,7 +4487,7 @@ class AutoPicasso(AbstractModuleCollection):
         ax.set_ylim([-1.5, 1.5])
         ax.set_aspect("equal")
         # Calculate the positions of the nodes
-        theta = np.linspace(0, 2 * np.pi, N, endpoint=False)
+        theta = -np.linspace(0, 2 * np.pi, N, endpoint=False)
         x = np.cos(theta)
         y = np.sin(theta)
         # Draw the edges
@@ -4445,7 +4528,7 @@ class AutoPicasso(AbstractModuleCollection):
                     ax.add_line(line)
                 else:
                     # Draw a circular arrow for self-interaction
-                    start_angle = 180 / np.pi * theta[i]
+                    start_angle = int(180 / np.pi * theta[i])
                     aA = start_angle + 0
                     aB = start_angle + 225
                     ax.annotate(
