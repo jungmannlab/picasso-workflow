@@ -3735,16 +3735,10 @@ class AutoPicasso(AbstractModuleCollection):
                     mask_dict["density_exp_" + tgt + " (/um^2)"]
                 )
 
-        def stripplot(data, positions, jitter, ax, color, alpha=1):
-            for pos, d in zip(positions, data):
-                x = pos * np.ones(len(d))
-                x += np.random.uniform(-jitter / 2, jitter / 2, size=len(d))
-                ax.scatter(x, d, color=color, alpha=alpha)
-
         fig, ax = plt.subplots(nrows=2, sharex=True)
         data = [all_densities_rdf[k] for k in channel_tags]
         ax[0].violinplot(data, showmedians=True)
-        stripplot(
+        self.stripplot(
             data,
             np.arange(1, 1 + len(channel_tags)),
             0.3,
@@ -3755,7 +3749,7 @@ class AutoPicasso(AbstractModuleCollection):
         ax[0].set_ylabel("RDF density")
         data = [all_densities_mask[k] for k in channel_tags]
         ax[1].violinplot(data, showmedians=True)
-        stripplot(
+        self.stripplot(
             data,
             np.arange(1, 1 + len(channel_tags)),
             0.3,
@@ -3782,7 +3776,7 @@ class AutoPicasso(AbstractModuleCollection):
 
         fig, ax = plt.subplots()
         ax.violinplot(all_areas_mask, showmedians=True)
-        stripplot([all_areas_mask], [1], 0.3, ax, "k", alpha=0.5)
+        self.stripplot([all_areas_mask], [1], 0.3, ax, "k", alpha=0.5)
         ax.set_ylabel("area")
         ylim = ax.get_ylim()
         ax.set_ylim([0, 1.3 * ylim[1]])
@@ -3797,6 +3791,12 @@ class AutoPicasso(AbstractModuleCollection):
         results["fp_area_mask"] = fp_area_mask
 
         return parameters, results
+
+    def stripplot(self, data, positions, jitter, ax, color, alpha=1):
+        for pos, d in zip(positions, data):
+            x = pos * np.ones(len(d))
+            x += np.random.uniform(-jitter / 2, jitter / 2, size=len(d))
+            ax.scatter(x, d, color=color, alpha=alpha)
 
     @module_decorator
     def find_cluster_motifs(self, i, parameters, results):
@@ -4010,7 +4010,7 @@ class AutoPicasso(AbstractModuleCollection):
         origin_colors = ["blue", "gray"]
 
         # plot number of clustered vs non-clustered locs
-        categories = ["non-clustered", "clustered"]
+        categories = ["clustered", "non-clustered"]
         fig, ax = plt.subplots()
         bxwidth = 1 / (len(origin_colors) + 2)
         bxpos_init = (
@@ -4021,20 +4021,14 @@ class AutoPicasso(AbstractModuleCollection):
         legend_handles = []
         data = {
             "exp": [
-                cluster_info_exp["n_nonclustered_locs"],
                 cluster_info_exp["n_clustered_locs"],
+                cluster_info_exp["n_nonclustered_locs"],
             ],
             "csr": [
-                cluster_info_csr["n_nonclustered_locs"],
                 cluster_info_csr["n_clustered_locs"],
+                cluster_info_csr["n_nonclustered_locs"],
             ],
         }
-
-        def stripplot(data, positions, jitter, ax, color, alpha=1):
-            for pos, d in zip(positions, data):
-                x = pos * np.ones(len(d))
-                x += np.random.uniform(-jitter / 2, jitter / 2, size=len(d))
-                ax.scatter(x, d, color=color, alpha=alpha)
 
         for i, org in enumerate(["exp", "csr"]):
             parts = ax.violinplot(
@@ -4046,7 +4040,7 @@ class AutoPicasso(AbstractModuleCollection):
             for pc in parts["bodies"]:
                 pc.set_facecolor(origin_colors[i])
                 pc.set_edgecolor(origin_colors[i])
-            stripplot(
+            self.stripplot(
                 data[org],
                 bxpos_init + i * bxwidth,
                 bxwidth,
@@ -4056,6 +4050,27 @@ class AutoPicasso(AbstractModuleCollection):
             )
             line = mlines.Line2D([], [], color=origin_colors[i], label=org)
             legend_handles.append(line)
+        # test for significance
+        ylims = ax.get_ylim()
+        p_values = np.ones(2)
+        t_stats = np.ones(2)
+        for i, (n_exp, n_csr) in enumerate(zip(data["exp"], data["csr"])):
+            t_stats[i], p_values[i] = stats.ttest_ind(n_exp, n_csr)
+            if p_values[i] < 1e-3:
+                siglabel = "p < 0.001"
+            elif p_values[i] < 1e-2:
+                siglabel = "p < 0.01"
+            else:
+                siglabel = "n.s."
+            ax.text(
+                i,
+                0.8 * ylims[1],
+                siglabel,
+                fontsize=14,
+                color="k",
+                horizontalalignment="center",
+                verticalalignment="center",
+            )
         ax.set_ylabel("# localizations per cell")
         ax.set_xticks(np.arange(len(categories)))
         ax.set_xticklabels(categories)  # , rotation=90)
@@ -4122,11 +4137,11 @@ class AutoPicasso(AbstractModuleCollection):
 
         # area of barcodes
         barcode_areas = pd.pivot_table(
-            bc_all[["barcode", "origin", "name", "iter"]],
+            bc_all[["barcode", "origin", "name", "iter", "area (nm^2)"]],
             index="barcode",
             columns=["origin", "name", "iter"],
             values="area (nm^2)",
-            aggfunc=np.mean,
+            aggfunc="mean",
             fill_value=0,
         )
         barcode_areas.to_excel(
@@ -4242,6 +4257,7 @@ class AutoPicasso(AbstractModuleCollection):
         # # plot separator lines
         # xpos = np.arange(len(barcode_numbers.index) - 1) + .5
         ylims = ax.get_ylim()
+        ax.set_ylim([0, ylims[1]])
         # for x in xpos:
         #     ax.plot([x, x], ylims, color='gray')
         ax.legend(handles=legend_handles)
@@ -4277,14 +4293,23 @@ class AutoPicasso(AbstractModuleCollection):
         ]
 
         for pos in significant_barcodes_idx:
+            if p_values[pos] < 1e-3:
+                siglabel = "p < 0.001"
+            elif p_values[pos] < 1e-2:
+                siglabel = "p < 0.01"
+            elif p_values[pos] < ttest_pvalue_max:
+                siglabel = f"p < {ttest_pvalue_max:.2f}"
+            else:
+                siglabel = "n.s."
             ax.text(
                 pos,
                 0.8 * ylims[1],
-                "*",
-                fontsize=14,
+                siglabel,
+                fontsize=10,
                 color="k",
                 horizontalalignment="center",
                 verticalalignment="center",
+                rotation=90,
             )
 
         significant_barcodes = [
@@ -4323,11 +4348,35 @@ class AutoPicasso(AbstractModuleCollection):
             + bxwidth / 2
         )
         legend_handles = []
+
+        pts = {}
+        ntgt_data = {}
+        for i, tgt in enumerate(targets):
+            pivot_table = pd.pivot_table(
+                df[["origin", "name", "iter", f"N_{tgt}_per_cluster"]],
+                index="origin",
+                columns=["name", "iter"],
+                values=f"N_{tgt}_per_cluster",
+                aggfunc="mean",
+                fill_value=np.nan,
+            )
+            # fp = os.path.join(os.path.split(fp_fig)[0], f"bc{bc}-{tgt}.xlsx")
+            # print(fp)
+            # pivot_table.to_excel(fp)
+            pts[tgt] = pivot_table
+            pts_exp = pts[tgt].loc["exp", :].values.flatten()
+            pts_csr = pts[tgt].loc["csr", :].values.flatten()
+            ntgt_data[tgt] = {
+                "exp": pts_exp[~np.isnan(pts_exp)],
+                "csr": pts_csr[~np.isnan(pts_csr)],
+            }
         for i, org in enumerate(["exp", "csr"]):
-            subdf = df.loc[df["origin"] == org]
+            # subdf = df.loc[df["origin"] == org]
             dflist = [
                 (
-                    subdf[f"N_{tgt}_per_cluster"]
+                    # subdf.groupby()[f"N_{tgt}_per_cluster"]
+                    # pts[tgt].loc[org, :].values
+                    ntgt_data[tgt][org]
                     if bc[2 + k] == "1"
                     else np.array([np.nan] * 3)
                 )
@@ -4338,42 +4387,74 @@ class AutoPicasso(AbstractModuleCollection):
                 positions=bxpos_init + i * bxwidth,
                 widths=bxwidth,
                 showmedians=True,
+                showextrema=False,
+                # quantiles=[.25, .75]
             )
             for pc in parts["bodies"]:
                 pc.set_facecolor(origin_colors[i])
                 pc.set_edgecolor(origin_colors[i])
+            self.stripplot(
+                dflist,
+                bxpos_init + i * bxwidth,
+                bxwidth,
+                ax,
+                origin_colors[i],
+                alpha=0.2,
+            )
+            # lineprops = {"color": origin_colors[i]}
+            # ax.boxplot(
+            #     dflist,
+            #     positions=bxpos_init + i * bxwidth,
+            #     widths=bxwidth,
+            #     showfliers=False,
+            #     boxprops=lineprops,
+            #     whiskerprops=lineprops,
+            #     medianprops=lineprops,
+            #     capprops=lineprops,
+            # )
             line = mlines.Line2D([], [], color=origin_colors[i], label=org)
             legend_handles.append(line)
         ax.set_ylabel("# targets per cluster")
         ax.set_xticks(np.arange(len(targets)))
         ax.set_xticklabels(targets, rotation=90)
-        ax.set_title(f"Significantly altered barcode {bc[2:]}")
         ax.legend(handles=legend_handles)
 
         # evaluate statistical difference
         p_values = np.ones(len(targets))
         t_stats = np.ones(len(targets))
         ylims = ax.get_ylim()
+        ax.set_ylim([0, ylims[1]])
         for i, tgt in enumerate(targets):
-            exp_data = df.loc[df["origin"] == "exp", f"N_{tgt}_per_cluster"]
-            csr_data = df.loc[df["origin"] == "csr", f"N_{tgt}_per_cluster"]
-            t_stats[i], p_values[i] = stats.ttest_ind(exp_data, csr_data)
+            if bc[2 + i] != "1":
+                continue
+            # exp_data = df.loc[df["origin"] == "exp", f"N_{tgt}_per_cluster"]
+            # csr_data = df.loc[df["origin"] == "csr", f"N_{tgt}_per_cluster"]
+            t_stats[i], p_values[i] = stats.ttest_ind(
+                ntgt_data[tgt]["exp"], ntgt_data[tgt]["csr"]
+            )
             if p_values[i] < 1e-3:
                 siglabel = "p < 0.001"
             elif p_values[i] < 1e-2:
                 siglabel = "p < 0.01"
             else:
                 siglabel = "n.s."
+            # print(f'{bc} target {targets[i]} p-values: ', p_values[i])
             ax.text(
-                i + 1,
+                i,
                 0.8 * ylims[1],
                 siglabel,
-                fontsize=14,
+                fontsize=12,
                 color="k",
                 horizontalalignment="center",
                 verticalalignment="center",
             )
 
+        # n_exp = np.sum(df["origin"] == "exp")
+        # n_csr = np.sum(df["origin"] == "csr")
+        # ax.set_title(
+        #     f"Significantly altered barcode {bc[2:]}; "
+        #     + f"data points exp {n_exp}, csr {n_csr}")
+        ax.set_title(f"Significantly altered barcode {bc[2:]}")
         fig.set_size_inches((8, 5))
         fig.savefig(fp_fig)
         plt.close(fig)
@@ -4483,13 +4564,16 @@ class AutoPicasso(AbstractModuleCollection):
         N = len(node_sizes)
         # Create a figure and a subplot
         fig, ax = plt.subplots()
-        ax.set_xlim([-1.5, 1.5])
-        ax.set_ylim([-1.5, 1.5])
+        ax.set_xlim([-1.75, 1.75])
+        ax.set_ylim([-1.75, 1.75])
         ax.set_aspect("equal")
         # Calculate the positions of the nodes
         theta = -np.linspace(0, 2 * np.pi, N, endpoint=False)
+        theta += np.pi * 2 / 3  # shift by 60 deg to match Joschka's positions
         x = np.cos(theta)
         y = np.sin(theta)
+        xnode = np.cos(theta + np.pi * 1 / 18)
+        ynode = np.sin(theta + np.pi * 1 / 18)
         # Draw the edges
         for i in range(N):
             for j in range(N):
@@ -4534,12 +4618,12 @@ class AutoPicasso(AbstractModuleCollection):
                     ax.annotate(
                         "",
                         xy=(1.1 * x[i], 1.1 * y[i]),
-                        xytext=(1.5 * x[i], 1.5 * y[i]),
+                        xytext=(1.65 * x[i], 1.65 * y[i]),
                         arrowprops=dict(
                             arrowstyle="<-",
                             # connectionstyle="arc,rad=.7,angleA=0,angleB=225",
                             connectionstyle=f"angle3,angleA={aA},angleB={aB}",
-                            linewidth=edge_sizes[i][i],
+                            linewidth=np.abs(edge_sizes[i][i]),
                             color=target_colors[i],
                         ),
                     )
@@ -4557,8 +4641,8 @@ class AutoPicasso(AbstractModuleCollection):
             )
             ax.add_patch(wedge)
             ax.text(
-                1.2 * x[i],
-                1.2 * y[i],
+                1.5 * xnode[i],
+                1.5 * ynode[i],
                 targets[i],
                 fontsize=14,
                 color=target_colors[i],
