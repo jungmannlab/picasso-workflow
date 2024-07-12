@@ -199,6 +199,10 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def protein_interactions_average(self):
+        pass
+
+    @abc.abstractmethod
     def create_mask(self):
         """Create a density mask"""
         pass
@@ -217,26 +221,26 @@ class AbstractModuleCollection(abc.ABC):
         """
         pass
 
-    @abc.abstractmethod
-    def dbscan_merge_cells(self):
-        """TO BE CLEANED UP
-        simulate CSR within a density mask
-        """
-        pass
+    # @abc.abstractmethod
+    # def dbscan_merge_cells(self):
+    #     """TO BE CLEANED UP
+    #     simulate CSR within a density mask
+    #     """
+    #     pass
 
-    @abc.abstractmethod
-    def dbscan_merge_stimulations(self):
-        """TO BE CLEANED UP
-        simulate CSR within a density mask
-        """
-        pass
+    # @abc.abstractmethod
+    # def dbscan_merge_stimulations(self):
+    #     """TO BE CLEANED UP
+    #     simulate CSR within a density mask
+    #     """
+    #     pass
 
-    @abc.abstractmethod
-    def binary_barcodes(self):
-        """TO BE CLEANED UP
-        simulate CSR within a density mask
-        """
-        pass
+    # @abc.abstractmethod
+    # def binary_barcodes(self):
+    #     """TO BE CLEANED UP
+    #     simulate CSR within a density mask
+    #     """
+    #     pass
 
     @abc.abstractmethod
     def find_cluster_motifs(self):
@@ -444,7 +448,7 @@ class ParameterCommandExecutor(DictSimpleTyper):
 
                 def is_valid_expression(expression):
                     # pattern = r"^[\d+\-*/\s()]+$"
-                    pattern = r"^[-+]?([0-9]*\.[0-9]+|[0-9]+)$"
+                    pattern = r"^[*-+/][0-9]*(\.[0-9]*)?"
                     return re.match(pattern, expression) is not None
 
                 if not is_valid_expression(aritexp):

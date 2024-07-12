@@ -862,6 +862,19 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Interaction pairs analyzed:
         {parameters["interaction_pairs"]}</li>
         </ul>"""
+
+        if fp_fig := results.get("fp_fig_imap"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+
         if props := results.get("Interaction proportions"):
             text += "<table>"
             text += "<tr>"
@@ -911,6 +924,46 @@ class ConfluenceReporter(AbstractModuleCollection):
                 text += "</tr>"
             text += "</table>"
 
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def protein_interactions_average(self, i, parameters, results):
+        logger.debug("protein_interactions_average.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Direct Protein Interaction Analysis Average</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        if fp_fig := results.get("fp_fig_imap"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+        if fp_fig := results.get("fp_fig"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -1136,6 +1189,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s</li>
         <li>Threshold Cluster Population:
         {100 * parameters["population_threshold"]:.1f}%</li>
+        <li>Threshold Exp Cells have barcode at least once:
+        {100 * parameters["cellfraction_threshold"]:.1f}%</li>
         <li>t-Test threshold p-value:
         {parameters["ttest_pvalue_max"]:.3f}</li>
         <li>Significant Barcodes: {results["significant_barcodes"]}</li>

@@ -144,6 +144,9 @@ def performRipleysMultiAnalysis(
     ripleys_mean_file = os.path.join(path, f"{filename}_ripleysIntegrals")
     np.save(ripleys_mean_file, ripleys_mean)
 
+    if atype == "RDF":
+        ripleys_mean = ripleysIntegrals
+
     # ripleysMeanVal = ripleysIntegrals / (2 * np.max(radii))
 
     return ripleysResults, ripleysIntegrals, ripleys_mean

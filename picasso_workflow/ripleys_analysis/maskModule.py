@@ -82,7 +82,7 @@ class Mask:
         y_lut = (data.y / self.pixelsize).astype(np.int32)
         # do inverse operation of the one in createMask
         fudr_mask = np.rot90(np.flipud(self.mask), k=-1)
-        inbounds = (x_lut < fudr_mask.shape[0]) | (y_lut < fudr_mask.shape[1])
+        inbounds = (x_lut < fudr_mask.shape[0]) & (y_lut < fudr_mask.shape[1])
         x_lut[~inbounds] = 0
         y_lut[~inbounds] = 0
         inmask = fudr_mask[x_lut, y_lut]

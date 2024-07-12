@@ -91,12 +91,20 @@ class RipleysInterface:
         if otherData is None:
             tree = getTree(data)
             nNeighbors = tree.count_neighbors(tree, self.radii) - N
+            K = (nNeighbors / N) / density
         else:
             tree = getTree(data)
             otherTree = getTree(otherData)
+            if isTree(otherData):
+                otherN = otherData.n
+            else:
+                otherN = otherData.shape[0]
             nNeighbors = tree.count_neighbors(otherTree, self.radii)
+            lambda_inv1 = area / N
+            lambda_inv2 = area / otherN
+            const_term = lambda_inv1 * lambda_inv2 / area
+            K = const_term * nNeighbors
 
-        K = (nNeighbors / N) / density
         L = np.sqrt(K / np.pi)
         H = L - self.radii
 
@@ -104,14 +112,17 @@ class RipleysInterface:
         # now this is the radial distribution function
         if self.atype == "RDF":
             K = nNeighbors / N  # / density
+            # mean number of other spots within a distance r of a self-spot
             n_means = nNeighbors / N
+            # difference of this number from one radius to the next
             d_n_means = n_means[1:] - n_means[:-1]
             mean_r = (self.radii[1:] + self.radii[:-1]) / 2
             d_r = self.radii[1:] - self.radii[:-1]
             d_areas = 2 * np.pi * mean_r * d_r
+            # density in the annulus between two radii
             rdf = d_n_means / d_areas
             K[:-1] = rdf
-            K[-1] = rdf[-1]
+            K[-1] = rdf[-1]  # duplicate last entry to keep lengths
 
         ripleysCurves = {"K": np.array(K), "L": np.array(L), "H": np.array(H)}
         return ripleysCurves
@@ -131,15 +142,20 @@ class RipleysInterface:
         nNeighbors = np.zeros(len(self.radii))
         # print('nNeighbors shape', nNeighbors.shape)
 
+        # always randomize to the maximum radius (otherwise, uncomment in the for loops)
+        data_rnd = self.randomize_data(data, np.max(self.radii))
+        if otherData is not None:
+            other_data_rnd = self.randomize_data(otherData, np.max(self.radii))
+
         for i, r in enumerate(self.radii):
             # create uniform random data in a circle of radius r
-            data_rnd = self.randomize_data(data, r)
+            # data_rnd = self.randomize_data(data, r)
             tree = getTree(data_rnd)
             if otherData is None:
                 # print('tree count neighbors: ', tree.count_neighbors(tree, r))
                 nNeighbors[i] = tree.count_neighbors(tree, r) - N
             else:
-                other_data_rnd = self.randomize_data(otherData, r)
+                # other_data_rnd = self.randomize_data(otherData, r)
                 otherTree = getTree(other_data_rnd)
                 # print('tree count neighbors: ', tree.count_neighbors(tree, r))
                 nNeighbors[i] = tree.count_neighbors(otherTree, r)
@@ -181,32 +197,51 @@ class RipleysInterface:
         ripleysMean = self.getRipleysMean()
         Knormalized = K - ripleysMean
 
+        if self.atype == "RDF":
+            # no not normalize at all, but calculate the difference
+            Knormalized = K - ripleysMean
+            return Knormalized
+
         quantileLow = (1 - ci) / 2
         quantileHigh = 1 - (1 - ci) / 2
         # Divide all positive values by high quantile:
         idxPos = Knormalized >= 0
         quantilesHigh = self.getRipleysQuantiles(quantileHigh)
-        if self.atype == "RDF":
-            # reset very low quantiles
-            quantilesHigh[
-                np.abs(quantilesHigh)
-                < 0.25 * np.nanmean(np.abs(quantilesHigh))
-            ] = 0.25 * np.nanmean(quantilesHigh)
+        # if self.atype == "RDF":
+        #     # reset very low quantiles
+        #     quantilesHigh[
+        #         np.abs(quantilesHigh)
+        #         < 0.25 * np.nanmean(np.abs(quantilesHigh))
+        #     ] = 0.25 * np.nanmean(quantilesHigh)
         Knormalized[idxPos] /= abs(
             (quantilesHigh[idxPos] - ripleysMean[idxPos])
         )
         # Divide all negative values by low quantile:
         quantilesLow = self.getRipleysQuantiles(quantileLow)
-        if self.atype == "RDF":
-            # reset very low quantiles
-            quantilesLow[
-                np.abs(quantilesLow) < 0.25 * np.nanmean(np.abs(quantilesLow))
-            ] = 0.25 * np.nanmean(quantilesLow)
+        # if self.atype == "RDF":
+        #     # reset very low quantiles
+        #     quantilesLow[
+        #         np.abs(quantilesLow) < 0.25 * np.nanmean(np.abs(quantilesLow))
+        #     ] = 0.25 * np.nanmean(quantilesLow)
         Knormalized[~idxPos] /= abs(
             (quantilesLow[~idxPos] - ripleysMean[~idxPos])
         )
 
         return Knormalized
+
+    def get_curve_outside_quantiles(self, K, ci=0.95):
+        K_outside = np.zeros_like(K)
+
+        quantileLow = (1 - ci) / 2
+        quantileHigh = 1 - (1 - ci) / 2
+
+        quantilesHigh = self.getRipleysQuantiles(quantileHigh)
+        quantilesLow = self.getRipleysQuantiles(quantileLow)
+
+        idxpos_outside = np.argwhere((K > quantilesHigh) | (K < quantilesLow))
+        K_outside[idxpos_outside] = K[idxpos_outside]
+
+        return K_outside
 
     def getRipleysMean(self):
         return self.ripleysCurves_controls["mean"]
@@ -219,6 +254,22 @@ class RipleysInterface:
         return np.array(quantilesK)
 
     def calculateRipleysIntegral(self):
+        if self.atype == "RDF":
+            mean_r = (self.radii[1:] + self.radii[:-1]) / 2
+            d_r = self.radii[1:] - self.radii[:-1]
+            d_areas = 2 * np.pi * mean_r * d_r
+            # for RDF, "normalized" curves are density differences.
+            # calculate the number of "lacking" or "overpopulated"
+            # proteins with respect to random, in the range of the radii
+
+            # only take into account the regions outsize the confidence
+            # interval
+            k_significant = self.get_curve_outside_quantiles(
+                self.ripleysCurves_data["normalized"], ci=0.95
+            )
+            n_overpop = d_areas * k_significant[:-1]
+            return np.sum(n_overpop)
+
         integral = np.trapz(self.ripleysCurves_data["normalized"], self.radii)
         return integral
 
@@ -247,19 +298,20 @@ class RipleysInterface:
                         label="Random controls",
                         linestyle="-",
                     )
-            axes.plot(
-                self.radii,
-                np.zeros(len(self.radii)),
-                c="k",
-                label=f"{ci*100}% envelope",
-                linestyle="--",
-            )
-            axes.plot(
-                self.radii, np.ones(len(self.radii)), c="k", linestyle=":"
-            )
-            axes.plot(
-                self.radii, -np.ones(len(self.radii)), c="k", linestyle=":"
-            )
+            if self.atype == "Ripleys":
+                axes.plot(
+                    self.radii,
+                    np.zeros(len(self.radii)),
+                    c="k",
+                    label=f"{ci*100}% envelope",
+                    linestyle="--",
+                )
+                axes.plot(
+                    self.radii, np.ones(len(self.radii)), c="k", linestyle=":"
+                )
+                axes.plot(
+                    self.radii, -np.ones(len(self.radii)), c="k", linestyle=":"
+                )
             axes.plot(
                 self.radii,
                 self.ripleysCurves_data["normalized"],
