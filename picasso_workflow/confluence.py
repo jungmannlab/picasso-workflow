@@ -1206,6 +1206,17 @@ class ConfluenceReporter(AbstractModuleCollection):
                 + f'ri:filename="{fp_fig}" />'
                 + "</ac:image></ul>"
             )
+        if fp_fig := results.get("fp_fig_fracdegreeofclustering"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
         if fp_fig := results.get("fp_fig_nbarcodesbox"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)

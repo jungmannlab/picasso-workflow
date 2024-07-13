@@ -4159,6 +4159,88 @@ class AutoPicasso(AbstractModuleCollection):
         plt.close(fig)
         results["fp_fig_degreeofclustering"] = fp_fig
 
+        data_fract = {
+            "exp": [
+                np.array(cluster_info_exp["n_clustered_locs"])
+                / (
+                    np.array(cluster_info_exp["n_clustered_locs"])
+                    + np.array(cluster_info_exp["n_nonclustered_locs"])
+                ),
+                np.array(cluster_info_exp["n_nonclustered_locs"])
+                / (
+                    np.array(cluster_info_exp["n_clustered_locs"])
+                    + np.array(cluster_info_exp["n_nonclustered_locs"])
+                ),
+            ],
+            "csr": [
+                np.array(cluster_info_csr["n_clustered_locs"])
+                / (
+                    np.array(cluster_info_csr["n_clustered_locs"])
+                    + np.array(cluster_info_csr["n_nonclustered_locs"])
+                ),
+                np.array(cluster_info_csr["n_nonclustered_locs"])
+                / (
+                    np.array(cluster_info_csr["n_clustered_locs"])
+                    + np.array(cluster_info_csr["n_nonclustered_locs"])
+                ),
+            ],
+        }
+        for i, org in enumerate(["exp", "csr"]):
+            parts = ax.violinplot(
+                data_fract[org],
+                positions=bxpos_init + i * bxwidth,
+                widths=bxwidth,
+                showmedians=True,
+            )
+            for pc in parts["bodies"]:
+                pc.set_facecolor(origin_colors[i])
+                pc.set_edgecolor(origin_colors[i])
+            self.stripplot(
+                data[org],
+                bxpos_init + i * bxwidth,
+                bxwidth,
+                ax,
+                origin_colors[i],
+                alpha=0.5,
+            )
+            line = mlines.Line2D([], [], color=origin_colors[i], label=org)
+            legend_handles.append(line)
+        # test for significance
+        ylims = ax.get_ylim()
+        p_values = np.ones(2)
+        t_stats = np.ones(2)
+        for i, (n_exp, n_csr) in enumerate(
+            zip(data_fract["exp"], data_fract["csr"])
+        ):
+            t_stats[i], p_values[i] = stats.ttest_ind(n_exp, n_csr)
+            if p_values[i] < 1e-3:
+                siglabel = "p < 0.001"
+            elif p_values[i] < 1e-2:
+                siglabel = "p < 0.01"
+            else:
+                siglabel = "n.s."
+            ax.text(
+                i,
+                0.8 * ylims[1],
+                siglabel,
+                fontsize=14,
+                color="k",
+                horizontalalignment="center",
+                verticalalignment="center",
+            )
+        ax.set_ylabel("fraction of locs per cell")
+        ax.set_xticks(np.arange(len(categories)))
+        ax.set_xticklabels(categories)  # , rotation=90)
+        ax.set_title("degree of clustering")
+        ax.legend(handles=legend_handles)
+        fig.set_size_inches((8, 5))
+        fp_fig = os.path.join(
+            results["folder"], "fracdegree_of_clustering.png"
+        )
+        fig.savefig(fp_fig)
+        plt.close(fig)
+        results["fp_fig_fracdegreeofclustering"] = fp_fig
+
         barcodes_exp["origin"] = "exp"
         barcodes_csr["origin"] = "csr"
         bc_all = pd.concat([barcodes_exp, barcodes_csr], ignore_index=True)
