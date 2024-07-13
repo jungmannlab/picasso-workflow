@@ -4185,6 +4185,7 @@ class AutoPicasso(AbstractModuleCollection):
                 ),
             ],
         }
+        fig, ax = plt.subplots()
         for i, org in enumerate(["exp", "csr"]):
             parts = ax.violinplot(
                 data_fract[org],
@@ -4196,7 +4197,7 @@ class AutoPicasso(AbstractModuleCollection):
                 pc.set_facecolor(origin_colors[i])
                 pc.set_edgecolor(origin_colors[i])
             self.stripplot(
-                data[org],
+                data_fract[org],
                 bxpos_init + i * bxwidth,
                 bxwidth,
                 ax,
