@@ -2580,17 +2580,22 @@ class AutoPicasso(AbstractModuleCollection):
         for pair, row in df.iterrows():
             A, B = pair.split(",")
             if A == B:
-                df_di.loc[A, B] = row["AA"]
+                df_di.loc[A, B] = 2 * row["AA"] / (row["A"] + 2 * row["AA"])
             else:
                 # proportion of A interacting with any number of B
                 prop = (row["AB"] + 2 * row["AABB"]) / (
                     row["A"] + 2 * row["AA"] + row["AB"] + 2 * row["AABB"]
                 )
                 df_di.loc[A, B] = 100 * prop
+                # proportion of B interacting with any number of A
+                prop = (row["AB"] + 2 * row["AABB"]) / (
+                    row["B"] + 2 * row["BB"] + row["AB"] + 2 * row["AABB"]
+                )
+                df_di.loc[B, A] = 100 * prop
         results["fp_interaction_map"] = os.path.join(
             results["folder"], "interaction_map.xlsx"
         )
-        df_di.to_excel()
+        df_di.to_excel(results["fp_interaction_map"])
         results["fp_fig_imap"] = self._plot_direct_interaction(
             df_di, results["folder"]
         )
@@ -2606,7 +2611,7 @@ class AutoPicasso(AbstractModuleCollection):
         """
         fig, ax = plt.subplots()
         heatmap = ax.imshow(
-            direct_interaction.values, cmap="coolwarm_r", vmin=0, vmax=100
+            direct_interaction.values, cmap="Blues", vmin=0, vmax=100
         )
         ax.grid(False)
         ax.set_xticks(np.arange(len(direct_interaction.columns)))
@@ -2614,9 +2619,9 @@ class AutoPicasso(AbstractModuleCollection):
         # Add number annotations to cells
         for i, A in enumerate(direct_interaction.columns):
             for j, B in enumerate(direct_interaction.index):
-                txt = f"{direct_interaction[A, B]:.2f}"
+                txt = f"{direct_interaction.loc[A, B]:.2f}"
                 if std is not None:
-                    txt += f"+-{std[A, B]}"
+                    txt += f"\n+-{std.loc[A, B]:.2f}"
                 ax.text(
                     j,
                     i,
@@ -2628,7 +2633,7 @@ class AutoPicasso(AbstractModuleCollection):
                 )
         ax.set_xticklabels(direct_interaction.columns, rotation=45)
         ax.set_yticklabels(direct_interaction.index, rotation=45)
-        ax.set_title("Percentage of interaction at 10 nm")
+        ax.set_title("Percentage of [row] interacting at 10 nm with [col]")
         plt.colorbar(heatmap, format="%.2f")
         fp_imap = os.path.join(folder, "interaction_map.png")
         fig.set_size_inches((9, 7))
@@ -2647,7 +2652,7 @@ class AutoPicasso(AbstractModuleCollection):
                     where the separate ripleys analyses have been done
                 report_names : list of str
                     the report names of those worklfows
-                swkfl_protein_interactions_key : str
+                swkfl_protint_key : str
                     the results key of the protein interactions module.
                     e.g. '05_protein_interactions'
             optional:
@@ -2659,11 +2664,11 @@ class AutoPicasso(AbstractModuleCollection):
         channel_tags = None
         search_dict = {
             (
-                parameters["swkfl_protein_interactions_key"],
+                parameters["swkfl_protint_key"],
                 "fp_proportions",
             ): fp_proportions,
             (
-                parameters["swkfl_protein_interactions_key"],
+                parameters["swkfl_protint_key"],
                 "fp_interaction_map",
             ): fp_interaction_map,
         }
@@ -2686,28 +2691,6 @@ class AutoPicasso(AbstractModuleCollection):
                         "Loaded datasets have different channel tags!"
                     )
 
-        # load proportions and calculate mean & std dev
-        all_props = []
-        for fp in fp_proportions:
-            all_props.append(pd.read_excel(fp))
-            # with open(fp, "r") as f:
-            #     all_props.append(json.load(f))
-        df_props = pd.concat(all_props)
-
-        means = df_props.mean()
-        stdevs = df_props.std()
-
-        # n_
-        fig, ax = plt.subplots()
-        x = np.arange(len(df_props.columns))
-        # borders = np.arange(5, )
-        ax.errorbar(x, means, stdevs)
-        ax.set_ylabel("proportions")
-        ax.set_title("A, AA, B, BB, AB, AABB proportions")
-        ax.set_xticklabels(df_props.columns, rotation=45)
-        results["fp_fig"] = os.path.join(results["folder"], "proportions.png")
-        fig.savefig(results["fp_fig"])
-
         # load the interaction maps
         all_imap = []
         for fp in fp_interaction_map:
@@ -2716,13 +2699,13 @@ class AutoPicasso(AbstractModuleCollection):
         df_mean = pd.DataFrame(
             index=all_imap[0].index,
             columns=all_imap[0].columns,
-            values=mean_imap,
+            data=mean_imap,
         )
         std_imap = np.std(np.stack(all_imap), axis=0)
         df_std = pd.DataFrame(
             index=all_imap[0].index,
             columns=all_imap[0].columns,
-            values=std_imap,
+            data=std_imap,
         )
         results["fp_fig_imap"] = self._plot_direct_interaction(
             df_mean, results["folder"], df_std

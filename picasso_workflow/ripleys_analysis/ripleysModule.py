@@ -140,6 +140,7 @@ class RipleysInterface:
         density = N / area
 
         nNeighbors = np.zeros(len(self.radii))
+        K = np.zeros_like(nNeighbors)
         # print('nNeighbors shape', nNeighbors.shape)
 
         # always randomize to the maximum radius (otherwise, uncomment in the for loops)
@@ -154,13 +155,18 @@ class RipleysInterface:
             if otherData is None:
                 # print('tree count neighbors: ', tree.count_neighbors(tree, r))
                 nNeighbors[i] = tree.count_neighbors(tree, r) - N
+                K[i] = (nNeighbors[i] / N) / density
             else:
                 # other_data_rnd = self.randomize_data(otherData, r)
                 otherTree = getTree(other_data_rnd)
+                otherN = otherTree.n
                 # print('tree count neighbors: ', tree.count_neighbors(tree, r))
                 nNeighbors[i] = tree.count_neighbors(otherTree, r)
+                lambda_inv1 = area / N
+                lambda_inv2 = area / otherN
+                const_term = lambda_inv1 * lambda_inv2 / area
+                K = const_term * nNeighbors[i]
 
-        K = (nNeighbors / N) / density
         L = np.sqrt(K / np.pi)
         H = L - self.radii
 
@@ -168,14 +174,17 @@ class RipleysInterface:
         # now this is the radial distribution function
         if self.atype == "RDF":
             K = nNeighbors / N  # / density
+            # mean number of other spots within a distance r of a self-spot
             n_means = nNeighbors / N
+            # difference of this number from one radius to the next
             d_n_means = n_means[1:] - n_means[:-1]
             mean_r = (self.radii[1:] + self.radii[:-1]) / 2
             d_r = self.radii[1:] - self.radii[:-1]
             d_areas = 2 * np.pi * mean_r * d_r
+            # density in the annulus between two radii
             rdf = d_n_means / d_areas
             K[:-1] = rdf
-            K[-1] = rdf[-1]  # just appending to match lengths
+            K[-1] = rdf[-1]  # duplicate last entry to keep lengths
 
         ripleysCurves = {"K": np.array(K), "L": np.array(L), "H": np.array(H)}
         return ripleysCurves, data_rnd
