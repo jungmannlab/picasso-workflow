@@ -574,6 +574,16 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna_manual"))
 
+    def analysis_documentation(self):
+        return
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_analysis_documentation")
+        )
+
+    def dummy_module(self):
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_dummy_module"))
+
     def ripleysk(self):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
@@ -607,6 +617,42 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_CSR_sim_in_mask"))
 
+    def find_cluster_motifs(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        return
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_find_cluster_motifs")
+        )
+
+    def interaction_graph(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        return
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_interaction_graph")
+        )
+
+    def plot_densities(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_plot_densities"))
+
+    def protein_interactions_average(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        return
+        shutil.rmtree(
+            os.path.join(
+                self.results_folder, "00_protein_interactions_average"
+            )
+        )
+
 
 # @unittest.skip("")
 class TestAnalyse(unittest.TestCase):
@@ -630,8 +676,10 @@ class TestAnalyse(unittest.TestCase):
     ]
 
     def setUp(self):
-        self.results_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
+        self.results_folder = os.path.normpath(
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
+            )
         )
         analysis_config = {
             "camera_info": {
