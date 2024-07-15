@@ -1867,6 +1867,120 @@ class AutoPicasso(util.AbstractModuleCollection):
         return allfps
 
     @module_decorator
+    def spinna(self, parameters, results):
+        """Direct implementation of spinna batch analysis.
+        The current locs file(s) are saved into the results folder, and
+        a template csv file is created. This csv needs to be filled out by the
+        user in a manual step before the spinna analysis is carried out.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    labeling_efficiency : dict of float, range 0-100
+                        labeling efficiency percentage, for all targets
+                    labeling_uncertainty : float or dict of floats
+                        labeling uncertainty [nm]; good value is e.g. 5
+                        assumed the same value for all targets
+                    N_simulate : int
+                        number of target molecules to simulated;
+                        good value is e.g. 50000
+                    # density : dict of float
+                    #     density to simulate;
+                    #     area density if 2D; volume density if 3D
+                    #     used proposed value in spinna_config.csv and can be
+                    #     altered manually after the first run of this module
+                    structures : str or list of dict
+                        if str: filepath to a yaml file with the structures.
+                        if list of dict:
+                        SPINNA structures. Each structure dict has
+                            "Molecular targets": list of str,
+                            "Structure title": str,
+                            "TARGET_x": list of float,
+                            "TARGET_y": list of float,
+                            "TARGET_z": list of float,
+                        where TARGET is one each of the target names in
+                        "Molecular targets"
+                    fp_mask_dict : str
+                        the filepath to the mask_dict file
+                    width, height, depth : float
+                        the width, height, and depth of the simulation space
+                        depth is optional
+                    random_rot_mode : '2D', or '3D'
+                        Mode of molecule rotation in simulation
+                    sim_repeats : int
+                        number of simulation repeats
+                    fit_NND_bin : float
+                        bin size of fits
+                    fit_NND_maxdist : float
+                        max of histogram
+                    n_nearest_neighbors : int
+                        number of nearest neighbors to evaluate
+        """
+        if isinstance(parameters["structures"], str):
+            with open(parameters["structures"], "r") as f:
+                structures = yaml.read_all(f)
+
+        if isinstance(parameters["labeling_uncertainty"], (int, float)):
+            labeling_uncertainty = {
+                tgt: parameters["labeling_uncertainty"]
+                for tgt in self.channel_tags
+            }
+        else:
+            labeling_uncertainty = parameters["labeling_uncertainty"]
+
+        if parameters.get("fp_mask_dict"):
+            with open(parameters["fp_mask_dict"], "rb") as f:
+                mask_dict = pickle.load(f)
+        else:
+            mask_dict = None
+
+        # locs, but as np.ndarray
+        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        exp_data = {}
+        for i, target in enumerate(self.channel_tags):
+            locs = self.channel_locs[i]
+            if hasattr(locs, "z"):
+                exp_data[target] = np.stack(
+                    (locs.x * pixelsize, locs.y * pixelsize, locs.z)
+                ).T
+                # dim = 3
+            else:
+                exp_data[target] = np.stack(
+                    (locs.x * pixelsize, locs.y * pixelsize)
+                ).T
+
+        spinna_pars = {
+            "structures": structures,
+            "label_unc": labeling_uncertainty,
+            "le": parameters["labeling_efficiency"],
+            "mask_dict": mask_dict,
+            "width": parameters["width"],
+            "height": parameters["height"],
+            "depth": parameters.get("depth"),
+            "random_rot_mode": parameters["random_rot_mode"],
+            "exp_data": exp_data,
+            "sim_repeats": parameters["sim_repeats"],
+            "fit_NND_bin": parameters["fit_NND_bin"],
+            "fit_NND_maxdist": parameters["fit_NND_maxdist"],
+            "N_structures": parameters["N_simulate"],
+            "save_filename": os.path.join(results["folder"], "spinna-run"),
+            "asynch": True,
+            "targets": self.channel_tags,
+            "apply_mask": mask_dict is not None,
+            "nn_plotted": parameters["n_nearest_neighbors"],
+            "result_dir": results["folder"],
+        }
+
+        result_dir, fp_fig = picasso_outpost.spinna_temp(spinna_pars)
+        plt.close("all")
+        results["fp_fig"] = fp_fig
+        results["result_dir"] = result_dir
+
+        return parameters, results
+
+    @module_decorator
     def spinna_manual(self, i, parameters, results):
         """Direct implementation of spinna batch analysis.
         The current locs file(s) are saved into the results folder, and
