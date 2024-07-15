@@ -269,6 +269,26 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
+    def undrift_aim(self):
+        parameters = {
+            "dimensions": ["x", "y"],
+            "segmentation": 1000,
+            "intersect_d": 20,
+            "roi_r": 60,
+        }
+        results = {
+            "start time": "now",
+            "duration": 27.4,
+        }
+        self.cr.undrift_rcc(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
     def manual(self):
         parameters = {
             "prompt": "Do something.",

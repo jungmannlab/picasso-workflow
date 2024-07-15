@@ -213,6 +213,29 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_undrift_rcc"))
 
+    @patch("picasso_workflow.analyse.aim.aim")
+    def undrift_aim(self, mock_undrift_aim):
+        nspots = 5
+        mock_undrift_aim.return_value = (
+            np.random.rand(2, len(self.ap.movie)),
+            np.rec.array(
+                [
+                    tuple(np.random.rand(len(self.locs_dtype)))
+                    for i in range(nspots)
+                ],
+                dtype=self.locs_dtype,
+            ),
+        )
+        parameters = {
+            "segmentation": 50,
+            "intersect_d": 20,
+            "roi_r": 60,
+        }
+
+        self.ap.undrift_aim(0, parameters)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_undrift_aim"))
+
     def manual(self):
         parameters = {
             "prompt": "User, please perform an action.",

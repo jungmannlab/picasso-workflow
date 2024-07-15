@@ -5,7 +5,7 @@ Author: Heinrich Grabmayr
 Initial Date: March 7, 2024
 Description: This is the picasso interface of picasso-workflow
 """
-from picasso import lib, io, localize, gausslq, postprocess, clusterer
+from picasso import lib, io, localize, gausslq, postprocess, clusterer, aim
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import os
@@ -840,6 +840,67 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     @module_decorator
+    def undrift_aim(self, i, parameters, results):
+        """Unrift localized data using the AIM algorithm
+        drift is saved in
+        self.drift
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    segmentation : int
+                        the number of frames segmented
+                    intersect_d : float
+                        Intersect distance in nanometers.
+                    roi_r : float
+                        Radius of the local search region in nanometers.
+                        Should be larger than the maximum expected drift wihtin
+                        segmentation.
+                    dimensions : list
+                        the dimensions undrifted.
+                optional items:
+                    filename : str
+                        the drift txt file name
+                    save_locs : bool
+                        whether to save the locs into the results folder
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        pixelsize = self.analysis_config["camera_info"]["pixelsize"]
+        self.drift, self.locs = aim.aim(
+            self.locs,
+            self.info,
+            segmentation=parameters["segmentation"],
+            intersect_d=parameters["intersect_d"] / pixelsize,
+            roi_r=parameters["roi_r"] / pixelsize,
+        )
+
+        results["success"] = True
+        results["fp_driftfile"] = os.path.join(results["folder"], "drift.txt")
+        np.savetxt(results["fp_driftfile"], self.drift, delimiter=",")
+        results["fp_fig"] = (
+            os.path.splitext(results["fp_driftfile"])[0] + ".png"
+        )
+        self._plot_drift(results["fp_plot"], parameters["dimensions"])
+
+        # save locs
+        if pars := parameters.get("save_locs"):
+            if "filename" in pars.keys():
+                pars["filename"] = os.path.join(
+                    results["folder"], pars["filename"]
+                )
+            self._save_locs(pars["filename"])
+
+        return parameters, results
+
+    @module_decorator
     def undrift_rcc(self, i, parameters, results):
         """Undrifts localized data using redundant cross correlation.
         drift is saved in
@@ -866,7 +927,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 as input, potentially changed values, for consistency
             results : dict
                 the analysis results
-
         """
         seg_init = parameters["segmentation"]
         for i in range(parameters.get("max_iter_segmentations", 3)):

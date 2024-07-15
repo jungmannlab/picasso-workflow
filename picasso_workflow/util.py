@@ -82,6 +82,11 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def undrift_aim(self):
+        """Unrift localized data using the AIM algorithm"""
+        pass
+
+    @abc.abstractmethod
     def manual(self):
         """Describes a manual step, for which the workflow is paused."""
         pass
