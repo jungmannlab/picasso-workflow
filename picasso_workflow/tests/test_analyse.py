@@ -560,6 +560,48 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
 
+    @patch(
+        "picasso_workflow.analyse.picasso_outpost.spinna_sgl_temp", MagicMock
+    )
+    def spinna(self):
+        info = [{"Width": 1000, "Height": 1000}]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        locs = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.channel_locs = [locs]
+        self.ap.channel_info = [info]
+        self.ap.channel_tags = ["CD86"]
+
+        parameters = {
+            "labeling_efficiency": {"CD86": 0.34},
+            "labeling_uncertainty": {"CD86": 5},
+            "n_simulate": 5000,
+            "fp_mask_dict": None,
+            "width": 512,
+            "height": 256,
+            "depth": 4,
+            "random_rot_mode": "3D",
+            "n_nearest_neighbors": 4,
+            "sim_repeats": 50,
+            "fit_NND_bin": 0.5,
+            "fit_NND_maxdist": 30,
+        }
+        parameters, results = self.ap.spinna(0, parameters)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
+
     # @patch("picasso_workflow.analyse.picasso_outpost.spinna_temp", MagicMock)
     def spinna_manual(self):
         info = [{"Width": 1000, "Height": 1000}]
