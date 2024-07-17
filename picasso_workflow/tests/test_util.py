@@ -159,3 +159,8 @@ class TestUtil(unittest.TestCase):
         assert res_out == res_exp
         logger.debug(f"tags out: {tags}")
         assert tags == ["RESI-1", "RESI-2"]
+
+    def test_06_valid_expression(self):
+        expression = "* 3.1415"
+        val = util.is_valid_expression(expression)
+        assert val

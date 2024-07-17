@@ -25,6 +25,7 @@ def performRipleysMultiAnalysis(
     channel_locs=None,
     combined_locs=None,
     pixelsize=None,
+    atype="Ripleys",  # or RDF
 ):
 
     print(f"Cell path: {path}/{filename}")
@@ -54,33 +55,55 @@ def performRipleysMultiAnalysis(
     # Perform Ripley's analysis for all data pairs
     ripleysResults = rm.initializeResultsMatrix(nFiles)
     ripleysIntegrals = np.zeros((nFiles, nFiles))
+    ripleys_mean = np.zeros((nFiles, nFiles))
 
     for j in range(nFiles):
         for k in range(nFiles):
             print(f"Analyzing files {fileIDs[j]} with {fileIDs[k]}...")
             if j == k:
-                # ripleysResults[j][k] = rm.RipleysAnalysis(
-                #     locData.forest[j], radii, cellMask, nRandomControls
-                # )
-                ripleysResults[j][k] = rm.RipleysAnalysis(
-                    locData.data[j], radii, cellMask, nRandomControls
-                )
+                if atype == "Ripleys":
+                    ripleysResults[j][k] = rm.RipleysAnalysis(
+                        locData.forest[j],
+                        radii,
+                        cellMask,
+                        nRandomControls,
+                        atype,
+                    )
+                elif atype == "RDF":
+                    ripleysResults[j][k] = rm.RipleysAnalysis(
+                        locData.data[j],
+                        radii,
+                        cellMask,
+                        nRandomControls,
+                        atype,
+                    )
+                else:
+                    raise NotImplementedError()
             else:
-                # ripleysResults[j][k] = rm.CrossRipleysAnalysis(
-                #     locData.forest[j],
-                #     locData.forest[k],
-                #     radii,
-                #     cellMask,
-                #     nRandomControls,
-                # )
-                ripleysResults[j][k] = rm.CrossRipleysAnalysis(
-                    locData.data[j],
-                    locData.data[k],
-                    radii,
-                    cellMask,
-                    nRandomControls,
-                )
+                if atype == "Ripleys":
+                    ripleysResults[j][k] = rm.CrossRipleysAnalysis(
+                        locData.forest[j],
+                        locData.forest[k],
+                        radii,
+                        cellMask,
+                        nRandomControls,
+                        atype,
+                    )
+                elif atype == "RDF":
+                    ripleysResults[j][k] = rm.CrossRipleysAnalysis(
+                        locData.data[j],
+                        locData.data[k],
+                        radii,
+                        cellMask,
+                        nRandomControls,
+                        atype,
+                    )
+                else:
+                    raise NotImplementedError()
             ripleysIntegrals[j, k] = ripleysResults[j][k].ripleysIntegral_data
+            curve_data = ripleysResults[j][k].ripleysCurves_data["normalized"]
+            mean_val = np.nanmean(curve_data[~np.isinf(curve_data)])
+            ripleys_mean[j, k] = mean_val
 
     # Normalized plot
     figsize = 30
@@ -91,11 +114,11 @@ def performRipleysMultiAnalysis(
                 ci=0.95,
                 normalized=True,
                 showControls=True,
-                title=f"Receptor {fileIDs[j]} with {fileIDs[k]}",
+                title=f"{fileIDs[j]} -> {fileIDs[k]}",
                 labelFontsize=30,
                 axes=axs[j][k],
             )
-    fig.savefig(os.path.join(path, f"{filename}_normalized.svg"))
+    fig.savefig(os.path.join(path, f"{filename}{atype}_normalized.png"))
 
     # Unnormalized plot
     fig, axs = plt.subplots(nFiles, nFiles, figsize=(figsize, figsize))
@@ -105,20 +128,28 @@ def performRipleysMultiAnalysis(
                 ci=0.95,
                 normalized=False,
                 showControls=True,
-                title=f"Receptor {fileIDs[j]} with {fileIDs[k]}",
+                title=f"{fileIDs[j]} -> {fileIDs[k]}",
                 labelFontsize=30,
                 axes=axs[j][k],
             )
-    fig.savefig(os.path.join(path, f"{filename}_unnormalized.svg"))
+    fig.savefig(os.path.join(path, f"{filename}{atype}_unnormalized.png"))
 
     # Print and save integral matrix
     print(f"Integral matrix:\n{ripleysIntegrals}\n")
     integralfile = os.path.join(path, f"{filename}_ripleysIntegrals")
     np.save(integralfile, ripleysIntegrals)
 
-    ripleysMeanVal = ripleysIntegrals / (2 * np.max(radii))
+    # Print and save mean matrix
+    print(f"Mean matrix:\n{ripleys_mean}\n")
+    ripleys_mean_file = os.path.join(path, f"{filename}_ripleysIntegrals")
+    np.save(ripleys_mean_file, ripleys_mean)
 
-    return ripleysResults, ripleysIntegrals, ripleysMeanVal
+    if atype == "RDF":
+        ripleys_mean = ripleysIntegrals
+
+    # ripleysMeanVal = ripleysIntegrals / (2 * np.max(radii))
+
+    return ripleysResults, ripleysIntegrals, ripleys_mean
 
 
 # Set file paths and parameters

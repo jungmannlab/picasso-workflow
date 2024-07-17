@@ -508,7 +508,10 @@ class ConfluenceReporter(AbstractModuleCollection):
         </li>
         </ul>"""
         if fp_fig := results.get("fp_fig"):
-            self.ci.upload_attachment(self.report_page_id, fp_fig)
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
             _, fp_fig = os.path.split(fp_fig)
             text += (
                 "<ul><ac:image><ri:attachment "
@@ -547,7 +550,10 @@ class ConfluenceReporter(AbstractModuleCollection):
          {results['density']} nm^(-{parameters['dimensionality']})</li>
         </ul>"""
         if fp_fig := results.get("fp_fig"):
-            self.ci.upload_attachment(self.report_page_id, fp_fig)
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
             _, fp_fig = os.path.split(fp_fig)
             text += (
                 "<ul><ac:image><ri:attachment "
@@ -725,11 +731,27 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting ripleysk.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Repley's K Analysis</strong></p>
+        <p><strong>Ripley's K Analysis</strong></p>
         <ul>
+        <p>Ripley's K analyis investigates pair-wise clustering or dispersing
+        organization between different channels. It is currently implemented
+        in two different modes: "Ripleys"-mode is the analysis based on
+        Ripley's K curves. To correct for finite-size and border effects,
+        Ripley's K curves are normalized to mean and variance of
+        completely spatially random simulations. "RDF"-mode is inspired by
+        the above but calculates the radial distribution function (i.e.
+        density at annulus of radius r instead of whole circle of radius r),
+        and normalizes to a randomized version of the original data: for the
+        evaluation of each radius r, each spot in the original data is moved by
+        a random vector in a circle around it with radius r, to level out
+        density fluctuations during normalization, in addition to the border
+        effects. RDF is not Ripleys, it just uses the same infrastructure for
+        testing.</p>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
+        <li>Type of analysis:
+        {str(parameters["atype"])}</li>
         <li>Integral significance threshold:
         {parameters["ripleys_threshold"]}</li>
         <li>Ripleys Integrals location: {results["fp_ripleys_meanval"]}</li>
@@ -737,12 +759,38 @@ class ConfluenceReporter(AbstractModuleCollection):
         {str(results["ripleys_significant"])}</li>
         </ul>"""
 
+        if fp_fig := results.get("fp_fig_normalized"):
+            text += "<ul><table>"
+            text += "<tr><td><b>Normalized Curves</b></td>"
+            text += "<td><b>Un-normalized Curves</b></td></tr>"
+            text += "<tr><td>"
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += f"""
+                <ac:image ac:width="750"><ri:attachment
+                ri:filename="{fp_fig}" />
+                </ac:image>"""
+            text += "</td><td>"
+            fp_fig = results.get("fp_fig_unnormalized")
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += f"""
+                <ac:image ac:width="750"><ri:attachment
+                ri:filename="{fp_fig}" />
+                </ac:image>"""
+            text += "</td></tr></table></ul>"
         if fp_fig := results.get("fp_fig_ripleys_meanval"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)
-                _, fp_fig = os.path.split(fp_fig)
             except ConfluenceInterfaceError:
                 pass
+            _, fp_fig = os.path.split(fp_fig)
             text += (
                 "<ul><ac:image><ri:attachment "
                 + f'ri:filename="{fp_fig}" />'
@@ -786,9 +834,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         if fp_fig := results.get("fp_figmeanvals"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)
-                _, fp_fig = os.path.split(fp_fig)
             except ConfluenceInterfaceError:
                 pass
+            _, fp_fig = os.path.split(fp_fig)
             text += (
                 "<ul><ac:image><ri:attachment "
                 + f'ri:filename="{fp_fig}" />'
@@ -814,6 +862,19 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Interaction pairs analyzed:
         {parameters["interaction_pairs"]}</li>
         </ul>"""
+
+        if fp_fig := results.get("fp_fig_imap"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+
         if props := results.get("Interaction proportions"):
             text += "<table>"
             text += "<tr>"
@@ -863,6 +924,46 @@ class ConfluenceReporter(AbstractModuleCollection):
                 text += "</tr>"
             text += "</table>"
 
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def protein_interactions_average(self, i, parameters, results):
+        logger.debug("protein_interactions_average.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Direct Protein Interaction Analysis Average</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        if fp_fig := results.get("fp_fig_imap"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+        if fp_fig := results.get("fp_fig"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -932,6 +1033,17 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         </ul>"""
+        if fp_fig := results.get("fp_fig"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -1010,9 +1122,162 @@ class ConfluenceReporter(AbstractModuleCollection):
         if fp_fig := results.get("fp_fig"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)
-                _, fp_fig = os.path.split(fp_fig)
             except ConfluenceInterfaceError:
                 pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def plot_densities(self, i, parameters, results):
+        logger.debug("plot_densities.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Show Densities</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+        if fp_fig := results.get("fp_fig_density"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+        if fp_fig := results.get("fp_fig_area"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def find_cluster_motifs(self, i, parameters, results):
+        logger.debug("find_cluster_motifs.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Analyse and plot Cluster Motifs</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Threshold Cluster Population:
+        {100 * parameters["population_threshold"]:.1f}%</li>
+        <li>Threshold Exp Cells have barcode at least once:
+        {100 * parameters["cellfraction_threshold"]:.1f}%</li>
+        <li>t-Test threshold p-value:
+        {parameters["ttest_pvalue_max"]:.3f}</li>
+        <li>Significant Barcodes: {results["significant_barcodes"]}</li>
+        </ul>"""
+        if fp_fig := results.get("fp_fig_degreeofclustering"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+        if fp_fig := results.get("fp_fig_fracdegreeofclustering"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+        if fp_fig := results.get("fp_fig_nbarcodesbox"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+        if fp_fig := results.get("fp_fig_abarcodesbox"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+        if fp_fig_list := results.get("fp_fig_ntargets"):
+            for fp_fig in fp_fig_list:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp_fig)
+                except ConfluenceInterfaceError:
+                    pass
+                _, fp_fig = os.path.split(fp_fig)
+                text += (
+                    "<ul><ac:image><ri:attachment "
+                    + f'ri:filename="{fp_fig}" />'
+                    + "</ac:image></ul>"
+                )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def interaction_graph(self, i, parameters, results):
+        """TO BE CLEANED UP
+        dbscan implementation for molecular interactions workflow
+        """
+        logger.debug("Reporting interaction_graph.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Interaction Graph</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+        if fp_fig := results.get("fp_fig"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
             text += (
                 "<ul><ac:image><ri:attachment "
                 + f'ri:filename="{fp_fig}" />'

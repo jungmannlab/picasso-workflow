@@ -35,10 +35,9 @@ via picassosr.
 - create a new anaconda environment: `conda create -n picasso-workflow python=3.10`
 - If you want to use a local development version of picasso, install that first:
 	- `cd /path/to/picasso`
-	- `pip install -e .`
+	- `pip install -r requirements.txt`
 - Dependencies are specified in requirements.txt, install by:
 	- `cd /path/to/picasso-workflow`
-	- `pip install -r requirements.txt`
 	- `pip install -e .`
 - Should be platform independent. Tested on MacOS Sonoma and  Windows Server.
 

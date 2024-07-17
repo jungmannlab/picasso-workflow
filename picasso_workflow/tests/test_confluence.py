@@ -350,6 +350,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         results = {
             "start time": "now",
             "duration": 1.3,
+            "combine_map": "placeholderforcombinemap",
         }
         self.cr.combine_channels(0, parameters, results)
 
@@ -526,11 +527,16 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
 
     # @unittest.skip("")
     def ripleysk(self):
-        parameters = {}
+        parameters = {
+            "ripleys_threshold": 1.2,
+            "atype": "Ripleys",
+        }
         results = {
             "start time": "now",
             "duration": 4.12,
             "success": True,
+            "ripleys_significant": [("a", "b")],
+            "fp_ripleys_meanval": "bklab",
         }
         self.cr.ripleysk(0, parameters, results)
 
@@ -542,13 +548,20 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
 
     # @unittest.skip("")
     def ripleysk_average(self):
-        parameters = {}
+        parameters = {
+            "ripleys_threshold": 1.2,
+            "report_names": ["a", "b", "c"],
+            "fp_workflows": ["/a", "/b", "/c"],
+        }
         results = {
             "start time": "now",
             "duration": 4.12,
             "success": True,
+            "output_folders": ["/d"],
+            "fp_ripleys_significant": "/e",
+            "ripleys_significant": [("a", "b")],
         }
-        self.cr.ripleysk(0, parameters, results)
+        self.cr.ripleysk_average(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -558,7 +571,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
 
     # @unittest.skip("")
     def protein_interactions(self):
-        parameters = {}
+        parameters = {"interaction_pairs": [("a", "b")]}
         results = {
             "start time": "now",
             "duration": 4.12,
@@ -620,6 +633,125 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "success": True,
         }
         self.cr.CSR_sim_in_mask(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def analysis_documentation(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.analysis_documentation(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def dummy_module(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.dummy_module(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def find_cluster_motifs(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        parameters = {
+            "population_threshold": 0.01,
+            "cellfraction_threshold": 0.4,
+            "ttest_pvalue_max": 0.05,
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "significant_barcodes": ["10", "11"],
+        }
+        self.cr.find_cluster_motifs(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def interaction_graph(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.interaction_graph(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def plot_densities(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.plot_densities(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def protein_interactions_average(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.protein_interactions_average(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(

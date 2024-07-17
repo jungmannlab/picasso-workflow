@@ -175,17 +175,6 @@ class AbstractModuleCollection(abc.ABC):
         """Direct implementation of spinna batch analysis."""
         pass
 
-    # @abc.abstractmethod
-    # def molecular_interactions(self):
-    #     """Analysis of molecular interactions.
-    #     1. Ripley's K analysis to see positive interactions
-    #     2a. homo-spinna
-    #     2b. hetero-spinna
-    #     3. dbscan
-    #     4. binary barcodes
-    #     """
-    #     pass
-
     @abc.abstractmethod
     def ripleysk(self):
         pass
@@ -196,6 +185,10 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def protein_interactions(self):
+        pass
+
+    @abc.abstractmethod
+    def protein_interactions_average(self):
         pass
 
     @abc.abstractmethod
@@ -218,21 +211,21 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def dbscan_merge_cells(self):
+    def find_cluster_motifs(self):
         """TO BE CLEANED UP
         simulate CSR within a density mask
         """
         pass
 
     @abc.abstractmethod
-    def dbscan_merge_stimulations(self):
+    def interaction_graph(self):
         """TO BE CLEANED UP
         simulate CSR within a density mask
         """
         pass
 
     @abc.abstractmethod
-    def binary_barcodes(self):
+    def plot_densities(self):
         """TO BE CLEANED UP
         simulate CSR within a density mask
         """
@@ -420,11 +413,6 @@ class ParameterCommandExecutor(DictSimpleTyper):
 
             # check for arithmetic expression:
             if aritexp is not None:
-
-                def is_valid_expression(expression):
-                    pattern = r"^[\d+\-*/\s()]+$"
-                    return re.match(pattern, expression) is not None
-
                 if not is_valid_expression(aritexp):
                     raise PriorResultError(
                         f"'{aritexp}' is not a valid numeric "
@@ -468,7 +456,7 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 try:
                     if isinstance(root_att, list):
                         logger.debug(
-                            f"Getting all {att_name}attributes of {root_att}"
+                            f"Getting all {att_name} attributes of {root_att}"
                         )
                         root_att = [
                             self.get_attribute(list_att, att_name)
@@ -526,6 +514,13 @@ class ParameterCommandExecutor(DictSimpleTyper):
                     raise e
         # logger.debug(f'From {root_att}, extracting "{att_name}": {att}')
         return att
+
+
+def is_valid_expression(expression):
+    """Check for validity of a numeric expression, e.g. '* 3.1415"""
+    # pattern = r"^[\d+\-*/\s()]+$"
+    pattern = r"^[*-+/][0-9]*(\.[0-9]*)?"
+    return re.match(pattern, expression) is not None
 
 
 class PriorResultError(AttributeError):
@@ -659,3 +654,26 @@ def multiply_recarray(ra, factor):
         nda = ra[col].astype(dt)
         ra[col] = nda * factor
     return ra
+
+
+def stripplot(data, positions, jitter, ax, color, alpha=1):
+    """Plot jittered data onto an axis. This can be a useful addition to
+    a violin or boxplot, especially for sparse data.
+    Args:
+        data : list of 1D array, or 2D array
+            the example datapoints to plot for each position
+        positions : list of numeric
+            the positions to plot the data at
+        jitter : float
+            the amount of jitter to add along x, to separate the data points
+        ax : plt.axes
+            the axes to plot in
+        color : str or whatever matplotlib understands
+            the color to plot with
+        alpha : flot
+            the transparency to plot with
+    """
+    for pos, d in zip(positions, data):
+        x = pos * np.ones(len(d))
+        x += np.random.uniform(-jitter / 2, jitter / 2, size=len(d))
+        ax.scatter(x, d, color=color, alpha=alpha)
