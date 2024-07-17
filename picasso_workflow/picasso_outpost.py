@@ -575,7 +575,6 @@ def DBSCAN_analysis_pd(clusters_csv, channel_tags):
 
 
 def _do_dbscan_molint(
-    self,
     result_folder,
     fp_out_base,
     df_mask,
@@ -867,7 +866,9 @@ def degree_of_clustering(
         ],
     }
     fp_fig_dog = os.path.join(folder, "degree_of_clustering.png")
-    _ = _plot_degreeofclustering(data, origin_colors, fp_fig_dog)
+    _ = _plot_degreeofclustering(
+        data, origin_colors, fp_fig_dog, ylabel="# locs per cell"
+    )
 
     # plot fraction of clustered vs non-clustered locs
     data_fract = {
@@ -897,12 +898,19 @@ def degree_of_clustering(
         ],
     }
     fp_fig_tractdog = os.path.join(folder, "fracdegree_of_clustering.png")
-    _ = _plot_degreeofclustering(data_fract, origin_colors, fp_fig_tractdog)
+    _ = _plot_degreeofclustering(
+        data_fract,
+        origin_colors,
+        fp_fig_tractdog,
+        ylabel="fraction of locs per cell",
+    )
 
     return [fp_fig_dog, fp_fig_tractdog]
 
 
-def _plot_degreeofclustering(data, origin_colors, fp_fig):
+def _plot_degreeofclustering(
+    data, origin_colors, fp_fig, ylabel="fraction of locs per cell"
+):
     """
     Plot the degree of clustering of experimental versus simulated
     data in violin plots, including stripplots of the data.
@@ -975,7 +983,7 @@ def _plot_degreeofclustering(data, origin_colors, fp_fig):
             horizontalalignment="center",
             verticalalignment="center",
         )
-    ax.set_ylabel("fraction of locs per cell")
+    ax.set_ylabel(ylabel)
     ax.set_xticks(np.arange(len(categories)))
     ax.set_xticklabels(categories)  # , rotation=90)
     ax.set_title("degree of clustering")
