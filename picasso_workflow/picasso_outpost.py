@@ -1192,6 +1192,8 @@ def _plot_and_compare_ntargets_in_barcodes(
             aggfunc="mean",
             fill_value=np.nan,
         )
+        # average over 'iter'
+        pivot_table = pivot_table.T.groupby(level=["name"]).mean().T
         # fp = os.path.join(os.path.split(fp_fig)[0], f"bc{bc}-{tgt}.xlsx")
         # print(fp)
         # pivot_table.to_excel(fp)

@@ -3407,6 +3407,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         barcode_numbers.to_excel(
             os.path.join(results["folder"], "barcodes_numbers.xlsx")
         )
+        # average over 'iter'
         barcode_numbers = (
             barcode_numbers.T.groupby(level=["origin", "name"]).mean().T
         )
@@ -3444,6 +3445,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         barcode_areas.to_excel(
             os.path.join(results["folder"], "barcodes_areas.xlsx")
         )
+        # average over 'iter'
         barcode_areas = (
             barcode_areas.T.groupby(level=["origin", "name"]).mean().T
         )
