@@ -858,8 +858,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                         Radius of the local search region in nanometers.
                         Should be larger than the maximum expected drift wihtin
                         segmentation.
-                    dimensions : list
-                        the dimensions undrifted.
+                    dimensions : list of str
+                        the dimensions undrifted, typically ['x', 'y'].
                 optional items:
                     filename : str
                         the drift txt file name
@@ -888,7 +888,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_fig"] = (
             os.path.splitext(results["fp_driftfile"])[0] + ".png"
         )
-        self._plot_drift(results["fp_plot"], parameters["dimensions"])
+        self._plot_drift(results["fp_fig"], parameters["dimensions"])
 
         # save locs
         if pars := parameters.get("save_locs"):

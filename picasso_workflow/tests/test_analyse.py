@@ -230,6 +230,7 @@ class TestAnalyseModules(unittest.TestCase):
             "segmentation": 50,
             "intersect_d": 20,
             "roi_r": 60,
+            "dimensions": ["x", "y"],
         }
 
         self.ap.undrift_aim(0, parameters)
