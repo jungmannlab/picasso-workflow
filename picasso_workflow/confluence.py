@@ -333,6 +333,41 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(driftimg_fn)[1],
             )
 
+    def undrift_aim(self, i, parameters, results):
+        """Describes the AIM undrifting
+        Args:
+        """
+        logger.debug("Reporting undrift_aim.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Undrifting via AIM</strong></p>
+        <ul><li>Dimensions: {parameters.get('dimensions')}</li>
+        <li>Segmentation: {parameters.get('segmentation')} frames</li>
+        <li>Intersect distance: {parameters.get('intersect_d')} nm</li>
+        <li>Local search region radius: {parameters.get('roi_r')} nm</li>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li></ul>
+        """
+        if fp_fig := results.get("fp_fig"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
     def manual(self, i, parameters, results):
         """ """
         logger.debug("Reporting manual step")
