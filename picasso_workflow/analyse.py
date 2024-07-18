@@ -874,7 +874,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the analysis results
         """
         pixelsize = self.analysis_config["camera_info"]["pixelsize"]
-        self.drift, self.locs = aim.aim(
+        self.locs, self.info, self.drift = aim.aim(
             self.locs,
             self.info,
             segmentation=parameters["segmentation"],
