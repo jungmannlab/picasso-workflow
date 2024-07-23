@@ -669,7 +669,7 @@ class WorkflowRunner:
         """
         module_id = f"{i:02d}_{module_name}"
         logger.debug("looking for previous " + module_id)
-        logger.debug(str(self.results.get(module_id, {})))
+        # logger.debug(str(self.results.get(module_id, {})))
         logger.debug(
             str(self.results.get(module_id, {}).get("success", False))
         )
