@@ -214,6 +214,7 @@ class AggregationWorkflowRunner:
 
     def run(self):
         """individualize the aggregation workflow and run."""
+        self.save(self.result_folder)
         # First, run the individual analysis
         sgl_ds_workflow_parameters = self.aggregation_workflow[
             "single_dataset_modules"

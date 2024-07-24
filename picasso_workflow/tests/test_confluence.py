@@ -552,7 +552,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "labeling_uncertainty": {"A": 5, "B": 5},
             "n_simulate": 5000,
             "fp_mask_dict": None,
-            "width": 512,
+            "density": [8e-5],
             "height": 256,
             "depth": 4,
             "random_rot_mode": "3D",
@@ -560,6 +560,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "sim_repeats": 50,
             "fit_NND_bin": 0.5,
             "fit_NND_maxdist": 30,
+            "res_factor": 10,
         }
         results = {
             "start time": "now",

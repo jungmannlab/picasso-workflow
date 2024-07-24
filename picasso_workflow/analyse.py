@@ -1867,7 +1867,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         return allfps
 
     @module_decorator
-    def spinna(self, parameters, results):
+    def spinna(self, i, parameters, results):
         """Direct implementation of spinna batch analysis.
         The current locs file(s) are saved into the results folder, and
         a template csv file is created. This csv needs to be filled out by the
@@ -1878,19 +1878,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the index of the module
             parameters: dict
                 with required keys:
-                    labeling_efficiency : dict of float, range 0-100
-                        labeling efficiency percentage, for all targets
+                    labeling_efficiency : dict of float, range 0-1
+                        labeling efficiency, for all targets
                     labeling_uncertainty : float or dict of floats
                         labeling uncertainty [nm]; good value is e.g. 5
                         assumed the same value for all targets
-                    N_simulate : int
+                    n_simulate : int
                         number of target molecules to simulated;
                         good value is e.g. 50000
-                    # density : dict of float
-                    #     density to simulate;
-                    #     area density if 2D; volume density if 3D
-                    #     used proposed value in spinna_config.csv and can be
-                    #     altered manually after the first run of this module
                     structures : str or list of dict
                         if str: filepath to a yaml file with the structures.
                         if list of dict:
@@ -1904,9 +1899,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                         "Molecular targets"
                     fp_mask_dict : str
                         the filepath to the mask_dict file
-                    width, height, depth : float
-                        the width, height, and depth of the simulation space
-                        depth is optional
+                    density : list of float
+                        density to simulate in 1/nm^d;
+                        area density if 2D; volume density if 3D
                     random_rot_mode : '2D', or '3D'
                         Mode of molecule rotation in simulation
                     sim_repeats : int
@@ -1917,10 +1912,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                         max of histogram
                     n_nearest_neighbors : int
                         number of nearest neighbors to evaluate
+                    res_factor : float
+                    the spinna res_factor
         """
+        from picasso_workflow.spinna_main import load_structures_from_dict
+
         if isinstance(parameters["structures"], str):
             with open(parameters["structures"], "r") as f:
                 structures = yaml.read_all(f)
+        else:
+            structures = parameters["structures"]
 
         if isinstance(parameters["labeling_uncertainty"], (int, float)):
             labeling_uncertainty = {
@@ -1939,8 +1940,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         # locs, but as np.ndarray
         pixelsize = self.analysis_config["camera_info"].get("pixelsize")
         exp_data = {}
+        exp_n_targets = np.zeros(len(self.channel_tags))
         for i, target in enumerate(self.channel_tags):
             locs = self.channel_locs[i]
+            exp_n_targets[i] = len(locs)
             if hasattr(locs, "z"):
                 exp_data[target] = np.stack(
                     (locs.x * pixelsize, locs.y * pixelsize, locs.z)
@@ -1951,20 +1954,46 @@ class AutoPicasso(util.AbstractModuleCollection):
                     (locs.x * pixelsize, locs.y * pixelsize)
                 ).T
 
+        data_2d = "z" not in self.channel_locs[0].dtype.names
+        if data_2d:
+            area = parameters["n_simulate"] / sum(parameters["density"])
+            width = np.sqrt(area)
+            height = np.sqrt(area)
+            depth = None
+            # d = 2
+        else:
+            z_range = int(self.locs["z"].max() - self.locs["z"].min())
+            volume = parameters["n_simulate"] / sum(parameters["density"])
+            width = np.sqrt(volume / z_range)
+            height = np.sqrt(volume / z_range)
+            depth = z_range
+            # d = 3
+
+        structures, targets = load_structures_from_dict(structures)
+
+        exp_frac_targets = exp_n_targets / np.sum(exp_n_targets)
+        n_sim_targets = {
+            tgt: exp_frac_targets[i] * parameters["n_simulate"]
+            for i, tgt in enumerate(self.channel_tags)
+        }
+        N_structures = picasso_outpost.generate_N_structures(
+            structures, n_sim_targets, parameters["res_factor"]
+        )
+
         spinna_pars = {
             "structures": structures,
             "label_unc": labeling_uncertainty,
             "le": parameters["labeling_efficiency"],
             "mask_dict": mask_dict,
-            "width": parameters["width"],
-            "height": parameters["height"],
-            "depth": parameters.get("depth"),
+            "width": width,
+            "height": height,
+            "depth": depth,
             "random_rot_mode": parameters["random_rot_mode"],
             "exp_data": exp_data,
             "sim_repeats": parameters["sim_repeats"],
             "fit_NND_bin": parameters["fit_NND_bin"],
             "fit_NND_maxdist": parameters["fit_NND_maxdist"],
-            "N_structures": parameters["N_simulate"],
+            "N_structures": N_structures,
             "save_filename": os.path.join(results["folder"], "spinna-run"),
             "asynch": True,
             "targets": self.channel_tags,
@@ -1973,9 +2002,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             "result_dir": results["folder"],
         }
 
-        result_dir, fp_fig = picasso_outpost.spinna_temp(spinna_pars)
+        result_dir, fp_figs = picasso_outpost.spinna_sgl_temp(spinna_pars)
         plt.close("all")
-        results["fp_fig"] = fp_fig
+        results["fp_figs"] = fp_figs
         results["result_dir"] = result_dir
 
         return parameters, results
