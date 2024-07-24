@@ -762,6 +762,47 @@ class ConfluenceReporter(AbstractModuleCollection):
                     os.path.split(fp)[1],
                 )
 
+    def spinna(self, i, parameters, results):
+        """ """
+        logger.debug("Reporting spinna_manual.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>SPINNA-Manual</strong></p>
+        <ul><li>file present: {results.get('success')}</li>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Labeling Efficiency: {parameters["labeling_efficiency"]} %</li>
+        <li>Labeling Uncertainty: {parameters["labeling_uncertainty"]} nm</li>
+        <li># simulated structures: {parameters["n_simulate"]}</li>
+        <li>Nearest Neighbors to evaluate: {parameters["n_nearest_neighbors"]}
+        </li>
+        <li>Using Mask: {parameters.get("fp_mask_dict") is not None}</li>
+        <li>Density: {parameters["density"]} [1/nm^d]</li>
+        <li>Random Rotation Mode: {parameters["random_rot_mode"]}</li>
+        <li># simulation repeats: {parameters["sim_repeats"]}</li>
+        <li>Histogram Bin Size: {parameters["fit_NND_bin"]}</li>
+        <li>Histogram Max value: {parameters["fit_NND_maxdist"]}</li>
+        """
+        if fp_figs := results.get("fp_figs"):
+            for fp_fig in fp_figs:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp_fig)
+                except ConfluenceInterfaceError:
+                    pass
+                _, fp_fig = os.path.split(fp_fig)
+                text += (
+                    "<ul><ac:image><ri:attachment "
+                    + f'ri:filename="{fp_fig}" />'
+                    + "</ac:image></ul>"
+                )
+        text += """</ul>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
     def ripleysk(self, i, parameters, results):
         logger.debug("Reporting ripleysk.")
         text = f"""

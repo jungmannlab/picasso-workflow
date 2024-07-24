@@ -181,6 +181,11 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def spinna(self):
+        """implementation of a single spinna run."""
+        pass
+
+    @abc.abstractmethod
     def ripleysk(self):
         pass
 

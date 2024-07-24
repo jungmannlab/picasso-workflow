@@ -218,6 +218,7 @@ class TestAnalyseModules(unittest.TestCase):
         nspots = 5
         mock_undrift_aim.return_value = (
             np.random.rand(2, len(self.ap.movie)),
+            [{"name": "info"}],
             np.rec.array(
                 [
                     tuple(np.random.rand(len(self.locs_dtype)))
@@ -559,6 +560,62 @@ class TestAnalyseModules(unittest.TestCase):
         assert results["duration"] > -1
 
         shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
+
+    @patch("picasso_workflow.analyse.picasso_outpost.spinna_sgl_temp")
+    def spinna(self, mock_sptmp):
+        mock_sptmp.return_value = (0, 1)
+        info = [{"Width": 1000, "Height": 1000}]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        locs = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.channel_locs = [locs]
+        self.ap.channel_info = [info]
+        self.ap.channel_tags = ["CD86"]
+
+        parameters = {
+            "labeling_efficiency": {"CD86": 0.54},
+            "labeling_uncertainty": {"CD86": 5},
+            "n_simulate": 50000,
+            "fp_mask_dict": None,
+            "density": [0.00009],
+            "random_rot_mode": "2D",
+            "n_nearest_neighbors": 4,
+            "sim_repeats": 5,
+            "fit_NND_bin": 5,
+            "fit_NND_maxdist": 300,
+            "res_factor": 10,
+            "structures": [
+                {
+                    "Molecular targets": ["CD86"],
+                    "Structure title": "monomer",
+                    "CD86_x": [0],
+                    "CD86_y": [0],
+                    "CD86_z": [0],
+                },
+                {
+                    "Molecular targets": ["CD86"],
+                    "Structure title": "dimer",
+                    "CD86_x": [-10, 10],
+                    "CD86_y": [0, 0],
+                    "CD86_z": [0, 0],
+                },
+            ],
+        }
+        parameters, results = self.ap.spinna(0, parameters)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
 
     # @patch("picasso_workflow.analyse.picasso_outpost.spinna_temp", MagicMock)
     def spinna_manual(self):

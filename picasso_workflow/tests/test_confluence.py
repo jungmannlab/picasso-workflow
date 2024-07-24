@@ -546,6 +546,35 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
+    def spinna(self):
+        parameters = {
+            "labeling_efficiency": {"A": 0.34, "B": 0.56},
+            "labeling_uncertainty": {"A": 5, "B": 5},
+            "n_simulate": 5000,
+            "fp_mask_dict": None,
+            "density": [8e-5],
+            "height": 256,
+            "depth": 4,
+            "random_rot_mode": "3D",
+            "n_nearest_neighbors": 4,
+            "sim_repeats": 50,
+            "fit_NND_bin": 0.5,
+            "fit_NND_maxdist": 30,
+            "res_factor": 10,
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+        }
+        self.cr.spinna(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
     def ripleysk(self):
         parameters = {
             "ripleys_threshold": 1.2,
