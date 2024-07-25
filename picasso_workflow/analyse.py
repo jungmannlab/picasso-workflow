@@ -2781,7 +2781,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         for pair, row in df.iterrows():
             A, B = pair.split(",")
             if A == B:
-                df_di.loc[A, B] = 2 * row["AA"] / (row["A"] + 2 * row["AA"])
+                prop = 2 * row["AA"] / (row["A"] + 2 * row["AA"])
+                df_di.loc[A, B] = 100 * prop
             else:
                 # proportion of A interacting with any number of B
                 prop = (row["AB"] + 2 * row["AABB"]) / (
