@@ -3928,20 +3928,194 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    # @module_decorator
-    # def labeling_efficiency_analysis(self, i, parameters, results):
-    #     """Analyse for labeling efficiency.
-    #     Args:
-    #         i : int
-    #             the index of the module
-    #         parameters: dict
-    #             with required keys:
-    #             and optional keys:
-    #         results : dict
-    #             the results this function generates. This is created
-    #             in the decorator wrapper
-    #     """
-    #     return parameters, results
+    @module_decorator
+    def labeling_efficiency_analysis(self, i, parameters, results):
+        """Analyse for labeling efficiency.
+        Perform 3 component SPINNA analysis for monomers and heterodimers
+        of target (A) and reference (B). The labeling efficiency is the
+
+        A_vis = AB_gt * (1-le(B))
+        B_vis = AB_gt * (1-le(A))
+        AB_vis = AB_gt * le(A) * le(B)
+
+        -> le(A) = AB_vis / le(B) * (1-le(B)) / A_vis
+        and
+        ->  le(A)  = 1 / ((le(B) * B_vis) / AB_vis + 1)
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    reference_tag : str
+                        the channgel_tag of the reference
+                    target_tag : str
+                        the channel_tag of the target queried for LE
+                    reference_le : float
+                        labeling efficiency (<1) of reference
+                    pair_distance: 10 # real distance of pair of tags in nm
+                    channel_map : dict
+                        maps between channels (protein names, tags before combining)
+                        and index in the combine_id column of combined locs
+                    labeling_uncertainty : dict, channel tag to float
+                        labeling uncertainty [nm]; good value is e.g. 5
+                    n_simulate : int
+                        number of target molecules to be simulated;
+                        good value is e.g. 50000
+                    density : dict, channel tag to float
+                        density to simulate [nm^2 or nm^3];
+                        area density if 2D; volume density if 3D
+                    nn_nth : int
+                        number of nearest neighbors to analyse
+                    res_factor : float
+                        the spinna res_factor
+                    sim_repeats : int
+                        number of simulation repeats, for noise reduction
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        target = parameters["target_tag"]
+        reference = parameters["reference_tag"]
+        labeling_efficiency = {
+            target: 1,
+            reference: 1,  # parameters["reference_le"]
+        }
+
+        pair_distance = parameters["pair_distance"]
+
+        from picasso_workflow.spinna_main import load_structures_from_dict
+
+        logger.debug("Labeling Efficiency determination using SPINNA")
+
+        # # homo-analysis (proportions of 1- or 2-mers of the same kind)
+        # props = {}
+        dimensionality = 2
+        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        if isinstance(parameters["density"], list):
+            density = {
+                tag: parameters["density"][cid]
+                for tag, cid in parameters["channel_map"].items()
+            }
+        elif isinstance(parameters["density"], dict):
+            density = parameters["density"]
+        else:
+            raise KeyError("density parameter must be list or dict.")
+        results["fp_density"] = os.path.join(results["folder"], "density.yaml")
+        with open(results["fp_density"], "w") as f:
+            yaml.dump(density, f)
+
+        # ground thruth density, adjusted by labeling efficiency
+        # assume le=1 for target here, it is calculated in the end.
+        density_gt = {reference: density[reference], target: density[target]}
+
+        logger.debug(f"analysing labeling efficency of {target} using SPINNA.")
+        # find index of A and B in self.channel_locs
+        i_target = self.channel_tags.index(target)
+        i_reference = self.channel_tags.index(reference)
+
+        # locs, but as np.ndarray
+        exp_data = {}
+        for i, target in zip([i_target, i_reference], [target, reference]):
+            locs = self.channel_locs[i]
+            if hasattr(locs, "z"):
+                exp_data[target] = np.stack(
+                    (locs.x * pixelsize, locs.y * pixelsize, locs.z)
+                ).T
+                # dim = 3
+            else:
+                exp_data[target] = np.stack(
+                    (locs.x * pixelsize, locs.y * pixelsize)
+                ).T
+                # dim = 2
+        # target monomer
+        structures = self._create_spinna_structure(
+            [target], [[1]], pair_distance
+        )
+        # reference monomer
+        structures = self._create_spinna_structure(
+            [reference], [[1]], pair_distance
+        )
+        # heterodimer
+        struct = {
+            "Molecular targets": [target, reference],
+            "Structure title": f"{target}-{reference}-heterodimer",
+            f"{target}_x": [-pair_distance / 2],
+            f"{target}_y": [0],
+            f"{target}_z": [0],
+            f"{reference}_x": [pair_distance / 2],
+            f"{reference}_y": [0],
+            f"{reference}_z": [0],
+        }
+        structures.append(struct)
+
+        compound_density = density_gt[target] / 1 + density_gt[reference] / 1
+        # area = parameters["n_simulate"] / (compound_density / 1e6)
+        # area = parameters["n_simulate"] / (compound_density)
+        area = parameters["n_simulate"] / (compound_density * 1e6)
+        n_sim_targets = {
+            tag: int(
+                parameters["n_simulate"] * density_gt[tag] / compound_density
+            )
+            for tag in [target, reference]
+        }
+
+        structures, targets = load_structures_from_dict(structures)
+
+        N_structures = picasso_outpost.generate_N_structures(
+            structures, n_sim_targets, parameters["res_factor"]
+        )
+
+        # bin size: more than Nyquist subsampling
+        expected_1stNN_peak = (
+            2 / (2 * dimensionality * np.pi * (compound_density / 2))
+        ) ** (1 / dimensionality)
+        fit_NND_bin = expected_1stNN_peak / 3
+        # max dist: a few times the first NN distance peak
+        fit_NND_maxdist = 20 * expected_1stNN_peak
+
+        spinna_parameters = {
+            "structures": structures,
+            "label_unc": parameters["labeling_uncertainty"],
+            "le": labeling_efficiency,
+            "mask_dict": None,
+            "width": np.sqrt(area * 1e6),
+            "height": np.sqrt(area * 1e6),
+            "depth": None,
+            "random_rot_mode": "2D",
+            "exp_data": exp_data,
+            "sim_repeats": parameters["sim_repeats"],
+            "fit_NND_bin": fit_NND_bin,
+            "fit_NND_maxdist": fit_NND_maxdist,
+            "N_structures": N_structures,
+            "save_filename": os.path.join(
+                results["folder"], f"interaction-{target}-{reference}"
+            ),
+            "asynch": True,
+            "targets": [target, reference],
+            "apply_mask": False,
+            "nn_plotted": parameters["nn_nth"],
+            "result_dir": results["folder"],
+        }
+
+        result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
+        plt.close("all")
+
+        results["fp_fig"] = fp_fig
+        prop_t, prop_r, prop_tr = result["Fitted proportions of structures"]
+        # -> le(A) = AB_vis / le(B) * (1-le(B)) / A_vis
+        # and
+        # ->  le(A)  = 1 / ((le(B) * B_vis) / AB_vis + 1)
+        le_ref = parameters["reference_le"]
+        results["labeling_efficiency"] = (
+            prop_tr / prop_t / (le_ref * (1 - le_ref))
+        )
+        results["labeling_efficiency_check"] = 1 / (
+            le_ref * prop_r / prop_tr + 1
+        )
+
+        return parameters, results
 
 
 class AutoPicassoError(Exception):

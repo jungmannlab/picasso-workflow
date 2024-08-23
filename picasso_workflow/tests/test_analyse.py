@@ -799,6 +799,26 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
 
+    @patch("picasso_workflow.analyse.picasso_outpost.spinna_sgl")
+    def labeling_efficiency_analysis(self, mock_spinna_sgl):
+        parameters = {
+            "target_tag": "CD86",
+            "reference_tag": "GFP",
+            "pair_distance": 10,
+            "density": [92.4, 83.5],
+            "n_simulate": 10000,
+            "res_factor": 5,
+            "labeling_uncertainty": 5,
+            "sim_repeats": 2,
+            "nn_nth": 2,
+        }
+        spinna_result = {"Fitted proportions of structures": (0.4, 0.15, 0.35)}
+        mock_spinna_sgl.return_value = (spinna_result, "/path/to/fig")
+
+        parameters, results = self.ap.link_locs(0, parameters)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
+
 
 # @unittest.skip("")
 class TestAnalyse(unittest.TestCase):

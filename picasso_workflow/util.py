@@ -264,11 +264,10 @@ class AbstractModuleCollection(abc.ABC):
         """Link localizations."""
         pass
 
-    # @abc.abstractmethod
-    # def labeling_efficiency_analysis(self):
-    #     """Analyse for labeling efficiency.
-    #     """
-    #     pass
+    @abc.abstractmethod
+    def labeling_efficiency_analysis(self):
+        """Analyse for labeling efficiency."""
+        pass
 
 
 class DictSimpleTyper:

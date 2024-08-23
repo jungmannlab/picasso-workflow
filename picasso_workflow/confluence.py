@@ -1502,19 +1502,47 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    # def labeling_efficiency_analysis(self, i, parameters, results):
-    #     """Analyse for labeling efficiency.
-    #     Args:
-    #         i : int
-    #             the index of the module
-    #         parameters: dict
-    #             with required keys:
-    #             and optional keys:
-    #         results : dict
-    #             the results this function generates. This is created
-    #             in the decorator wrapper
-    #     """
-    #     pass
+    def labeling_efficiency_analysis(self, i, parameters, results):
+        """Analyse for labeling efficiency.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        logger.debug("Reporting labeling_efficiency_analysis.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Labeling Efficiency Evaluation</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Labeling efficiency: {results["labeling_efficiency"]}</li>
+        <li>Labeling efficiency (check):
+         {results["labeling_efficiency_check"]}</li>
+        </ul>"""
+        if fp_fig := results.get("fp_fig"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
 
 
 class UndriftError(Exception):
