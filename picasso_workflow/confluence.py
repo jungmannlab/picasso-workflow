@@ -1472,19 +1472,35 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    # def link_locs(self, i, parameters, results):
-    #     """Link localizations.
-    #     Args:
-    #         i : int
-    #             the index of the module
-    #         parameters: dict
-    #             with required keys:
-    #             and optional keys:
-    #         results : dict
-    #             the results this function generates. This is created
-    #             in the decorator wrapper
-    #     """
-    #     pass
+    def link_locs(self, i, parameters, results):
+        """Link localizations.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        logger.debug("Reporting link_locs.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Link localizations</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Maximum Distance [px]: {parameters["d_max"]}</li>
+        <li>Maximum transient dark time: {parameters["tolerance"]}</li>
+        </ul>"""
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
 
     # def labeling_efficiency_analysis(self, i, parameters, results):
     #     """Analyse for labeling efficiency.

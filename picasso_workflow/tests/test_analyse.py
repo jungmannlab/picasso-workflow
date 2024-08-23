@@ -790,6 +790,15 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_filter_locs"))
 
+    @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
+    @patch("picasso_workflow.analyse.postprocess.link", MagicMock)
+    def link_locs(self):
+        parameters = {"d_max": 2, "tolerance": 3}
+
+        parameters, results = self.ap.link_locs(0, parameters)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
+
 
 # @unittest.skip("")
 class TestAnalyse(unittest.TestCase):

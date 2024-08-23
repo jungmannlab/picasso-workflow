@@ -259,11 +259,10 @@ class AbstractModuleCollection(abc.ABC):
         """Filter localizations to lie within a min-max range of a metric."""
         pass
 
-    # @abc.abstractmethod
-    # def link_locs(self):
-    #     """Link localizations.
-    #     """
-    #     pass
+    @abc.abstractmethod
+    def link_locs(self):
+        """Link localizations."""
+        pass
 
     # @abc.abstractmethod
     # def labeling_efficiency_analysis(self):
