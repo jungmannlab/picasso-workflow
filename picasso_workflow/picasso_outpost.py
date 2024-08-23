@@ -10,6 +10,7 @@ Description: This is a collection of exploratory DNA-PAINT analysis / picasso
 """
 import logging
 import numpy as np
+from numpy.lib.recfunctions import stack_arrays
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
@@ -17,7 +18,7 @@ import yaml
 import os
 from aicsimageio import AICSImage
 
-from picasso import io, localize, render, imageprocess
+from picasso import io, localize, render, imageprocess, postprocess, lib
 from picasso_workflow import util
 
 from scipy.special import gamma as _gamma
@@ -1405,4 +1406,152 @@ def _plot_interaction_graph(
 
 ########################################################################
 # End Molecular Interaction Patterns (Joschka)
+########################################################################
+
+
+########################################################################
+# Start Labeling Efficiency Workflow Modules
+########################################################################
+
+
+def pick_gold(locs, info):
+    """
+    Searches picks similar to Gold clusters.
+
+    Focuses on the number of locs and their root mean square
+    displacement from center of mass. Std is defined in Tools
+    Settings Dialog.
+
+    Returns:
+        similar : list of [x, y] position pairs
+            the positions (picks) of gold beads
+
+    Raises
+    ------
+    NotImplementedError
+        If pick shape is rectangle
+    """
+    d = 2
+    std_range = 1.4
+    mean_rmsd = 0.4
+
+    maxframe = info[0]["Frames"]
+    maxheight = info[0]["Height"]
+    maxwidth = info[0]["Width"]
+    r = d / 2
+    d2 = d**2
+
+    # extract n_locs and rmsd from current picks
+    (locs_temp, r, _, _, block_starts, block_ends, K, L) = (
+        postprocess.get_index_blocks(locs, info, r)
+    )
+
+    # calculate min and max n_locs and rmsd for picking similar
+    mean_n_locs = maxframe
+    std_n_locs = 0.25 * mean_n_locs
+    std_rmsd = 0.25 * mean_n_locs
+    min_n_locs = mean_n_locs - std_range * std_n_locs
+    max_n_locs = mean_n_locs + std_range * std_n_locs
+    min_rmsd = mean_rmsd - std_range * std_rmsd
+    max_rmsd = mean_rmsd + std_range * std_rmsd
+
+    # x, y coordinates of found regions:
+    x_similar = np.array([])
+    y_similar = np.array([])
+
+    # preparations for grid search
+    x_range = np.arange(d / 2, maxwidth, np.sqrt(3) * d / 2)
+    y_range_base = np.arange(d / 2, maxheight - d / 2, d)
+    y_range_shift = y_range_base + d / 2
+
+    locs_x = locs_temp.x
+    locs_y = locs_temp.y
+    locs_xy = np.stack((locs_x, locs_y))
+    x_r = np.uint64(x_range / r)
+    y_r1 = np.uint64(y_range_shift / r)
+    y_r2 = np.uint64(y_range_base / r)
+    # print(locs_xy)
+    # print("min_n_locs, max_n_locs, min_rmsd, max_rmsd")
+    # print(min_n_locs, max_n_locs, min_rmsd, max_rmsd)
+    # pick similar
+    x_similar, y_similar = postprocess.pick_similar(
+        x_range,
+        y_range_shift,
+        y_range_base,
+        min_n_locs,
+        max_n_locs,
+        min_rmsd,
+        max_rmsd,
+        x_r,
+        y_r1,
+        y_r2,
+        locs_xy,
+        block_starts,
+        block_ends,
+        K,
+        L,
+        x_similar,
+        y_similar,
+        r,
+        d2,
+    )
+    # add picks
+    similar = list(zip(x_similar, y_similar))
+    return similar
+
+
+def index_locs(locs, info, pick_diameter):
+    """
+    Indexes localizations from a given channel in a grid with grid
+    size equal to the pick radius.
+    """
+    d = pick_diameter
+    size = d / 2
+    index_blocks = postprocess.get_index_blocks(locs, info, size)
+    return index_blocks
+
+
+def picked_locs(locs, info, _centers, pick_diameter, add_group=True):
+    """
+    Returns picked localizations in the specified channel.
+
+    Parameters
+    ----------
+    channel : int
+        Channel of locs to be processed
+    add_group : boolean (default=True)
+        True if group id should be added to locs. Each pick will be
+        assigned a different id
+
+    Returns:
+        all_picked_locs : np.recarray
+            locs within pick_diameter around _centers, linked to
+            common centers by field 'group'
+    """
+
+    picked_locs = []
+    d = pick_diameter
+    r = d / 2
+    index_blocks = index_locs(locs, info, d)
+    # print('index blocks: ', index_blocks)
+    for i, pick in enumerate(_centers):
+        x, y = pick
+        block_locs = postprocess.get_block_locs_at(x, y, index_blocks)
+        # print(f'block locs: {block_locs}')
+
+        group_locs = lib.locs_at(x, y, block_locs, r)
+        # print(f'grouplocs: {group_locs}')
+        if add_group:
+            group = i * np.ones(len(group_locs), dtype=np.int32)
+            group_locs = lib.append_to_rec(group_locs, group, "group")
+        group_locs.sort(kind="mergesort", order="frame")
+        picked_locs.append(group_locs)
+
+    all_picked_locs = stack_arrays(picked_locs, asrecarray=True, usemask=False)
+
+    return all_picked_locs
+
+
+########################################################################
+# End Labeling Efficiency Workflow Modules
 ########################################################################

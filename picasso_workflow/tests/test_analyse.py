@@ -734,6 +734,17 @@ class TestAnalyseModules(unittest.TestCase):
             )
         )
 
+    @patch("picasso_workflow.analyse.picasso_outpost.pick_gold")
+    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.analyse.picasso_outpost.io.save_locs")
+    def find_gold(self, mock_pick_gold, mock_picked_locs, mock_save_locs):
+        parameters = {}
+        mock_pick_gold.return_value = [[2, 4], [4, 2], [4, 4]]
+        mock_picked_locs.return_value = self.ap.locs
+        parameters, results = self.ap.find_gold(0, parameters)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_find_gold"))
+
 
 # @unittest.skip("")
 class TestAnalyse(unittest.TestCase):

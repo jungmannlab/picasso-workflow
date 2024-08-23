@@ -1367,6 +1367,95 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    def find_gold(self, i, parameters, results):
+        """Find localizations stemming from gold beads based on blinking
+        kinetics.
+        The metrics used are number of locs and rms deviation from mean
+        frame
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        logger.debug("Reporting find_gold.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Find Gold Beads</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li># Gold Beads found: {results["n_gold"]}</li>
+        <li># Gold Bead locs saved at: {results["fp_gold"]}</li>
+        </ul>"""
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    # def undrift_from_picked(self, i, parameters, results):
+    #     """Performs undrift from piced locs.
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #             and optional keys:
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     pass
+
+    # def filter_locs(self, i, parameters, results):
+    #     """Filter localizations to lie within a min-max range of a metric.
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #             and optional keys:
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     pass
+
+    # def link_locs(self, i, parameters, results):
+    #     """Link localizations.
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #             and optional keys:
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     pass
+
+    # def labeling_efficiency_analysis(self, i, parameters, results):
+    #     """Analyse for labeling efficiency.
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #             and optional keys:
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     pass
+
 
 class UndriftError(Exception):
     pass
