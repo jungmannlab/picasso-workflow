@@ -736,14 +736,34 @@ class TestAnalyseModules(unittest.TestCase):
 
     @patch("picasso_workflow.analyse.picasso_outpost.pick_gold")
     @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
-    @patch("picasso_workflow.analyse.picasso_outpost.io.save_locs")
-    def find_gold(self, mock_pick_gold, mock_picked_locs, mock_save_locs):
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def find_gold(self, mock_save_locs, mock_picked_locs, mock_pick_gold):
         parameters = {}
         mock_pick_gold.return_value = [[2, 4], [4, 2], [4, 4]]
         mock_picked_locs.return_value = self.ap.locs
         parameters, results = self.ap.find_gold(0, parameters)
 
         shutil.rmtree(os.path.join(self.results_folder, "00_find_gold"))
+
+    @patch("picasso_workflow.analyse.picasso_outpost._undrift_from_picked")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def undrift_from_picked(
+        self, mock_load_locs, mock_save_locs, mock_undrift
+    ):
+        parameters = {"fp_picked_locs": "fp"}
+        mock_undrift.return_value = (
+            "locs",
+            [{"name": "info"}],
+            ([2, 4, 3], [3, 2, 1]),
+        )
+        mock_save_locs.return_value = None
+        mock_load_locs.return_value = "locs", [{"name": "info"}]
+        parameters, results = self.ap.undrift_from_picked(0, parameters)
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_undrift_from_picked")
+        )
 
 
 # @unittest.skip("")

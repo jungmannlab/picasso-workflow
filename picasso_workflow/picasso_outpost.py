@@ -1552,6 +1552,79 @@ def picked_locs(locs, info, _centers, pick_diameter, add_group=True):
     return all_picked_locs
 
 
+def _undrift_from_picked_coordinate(info, picked_locs, coordinate):
+    """
+    Calculates drift in a given coordinate.
+
+    Parameters
+    ----------
+    channel : int
+        Channel where locs are being undrifted
+    picked_locs : list
+        List of np.recarrays with locs for each pick
+    coordinate : str
+        Spatial coordinate where drift is to be found
+
+    Returns
+    -------
+    np.array
+        Contains average drift across picks for all frames
+    """
+
+    n_picks = len(picked_locs)
+    n_frames = info[0]["Frames"]
+
+    # Drift per pick per frame
+    drift = np.empty((n_picks, n_frames))
+    drift.fill(np.nan)
+
+    # Remove center of mass offset
+    for i, locs in enumerate(picked_locs):
+        coordinates = getattr(locs, coordinate)
+        drift[i, locs.frame] = coordinates - np.mean(coordinates)
+
+    # Mean drift over picks
+    drift_mean = np.nanmean(drift, 0)
+    # Square deviation of each pick's drift to mean drift along frames
+    sd = (drift - drift_mean) ** 2
+    # Mean of square deviation for each pick
+    msd = np.nanmean(sd, 1)
+    # New mean drift over picks
+    # where each pick is weighted according to its msd
+    nan_mask = np.isnan(drift)
+    drift = np.ma.MaskedArray(drift, mask=nan_mask)
+    drift_mean = np.ma.average(drift, axis=0, weights=1 / msd)
+    drift_mean = drift_mean.filled(np.nan)
+
+    # Linear interpolation for frames without localizations
+    def nan_helper(y):
+        return np.isnan(y), lambda z: z.nonzero()[0]
+
+    nans, nonzero = nan_helper(drift_mean)
+    drift_mean[nans] = np.interp(
+        nonzero(nans), nonzero(~nans), drift_mean[~nans]
+    )
+
+    return drift_mean
+
+
+def _undrift_from_picked(locs, info, picked_locs):
+    """
+    Undrifts in x and y based on picked locs in a given channel.
+    Parameters
+    ----------
+    channel : int
+        Channel to be undrifted
+    """
+    drift_x = _undrift_from_picked_coordinate(info, picked_locs, "x")
+    drift_y = _undrift_from_picked_coordinate(info, picked_locs, "y")
+
+    locs.x -= drift_x[locs.frame]
+    locs.y -= drift_y[locs.frame]
+
+    return locs, info, (drift_x, drift_y)
+
+
 ########################################################################
 # End Labeling Efficiency Workflow Modules
 ########################################################################

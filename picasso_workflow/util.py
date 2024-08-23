@@ -249,11 +249,10 @@ class AbstractModuleCollection(abc.ABC):
         """
         pass
 
-    # @abc.abstractmethod
-    # def undrift_from_picked(self):
-    #     """Performs undrift from piced locs.
-    #     """
-    #     pass
+    @abc.abstractmethod
+    def undrift_from_picked(self):
+        """Performs undrift from piced locs."""
+        pass
 
     # @abc.abstractmethod
     # def filter_locs(self):

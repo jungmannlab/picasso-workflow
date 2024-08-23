@@ -3825,20 +3825,43 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    # @module_decorator
-    # def undrift_from_picked(self, i, parameters, results):
-    #     """Performs undrift from piced locs.
-    #     Args:
-    #         i : int
-    #             the index of the module
-    #         parameters: dict
-    #             with required keys:
-    #             and optional keys:
-    #         results : dict
-    #             the results this function generates. This is created
-    #             in the decorator wrapper
-    #     """
-    #     return parameters, results
+    @module_decorator
+    def undrift_from_picked(self, i, parameters, results):
+        """Performs undrift from piced locs.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_picked_locs : str
+                        filepath to the picked locs to undrift from
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        result = io.load_locs(parameters["fp_picked_locs"])
+        print(result)
+        picked_locs, picked_info = io.load_locs(parameters["fp_picked_locs"])
+        self.locs, self.info, drift = picasso_outpost._undrift_from_picked(
+            self.locs, self.info, picked_locs
+        )
+
+        fig, ax = plt.subplots(nrows=1)
+        ax.plot(drift[0], label="x drift")
+        ax.plot(drift[1], label="y drift")
+        ax.set_title("undrift from picked")
+        ax.set_ylabel("drift")
+        ax.set_xlabel("frame")
+        fp_fig = os.path.join(results["folder"], "undrift_from_picked.png")
+        results["fp_fig"] = fp_fig
+        fig.savefig(fp_fig)
+        plt.close(fig)
+
+        fp_locs = os.path.join(results["folder"], "locs.hdf5")
+        results["fp_locs"] = fp_locs
+        self._save_locs(fp_locs)
+        return parameters, results
 
     # @module_decorator
     # def filter_locs(self, i, parameters, results):

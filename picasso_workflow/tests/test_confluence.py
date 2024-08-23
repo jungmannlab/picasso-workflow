@@ -826,6 +826,25 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    # @unittest.skip("")
+    def undrift_from_picked(self):
+        parameters = {
+            "fp_picked_locs": "path/to/gold",
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "fp_locs": "path/to/locs",
+        }
+        self.cr.undrift_from_picked(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
 
 # @unittest.skip('')
 class Test_B_ConfluenceReporter(unittest.TestCase):
