@@ -765,6 +765,31 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_undrift_from_picked")
         )
 
+    @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
+    def filter_locs(self):
+        parameters = {"field": "photons", "minval": 800, "maxval": 1200}
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("sx", "f4"),
+            ("sy", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        self.ap.locs = np.rec.array(
+            [
+                tuple([i] + list(1000 * np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+
+        parameters, results = self.ap.filter_locs(0, parameters)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_filter_locs"))
+
 
 # @unittest.skip("")
 class TestAnalyse(unittest.TestCase):

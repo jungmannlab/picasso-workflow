@@ -254,11 +254,10 @@ class AbstractModuleCollection(abc.ABC):
         """Performs undrift from piced locs."""
         pass
 
-    # @abc.abstractmethod
-    # def filter_locs(self):
-    #     """Filter localizations to lie within a min-max range of a metric.
-    #     """
-    #     pass
+    @abc.abstractmethod
+    def filter_locs(self):
+        """Filter localizations to lie within a min-max range of a metric."""
+        pass
 
     # @abc.abstractmethod
     # def link_locs(self):

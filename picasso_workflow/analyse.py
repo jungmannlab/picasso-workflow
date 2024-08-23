@@ -3863,20 +3863,37 @@ class AutoPicasso(util.AbstractModuleCollection):
         self._save_locs(fp_locs)
         return parameters, results
 
-    # @module_decorator
-    # def filter_locs(self, i, parameters, results):
-    #     """Filter localizations to lie within a min-max range of a metric.
-    #     Args:
-    #         i : int
-    #             the index of the module
-    #         parameters: dict
-    #             with required keys:
-    #             and optional keys:
-    #         results : dict
-    #             the results this function generates. This is created
-    #             in the decorator wrapper
-    #     """
-    #     return parameters, results
+    @module_decorator
+    def filter_locs(self, i, parameters, results):
+        """Filter localizations to lie within a min-max range of a metric.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    field : str
+                        the field to filter on
+                    minval : dtype of field
+                        the minimum value to accept
+                    maxval : dtype of field
+                        the maximum value to accept
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        field = parameters["field"]
+        xmin = parameters["minval"]
+        xmax = parameters["maxval"]
+        self.locs = self.locs[
+            (self.locs[field] >= xmin) & (self.locs[field] <= xmax)
+        ]
+
+        fp_locs = os.path.join(results["folder"], "locs.hdf5")
+        results["fp_locs"] = fp_locs
+        self._save_locs(fp_locs)
+
+        return parameters, results
 
     # @module_decorator
     # def link_locs(self, i, parameters, results):
