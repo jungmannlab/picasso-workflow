@@ -799,11 +799,12 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_sgl")
+    @patch("picasso_workflow.analyse.picasso_outpost.spinna_sgl_temp")
     def labeling_efficiency_analysis(self, mock_spinna_sgl):
         parameters = {
             "target_tag": "CD86",
             "reference_tag": "GFP",
+            "reference_le": 0.52,
             "pair_distance": 10,
             "density": [92.4, 83.5],
             "n_simulate": 10000,
@@ -811,13 +812,47 @@ class TestAnalyseModules(unittest.TestCase):
             "labeling_uncertainty": 5,
             "sim_repeats": 2,
             "nn_nth": 2,
+            "channel_map": {"GFP": 0, "CD86": 1},
         }
         spinna_result = {"Fitted proportions of structures": (0.4, 0.15, 0.35)}
         mock_spinna_sgl.return_value = (spinna_result, "/path/to/fig")
+        self.ap.channel_tags = ["GFP", "CD86"]
+        self.ap.channel_locs = [None, None]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("sx", "f4"),
+            ("sy", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        locs_a = np.rec.array(
+            [
+                tuple([i] + list(1000 * np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        locs_b = np.rec.array(
+            [
+                tuple([i] + list(1000 * np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.channel_locs = [locs_a, locs_b]
 
-        parameters, results = self.ap.link_locs(0, parameters)
+        parameters, results = self.ap.labeling_efficiency_analysis(
+            0, parameters
+        )
 
-        shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
+        shutil.rmtree(
+            os.path.join(
+                self.results_folder, "00_labeling_efficiency_analysis"
+            )
+        )
 
 
 # @unittest.skip("")
