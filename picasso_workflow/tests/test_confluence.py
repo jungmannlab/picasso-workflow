@@ -886,8 +886,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "start time": "now",
             "duration": 4.12,
             "success": True,
-            "labeling_efficiency": 0.57,
-            "labeling_efficiency_check": 0.52,
+            "labeling_efficiency": {"ref": 0.57, "tgt": 0.23},
         }
         self.cr.labeling_efficiency_analysis(0, parameters, results)
 

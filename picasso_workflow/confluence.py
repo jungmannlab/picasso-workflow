@@ -1523,8 +1523,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         <li>Labeling efficiency: {results["labeling_efficiency"]}</li>
-        <li>Labeling efficiency (check):
-         {results["labeling_efficiency_check"]}</li>
         </ul>"""
         if fp_fig := results.get("fp_fig"):
             try:

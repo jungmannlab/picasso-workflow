@@ -3932,27 +3932,22 @@ class AutoPicasso(util.AbstractModuleCollection):
     def labeling_efficiency_analysis(self, i, parameters, results):
         """Analyse for labeling efficiency.
         Perform 3 component SPINNA analysis for monomers and heterodimers
-        of target (A) and reference (B). The labeling efficiency is the
+        of target (A) and reference (B). For the analysis, we enter a
+        labeling efficiency of 1, yielding proportions of monomers and
+        dimers as seen in the data. The real labeling efficiency is then
 
-        A_vis = AB_gt * (1-le(B))
-        B_vis = AB_gt * (1-le(A))
-        AB_vis = AB_gt * le(A) * le(B)
-
-        -> le(A) = AB_vis / le(B) * (1-le(B)) / A_vis
-        and
-        ->  le(A)  = 1 / ((le(B) * B_vis) / AB_vis + 1)
+        LE(A) = prop(AB) / (prop(B) + prop(AB))
+        LE(B) = prop(AB) / (prop(A) + prop(AB))
 
         Args:
             i : int
                 the index of the module
             parameters: dict
                 with required keys:
-                    reference_tag : str
+                    reference_name : str
                         the channgel_tag of the reference
-                    target_tag : str
+                    target_name : str
                         the channel_tag of the target queried for LE
-                    reference_le : float
-                        labeling efficiency (<1) of reference
                     pair_distance: 10 # real distance of pair of tags in nm
                     channel_map : dict
                         maps between channels (protein names, tags before combining)
@@ -3976,11 +3971,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        target = parameters["target_tag"]
-        reference = parameters["reference_tag"]
+        target = parameters["target_name"]
+        reference = parameters["reference_name"]
         labeling_efficiency = {
             target: 1,
-            reference: 1,  # parameters["reference_le"]
+            reference: 1,
         }
 
         pair_distance = parameters["pair_distance"]
@@ -4103,17 +4098,20 @@ class AutoPicasso(util.AbstractModuleCollection):
         plt.close("all")
 
         results["fp_fig"] = fp_fig
-        prop_t, prop_r, prop_tr = result["Fitted proportions of structures"]
-        # -> le(A) = AB_vis / le(B) * (1-le(B)) / A_vis
-        # and
-        # ->  le(A)  = 1 / ((le(B) * B_vis) / AB_vis + 1)
-        le_ref = parameters["reference_le"]
-        results["labeling_efficiency"] = (
-            prop_tr / prop_t / (le_ref * (1 - le_ref))
-        )
-        results["labeling_efficiency_check"] = 1 / (
-            le_ref * prop_r / prop_tr + 1
-        )
+        props = result["Fitted proportions of structures"]  # given in percent
+        prop_t = props[0]
+        prop_r = props[1]
+        prop_tr = props[2]
+
+        # LE(A) = prop(AB) / (prop(B) + prop(AB))
+        # LE(B) = prop(AB) / (prop(A) + prop(AB))
+        le_target = prop_tr / (prop_r + prop_tr) * 100
+        le_reference = prop_tr / (prop_t + prop_tr) * 100
+
+        results["labeling_efficiency"] = {
+            parameters["target_name"]: le_target,
+            parameters["reference_name"]: le_reference,
+        }
 
         return parameters, results
 

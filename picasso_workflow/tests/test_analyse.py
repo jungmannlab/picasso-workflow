@@ -802,9 +802,8 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.picasso_outpost.spinna_sgl_temp")
     def labeling_efficiency_analysis(self, mock_spinna_sgl):
         parameters = {
-            "target_tag": "CD86",
-            "reference_tag": "GFP",
-            "reference_le": 0.52,
+            "target_name": "CD86",
+            "reference_name": "GFP",
             "pair_distance": 10,
             "density": [92.4, 83.5],
             "n_simulate": 10000,
