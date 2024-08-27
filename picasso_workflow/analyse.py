@@ -3949,9 +3949,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                     target_name : str
                         the channel_tag of the target queried for LE
                     pair_distance: 10 # real distance of pair of tags in nm
-                    channel_map : dict
-                        maps between channels (protein names, tags before combining)
-                        and index in the combine_id column of combined locs
                     labeling_uncertainty : dict, channel tag to float
                         labeling uncertainty [nm]; good value is e.g. 5
                     n_simulate : int
@@ -3960,17 +3957,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                     density : dict, channel tag to float
                         density to simulate [nm^2 or nm^3];
                         area density if 2D; volume density if 3D
-                    nn_nth : int
-                        number of nearest neighbors to analyse
                     res_factor : float
                         the spinna res_factor
                     sim_repeats : int
                         number of simulation repeats, for noise reduction
                 and optional keys:
+                    nn_nth : int
+                        number of nearest neighbors to analyse
+                        default: 1
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        if not parameters.get("nn_nth"):
+            parameters["nn_nth"] = 1
         target = parameters["target_name"]
         reference = parameters["reference_name"]
         labeling_efficiency = {
@@ -3979,6 +3979,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         }
 
         pair_distance = parameters["pair_distance"]
+
+        channel_map = {tag: i for i, tag in enumerate(self.channel_tags)}
 
         from picasso_workflow.spinna_main import load_structures_from_dict
 
@@ -3991,7 +3993,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if isinstance(parameters["density"], list):
             density = {
                 tag: parameters["density"][cid]
-                for tag, cid in parameters["channel_map"].items()
+                for tag, cid in channel_map.items()
             }
         elif isinstance(parameters["density"], dict):
             density = parameters["density"]

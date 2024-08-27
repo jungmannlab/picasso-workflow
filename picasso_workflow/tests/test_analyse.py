@@ -805,15 +805,16 @@ class TestAnalyseModules(unittest.TestCase):
             "target_name": "CD86",
             "reference_name": "GFP",
             "pair_distance": 10,
-            "density": [92.4, 83.5],
+            "density": {"CD86": 92.4, "GFP": 83.5},
             "n_simulate": 10000,
             "res_factor": 5,
             "labeling_uncertainty": 5,
             "sim_repeats": 2,
-            "nn_nth": 2,
-            "channel_map": {"GFP": 0, "CD86": 1},
+            # "nn_nth": 2,
         }
-        spinna_result = {"Fitted proportions of structures": (0.4, 0.15, 0.35)}
+        spinna_result = {
+            "Fitted proportions of structures": np.array([0.4, 0.15, 0.35])
+        }
         mock_spinna_sgl.return_value = (spinna_result, "/path/to/fig")
         self.ap.channel_tags = ["GFP", "CD86"]
         self.ap.channel_locs = [None, None]
