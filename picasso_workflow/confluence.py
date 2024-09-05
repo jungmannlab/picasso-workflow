@@ -1524,17 +1524,18 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s</li>
         <li>Labeling efficiency: {results["labeling_efficiency"]}</li>
         </ul>"""
-        if fp_fig := results.get("fp_fig"):
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
-            _, fp_fig = os.path.split(fp_fig)
-            text += (
-                "<ul><ac:image><ri:attachment "
-                + f'ri:filename="{fp_fig}" />'
-                + "</ac:image></ul>"
-            )
+        if fp_figs := results.get("fp_fig"):
+            for fp_fig in fp_figs:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp_fig)
+                except ConfluenceInterfaceError:
+                    pass
+                _, fp_fig = os.path.split(fp_fig)
+                text += (
+                    "<ul><ac:image><ri:attachment "
+                    + f'ri:filename="{fp_fig}" />'
+                    + "</ac:image></ul>"
+                )
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """

@@ -10,7 +10,8 @@ Description: This is a collection of exploratory DNA-PAINT analysis / picasso
 """
 import logging
 import numpy as np
-from numpy.lib.recfunctions import stack_arrays
+
+# from numpy.lib.recfunctions import stack_arrays
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
@@ -1524,7 +1525,10 @@ def picked_locs(locs, info, _centers, pick_diameter, add_group=True):
         assigned a different id
 
     Returns:
-        all_picked_locs : np.recarray
+        # all_picked_locs : np.recarray
+        #     locs within pick_diameter around _centers, linked to
+        #     common centers by field 'group'
+        all_picked_locs : list of np.recarray
             locs within pick_diameter around _centers, linked to
             common centers by field 'group'
     """
@@ -1547,7 +1551,8 @@ def picked_locs(locs, info, _centers, pick_diameter, add_group=True):
         group_locs.sort(kind="mergesort", order="frame")
         picked_locs.append(group_locs)
 
-    all_picked_locs = stack_arrays(picked_locs, asrecarray=True, usemask=False)
+    # all_picked_locs = stack_arrays(picked_locs, asrecarray=True, usemask=False)
+    all_picked_locs = picked_locs
 
     return all_picked_locs
 
