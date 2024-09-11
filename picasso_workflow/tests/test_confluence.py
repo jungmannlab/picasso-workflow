@@ -808,6 +808,94 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    # @unittest.skip("")
+    def find_gold(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "n_gold": 3,
+            "fp_gold": "path/to/gold",
+        }
+        self.cr.find_gold(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def undrift_from_picked(self):
+        parameters = {
+            "fp_picked_locs": "path/to/gold",
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "fp_locs": "path/to/locs",
+        }
+        self.cr.undrift_from_picked(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def filter_locs(self):
+        parameters = {"field": "photons", "minval": 800, "maxval": 1200}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "fp_locs": "path/to/locs",
+        }
+        self.cr.filter_locs(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def link_locs(self):
+        parameters = {"d_max": 2, "tolerance": 3}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "fp_locs": "path/to/locs",
+        }
+        self.cr.link_locs(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def labeling_efficiency_analysis(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "labeling_efficiency": {"ref": 0.57, "tgt": 0.23},
+        }
+        self.cr.labeling_efficiency_analysis(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
 
 # @unittest.skip('')
 class Test_B_ConfluenceReporter(unittest.TestCase):

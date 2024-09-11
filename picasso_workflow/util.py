@@ -241,6 +241,34 @@ class AbstractModuleCollection(abc.ABC):
         """
         pass
 
+    @abc.abstractmethod
+    def find_gold(self):
+        """Find localizations stemming from gold beads based on blinking kinetics.
+        The metrics used are number of locs and rms deviation from mean
+        frame
+        """
+        pass
+
+    @abc.abstractmethod
+    def undrift_from_picked(self):
+        """Performs undrift from piced locs."""
+        pass
+
+    @abc.abstractmethod
+    def filter_locs(self):
+        """Filter localizations to lie within a min-max range of a metric."""
+        pass
+
+    @abc.abstractmethod
+    def link_locs(self):
+        """Link localizations."""
+        pass
+
+    @abc.abstractmethod
+    def labeling_efficiency_analysis(self):
+        """Analyse for labeling efficiency."""
+        pass
+
 
 class DictSimpleTyper:
     """Scans a complex dictionary and converts numpy arrays and

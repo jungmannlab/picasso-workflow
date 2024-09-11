@@ -156,3 +156,100 @@ class TestPicassoOutpost(unittest.TestCase):
         # fig.savefig(os.path.join(results_folder, 'loglike_minimization.png'))
 
         # assert False
+
+    def get_locs_with_gold(
+        self, gold_x, gold_y, nframes=10, locs_per_frame=5, noise=0.5
+    ):
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("sx", "f4"),
+            ("sy", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        width = 20
+        height = 42
+        locs = np.lib.recfunctions.stack_arrays(
+            [
+                np.rec.array(
+                    [
+                        tuple([f, p, x, y, sx, sy, lpx, lpy])
+                        for f, p, x, y, sx, sy, lpx, lpy in zip(
+                            [i] * locs_per_frame,
+                            list(1000 * np.random.rand(locs_per_frame)),
+                            list(
+                                width
+                                * np.random.rand(locs_per_frame - len(gold_x))
+                            )
+                            + [np.random.normal(x, noise) for x in gold_x],
+                            list(
+                                height
+                                * np.random.rand(locs_per_frame - len(gold_y))
+                            )
+                            + [np.random.normal(y, noise) for y in gold_y],
+                            list(np.random.rand(locs_per_frame)),
+                            list(np.random.rand(locs_per_frame)),
+                            list(np.random.rand(locs_per_frame)),
+                            list(np.random.rand(locs_per_frame)),
+                        )
+                    ],
+                    dtype=locs_dtype,
+                )
+                for i in range(nframes)
+            ],
+            asrecarray=True,
+            usemask=False,
+        )
+        # print(locs)
+        # print(locs.dtype)
+        info = [
+            {
+                "Frames": nframes,
+                "Width": width,
+                "Height": height,
+                "Data Type": "u4",
+            }
+        ]
+        return locs, info
+
+    def test_06a_pick_gold(self):
+        np.random.seed(42)
+        centers = [[12, 4], [4, 12], [14, 14]]
+        locs, info = self.get_locs_with_gold(
+            [center[0] for center in centers],
+            [center[1] for center in centers],
+            nframes=100,
+            locs_per_frame=4,
+        )
+        gold_picks = picasso_outpost.pick_gold(locs, info)
+        print(gold_picks)
+        # round the picks for assertion
+        gold_picks = [
+            list(np.round(pair).astype(np.int64)) for pair in gold_picks
+        ]
+        print(gold_picks)
+        for center in centers:
+            assert center in gold_picks
+
+    def test_06b_index_locs(self):
+        locs, info = self.get_locs_with_gold([], [])
+        pick_diameters = 2.3
+        index_blocs = picasso_outpost.index_locs(locs, info, pick_diameters)
+
+        assert index_blocs is not None
+
+    def test_06c_picked_locs(self):
+        centers = [[2, 4], [4, 2], [4, 4]]
+        locs, info = self.get_locs_with_gold(
+            [center[0] for center in centers],
+            [center[1] for center in centers],
+            noise=0.05,
+        )
+        gold_locs = picasso_outpost.picked_locs(
+            locs, info, centers, pick_diameter=0.5
+        )
+
+        assert len(gold_locs) == len(centers) * info[0]["Frames"]

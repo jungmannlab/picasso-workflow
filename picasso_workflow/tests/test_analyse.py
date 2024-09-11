@@ -734,6 +734,126 @@ class TestAnalyseModules(unittest.TestCase):
             )
         )
 
+    @patch("picasso_workflow.analyse.picasso_outpost.pick_gold")
+    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def find_gold(self, mock_save_locs, mock_picked_locs, mock_pick_gold):
+        parameters = {}
+        mock_pick_gold.return_value = [[2, 4], [4, 2], [4, 4]]
+        mock_picked_locs.return_value = self.ap.locs
+        parameters, results = self.ap.find_gold(0, parameters)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_find_gold"))
+
+    @patch("picasso_workflow.analyse.picasso_outpost._undrift_from_picked")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def undrift_from_picked(
+        self, mock_load_locs, mock_save_locs, mock_undrift
+    ):
+        parameters = {"fp_picked_locs": "fp"}
+        mock_undrift.return_value = (
+            "locs",
+            [{"name": "info"}],
+            ([2, 4, 3], [3, 2, 1]),
+        )
+        mock_save_locs.return_value = None
+        mock_load_locs.return_value = "locs", [{"name": "info"}]
+        parameters, results = self.ap.undrift_from_picked(0, parameters)
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_undrift_from_picked")
+        )
+
+    @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
+    def filter_locs(self):
+        parameters = {"field": "photons", "minval": 800, "maxval": 1200}
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("sx", "f4"),
+            ("sy", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        self.ap.locs = np.rec.array(
+            [
+                tuple([i] + list(1000 * np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+
+        parameters, results = self.ap.filter_locs(0, parameters)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_filter_locs"))
+
+    @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
+    @patch("picasso_workflow.analyse.postprocess.link", MagicMock)
+    def link_locs(self):
+        parameters = {"d_max": 2, "tolerance": 3}
+
+        parameters, results = self.ap.link_locs(0, parameters)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
+
+    @patch("picasso_workflow.analyse.picasso_outpost.spinna_sgl_temp")
+    def labeling_efficiency_analysis(self, mock_spinna_sgl):
+        parameters = {
+            "target_name": "CD86",
+            "reference_name": "GFP",
+            "pair_distance": 10,
+            "density": {"CD86": 92.4, "GFP": 83.5},
+            "n_simulate": 10000,
+            "res_factor": 5,
+            "labeling_uncertainty": 5,
+            "sim_repeats": 2,
+            # "nn_nth": 2,
+        }
+        spinna_result = {
+            "Fitted proportions of structures": np.array([0.4, 0.15, 0.35])
+        }
+        mock_spinna_sgl.return_value = (spinna_result, "/path/to/fig")
+        self.ap.channel_tags = ["GFP", "CD86"]
+        self.ap.channel_locs = [None, None]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("sx", "f4"),
+            ("sy", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        locs_a = np.rec.array(
+            [
+                tuple([i] + list(1000 * np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        locs_b = np.rec.array(
+            [
+                tuple([i] + list(1000 * np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.channel_locs = [locs_a, locs_b]
+
+        parameters, results = self.ap.labeling_efficiency_analysis(
+            0, parameters
+        )
+
+        shutil.rmtree(
+            os.path.join(
+                self.results_folder, "00_labeling_efficiency_analysis"
+            )
+        )
+
 
 # @unittest.skip("")
 class TestAnalyse(unittest.TestCase):
