@@ -817,6 +817,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "success": True,
             "n_gold": 3,
             "fp_gold": "path/to/gold",
+            "fp_nogold": "path/to/no/gold",
         }
         self.cr.find_gold(0, parameters, results)
 
