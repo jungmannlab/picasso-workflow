@@ -878,6 +878,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the analysis results
         """
         pixelsize = self.analysis_config["camera_info"]["pixelsize"]
+
+        # dirty debug: picasso.aim.aim expects the existence of info[1]["Pixelsize"]
+        self.info[1]["Pixelsize"] = pixelsize
+
         self.locs, self.info, self.drift = aim.aim(
             self.locs,
             self.info,
