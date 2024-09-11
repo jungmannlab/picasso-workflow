@@ -251,5 +251,6 @@ class TestPicassoOutpost(unittest.TestCase):
         gold_locs = picasso_outpost.picked_locs(
             locs, info, centers, pick_diameter=0.5
         )
+        ngold_locs = np.sum([len(lcs) for lcs in gold_locs])
 
-        assert len(gold_locs) == len(centers) * info[0]["Frames"]
+        assert ngold_locs == len(centers) * info[0]["Frames"]

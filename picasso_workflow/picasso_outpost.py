@@ -1549,7 +1549,7 @@ def get_block_locs_at(x, y, index_blocks, return_indices=False):
                     )
     indices = list(itertools.chain(*indices))
     if return_indices:
-        return locs[indices], indices
+        return locs[indices], np.array(indices)
     else:
         return locs[indices]
 
@@ -1625,6 +1625,9 @@ def picked_locs(
         group_locs, is_picked = locs_at(
             x, y, block_locs, r, return_indices=True
         )
+        logger.debug(block_indices)
+        logger.debug(is_picked)
+        logger.debug(is_picked.shape)
         is_not_picked.append(block_indices[~is_picked])
         # print(f'grouplocs: {group_locs}')
         if add_group:
