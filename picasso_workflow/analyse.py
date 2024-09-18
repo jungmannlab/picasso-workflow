@@ -3807,6 +3807,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters: dict
                 with required keys:
                 and optional keys:
+                    remove_gold : bool
+                        if present and set to True, the gold locs
+                        are discarded and self.locs is set to the
+                        nongold-locs
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -3857,6 +3861,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             }
         )
         io.save_locs(fp_nogold, nongold_locs, nogold_info)
+
+        if parameters.get("remove_gold"):
+            self.locs = nongold_locs
+            self.info = nogold_info
 
         return parameters, results
 
