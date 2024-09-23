@@ -96,15 +96,20 @@ class RipleysInterface:
         else:
             tree = getTree(data)
             otherTree = getTree(otherData)
-            if isTree(otherData):
-                otherN = otherData.n
-            else:
-                otherN = otherData.shape[0]
+            # if isTree(otherData):
+            #     otherN = otherData.n
+            # else:
+            #     otherN = otherData.shape[0]
             nNeighbors = tree.count_neighbors(otherTree, self.radii)
-            lambda_inv1 = area / N
-            lambda_inv2 = area / otherN
-            const_term = lambda_inv1 * lambda_inv2 / area
-            K = const_term * nNeighbors
+
+            # Rafal's correction:
+            # lambda_inv1 = area / N
+            # lambda_inv2 = area / otherN
+            # const_term = lambda_inv1 * lambda_inv2 / area
+            # K = const_term * nNeighbors
+
+            # GOING back to magdalena's version
+            K = (nNeighbors / N) / density
 
         L = np.sqrt(K / np.pi)
         H = L - self.radii
