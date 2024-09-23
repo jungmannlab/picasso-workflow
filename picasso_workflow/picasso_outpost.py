@@ -26,13 +26,18 @@ from scipy.special import gamma as _gamma
 from scipy.special import factorial as _factorial
 from scipy.optimize import minimize
 from scipy import stats
+import itertools
 
 
 logger = logging.getLogger(__name__)
 
 
 def align_channels(
-    channel_locs, channel_info, max_iterations=5, convergence=0.001
+    channel_locs,
+    channel_info,
+    max_iterations=5,
+    convergence=0.001,
+    fiducial_locs=None,
 ):
     """This is taken from picasso.gui.render.View.align. As the code is not
     modular enough, it is replicated here. Potentially, this could go into
@@ -47,6 +52,9 @@ def align_channels(
         convergence : float
             convergence criterium when a shift is negligible and thus
             alignment convergence achieved. The value is in pixels.
+        fiducial_locs : list of recarray
+            the localizations to use as a basis for the alignment. If None,
+            the channel_locs are used as fiducials.
     Returns:
         shift : list (len 2-3) of lists (len iterations)
             the shifts in x, y, (z) for each iteration, averaged over
@@ -66,12 +74,16 @@ def align_channels(
         completed = True
 
         # find shift between channels
-        shift = shift_from_rcc(channel_locs, channel_info)
+        if fiducial_locs is None:
+            # assignment by reference. Any changes to fiducial_locs will act on
+            # channel_locs and vice versa.
+            fiducial_locs = channel_locs
+        shift = shift_from_rcc(fiducial_locs, channel_info)
         logger.debug("Shifting channels.")
         temp_shift_x = []
         temp_shift_y = []
         temp_shift_z = []
-        for i, locs_ in enumerate(channel_locs):
+        for i, locs_ in enumerate(fiducial_locs):
             if (
                 np.absolute(shift[0][i]) + np.absolute(shift[1][i])
                 > convergence
@@ -104,6 +116,14 @@ def align_channels(
     shift = [shift_x, shift_y]
     if shift_z != []:
         shift.append(shift_z)
+
+    # if fiducial_locs were separately given, shift channel_locs
+    if channel_locs != fiducial_locs:
+        for i, locs_ in enumerate(channel_locs):
+            locs_.y -= cumulative_shift[0]
+            locs_.x -= cumulative_shift[1]
+            if len(cumulative_shift) > 2:
+                locs_.z -= cumulative_shift[2]
     return shift, cumulative_shift
 
 
@@ -1415,7 +1435,7 @@ def _plot_interaction_graph(
 ########################################################################
 
 
-def pick_gold(locs, info):
+def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=0.4):
     """
     Searches picks similar to Gold clusters.
 
@@ -1423,6 +1443,11 @@ def pick_gold(locs, info):
     displacement from center of mass. Std is defined in Tools
     Settings Dialog.
 
+    Args:
+        diameter : float
+            the pick similar diameter
+        std_range, mean_rmsd : float
+            the pick similar parameters identifying gold
     Returns:
         similar : list of [x, y] position pairs
             the positions (picks) of gold beads
@@ -1432,9 +1457,7 @@ def pick_gold(locs, info):
     NotImplementedError
         If pick shape is rectangle
     """
-    d = 2
-    std_range = 1.4
-    mean_rmsd = 0.4
+    d = diameter
 
     maxframe = info[0]["Frames"]
     maxheight = info[0]["Height"]
@@ -1512,7 +1535,59 @@ def index_locs(locs, info, pick_diameter):
     return index_blocks
 
 
-def picked_locs(locs, info, _centers, pick_diameter, add_group=True):
+def get_block_locs_at(x, y, index_blocks, return_indices=False):
+    """Copied from picasso.postprocess.get_block_locs_at.
+    But the block indices are needed as well.
+    """
+    locs, size, _, _, block_starts, block_ends, K, L = index_blocks
+    x_index = np.uint32(x / size)
+    y_index = np.uint32(y / size)
+    indices = []
+    for k in range(y_index - 1, y_index + 2):
+        if 0 <= k < K:
+            for li in range(x_index - 1, x_index + 2):
+                if 0 <= li < L:
+                    indices.append(
+                        list(range(block_starts[k, li], block_ends[k, li]))
+                    )
+    indices = list(itertools.chain(*indices))
+    if return_indices:
+        return locs[indices], np.array(indices)
+    else:
+        return locs[indices]
+
+
+def locs_at(x, y, locs, r, return_indices=False):
+    """Returns localizations at position (x, y) within radius r.
+
+    Parameters
+    ----------
+    x : float
+        x-coordinate of the position.
+    y : float
+        y-coordinate of the position.
+    locs : np.rec.array
+        Localizations list.
+    r : float
+        Radius.
+
+    Returns
+    -------
+    picked_locs : np.rec.array
+        Localizations at position.
+    """
+
+    is_picked = lib.is_loc_at(x, y, locs, r)
+    picked_locs = locs[is_picked]
+    if return_indices:
+        return picked_locs, is_picked
+    else:
+        return picked_locs
+
+
+def picked_locs(
+    locs, info, _centers, pick_diameter, add_group=True, return_nonpicked=False
+):
     """
     Returns picked localizations in the specified channel.
 
@@ -1523,27 +1598,40 @@ def picked_locs(locs, info, _centers, pick_diameter, add_group=True):
     add_group : boolean (default=True)
         True if group id should be added to locs. Each pick will be
         assigned a different id
+    return_nonpicked : bool
+        whether to return the non-picked locs
 
     Returns:
-        # all_picked_locs : np.recarray
-        #     locs within pick_diameter around _centers, linked to
-        #     common centers by field 'group'
-        all_picked_locs : list of np.recarray
+        all_picked_locs : np.recarray
             locs within pick_diameter around _centers, linked to
             common centers by field 'group'
+        # all_picked_locs : list of np.recarray
+        #     locs within pick_diameter around _centers, linked to
+        #     common centers by field 'group'
+        non_picked_locs : np.recarray
+            locs that have not been picked.
     """
 
     picked_locs = []
+    is_not_picked = []
     d = pick_diameter
     r = d / 2
     index_blocks = index_locs(locs, info, d)
     # print('index blocks: ', index_blocks)
     for i, pick in enumerate(_centers):
         x, y = pick
-        block_locs = postprocess.get_block_locs_at(x, y, index_blocks)
+        block_locs, block_indices = get_block_locs_at(
+            x, y, index_blocks, return_indices=True
+        )
         # print(f'block locs: {block_locs}')
 
-        group_locs = lib.locs_at(x, y, block_locs, r)
+        group_locs, is_picked = locs_at(
+            x, y, block_locs, r, return_indices=True
+        )
+        # logger.debug(block_indices)
+        # logger.debug(is_picked)
+        # logger.debug(is_picked.shape)
+        is_not_picked.append(block_indices[~is_picked])
         # print(f'grouplocs: {group_locs}')
         if add_group:
             group = i * np.ones(len(group_locs), dtype=np.int32)
@@ -1551,10 +1639,20 @@ def picked_locs(locs, info, _centers, pick_diameter, add_group=True):
         group_locs.sort(kind="mergesort", order="frame")
         picked_locs.append(group_locs)
 
-    # all_picked_locs = stack_arrays(picked_locs, asrecarray=True, usemask=False)
-    all_picked_locs = picked_locs
+    all_picked_locs = np.lib.recfunctions.stack_arrays(
+        picked_locs, asrecarray=True, usemask=False
+    )
+    # all_picked_locs = picked_locs
 
-    return all_picked_locs
+    if return_nonpicked:
+        mask = np.isin(
+            locs[["frame", "x", "y", "photons"]],
+            all_picked_locs[["frame", "x", "y", "photons"]],
+        )
+        non_picked_locs = locs[~mask]
+        return all_picked_locs, non_picked_locs
+    else:
+        return all_picked_locs
 
 
 def _undrift_from_picked_coordinate(info, picked_locs, coordinate):

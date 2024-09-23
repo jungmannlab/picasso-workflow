@@ -1392,6 +1392,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s</li>
         <li># Gold Beads found: {results["n_gold"]}</li>
         <li># Gold Bead locs saved at: {results["fp_gold"]}</li>
+        <li># Non-gold Bead locs saved at: {results["fp_nogold"]}</li>
         </ul>"""
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
