@@ -286,19 +286,24 @@ class RipleysInterface:
             return np.sum(n_overpop)
 
         if interval is None:
-            integral = np.trapz(
-                self.ripleysCurves_data["normalized"], self.radii
-            )
+            # integral = np.trapz(
+            #     self.ripleysCurves_data["normalized"], self.radii
+            # )
+            # ignore nan values!
+            rdata = self.ripleysCurves_data["normalized"]
+            rs = self.radii[~np.isnan(rdata)]
+            integral = np.trapz(rdata[~np.isnan(rdata)], rs)
         else:
-            f_limits = np.interp(
-                interval, self.ripleysCurves_data["normalized"], self.radii
-            )
+            # ignore nan values!
+            rdata = self.ripleysCurves_data["normalized"]
+            rs = self.radii[~np.isnan(rdata)]
+            f_limits = np.interp(interval, rdata[~np.isnan(rdata)], rs)
             f = [
                 f_limits[0],
-                self.ripleysCurves_data["normalized"],
+                rdata[~np.isnan(rdata)],
                 f_limits[1],
             ]
-            x = [interval[0], self.radii, interval[1]]
+            x = [interval[0], rs, interval[1]]
             integral = np.trapz(f, x)
         return integral
 
