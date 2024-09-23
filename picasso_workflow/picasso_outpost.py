@@ -1435,7 +1435,7 @@ def _plot_interaction_graph(
 ########################################################################
 
 
-def pick_gold(locs, info):
+def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=0.4):
     """
     Searches picks similar to Gold clusters.
 
@@ -1443,6 +1443,11 @@ def pick_gold(locs, info):
     displacement from center of mass. Std is defined in Tools
     Settings Dialog.
 
+    Args:
+        diameter : float
+            the pick similar diameter
+        std_range, mean_rmsd : float
+            the pick similar parameters identifying gold
     Returns:
         similar : list of [x, y] position pairs
             the positions (picks) of gold beads
@@ -1452,9 +1457,7 @@ def pick_gold(locs, info):
     NotImplementedError
         If pick shape is rectangle
     """
-    d = 2
-    std_range = 1.4
-    mean_rmsd = 0.4
+    d = diameter
 
     maxframe = info[0]["Frames"]
     maxheight = info[0]["Height"]
@@ -1599,12 +1602,12 @@ def picked_locs(
         whether to return the non-picked locs
 
     Returns:
-        # all_picked_locs : np.recarray
-        #     locs within pick_diameter around _centers, linked to
-        #     common centers by field 'group'
-        all_picked_locs : list of np.recarray
+        all_picked_locs : np.recarray
             locs within pick_diameter around _centers, linked to
             common centers by field 'group'
+        # all_picked_locs : list of np.recarray
+        #     locs within pick_diameter around _centers, linked to
+        #     common centers by field 'group'
         non_picked_locs : np.recarray
             locs that have not been picked.
     """
@@ -1625,9 +1628,9 @@ def picked_locs(
         group_locs, is_picked = locs_at(
             x, y, block_locs, r, return_indices=True
         )
-        logger.debug(block_indices)
-        logger.debug(is_picked)
-        logger.debug(is_picked.shape)
+        # logger.debug(block_indices)
+        # logger.debug(is_picked)
+        # logger.debug(is_picked.shape)
         is_not_picked.append(block_indices[~is_picked])
         # print(f'grouplocs: {group_locs}')
         if add_group:
@@ -1636,12 +1639,17 @@ def picked_locs(
         group_locs.sort(kind="mergesort", order="frame")
         picked_locs.append(group_locs)
 
-    # all_picked_locs = stack_arrays(picked_locs, asrecarray=True, usemask=False)
-    all_picked_locs = picked_locs
+    all_picked_locs = np.lib.recfunctions.stack_arrays(
+        picked_locs, asrecarray=True, usemask=False
+    )
+    # all_picked_locs = picked_locs
 
     if return_nonpicked:
-        is_not_picked = np.concatenate(is_not_picked)
-        non_picked_locs = locs[is_not_picked]
+        mask = np.isin(
+            locs[["frame", "x", "y", "photons"]],
+            all_picked_locs[["frame", "x", "y", "photons"]],
+        )
+        non_picked_locs = locs[~mask]
         return all_picked_locs, non_picked_locs
     else:
         return all_picked_locs

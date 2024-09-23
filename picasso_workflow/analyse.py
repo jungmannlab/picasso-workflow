@@ -3811,13 +3811,24 @@ class AutoPicasso(util.AbstractModuleCollection):
                         if present and set to True, the gold locs
                         are discarded and self.locs is set to the
                         nongold-locs
+                    diameter : float
+                        the pick similar diameter for identifying gold
+                    std_range, mean_rmsd : float
+                        the pick similar parameters identifying gold
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        gold_picks = picasso_outpost.pick_gold(self.locs, self.info)
+        logger.debug(f"# locs: {len(self.locs)}")
+        # search for xy positions that look like gold ('pick similar')
+        kwargs = {}
+        for prop in ["diameter", "std_range", "mean_rmsd"]:
+            if val := parameters.get(prop):
+                kwargs[prop] = val
+        gold_picks = picasso_outpost.pick_gold(self.locs, self.info, **kwargs)
 
         results["n_gold"] = len(gold_picks)
+        logger.debug(f"# gold particles found: {len(gold_picks)}")
 
         if len(gold_picks) <= 2:
             logger.debug(
@@ -3838,8 +3849,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
 
         # save gold locs
-        # fp_gold = os.path.join(results["folder"], "gold.hdf5")
-        fp_gold = os.path.join(results["folder"], "gold.pkl")
+        fp_gold = os.path.join(results["folder"], "gold.hdf5")
+        # fp_gold = os.path.join(results["folder"], "gold.pkl")
         results["fp_gold"] = fp_gold
         gold_info = self.info
         gold_info.append(
@@ -3848,9 +3859,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 "data": "gold",
             }
         )
-        # io.save_locs(fp_gold, gold_locs, gold_info)
-        with open(fp_gold, "wb") as f:
-            pickle.dump(gold_locs, f)
+        io.save_locs(fp_gold, gold_locs, gold_info)
+        # with open(fp_gold, "wb") as f:
+        #     pickle.dump(gold_locs, f)
+
         fp_nogold = os.path.join(results["folder"], "nogold.hdf5")
         results["fp_nogold"] = fp_nogold
         nogold_info = self.info
@@ -3865,6 +3877,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         if parameters.get("remove_gold"):
             self.locs = nongold_locs
             self.info = nogold_info
+            logger.debug("removing gold from attribute locs.")
+
+        # logger.debug(f"# locs kept as attribute: {len(self.locs)}")
 
         return parameters, results
 
@@ -3884,10 +3899,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        # result = io.load_locs(parameters["fp_picked_locs"])
-        with open(parameters["fp_picked_locs"], "rb") as f:
-            result = pickle.load(f)
+        result = io.load_locs(parameters["fp_picked_locs"])
+        # with open(parameters["fp_picked_locs"], "rb") as f:
+        #     result = pickle.load(f)
         picked_locs = result
+        if not isinstance(picked_locs, list):
+            # picked locs are saved as one recarray, with the 'group' the pick
+            groups = np.unique(picked_locs["group"])
+            picked_locs = [
+                picked_locs[picked_locs["group"] == group] for group in groups
+            ]
         # print(result)
         # picked_locs, picked_info = io.load_locs(parameters["fp_picked_locs"])
         self.locs, self.info, drift = picasso_outpost._undrift_from_picked(
