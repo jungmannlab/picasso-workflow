@@ -1746,13 +1746,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the index of the module
             parameters: dict
                 with required keys:
-                    align_pars : dict
-                        kwargs of picasso_outpost.align_channels
-                            max_iterations, convergence
                 and optional keys:
                     filepaths : list of str
                         the previously saved hdf5 files to be loaded and
                         aligned. if not given, the last processed data is used
+                    align_pars : dict
+                        kwargs of picasso_outpost.align_channels
+                            max_iterations, convergence
                     fp_fiducials : list of str
                         the previously saved hdf5 files of fiducial markers
                         to be loaded and aligned.
@@ -3893,7 +3893,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 with required keys:
                     fp_picked_locs : str
                         filepath to the picked locs to undrift from
-                        (.pkl file of list of locs)
+                        (.hdf5 file of list of locs, with 'group' column
+                         to describe picks)
                 and optional keys:
             results : dict
                 the results this function generates. This is created
