@@ -45,6 +45,7 @@ class RipleysInterface:
             "H": np.array(H),
             "mean": np.array(meanControl),
         }
+
         return ripleysRandomControlCurves
 
     def getRipleysRandomControlCurves2(self, data, otherData=None, area=None):
@@ -262,7 +263,7 @@ class RipleysInterface:
         ]
         return np.array(quantilesK)
 
-    def calculateRipleysIntegral(self):
+    def calculateRipleysIntegral(self, interval=None):
         if self.atype == "RDF":
             mean_r = (self.radii[1:] + self.radii[:-1]) / 2
             d_r = self.radii[1:] - self.radii[:-1]
@@ -279,7 +280,21 @@ class RipleysInterface:
             n_overpop = d_areas * k_significant[:-1]
             return np.sum(n_overpop)
 
-        integral = np.trapz(self.ripleysCurves_data["normalized"], self.radii)
+        if interval is None:
+            integral = np.trapz(
+                self.ripleysCurves_data["normalized"], self.radii
+            )
+        else:
+            f_limits = np.interp(
+                interval, self.ripleysCurves_data["normalized"], self.radii
+            )
+            f = [
+                f_limits[0],
+                self.ripleysCurves_data["normalized"],
+                f_limits[1],
+            ]
+            x = [interval[0], self.radii, interval[1]]
+            integral = np.trapz(f, x)
         return integral
 
     def plot(

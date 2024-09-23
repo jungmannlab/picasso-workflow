@@ -2239,6 +2239,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                     number of random controls, default: 100
                 ripleys_rmax : int
                     the maximum radius, default 200
+                ripleys_dr : float
+                    the radius interval, default 5
+                radii : 1D np array
+                    the radius values. If given, ripleys_rmax and
+                    ripleys_dr are ignored.
                 ripleys_threshold : float
                     the threshold of ripleys integrals above which the
                     interaction is deemed significant.
@@ -2271,7 +2276,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                     ),
                 )
             )
-        )
 
         if isinstance(parameters["fp_combined_locs"], list):
             fp_combined_locs = parameters["fp_combined_locs"][0]

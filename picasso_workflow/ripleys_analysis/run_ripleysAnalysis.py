@@ -28,6 +28,8 @@ def performRipleysMultiAnalysis(
     atype="Ripleys",  # or RDF
 ):
 
+    np.random.seed(0)
+
     print(f"Cell path: {path}/{filename}")
 
     #  Load data
@@ -50,7 +52,10 @@ def performRipleysMultiAnalysis(
     cellMask.plot()
     cellMask.save(path, f"{filename}_mask")
 
-    locData.applyMask(cellMask)
+    # locData.applyMask(cellMask)
+
+    # plt.hexbin(locData.allData['x'], locData.allData['y'])
+    # plt.show()
 
     # Perform Ripley's analysis for all data pairs
     ripleysResults = rm.initializeResultsMatrix(nFiles)
@@ -101,9 +106,13 @@ def performRipleysMultiAnalysis(
                 else:
                     raise NotImplementedError()
             ripleysIntegrals[j, k] = ripleysResults[j][k].ripleysIntegral_data
-            curve_data = ripleysResults[j][k].ripleysCurves_data["normalized"]
-            mean_val = np.nanmean(curve_data[~np.isinf(curve_data)])
-            ripleys_mean[j, k] = mean_val
+            # curve_data = ripleysResults[j][k].ripleysCurves_data["normalized"]
+            # mean_val = np.nanmean(curve_data[~np.isinf(curve_data)])
+            # ripleys_mean[j, k] = mean_val
+
+            # calculate mean of a function: integral divided by
+            # integration interval
+            ripleys_mean[j, k] = ripleysIntegrals[j, k] / np.max(radii)
 
     # Normalized plot
     figsize = 30
