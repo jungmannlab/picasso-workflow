@@ -1362,9 +1362,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             alldist = np.sort(alldist, axis=1)
             logger.debug("sorted all distances")
         else:
-            k = max([
-                parameters['nth_NN'] + 3,
-                parameters["nth_rdf"] + 3])
+            k = max([parameters["nth_NN"] + 3, parameters["nth_rdf"] + 3])
             tree = KDTree(points)
             alldist, indices = tree.query(points, k=k)
             alldist = np.sort(alldist, axis=1)
@@ -2324,7 +2322,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     def _plot_ripleys_integrals(
-        self, ripleysMeanVal, folder, channel_tags, atype
+        self, ripleysMeanVal, folder, channel_tags, atype, std=None
     ):
         fig, ax = plt.subplots()
         heatmap = ax.imshow(ripleysMeanVal, cmap="coolwarm_r", vmin=-1, vmax=1)
@@ -2334,10 +2332,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Add number annotations to cells
         for i in range(ripleysMeanVal.shape[0]):
             for j in range(ripleysMeanVal.shape[1]):
+                txt = f"{ripleysMeanVal[i, j]:.2f}"
+                if std is not None:
+                    txt += f"\n+-{std[i, j]:.2f}"
                 ax.text(
                     j,
                     i,
-                    f"{ripleysMeanVal[i, j]:.2f}",
+                    txt,
                     ha="center",
                     va="center",
                     color="black",
@@ -2481,6 +2482,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             [np.loadtxt(fp) for fp in fp_ripleys_meanvals]
         )
         averaged_integrals = np.nanmean(all_integrals, axis=0)
+        std_integrals = np.nanstd(all_integrals, axis=0)
 
         # save into own results folder
         results["fp_ripleys_meanvals"] = os.path.join(
@@ -2493,6 +2495,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["folder"],
             channel_tags,
             parameters["atype"],
+            std=std_integrals,
         )
 
         significant_pairs = self._find_ripleys_significant(

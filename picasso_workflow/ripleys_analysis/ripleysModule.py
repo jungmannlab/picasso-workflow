@@ -291,16 +291,23 @@ class RipleysInterface:
             # )
             # ignore nan values!
             rdata = self.ripleysCurves_data["normalized"]
-            rs = self.radii[~np.isnan(rdata)]
-            integral = np.trapz(rdata[~np.isnan(rdata)], rs)
+            # print(rdata)
+            # print(np.isnan(rdata))
+            rd_valid = (~np.isnan(rdata)) & (~np.isinf(rdata))
+            if np.sum(rd_valid) > 0:
+                rs = self.radii[rd_valid]
+                integral = np.trapz(rdata[rd_valid], rs)
+            else:
+                integral = np.nan
         else:
             # ignore nan values!
             rdata = self.ripleysCurves_data["normalized"]
-            rs = self.radii[~np.isnan(rdata)]
-            f_limits = np.interp(interval, rdata[~np.isnan(rdata)], rs)
+            rd_valid = (~np.isnan(rdata)) & (~np.isinf(rdata))
+            rs = self.radii[rd_valid]
+            f_limits = np.interp(interval, rdata[rd_valid], rs)
             f = [
                 f_limits[0],
-                rdata[~np.isnan(rdata)],
+                rdata[rd_valid],
                 f_limits[1],
             ]
             x = [interval[0], rs, interval[1]]
