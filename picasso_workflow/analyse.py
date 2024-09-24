@@ -1356,10 +1356,18 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # print(points)
         # print(points.shape)
-        alldist = distance.cdist(points, points)
-        logger.debug("found all distances")
-        alldist = np.sort(alldist, axis=1)
-        logger.debug("sorted all distances")
+        if len(locs) < 10000:
+            alldist = distance.cdist(points, points)
+            logger.debug("found all distances")
+            alldist = np.sort(alldist, axis=1)
+            logger.debug("sorted all distances")
+        else:
+            k = max([
+                parameters['nth_NN'] + 3,
+                parameters["nth_rdf"] + 3])
+            tree = KDTree(points)
+            alldist, indices = tree.query(points, k=k)
+            alldist = np.sort(alldist, axis=1)
 
         # calculate bins
         NN_median = np.median(alldist[:, 1])
@@ -2251,13 +2259,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         #         np.arange(100, parameters.get("ripleys_rmax", 200), 12),
         #     )
         # )
-        radii = np.concatenate(
-            (
-                np.arange(
-                    0,
-                    parameters.get("ripleys_rmax", 200),
-                    parameters.get("ripleys_dr", 5),
-                ),
+        if (radii := parameters.get("radii")) is not None:
+            radii = np.array(radii)
+        else:
+            radii = np.concatenate(
+                (
+                    np.arange(
+                        0,
+                        parameters.get("ripleys_rmax", 200),
+                        parameters.get("ripleys_dr", 5),
+                    ),
+                )
             )
         )
 
