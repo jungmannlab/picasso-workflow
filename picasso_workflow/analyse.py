@@ -1362,9 +1362,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             alldist = np.sort(alldist, axis=1)
             logger.debug("sorted all distances")
         else:
-            k = max([
-                parameters['nth_NN'] + 3,
-                parameters["nth_rdf"] + 3])
+            k = max([parameters["nth_NN"] + 3, parameters["nth_rdf"] + 3])
             tree = KDTree(points)
             alldist, indices = tree.query(points, k=k)
             alldist = np.sort(alldist, axis=1)
@@ -2271,7 +2269,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                     ),
                 )
             )
-        )
 
         if isinstance(parameters["fp_combined_locs"], list):
             fp_combined_locs = parameters["fp_combined_locs"][0]
