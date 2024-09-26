@@ -2237,6 +2237,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                     number of random controls, default: 100
                 ripleys_rmax : int
                     the maximum radius, default 200
+                ripleys_dr : float
+                    the radius interval, default 5
+                radii : 1D np array
+                    the radius values. If given, ripleys_rmax and
+                    ripleys_dr are ignored.
                 ripleys_threshold : float
                     the threshold of ripleys integrals above which the
                     interaction is deemed significant.
@@ -2317,7 +2322,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     def _plot_ripleys_integrals(
-        self, ripleysMeanVal, folder, channel_tags, atype
+        self, ripleysMeanVal, folder, channel_tags, atype, std=None
     ):
         fig, ax = plt.subplots()
         heatmap = ax.imshow(ripleysMeanVal, cmap="coolwarm_r", vmin=-1, vmax=1)
@@ -2327,10 +2332,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Add number annotations to cells
         for i in range(ripleysMeanVal.shape[0]):
             for j in range(ripleysMeanVal.shape[1]):
+                txt = f"{ripleysMeanVal[i, j]:.2f}"
+                if std is not None:
+                    txt += f"\n+-{std[i, j]:.2f}"
                 ax.text(
                     j,
                     i,
-                    f"{ripleysMeanVal[i, j]:.2f}",
+                    txt,
                     ha="center",
                     va="center",
                     color="black",
@@ -2474,6 +2482,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             [np.loadtxt(fp) for fp in fp_ripleys_meanvals]
         )
         averaged_integrals = np.nanmean(all_integrals, axis=0)
+        std_integrals = np.nanstd(all_integrals, axis=0)
 
         # save into own results folder
         results["fp_ripleys_meanvals"] = os.path.join(
@@ -2486,6 +2495,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["folder"],
             channel_tags,
             parameters["atype"],
+            std=std_integrals,
         )
 
         significant_pairs = self._find_ripleys_significant(

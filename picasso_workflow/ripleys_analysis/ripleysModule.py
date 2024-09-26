@@ -45,6 +45,7 @@ class RipleysInterface:
             "H": np.array(H),
             "mean": np.array(meanControl),
         }
+
         return ripleysRandomControlCurves
 
     def getRipleysRandomControlCurves2(self, data, otherData=None, area=None):
@@ -95,15 +96,20 @@ class RipleysInterface:
         else:
             tree = getTree(data)
             otherTree = getTree(otherData)
-            if isTree(otherData):
-                otherN = otherData.n
-            else:
-                otherN = otherData.shape[0]
+            # if isTree(otherData):
+            #     otherN = otherData.n
+            # else:
+            #     otherN = otherData.shape[0]
             nNeighbors = tree.count_neighbors(otherTree, self.radii)
-            lambda_inv1 = area / N
-            lambda_inv2 = area / otherN
-            const_term = lambda_inv1 * lambda_inv2 / area
-            K = const_term * nNeighbors
+
+            # Rafal's correction:
+            # lambda_inv1 = area / N
+            # lambda_inv2 = area / otherN
+            # const_term = lambda_inv1 * lambda_inv2 / area
+            # K = const_term * nNeighbors
+
+            # GOING back to magdalena's version
+            K = (nNeighbors / N) / density
 
         L = np.sqrt(K / np.pi)
         H = L - self.radii
@@ -262,7 +268,7 @@ class RipleysInterface:
         ]
         return np.array(quantilesK)
 
-    def calculateRipleysIntegral(self):
+    def calculateRipleysIntegral(self, interval=None):
         if self.atype == "RDF":
             mean_r = (self.radii[1:] + self.radii[:-1]) / 2
             d_r = self.radii[1:] - self.radii[:-1]
@@ -279,7 +285,33 @@ class RipleysInterface:
             n_overpop = d_areas * k_significant[:-1]
             return np.sum(n_overpop)
 
-        integral = np.trapz(self.ripleysCurves_data["normalized"], self.radii)
+        if interval is None:
+            # integral = np.trapz(
+            #     self.ripleysCurves_data["normalized"], self.radii
+            # )
+            # ignore nan values!
+            rdata = self.ripleysCurves_data["normalized"]
+            # print(rdata)
+            # print(np.isnan(rdata))
+            rd_valid = (~np.isnan(rdata)) & (~np.isinf(rdata))
+            if np.sum(rd_valid) > 0:
+                rs = self.radii[rd_valid]
+                integral = np.trapz(rdata[rd_valid], rs)
+            else:
+                integral = np.nan
+        else:
+            # ignore nan values!
+            rdata = self.ripleysCurves_data["normalized"]
+            rd_valid = (~np.isnan(rdata)) & (~np.isinf(rdata))
+            rs = self.radii[rd_valid]
+            f_limits = np.interp(interval, rdata[rd_valid], rs)
+            f = [
+                f_limits[0],
+                rdata[rd_valid],
+                f_limits[1],
+            ]
+            x = [interval[0], rs, interval[1]]
+            integral = np.trapz(f, x)
         return integral
 
     def plot(
