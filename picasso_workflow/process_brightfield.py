@@ -8,6 +8,7 @@ images.
 """
 import logging
 from moviepy.editor import ImageSequenceClip
+from imageio import imsave  # package is dependency of moviepy
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -62,3 +63,23 @@ def save_movie(fname, movie, min_quantile=0, max_quantile=1, fps=1):
     # Create movie file
     clip = ImageSequenceClip(adjusted_images, fps=fps)
     clip.write_videofile(fname, verbose=False)  # , codec='mpeg4')
+
+
+def save_frame(pathname, frame, min_quantile=0, max_quantile=1):
+    """Save a grayscale frame to png
+    Args:
+        pathname : str
+            the file name to save
+        frame : 2D np array (x,y)
+            the frame to save
+        min_quantile : float, default: 0
+            the quantile below which pixels are shown black
+        max_quantile : float, default: 1
+            the quantile above which pixels are shown white
+    """
+    logger.debug(frame.shape)
+    adjusted_frame = adjust_contrast(
+        frame, min_quantile, max_quantile
+    )  # [..., np.newaxis]
+    logger.debug(adjusted_frame.shape)
+    imsave(pathname, adjusted_frame)

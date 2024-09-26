@@ -27,6 +27,20 @@ class AbstractModuleCollection(abc.ABC):
     def __init__(self):
         pass
 
+    @abc.abstractmethod
+    def dummy_module(self):
+        """A module that does nothing, for quickly removing
+        modules in a workflow without having to renumber the
+        following result idcs. Only for workflow debugging,
+        remove when done.
+        """
+        pass
+
+    @abc.abstractmethod
+    def analysis_documentation(self):
+        """Document the parameters of the analysis machine and software."""
+        pass
+
     ##########################################################################
     # Single-dataset workflow modules
     ##########################################################################
@@ -57,8 +71,19 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def export_brightfield(self):
+        """Opens a single-plane tiff image and saves it to png with
+        contrast adjustment."""
+        pass
+
+    @abc.abstractmethod
     def undrift_rcc(self):
         """Undrifts localized data using redundant cross correlation."""
+        pass
+
+    @abc.abstractmethod
+    def undrift_aim(self):
+        """Unrift localized data using the AIM algorithm"""
         pass
 
     @abc.abstractmethod
@@ -70,6 +95,51 @@ class AbstractModuleCollection(abc.ABC):
     def summarize_dataset(self):
         """Summarizes the results of a dataset analysis."""
         pass
+
+    # @abc.abstractmethod
+    # def aggregate_cluster(self):
+    #     """Aggregate along the cluster column.
+    #     Uses picasso.postprocess.cluster_combine"""
+    #     pass
+
+    @abc.abstractmethod
+    def density(self):
+        """Calculate local localization density"""
+        pass
+
+    @abc.abstractmethod
+    def dbscan(self):
+        """Perform clustering using dbscan"""
+        pass
+
+    @abc.abstractmethod
+    def hdbscan(self):
+        """Perform clustering using hdbscan"""
+        pass
+
+    @abc.abstractmethod
+    def smlm_clusterer(self):
+        """Perform clustering using the smlm clusterer"""
+        pass
+
+    @abc.abstractmethod
+    def nneighbor(self):
+        """Calculate Nearest Neighbor distances"""
+        pass
+
+    @abc.abstractmethod
+    def fit_csr(self):
+        """Fit a Completely Spatially Random Distribution to
+        nearest neighbors"""
+        pass
+
+    # @abs.abstractmethod
+    # def radial_distribution_function(self):
+    #     """Generate the Radial Distribution Function,
+    #     Whis is the sum of nearest neighbors with geometry factor.
+    #     At long radii, its value is the overall density.
+    #     """
+    # pass
 
     @abc.abstractmethod
     def save_single_dataset(self):
@@ -93,6 +163,112 @@ class AbstractModuleCollection(abc.ABC):
         for the aggregation workflow more straightforward."""
         pass
 
+    @abc.abstractmethod
+    def combine_channels(self):
+        """Combines multiple channels into one dataset. This is relevant
+        e.g. for RESI."""
+        pass
+
+    @abc.abstractmethod
+    def save_datasets_aggregated(self):
+        """save data of multiple single-dataset workflows from one
+        aggregation workflow."""
+        pass
+
+    @abc.abstractmethod
+    def spinna_manual(self):
+        """Direct implementation of spinna batch analysis."""
+        pass
+
+    @abc.abstractmethod
+    def spinna(self):
+        """implementation of a single spinna run."""
+        pass
+
+    @abc.abstractmethod
+    def ripleysk(self):
+        pass
+
+    @abc.abstractmethod
+    def ripleysk_average(self):
+        pass
+
+    @abc.abstractmethod
+    def protein_interactions(self):
+        pass
+
+    @abc.abstractmethod
+    def protein_interactions_average(self):
+        pass
+
+    @abc.abstractmethod
+    def create_mask(self):
+        """Create a density mask"""
+        pass
+
+    @abc.abstractmethod
+    def dbscan_molint(self):
+        """TO BE CLEANED UP
+        dbscan implementation for molecular interactions workflow
+        """
+        pass
+
+    @abc.abstractmethod
+    def CSR_sim_in_mask(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
+    @abc.abstractmethod
+    def find_cluster_motifs(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
+    @abc.abstractmethod
+    def interaction_graph(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
+    @abc.abstractmethod
+    def plot_densities(self):
+        """TO BE CLEANED UP
+        simulate CSR within a density mask
+        """
+        pass
+
+    @abc.abstractmethod
+    def find_gold(self):
+        """Find localizations stemming from gold beads based on blinking kinetics.
+        The metrics used are number of locs and rms deviation from mean
+        frame
+        """
+        pass
+
+    @abc.abstractmethod
+    def undrift_from_picked(self):
+        """Performs undrift from piced locs."""
+        pass
+
+    @abc.abstractmethod
+    def filter_locs(self):
+        """Filter localizations to lie within a min-max range of a metric."""
+        pass
+
+    @abc.abstractmethod
+    def link_locs(self):
+        """Link localizations."""
+        pass
+
+    @abc.abstractmethod
+    def labeling_efficiency_analysis(self):
+        """Analyse for labeling efficiency."""
+        pass
+
 
 class DictSimpleTyper:
     """Scans a complex dictionary and converts numpy arrays and
@@ -105,7 +281,8 @@ class DictSimpleTyper:
                 converts numpy arrays and tuples to lists, numpy scalars to
                 python scalars
         """
-        self.to_simple_type = True
+        self.to_simple_type = to_simple_type
+        self.curr_rootidx = 0
 
     def run(self, parameters):
         """Scan a parameter set for commands to execute prior to module
@@ -118,11 +295,19 @@ class DictSimpleTyper:
         logger.debug("Running DictSimpleTyper")
         return self.scan(parameters)
 
-    def scan(self, itrbl):
+    def scan(self, itrbl, root_level=False):
+        """Scan a level in a dict.
+        Args:
+            itrbl : usually an iterable
+                the value to scan
+            root_level : bool
+                whether the value is in root level.
+                If it is, its index will be stored.
+        """
         if isinstance(itrbl, dict):
             res = self.scan_dict(itrbl)
         elif isinstance(itrbl, list):
-            res = self.scan_list(itrbl)
+            res = self.scan_list(itrbl, root_level)
         elif isinstance(itrbl, tuple):
             res = self.scan_tuple(itrbl)
         elif isinstance(itrbl, np.ndarray):
@@ -139,8 +324,10 @@ class DictSimpleTyper:
             d[k] = self.scan(v)
         return d
 
-    def scan_list(self, li):
+    def scan_list(self, li, root_level=False):
         for i, it in enumerate(li):
+            if root_level:
+                self.curr_rootidx = i
             li[i] = self.scan(it)
         return li
 
@@ -193,34 +380,64 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 commands should not be executed, therefore different
                 signs are used.
         """
+        super().__init__(to_simple_type)
         self.parent_object = parent_object
         self.map = map_dict
-        self.to_simple_type = to_simple_type
         self.command_sign = command_sign
 
-    def run(self, parameters):
+    def run(self, parameters, curr_rootidx=None):
         """Scan a parameter set for commands to execute prior to module
         execution.
         commands: '$get_prior_result'
         Args:
             parameters : dict
                 the parameters for a module
+            curr_rootidx : int or None
+                if int, this is the current module index
         """
         logger.debug("Running ParameterCommandExecutor")
-        return self.scan(parameters)
+        if curr_rootidx is not None:
+            self.curr_rootidx = curr_rootidx
+        return self.scan(parameters, root_level=True)
 
     def scan_tuple(self, t):
+        """Firstly, this scans normal tuples. Secondly, tuples of len 2
+        can be commands, e.g.
+            $get_prior_result
+                retreive a result of a prior module, e.g.
+                ("$get_prior_result", "results, 04_manual, filepath")
+            $get_previous_module_result
+                retreive a result of the module directly before the current one
+                ("$get_previous_module_result",
+                 "sample_movie, sample_frame_idx")
+            $map
+                use self.map dictionary to map values, e.g.
+                ("$$map", "filepath")
+        The commands can be combined with numeric operations:
+            ('$get_previous_module_result *2', 'nena')
+            The arithmetic expression must not contain any spaces.
+        """
         if (
             len(t) == 2
             and isinstance(t[0], str)
             and t[0][: len(self.command_sign)] == self.command_sign
         ):
             # this is a parameter command
-            if t[0] == f"{self.command_sign}get_prior_result":
+            if " " in t[0]:
+                cmd = t[0].split(" ")[0]
+                aritexp = t[0].split(" ")[1]
+            else:
+                cmd = t[0]
+                aritexp = None
+            if cmd == f"{self.command_sign}get_prior_result":
                 logger.debug(f"Getting prior result from {t[1]}.")
                 res = self.get_prior_result(t[1])
                 logger.debug(f"Prior result is {res}.")
-            elif t[0] == f"{self.command_sign}map":
+            elif cmd == f"{self.command_sign}get_previous_module_result":
+                logger.debug(f"Getting previous module result {t[1]}.")
+                res = self.get_previous_module_result(t[1])
+                logger.debug(f"Previous module result is {res}.")
+            elif cmd == f"{self.command_sign}map":
                 res = self.map[t[1]]
                 logger.debug(f"Mapping {t[1]}: {res}")
             else:
@@ -231,6 +448,15 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 logger.debug(msg)
                 raise NotImplementedError(msg)
             # elif add more parameter commands
+
+            # check for arithmetic expression:
+            if aritexp is not None:
+                if not is_valid_expression(aritexp):
+                    raise PriorResultError(
+                        f"'{aritexp}' is not a valid numeric "
+                        + "arithmetic expression."
+                    )
+                res = eval(str(res) + aritexp)
             return res
         else:
             # it's just a normal tuple
@@ -250,9 +476,9 @@ class ParameterCommandExecutor(DictSimpleTyper):
             locator : str
                 the chain of attributes for finding the prior result, comma
                 separated. They all need to be obtainable with getattr,
-                starting from this class e.g. "results, load, sample_movie,
+                starting from this class e.g. "results, 02_load, sample_movie,
                 sample_frame_idx" obtains
-                self.results['load']['sample_movie']['sample_frame_idx']
+                self.results['02_load']['sample_movie']['sample_frame_idx']
         Returns:
             the last attribute in the chain.
         """
@@ -268,7 +494,7 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 try:
                     if isinstance(root_att, list):
                         logger.debug(
-                            f"Getting all {att_name}attributes of {root_att}"
+                            f"Getting all {att_name} attributes of {root_att}"
                         )
                         root_att = [
                             self.get_attribute(list_att, att_name)
@@ -285,6 +511,29 @@ class ParameterCommandExecutor(DictSimpleTyper):
                     )
         logger.debug(f"Prior Result of {locator} is {root_att}")
         return root_att
+
+    def get_previous_module_result(self, locator):
+        """This is a convenience function for get_prior_result. It
+        automatically prepends the previous module to the command.
+        Args:
+            locator : str
+                the chain of attributes for finding the result from within
+                the module; e.g. "sample_movie, sample_frame_idx". Called from
+                module 3, this will obtain
+                self.results['02_load']['sample_movie']['sample_frame_idx']
+        Returns:
+            the last attribute in the chain.
+        """
+        prev_module_idx = self.curr_rootidx - 1
+        all_module_ids = list(self.parent_object.results.keys())
+        prev_module_id = [
+            mid
+            for mid in all_module_ids
+            if mid.startswith(f"{prev_module_idx:02d}_")
+        ]
+        prev_module_id = prev_module_id[0]
+        locator = f"results, {prev_module_id}, {locator}"
+        return self.get_prior_result(locator)
 
     def get_attribute(self, root_att, att_name):
         if isinstance(root_att, dict):
@@ -303,6 +552,13 @@ class ParameterCommandExecutor(DictSimpleTyper):
                     raise e
         # logger.debug(f'From {root_att}, extracting "{att_name}": {att}')
         return att
+
+
+def is_valid_expression(expression):
+    """Check for validity of a numeric expression, e.g. '* 3.1415"""
+    # pattern = r"^[\d+\-*/\s()]+$"
+    pattern = r"^[*-+/][0-9]*(\.[0-9]*)?"
+    return re.match(pattern, expression) is not None
 
 
 class PriorResultError(AttributeError):
@@ -423,3 +679,39 @@ def get_caller_name(levels_back=1):
     # Get the name of that function
     function_name = frame.f_code.co_name
     return function_name
+
+
+def multiply_recarray(ra, factor):
+    columns = [it[0] for it in ra.dtype.descr if it[0] != ""]
+
+    column_dtypes = [it[1] for it in ra.dtype.descr if it[0] in columns]
+    dt = column_dtypes[0]
+    if not all([it == dt for it in column_dtypes]):
+        raise AttributeError("Cannot multiply, not all dtypes are the same")
+    for i, col in enumerate(columns):
+        nda = ra[col].astype(dt)
+        ra[col] = nda * factor
+    return ra
+
+
+def stripplot(data, positions, jitter, ax, color, alpha=1):
+    """Plot jittered data onto an axis. This can be a useful addition to
+    a violin or boxplot, especially for sparse data.
+    Args:
+        data : list of 1D array, or 2D array
+            the example datapoints to plot for each position
+        positions : list of numeric
+            the positions to plot the data at
+        jitter : float
+            the amount of jitter to add along x, to separate the data points
+        ax : plt.axes
+            the axes to plot in
+        color : str or whatever matplotlib understands
+            the color to plot with
+        alpha : flot
+            the transparency to plot with
+    """
+    for pos, d in zip(positions, data):
+        x = pos * np.ones(len(d))
+        x += np.random.uniform(-jitter / 2, jitter / 2, size=len(d))
+        ax.scatter(x, d, color=color, alpha=alpha)

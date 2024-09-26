@@ -214,6 +214,7 @@ class AggregationWorkflowRunner:
 
     def run(self):
         """individualize the aggregation workflow and run."""
+        self.save(self.result_folder)
         # First, run the individual analysis
         sgl_ds_workflow_parameters = self.aggregation_workflow[
             "single_dataset_modules"
@@ -239,13 +240,25 @@ class AggregationWorkflowRunner:
             #     self.result_folder, sgl_wkfl_reporter_config['report_name'])
             if self.continue_workflow:
                 try:
+                    logger.debug(
+                        "loading WorkflowRunner from "
+                        + os.path.join(
+                            self.result_folder,
+                            sgl_wkfl_reporter_config["report_name"]
+                            + "_"
+                            + self.postfix,
+                        )
+                    )
                     wr = WorkflowRunner.load(
                         os.path.join(
                             self.result_folder,
-                            sgl_wkfl_reporter_config["report_name"],
+                            sgl_wkfl_reporter_config["report_name"]
+                            + "_"
+                            + self.postfix,
                         )
                     )
                 except Exception:
+                    logger.debug("loading did not work. creating from dict.")
                     wr = WorkflowRunner.config_from_dicts(
                         sgl_wkfl_reporter_config,
                         sgl_wkfl_analysis_config,
@@ -253,6 +266,7 @@ class AggregationWorkflowRunner:
                         postfix=self.postfix,
                     )
             else:
+                logger.debug("not dontinuing workflow.starting new.")
                 wr = WorkflowRunner.config_from_dicts(
                     sgl_wkfl_reporter_config,
                     sgl_wkfl_analysis_config,
@@ -279,6 +293,7 @@ class AggregationWorkflowRunner:
             map_dict=self.aggregation_workflow.get(
                 "single_dataset_tileparameters"
             ),
+            command_sign="$$",
         )
         parameters = pce.run(self.aggregation_workflow["aggregation_modules"])
         agg_reporter_config = copy.deepcopy(self.reporter_config)
@@ -287,12 +302,42 @@ class AggregationWorkflowRunner:
         )
         agg_analysis_config = copy.deepcopy(self.analysis_config)
         agg_analysis_config["result_location"] = self.result_folder
-        wr = WorkflowRunner.config_from_dicts(
-            agg_reporter_config,
-            agg_analysis_config,
-            parameters,
-            postfix=self.postfix,
-        )
+        # try loading
+        if self.continue_workflow:
+            try:
+                logger.debug(
+                    "loading WorkflowRunner from "
+                    + os.path.join(
+                        self.result_folder,
+                        agg_reporter_config["report_name"]
+                        + "_"
+                        + self.postfix,
+                    )
+                )
+                wr = WorkflowRunner.load(
+                    os.path.join(
+                        self.result_folder,
+                        agg_reporter_config["report_name"]
+                        + "_"
+                        + self.postfix,
+                    )
+                )
+            except Exception:
+                logger.debug("loading did not work. creating from dict.")
+                wr = WorkflowRunner.config_from_dicts(
+                    agg_reporter_config,
+                    agg_analysis_config,
+                    parameters,
+                    postfix=self.postfix,
+                )
+        else:
+            logger.debug("not dontinuing workflow.starting new.")
+            wr = WorkflowRunner.config_from_dicts(
+                agg_reporter_config,
+                agg_analysis_config,
+                parameters,
+                postfix=self.postfix,
+            )
         self.cpage_names.append(wr.reporter_config["report_name"])
         wr.run()
         self.all_results["aggregation"] = wr.results
@@ -502,11 +547,23 @@ class WorkflowRunner:
                 )
 
         # now, run the modules
+        all_previously_succeeded = True
         for i, (module_name, module_parameters) in enumerate(
             self.workflow_modules
         ):
-            # check whether the next module has been analysed already
-            if self.module_previously_analyzed(i + 1):
+            # # check whether the next module has been analysed already
+            # if self.module_previously_analyzed(i + 1):
+            #     # if it has, skip this. This way an aborted module
+            #     # will be re-analyzed.
+            #     logger.debug(
+            #         f"""Module {i}, {module_name} has been previously
+            #         analyzed. Skipping."""
+            #     )
+            #     continue
+            if (
+                all_previously_succeeded
+                and self.module_previously_succeeded(i, module_name)
+            ) and self.module_previously_analyzed(i):
                 # if it has, skip this. This way an aborted module
                 # will be re-analyzed.
                 logger.debug(
@@ -514,15 +571,19 @@ class WorkflowRunner:
                     analyzed. Skipping."""
                 )
                 continue
+            else:
+                all_previously_succeeded = False
             # all modules are called with iteration and parameter dict
             # as arguments
             module_parameters = self.parameter_command_executor.run(
-                module_parameters
+                module_parameters, curr_rootidx=i
             )
             success = self.call_module(module_name, i, module_parameters)
+            self.save(self.result_folder)
             if not success:
                 break
-            self.save(self.result_folder)
+        else:
+            success = True
         return success
 
     ##########################################################################
@@ -548,6 +609,8 @@ class WorkflowRunner:
             "analysis_config": pce.run(self.analysis_config),
             "workflow_modules": pce.run(self.workflow_modules),
         }
+        logger.debug("saving data:")
+        logger.debug(str(data))
         with open(filepath, "w") as f:
             yaml.dump(data, f)
 
@@ -582,6 +645,7 @@ class WorkflowRunner:
             module_found : bool
                 whether the folder corresponding to the module index was found
         """
+        # via created directories:
         dirs = os.listdir(self.result_folder)
         dirs = [
             d
@@ -591,6 +655,26 @@ class WorkflowRunner:
         prefix = f"{i:02d}_"
         module_found = any([d.startswith(prefix) for d in dirs])
         return module_found
+
+    def module_previously_succeeded(self, i, module_name):
+        """Check whether a module has previously succeeded, which must be
+        saved in the results.
+        Args:
+            i : int
+                the module index
+            module_name : str
+                the module name
+        Returns:
+            module_found : bool
+                whether a previous module evaluation has succeeded
+        """
+        module_id = f"{i:02d}_{module_name}"
+        logger.debug("looking for previous " + module_id)
+        # logger.debug(str(self.results.get(module_id, {})))
+        logger.debug(
+            str(self.results.get(module_id, {}).get("success", False))
+        )
+        return self.results.get(module_id, {}).get("success", False)
 
     def call_module(self, fun_name, i, parameters):
         """At the level of the WorkflowRunner, all modules are processed the
@@ -618,9 +702,13 @@ class WorkflowRunner:
         try:
             parameters, self.results[key] = fun_ap(i, parameters)
         except AutoPicassoError as e:
+            self.results[key]["success"] = False
             logger.error(e)
             raise e
         logger.debug(f"RESULTS: {self.results[key]}")
         fun_cr = getattr(self.confluencereporter, fun_name)
-        fun_cr(i, parameters, self.results[key])
+        try:
+            fun_cr(i, parameters, self.results[key])
+        except ConfluenceInterfaceError as e:
+            logger.error(e)
         return self.results[key]["success"]

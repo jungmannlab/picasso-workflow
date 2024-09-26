@@ -31,9 +31,9 @@ def minimal_channel_align(filepaths, box_size=7):
         (
             "load_datasets_to_aggregate",
             {
-                "tags": ("$map", "#tags"),
+                "tags": ("$$map", "#tags"),
                 "filepaths": (
-                    "$get_prior_result",
+                    "$$get_prior_result",
                     "all_results, single_dataset, $all, "
                     + f"{idx_last_sgl_module:02d}_save_single_dataset, "
                     + "filepath",
@@ -42,6 +42,10 @@ def minimal_channel_align(filepaths, box_size=7):
         ),
         (
             "align_channels",
+            {},
+        ),
+        (
+            "save_datasets_aggregated",
             {},
         ),
     ]

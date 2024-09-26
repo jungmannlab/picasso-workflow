@@ -40,9 +40,8 @@ def minimal(filepath, box_size=7):
                 "auto_netgrad": {
                     "filename": "ng_histogram.png",
                     "frame_numbers": (
-                        "$get_prior_result",  # get from prior results
-                        "results, 00_load_dataset_movie, "
-                        + "sample_movie, sample_frame_idx",
+                        "$get_previous_module_result",  # from prior results
+                        "sample_movie, sample_frame_idx",
                     ),
                     "box_size": box_size,
                     "start_ng": -3000,
