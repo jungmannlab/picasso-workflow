@@ -1795,6 +1795,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         results["shifts"] = cum_shifts[:, :, -1]
 
+        fp_shifts = os.path.join(results["folder"], "shifts.txt")
+        np.savetxt(fp_shifts, results["shifts"])
+        fp_cumshifts = os.path.join(results["folder"], "cum_shifts.npy")
+        np.save(fp_cumshifts, cum_shifts)
+
         if fn := parameters.get("fig_filename"):
             fig_filepath = os.path.join(results["folder"], fn)
             picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
