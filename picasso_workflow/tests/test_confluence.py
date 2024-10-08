@@ -26,7 +26,6 @@ class Test_A_ConfluenceInterface(unittest.TestCase):
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
         self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
-        print("testestest:", self.confluence_space, self.confluence_username)
         self.testpgtitle = "mytestpage"
         self.bodytxt = "mybodytext"
 
@@ -960,3 +959,8 @@ class Test_C_ConfluenceReporter(Test_B_ConfluenceReporter):
             report_name,
             self.confluence_token,
         )
+
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            report_name
+        )
+        self.cr.ci.delete_page(pgid)

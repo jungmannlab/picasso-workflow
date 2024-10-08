@@ -1551,7 +1551,6 @@ class ConfluenceInterface:
     """
 
     def __init__(self, base_url, username, space_key, parent_page_title, token):
-        print("HERE0", base_url, username, token)
         self.confluence = con(
             url=base_url,
             username=username,
@@ -1564,7 +1563,6 @@ class ConfluenceInterface:
         self.base_url = base_url
         self.username = username
         self.space_key = space_key
-        print("HERE1:", parent_page_title)
         self.parent_page_id, _ = self.get_page_properties(parent_page_title)
 
 
@@ -1585,7 +1583,6 @@ class ConfluenceInterface:
             title : str
                 the page title
         """
-        print("HERE:", page_title, self.space_key, page_title)
         if page_title != "":
             page = self.confluence.get_page_by_title(space = self.space_key, title = page_title)
         elif page_id != "":
@@ -1653,11 +1650,11 @@ class ConfluenceInterface:
         # Needs exception for    raise ConfluenceInterfaceError("Failed to get page content.") + logger.error
         return page["id"]
     
-    def delete_page(self, page_id):
+    def delete_page(self, page_id, recursive=False):
         # allow the page name to be used instead of page_id
         if isinstance(page_id, str) and not page_id.isnumeric():
             page_id, pgname = self.get_page_properties(page_id)
-        self.confluence.remove_page(page_id, status=None, recursive=False)
+        self.confluence.remove_page(page_id, status=None, recursive=recursive)
         # implement logger 
 
     def upload_attachment(self, page_id, filename):
@@ -1710,7 +1707,7 @@ class ConfluenceInterface:
                 the id of the attachment
         Returns:
         """
-        self.confluence.delete_attachment('page_id', 'attachment_id', version=None)
+        self.confluence.delete_attachment(page_id, attachment_id, version=None)
 
     def update_page_content(self, page_name, page_id, body_update):
        status = self.confluence.update_page(
