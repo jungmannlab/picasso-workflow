@@ -37,6 +37,7 @@ class Test_A_PackageIntegration(unittest.TestCase):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
 
     def tearDown(self):
         pass
@@ -46,6 +47,7 @@ class Test_A_PackageIntegration(unittest.TestCase):
             "report_name": "test_a01_WorkflowRunner",
             "ConfluenceReporter": {
                 "base_url": self.confluence_url,
+                "username": self.confluence_username,
                 "space_key": self.confluence_space,
                 "parent_page_title": self.confluence_page,
                 "token": self.confluence_token,
@@ -88,6 +90,7 @@ class Test_A_PackageIntegration(unittest.TestCase):
             "report_name": "test_b01_AggregationWorkflowRunner",
             "ConfluenceReporter": {
                 "base_url": self.confluence_url,
+                "username": self.confluence_username,
                 "space_key": self.confluence_space,
                 "parent_page_title": self.confluence_page,
                 "token": self.confluence_token,
@@ -131,6 +134,7 @@ class Test_A_PackageIntegration(unittest.TestCase):
         shutil.rmtree(awr.result_folder)
         ci = ConfluenceInterface(
             base_url=self.confluence_url,
+            username = self.confluence_username,
             space_key=self.confluence_space,
             parent_page_title=self.confluence_page,
             token=self.confluence_token,
@@ -158,6 +162,7 @@ class Test_B_CompleteIntegration(unittest.TestCase):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
 
     def tearDown(self):
         pass
@@ -167,6 +172,7 @@ class Test_B_CompleteIntegration(unittest.TestCase):
             "report_name": "test_01_WorkflowRunner_ssw_minimal",
             "ConfluenceReporter": {
                 "base_url": self.confluence_url,
+                "username": self.confluence_username,
                 "space_key": self.confluence_space,
                 "parent_page_title": self.confluence_page,
                 "token": self.confluence_token,
@@ -208,6 +214,7 @@ class Test_B_CompleteIntegration(unittest.TestCase):
             "report_name": "test_02_AWR_saw_align_channels",
             "ConfluenceReporter": {
                 "base_url": self.confluence_url,
+                "username": self.confluence_username,
                 "space_key": self.confluence_space,
                 "parent_page_title": self.confluence_page,
                 "token": self.confluence_token,
@@ -260,6 +267,7 @@ class Test_B_CompleteIntegration(unittest.TestCase):
         shutil.rmtree(awr.result_folder)
         ci = ConfluenceInterface(
             base_url=self.confluence_url,
+            username = self.confluence_username,
             space_key=self.confluence_space,
             parent_page_title=self.confluence_page,
             token=self.confluence_token,

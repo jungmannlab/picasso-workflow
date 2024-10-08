@@ -25,7 +25,8 @@ class Test_A_ConfluenceInterface(unittest.TestCase):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
-
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
+        print("testestest:", self.confluence_space, self.confluence_username)
         self.testpgtitle = "mytestpage"
         self.bodytxt = "mybodytext"
 
@@ -35,6 +36,7 @@ class Test_A_ConfluenceInterface(unittest.TestCase):
     def instantiate_confluence_interface(self):
         return confluence.ConfluenceInterface(
             self.confluence_url,
+            self.confluence_username,
             self.confluence_space,
             self.confluence_page,
             self.confluence_token,
@@ -104,6 +106,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
 
         report_name = "my test report"
 
@@ -116,6 +119,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
 
         self.cr = confluence.ConfluenceReporter(
             self.confluence_url,
+            self.confluence_username,
             self.confluence_space,
             self.confluence_page,
             report_name,
@@ -907,6 +911,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
 
         report_name = "my test report"
 
@@ -919,6 +924,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
 
         self.cr = confluence.ConfluenceReporter(
             self.confluence_url,
+            self.confluence_username,
             self.confluence_space,
             self.confluence_page,
             report_name,
@@ -942,11 +948,13 @@ class Test_C_ConfluenceReporter(Test_B_ConfluenceReporter):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
 
         report_name = "my test report"
 
         self.cr = confluence.ConfluenceReporter(
             self.confluence_url,
+            self.confluence_username,
             self.confluence_space,
             self.confluence_page,
             report_name,
