@@ -1816,10 +1816,20 @@ class ConfluenceInterface:
     def update_page_content_with_movie_attachment(
         self, page_name, page_id, filename
     ):
+        body_update = f"""
+            <ac:structured-macro ac:name="multimedia" ac:schema-version="1">
+            <ac:parameter ac:name="autoplay">false</ac:parameter>
+            <ac:parameter ac:name="name"><ri:attachment
+            ri:filename=\"{filename}\" /></ac:parameter>
+            <ac:parameter ac:name="loop">false</ac:parameter>
+            <ac:parameter ac:name="width">30%</ac:parameter>
+            <ac:parameter ac:name="height">30%</ac:parameter>
+            </ac:structured-macro>
+            """
         self.confluence.append_page(
             page_id,
             page_name,
-            filename,
+            append_body=body_update,
             parent_id=None,
             type="page",
             representation="storage",
@@ -1830,10 +1840,14 @@ class ConfluenceInterface:
     def update_page_content_with_image_attachment(
         self, page_name, page_id, filename
     ):
+        body_update = (
+            f'<ac:image><ri:attachment ri:filename="{filename}" />'
+            + "</ac:image>"
+        )
         self.confluence.append_page(
             page_id,
             page_name,
-            filename,
+            append_body=body_update,
             parent_id=None,
             type="page",
             representation="storage",
