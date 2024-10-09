@@ -47,6 +47,12 @@ via picassosr.
 
 ## Contributing
 
+- Install pre commit hooks:
+	- `pip install pre-commit` (if not already installed by requirements in pyproject.toml / pip install -e)
+	- `cd GitHub/picasso-workflow`
+	- `pre-commit install`
+	- Now, before commit via git, the hooks will run through and check code and style
+	- optionally, the hooks can be run manually: `pre-commit run --all-files`
 - For adding new workflow modules, create a new branch (feature/newmodule),
 and add new modules to:
 	- util/AbstractModuleCollection
@@ -54,6 +60,9 @@ and add new modules to:
 	- confluence/ConfluenceReporter
 	- tests/test_analyse
 	- tests/test_confluence
+- make sure unit tests run through smoothely:
+	- `cde GitHub/picasso-workflow`
+	- `pytest -v`
 - Please adhere to PEP code style and send pull request when done.
 
 ## License
