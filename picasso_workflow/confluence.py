@@ -7,9 +7,9 @@ Description: Interaction with Confluence
 """
 import logging
 import os
-import requests
 import pandas as pd
 from atlassian import Confluence as con
+from requests.exceptions import ConnectionError, HTTPError
 
 from picasso_workflow.util import AbstractModuleCollection
 
@@ -23,14 +23,19 @@ class ConfluenceReporter(AbstractModuleCollection):
     """
 
     def __init__(
-        self, base_url, username, space_key, parent_page_title, report_name, token
+        self,
+        base_url,
+        username,
+        space_key,
+        parent_page_title,
+        report_name,
+        token,
     ):
         logger.debug("Initializing ConfluenceReporter.")
-        
-        self.ci = ConfluenceInterface(
-            base_url, username, space_key, parent_page_title, token
-        )
 
+        self.ci = ConfluenceInterface(
+            base_url, space_key, parent_page_title, username, token
+        )
 
         # create page
         self.report_page_name = report_name
@@ -249,7 +254,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Locs Column names: {results['locs_columns']}</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        # text = "<p><strong>Localize</strong></p>"
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -1542,29 +1546,89 @@ class UndriftError(Exception):
     pass
 
 
+def confluence_call(method):
+    """When calling the confluence API, sometimes the connection is lost.
+    Therefore, wrap the functions using this decorator in order to
+    re-connect and call again in that case.
+    """
+
+    def confluence_call_wrapper(self, *args, **kwargs):
+        try:
+            # call the confluence api
+            status = method(self, *args, **kwargs)
+        except ConnectionError as e:
+            logger.exception(e)
+            self.connect()
+            status = method(self, *args, **kwargs)
+        except HTTPError as e:
+            if "unauthorized" in str(e).lower():
+                raise e
+            raise ConfluenceInterfaceError(
+                f"Calling {method.__name__} failed with HTTPError: {str(e)}"
+            )
+
+        return status
+
+    return confluence_call_wrapper
+
+
 class ConfluenceInterface:
     """A Interface class to access Confluence
 
     For access to the Confluence API, create an API token in confluence,
     and store it as an environment variable:
     $ setx CONFLUENCE_BEARER "your_confluence_api_token"
+    If the token is not stored as an environment variable, specify it
+    here at initialization.
+
+    Args:
+        base_url : str
+            the confluence url to connect to.
+        space_key : str
+            the confluence space key to work in
+        parent_page_title : str
+            the (already existing) parent page to crate the reports under
+        username : str, default None
+            the username to authenticate with.
+            If given, authentiation is performed with url, username and
+            password.
+            If None or "", authentication is performed with url and token.
+            For Confluence Server, token-based authentication is needed.
+        token : str, default None
+            the password (if username-based authentication), or token.
+            If None, the environment variable CONFLUENCE_BEARER is polled.
     """
 
-    def __init__(self, base_url, username, space_key, parent_page_title, token):
-        self.confluence = con(
-            url=base_url,
-            username=username,
-            password=token)
-        
+    def __init__(
+        self, base_url, space_key, parent_page_title, username=None, token=None
+    ):
+        """ """
         if token is None:
             self.bearer_token = self.get_bearer_token()
         else:
             self.bearer_token = token
         self.base_url = base_url
-        self.username = username
+        if username != "":
+            self.username = username
+        else:
+            self.username = None
         self.space_key = space_key
+        self.connect()
+
         self.parent_page_id, _ = self.get_page_properties(parent_page_title)
 
+    def connect(self):
+        """Connect to confluence (cloud or server) by authentification depending
+        on the settings stored at initialization.
+        """
+        if self.username is not None:
+            self.confluence = con(
+                url=self.base_url,
+                username=self.username,
+                password=self.bearer_token,
+            )
+        else:
+            self.confluence = con(url=self.base_url, token=self.bearer_token)
 
     def get_bearer_token(self):
         """Set this by setting the environment variable in the windows command
@@ -1575,6 +1639,7 @@ class ConfluenceInterface:
         """
         return os.environ.get("CONFLUENCE_TOKEN")
 
+    @confluence_call
     def get_page_properties(self, page_title="", page_id=""):
         """
         Returns:
@@ -1584,7 +1649,9 @@ class ConfluenceInterface:
                 the page title
         """
         if page_title != "":
-            page = self.confluence.get_page_by_title(space = self.space_key, title = page_title)
+            page = self.confluence.get_page_by_title(
+                space=self.space_key, title=page_title
+            )
         elif page_id != "":
             page = self.confluence.get_page_by_id(page_id=page_id)
         else:
@@ -1593,9 +1660,10 @@ class ConfluenceInterface:
                 "Cannot get page properties. "
                 + "One of page_title and page_id must be given."
             )
-        # Needs exception for  raise ConfluenceInterfaceError("Failed to get page content.") + logger.error
+
         return page["id"], page["title"]
 
+    @confluence_call
     def get_page_version(self, page_title="", page_id=""):
         """
         Returns:
@@ -1604,15 +1672,19 @@ class ConfluenceInterface:
                     id, title, version
         """
         if page_title != "":
-            page = self.confluence.get_page_by_title(space = self.space_key, title = page_title, expand='version')
+            page = self.confluence.get_page_by_title(
+                space=self.space_key, title=page_title, expand="version"
+            )
         elif page_id != "":
-            page = self.confluence.get_page_by_id(page_id=page_id, expand='body.version')
+            page = self.confluence.get_page_by_id(
+                page_id=page_id, expand="body.version"
+            )
         else:
-            logger.error("One of page_title and page_id must be given.")
-        
-        # Needs exception for    raise ConfluenceInterfaceError("Failed to get page content.") + logger.error
-        return page['version']["number"]
+            logger.exception("One of page_title and page_id must be given.")
 
+        return page["version"]["number"]
+
+    @confluence_call
     def get_page_body(self, page_title="", page_id=""):
         """
         Returns:
@@ -1621,15 +1693,19 @@ class ConfluenceInterface:
                     id, title, version
         """
         if page_title != "":
-            page = self.confluence.get_page_by_title(space = self.space_key, title = page_title, expand='body.storage')
+            page = self.confluence.get_page_by_title(
+                space=self.space_key, title=page_title, expand="body.storage"
+            )
         elif page_id != "":
-            page = self.confluence.get_page_by_id(page_id=page_id, expand='body.storage')
+            page = self.confluence.get_page_by_id(
+                page_id=page_id, expand="body.storage"
+            )
         else:
-            logger.error("One of page_title and page_id must be given.")
-        
-        # Needs exception for    raise ConfluenceInterfaceError("Failed to get page content.") + logger.error
-        return page['body']['storage']['value']
+            logger.exception("One of page_title and page_id must be given.")
 
+        return page["body"]["storage"]["value"]
+
+    @confluence_call
     def create_page(self, page_title, body_text, parent_id="rootparent"):
         """
         Args:
@@ -1646,17 +1722,27 @@ class ConfluenceInterface:
         """
         if parent_id == "rootparent":
             parent_id = self.parent_page_id
-        page = self.confluence.create_page(space=self.space_key, title = page_title, body = body_text, parent_id=parent_id, type='page', representation='storage', editor='v2', full_width=True)
-        # Needs exception for    raise ConfluenceInterfaceError("Failed to get page content.") + logger.error
+        page = self.confluence.create_page(
+            space=self.space_key,
+            title=page_title,
+            body=body_text,
+            parent_id=parent_id,
+            type="page",
+            representation="storage",
+            editor="v2",
+            full_width=True,
+        )
         return page["id"]
-    
+
+    @confluence_call
     def delete_page(self, page_id, recursive=False):
         # allow the page name to be used instead of page_id
         if isinstance(page_id, str) and not page_id.isnumeric():
             page_id, pgname = self.get_page_properties(page_id)
         self.confluence.remove_page(page_id, status=None, recursive=recursive)
-        # implement logger 
+        # implement logger
 
+    @confluence_call
     def upload_attachment(self, page_id, filename):
         """Uploads an attachment to a page
         Args:
@@ -1668,16 +1754,20 @@ class ConfluenceInterface:
             attachment_id : str
                 the id of the attachment
         """
-        self.confluence.attach_file(filename=filename,  page_id = page_id, space=self.space_key)
-        # Needs exception for    raise ConfluenceInterfaceError("Failed to upload attachment.") + logger.error
+        self.confluence.attach_file(
+            filename=filename, page_id=page_id, space=self.space_key
+        )
 
-        attachments_container = self.confluence.get_attachments_from_content(page_id=page_id, start=0, limit=500)
+        attachments_container = self.confluence.get_attachments_from_content(
+            page_id=page_id, start=0, limit=500
+        )
         for attachment in attachments_container["results"]:
             attachment_id = attachment["id"]
             break
-        
+
         return attachment_id
 
+    @confluence_call
     def get_attachment_id(self, page_id, filename):
         """Get the id of an attachment to a page
         Args:
@@ -1689,8 +1779,10 @@ class ConfluenceInterface:
             attachment_id : str
                 the id of the attachment
         """
-        attachments_container = self.confluence.get_attachments_from_content(page_id, start=0, limit=500)
-        attachments = attachments_container['results']
+        attachments_container = self.confluence.get_attachments_from_content(
+            page_id, start=0, limit=500
+        )
+        attachments = attachments_container["results"]
         for attachment in attachments:
             if attachment["title"].lower() == filename.lower():
                 attachment_id = attachment["id"]
@@ -1698,6 +1790,7 @@ class ConfluenceInterface:
 
         return attachment_id
 
+    @confluence_call
     def delete_attachment(self, page_id, attachment_id):
         """Deletes an attachment to a page
         Args:
@@ -1709,24 +1802,43 @@ class ConfluenceInterface:
         """
         self.confluence.delete_attachment(page_id, attachment_id, version=None)
 
+    @confluence_call
     def update_page_content(self, page_name, page_id, body_update):
-       status = self.confluence.update_page(
-           parent_id=None,
-           page_id=page_id,
-           title=page_name,
-           body=body_update,
-           )
+        status = self.confluence.update_page(
+            parent_id=None,
+            page_id=page_id,
+            title=page_name,
+            body=body_update,
+        )
+        return status
 
+    @confluence_call
     def update_page_content_with_movie_attachment(
         self, page_name, page_id, filename
     ):
-        self.confluence.append_page(page_id, page_name, filename, parent_id=None, type='page', representation='storage', minor_edit=False)
+        self.confluence.append_page(
+            page_id,
+            page_name,
+            filename,
+            parent_id=None,
+            type="page",
+            representation="storage",
+            minor_edit=False,
+        )
 
-
+    @confluence_call
     def update_page_content_with_image_attachment(
         self, page_name, page_id, filename
     ):
-       self.confluence.append_page(page_id, page_name, filename, parent_id=None, type='page', representation='storage', minor_edit=False)
+        self.confluence.append_page(
+            page_id,
+            page_name,
+            filename,
+            parent_id=None,
+            type="page",
+            representation="storage",
+            minor_edit=False,
+        )
 
 
 class ConfluenceInterfaceError(Exception):

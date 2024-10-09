@@ -35,9 +35,9 @@ class Test_A_ConfluenceInterface(unittest.TestCase):
     def instantiate_confluence_interface(self):
         return confluence.ConfluenceInterface(
             self.confluence_url,
-            self.confluence_username,
             self.confluence_space,
             self.confluence_page,
+            self.confluence_username,
             self.confluence_token,
         )
 
@@ -960,7 +960,5 @@ class Test_C_ConfluenceReporter(Test_B_ConfluenceReporter):
             self.confluence_token,
         )
 
-        pgid, pgtitle = self.cr.ci.get_page_properties(
-            report_name
-        )
+        pgid, pgtitle = self.cr.ci.get_page_properties(report_name)
         self.cr.ci.delete_page(pgid)

@@ -556,7 +556,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ix, iy = i // sample_spots_cols, i % sample_spots_cols
             pix = ix * (box_size + border_width)
             piy = iy * (box_size + border_width)
-            logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
+            # logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
             canvas[pix : pix + box_size, piy : piy + box_size] = (
                 picasso_outpost.normalize_spot(spot)
             )

@@ -27,6 +27,7 @@ dependencies = [
     "fsspec>=2022.8.0",
     "aicsimageio",
     "psutil",
+    "atlassian-python-api",
 ]
 keywords = ["picasso"]
 

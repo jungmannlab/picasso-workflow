@@ -134,9 +134,9 @@ class Test_A_PackageIntegration(unittest.TestCase):
         shutil.rmtree(awr.result_folder)
         ci = ConfluenceInterface(
             base_url=self.confluence_url,
-            username = self.confluence_username,
             space_key=self.confluence_space,
             parent_page_title=self.confluence_page,
+            username=self.confluence_username,
             token=self.confluence_token,
         )
         for repname in awr.cpage_names:
@@ -267,9 +267,9 @@ class Test_B_CompleteIntegration(unittest.TestCase):
         shutil.rmtree(awr.result_folder)
         ci = ConfluenceInterface(
             base_url=self.confluence_url,
-            username = self.confluence_username,
             space_key=self.confluence_space,
             parent_page_title=self.confluence_page,
+            username=self.confluence_username,
             token=self.confluence_token,
         )
         for repname in awr.cpage_names:
