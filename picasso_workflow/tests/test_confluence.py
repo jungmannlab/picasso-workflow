@@ -118,10 +118,10 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
 
         self.cr = confluence.ConfluenceReporter(
             self.confluence_url,
-            self.confluence_username,
             self.confluence_space,
             self.confluence_page,
             report_name,
+            self.confluence_username,
             self.confluence_token,
         )
         # self.cr.ci.upda
@@ -923,10 +923,10 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
 
         self.cr = confluence.ConfluenceReporter(
             self.confluence_url,
-            self.confluence_username,
             self.confluence_space,
             self.confluence_page,
             report_name,
+            self.confluence_username,
             self.confluence_token,
         )
         # self.cr.ci.upda
@@ -953,10 +953,10 @@ class Test_C_ConfluenceReporter(Test_B_ConfluenceReporter):
 
         self.cr = confluence.ConfluenceReporter(
             self.confluence_url,
-            self.confluence_username,
             self.confluence_space,
             self.confluence_page,
             report_name,
+            self.confluence_username,
             self.confluence_token,
         )
 

@@ -25,11 +25,11 @@ class ConfluenceReporter(AbstractModuleCollection):
     def __init__(
         self,
         base_url,
-        username,
         space_key,
         parent_page_title,
         report_name,
-        token,
+        username=None,
+        token=None,
     ):
         logger.debug("Initializing ConfluenceReporter.")
 
@@ -1804,11 +1804,11 @@ class ConfluenceInterface:
 
     @confluence_call
     def update_page_content(self, page_name, page_id, body_update):
-        status = self.confluence.update_page(
+        status = self.confluence.append_page(
             parent_id=None,
             page_id=page_id,
             title=page_name,
-            body=body_update,
+            append_body=body_update,
         )
         return status
 
