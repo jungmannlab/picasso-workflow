@@ -58,11 +58,11 @@ class TestAnalyseModules(unittest.TestCase):
         )
         analysis_config = {
             "camera_info": {
-                "gain": 1,
-                "sensitivity": 0.45,
-                "baseline": 100,
-                "qe": 0.82,
-                "pixelsize": 130,  # nm
+                "Gain": 1,
+                "Sensitivity": 0.45,
+                "Baseline": 100,
+                "Qe": 0.82,
+                "Pixelsize": 130,  # nm
             },
             "gpufit_installed": False,
         }
@@ -885,11 +885,11 @@ class TestAnalyse(unittest.TestCase):
         )
         analysis_config = {
             "camera_info": {
-                "gain": 1,
-                "sensitivity": 0.45,
-                "baseline": 100,
-                "qe": 0.82,
-                "pixelsize": 130,  # nm
+                "Gain": 1,
+                "Sensitivity": 0.45,
+                "Baseline": 100,
+                "Qe": 0.82,
+                "Pixelsize": 130,  # nm
             },
             "gpufit_installed": False,
         }
