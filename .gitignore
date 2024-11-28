@@ -166,3 +166,4 @@ temp_scripts
 temp/*
 
 spinna*
+nn_redistribution.py
