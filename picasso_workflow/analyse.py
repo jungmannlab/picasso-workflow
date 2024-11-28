@@ -3924,10 +3924,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        result = io.load_locs(parameters["fp_picked_locs"])
+        picked_locs, info = io.load_locs(parameters["fp_picked_locs"])
         # with open(parameters["fp_picked_locs"], "rb") as f:
         #     result = pickle.load(f)
-        picked_locs = result
+        
         if not isinstance(picked_locs, list):
             # picked locs are saved as one recarray, with the 'group' the pick
             groups = np.unique(picked_locs["group"])
