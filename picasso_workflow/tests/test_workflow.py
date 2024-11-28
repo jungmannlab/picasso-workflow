@@ -138,6 +138,7 @@ class TestWorkflow(unittest.TestCase):
             "report_name": "myreport",
             "ConfluenceReporter": {
                 "base_url": "",
+                "username": "",
                 "space_key": "",
                 "parent_page_title": "",
             },
@@ -170,6 +171,7 @@ class TestWorkflow(unittest.TestCase):
             "report_name": "myreport",
             "ConfluenceReporter": {
                 "base_url": "",
+                "username": "",
                 "space_key": "",
                 "parent_page_title": "",
             },

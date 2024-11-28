@@ -277,9 +277,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     )
 
                 camera_info = {
-                    "baseline": cam_config["Baseline"],
-                    "gain": cam_config.get("Gain", 1),
-                    "sensitivity": sensitivity,
+                    "Baseline": cam_config["Baseline"],
+                    "Gain": cam_config.get("Gain", 1),
+                    "Sensitivity": sensitivity,
                     "qe": 1,  # relevant are detected, not incident photons
                     "pixelsize": cam_config["Pixelsize"],
                 }
@@ -556,7 +556,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ix, iy = i // sample_spots_cols, i % sample_spots_cols
             pix = ix * (box_size + border_width)
             piy = iy * (box_size + border_width)
-            logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
+            # logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
             canvas[pix : pix + box_size, piy : piy + box_size] = (
                 picasso_outpost.normalize_spot(spot)
             )
@@ -669,7 +669,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             results : dict
                 the analysis results
         """
-        em = self.analysis_config["camera_info"]["gain"] > 1
+        em = self.analysis_config["camera_info"]["Gain"] > 1
         spots = localize.get_spots(
             self.movie,
             self.identifications,
@@ -690,7 +690,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     for f in _futures.as_completed(fs):
                         progress_bar.update()
                 theta = gausslq.fits_from_futures(fs)
-                em = self.analysis_config["camera_info"]["gain"] > 1
+                em = self.analysis_config["camera_info"]["Gain"] > 1
                 self.locs = gausslq.locs_from_fits(
                     self.identifications, theta, parameters["box_size"], em
                 )
@@ -722,7 +722,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # "Convergence Criterion": convergence,
             # "Max. Iterations": max_iterations,
             "Pixelsize": float(
-                self.analysis_config["camera_info"].get("pixelsize")
+                self.analysis_config["camera_info"].get("Pixelsize")
             ),
             "Fit method": "gausslq",
             "Wrapped by": "picasso-workflow : localize",
@@ -877,7 +877,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             results : dict
                 the analysis results
         """
-        pixelsize = self.analysis_config["camera_info"]["pixelsize"]
+        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
 
         # dirty debug: picasso.aim.aim expects the existence of info[1]["Pixelsize"]
         self.info[1]["Pixelsize"] = pixelsize
@@ -1192,7 +1192,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         radius = parameters["radius"]
         min_density = parameters["min_density"]
-        pixelsize = self.analysis_config["camera_info"]["pixelsize"]
+        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
         # label locs according to clusters
         self.locs = clusterer.dbscan(self.locs, radius, min_density, pixelsize)
         dbscan_info = {
@@ -1231,7 +1231,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         min_cluster = parameters["min_cluster"]
         min_samples = parameters["min_samples"]
-        pixelsize = self.analysis_config["camera_info"]["pixelsize"]
+        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
 
         # label locs according to clusters
         self.locs = clusterer.hdbscan(
@@ -1282,7 +1282,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         parameters["basic_fa"] = basic_fa
         radius_z = parameters.get("radius_z", None)
         parameters["radius_z"] = radius_z
-        pixelsize = self.analysis_config["camera_info"]["pixelsize"]
+        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
 
         if radius_z is not None:  # 3D
             params = [radius, radius_z, min_locs, 0, basic_fa, 0]
@@ -1349,7 +1349,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             locs[parameters["dims"]].tolist()
         )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
         # convert all dimensions to nanometers
-        pixelsize = self.analysis_config["camera_info"]["pixelsize"]
+        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
         for i, dim in enumerate(parameters["dims"]):
             if dim in ["x", "y"]:
                 points[:, i] = points[:, i] * pixelsize
@@ -1795,6 +1795,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         results["shifts"] = cum_shifts[:, :, -1]
 
+        fp_shifts = os.path.join(results["folder"], "shifts.txt")
+        np.savetxt(fp_shifts, results["shifts"])
+        fp_cumshifts = os.path.join(results["folder"], "cum_shifts.npy")
+        np.save(fp_cumshifts, cum_shifts)
+
         if fn := parameters.get("fig_filename"):
             fig_filepath = os.path.join(results["folder"], fn)
             picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
@@ -1965,7 +1970,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             mask_dict = None
 
         # locs, but as np.ndarray
-        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         exp_data = {}
         exp_n_targets = np.zeros(len(self.channel_tags))
         for i, target in enumerate(self.channel_tags):
@@ -2290,7 +2295,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 nRandomControls=nRandomControls,
                 channel_locs=self.channel_locs,
                 combined_locs=combined_locs,
-                pixelsize=self.analysis_config["camera_info"].get("pixelsize"),
+                pixelsize=self.analysis_config["camera_info"].get("Pixelsize"),
                 atype=parameters["atype"],
             )
         )
@@ -2567,7 +2572,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # # homo-analysis (proportions of 1- or 2-mers of the same kind)
         # props = {}
         dimensionality = 2
-        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         if isinstance(parameters["density"], list):
             density = {
                 tag: parameters["density"][cid]
@@ -2594,7 +2599,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         #     int(parameters["n_simulate"] * compound_density / den)
         #     for tag, den in parameters["density"].items()
         # }
-        # pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        # pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         # structures = self._create_spinna_structure(
         #     self.channel_tags, [1, 2], distance=parameters["distance"])
         # N_structures = picasso_outpost.generate_N_structures(
@@ -2999,7 +3004,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         combined_locs, combined_info = io.load_locs(fp_combined_locs)
         # self.channel_locs = [combined_locs]
         multi_filename = "multi_ID.hdf5"
-        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         mask_dict = mask.gen_mask(
             combined_locs["x"],
             combined_locs["y"],
@@ -3099,7 +3104,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         with open(parameters["fp_channel_map"], "r") as f:
             channel_map = yaml.safe_load(f)
 
-        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         epsilon_nm = parameters["epsilon_nm"]
         df_mask = pd.read_hdf(parameters["fp_merge_mask"], key="locs")
         fp_out_base = os.path.join(results["folder"], "dbscan.hdf5")
@@ -3216,7 +3221,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # from picasso_workflow.dbscan_molint import dbscan
 
-        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         epsilon_nm = parameters["epsilon_nm"]
 
         # get map
@@ -3919,10 +3924,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        result = io.load_locs(parameters["fp_picked_locs"])
+        picked_locs, info = io.load_locs(parameters["fp_picked_locs"])
         # with open(parameters["fp_picked_locs"], "rb") as f:
         #     result = pickle.load(f)
-        picked_locs = result
+        
         if not isinstance(picked_locs, list):
             # picked locs are saved as one recarray, with the 'group' the pick
             groups = np.unique(picked_locs["group"])
@@ -4077,7 +4082,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # # homo-analysis (proportions of 1- or 2-mers of the same kind)
         # props = {}
         dimensionality = 2
-        pixelsize = self.analysis_config["camera_info"].get("pixelsize")
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         if isinstance(parameters["density"], list):
             density = {
                 tag: parameters["density"][cid]

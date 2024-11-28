@@ -37,6 +37,7 @@ class Test_A_PackageIntegration(unittest.TestCase):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
 
     def tearDown(self):
         pass
@@ -46,6 +47,7 @@ class Test_A_PackageIntegration(unittest.TestCase):
             "report_name": "test_a01_WorkflowRunner",
             "ConfluenceReporter": {
                 "base_url": self.confluence_url,
+                "username": self.confluence_username,
                 "space_key": self.confluence_space,
                 "parent_page_title": self.confluence_page,
                 "token": self.confluence_token,
@@ -54,11 +56,11 @@ class Test_A_PackageIntegration(unittest.TestCase):
         analysis_config = {
             "result_location": self.results_folder,
             "camera_info": {
-                "gain": 1,
-                "sensitivity": 0.45,
-                "baseline": 100,
-                "qe": 0.82,
-                "pixelsize": 130,  # nm
+                "Gain": 1,
+                "Sensitivity": 0.45,
+                "Baseline": 100,
+                "Qe": 0.82,
+                "Pixelsize": 130,  # nm
             },
             "gpufit_installed": False,
         }
@@ -88,6 +90,7 @@ class Test_A_PackageIntegration(unittest.TestCase):
             "report_name": "test_b01_AggregationWorkflowRunner",
             "ConfluenceReporter": {
                 "base_url": self.confluence_url,
+                "username": self.confluence_username,
                 "space_key": self.confluence_space,
                 "parent_page_title": self.confluence_page,
                 "token": self.confluence_token,
@@ -96,11 +99,11 @@ class Test_A_PackageIntegration(unittest.TestCase):
         analysis_config = {
             "result_location": self.results_folder,
             "camera_info": {
-                "gain": 1,
-                "sensitivity": 0.45,
-                "baseline": 100,
-                "qe": 0.82,
-                "pixelsize": 130,  # nm
+                "Gain": 1,
+                "Sensitivity": 0.45,
+                "Baseline": 100,
+                "Qe": 0.82,
+                "Pixelsize": 130,  # nm
             },
             "gpufit_installed": False,
         }
@@ -133,6 +136,7 @@ class Test_A_PackageIntegration(unittest.TestCase):
             base_url=self.confluence_url,
             space_key=self.confluence_space,
             parent_page_title=self.confluence_page,
+            username=self.confluence_username,
             token=self.confluence_token,
         )
         for repname in awr.cpage_names:
@@ -158,6 +162,7 @@ class Test_B_CompleteIntegration(unittest.TestCase):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
 
     def tearDown(self):
         pass
@@ -167,6 +172,7 @@ class Test_B_CompleteIntegration(unittest.TestCase):
             "report_name": "test_01_WorkflowRunner_ssw_minimal",
             "ConfluenceReporter": {
                 "base_url": self.confluence_url,
+                "username": self.confluence_username,
                 "space_key": self.confluence_space,
                 "parent_page_title": self.confluence_page,
                 "token": self.confluence_token,
@@ -175,11 +181,11 @@ class Test_B_CompleteIntegration(unittest.TestCase):
         analysis_config = {
             "result_location": self.results_folder,
             "camera_info": {
-                "gain": 1,
-                "sensitivity": 0.45,
-                "baseline": 100,
-                "qe": 0.82,
-                "pixelsize": 130,  # nm
+                "Gain": 1,
+                "Sensitivity": 0.45,
+                "Baseline": 100,
+                "Qe": 0.82,
+                "Pixelsize": 130,  # nm
             },
             "gpufit_installed": False,
         }
@@ -208,6 +214,7 @@ class Test_B_CompleteIntegration(unittest.TestCase):
             "report_name": "test_02_AWR_saw_align_channels",
             "ConfluenceReporter": {
                 "base_url": self.confluence_url,
+                "username": self.confluence_username,
                 "space_key": self.confluence_space,
                 "parent_page_title": self.confluence_page,
                 "token": self.confluence_token,
@@ -216,11 +223,11 @@ class Test_B_CompleteIntegration(unittest.TestCase):
         analysis_config = {
             "result_location": self.results_folder,
             "camera_info": {
-                "gain": 1,
-                "sensitivity": 0.45,
-                "baseline": 100,
-                "qe": 0.82,
-                "pixelsize": 130,  # nm
+                "Gain": 1,
+                "Sensitivity": 0.45,
+                "Baseline": 100,
+                "Qe": 0.82,
+                "Pixelsize": 130,  # nm
             },
             "gpufit_installed": False,
         }
@@ -262,6 +269,7 @@ class Test_B_CompleteIntegration(unittest.TestCase):
             base_url=self.confluence_url,
             space_key=self.confluence_space,
             parent_page_title=self.confluence_page,
+            username=self.confluence_username,
             token=self.confluence_token,
         )
         for repname in awr.cpage_names:

@@ -61,6 +61,12 @@ type "terminal" hit enter). Then, one after another execute the follwing command
 
 ## Contributing
 
+- Install pre commit hooks:
+	- `pip install pre-commit` (if not already installed by requirements in pyproject.toml / pip install -e)
+	- `cd GitHub/picasso-workflow`
+	- `pre-commit install`
+	- Now, before commit via git, the hooks will run through and check code and style
+	- optionally, the hooks can be run manually: `pre-commit run --all-files`
 - For adding new workflow modules, create a new branch (feature/newmodule),
 and add new modules as methods to the following classes:
 	- util/AbstractModuleCollection: This 'registers' the module as an option provided to the user. It does not need to do anything (pass).
@@ -70,7 +76,7 @@ and add new modules as methods to the following classes:
 	- tests/test_confluence/Test_B_ConfluenceReporterModules: As above, write a unit test for your module to make sure it runs through.
  	- tests/test_picasso_outpost: In case you added functions here, make sure to test them as well.
   - for running the unittests, go to terminal, activate the conda environment by `conda activate picasso-workflow`, navigate to your git repository, e.g. `cd ~/GitHub/picasso-workflow`, and enter `pytest -v`. If you don't want to run all tests for efficiency, you can add the module as an argument
-- Please document your code. Importantly, write docstrings in the beginning of your function, in Google format (https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html#example-google) 
+- Please document your code. Importantly, write docstrings in the beginning of your function, in Google format (https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html#example-google)
 - Please adhere to PEP code style (https://peps.python.org/pep-0008/) and send pull request when done.
 - Please be aware: Pre-commit hooks have been added to ascertain that the pushed code is clean and readable.
 - GitHub Actions are in place for the master and develop branches, running unittests and analysing coverage at new pushes [currently under construction]

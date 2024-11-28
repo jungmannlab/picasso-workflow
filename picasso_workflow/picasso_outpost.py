@@ -69,6 +69,10 @@ def align_channels(
     all_shift = np.zeros((3, len(channel_locs), max_iterations))
 
     logger.debug("Aligning datasets")
+    if fiducial_locs is None:
+        use_fiducials = False
+    else:
+        use_fiducials = True
 
     for iteration in range(max_iterations):
         completed = True
@@ -117,13 +121,24 @@ def align_channels(
     if shift_z != []:
         shift.append(shift_z)
 
+    # logger.debug(f"calculated shifts:")
+    # logger.debug(f"last shift: {str(shift)}")
+    # # logger.debug(f'shift_y: {str(shift_y)}')
+    # # logger.debug(f'shift_z: {str(shift_z)}')
+    # logger.debug(f"all shift: {str(all_shift)}")
+    # logger.debug(f"cumulative_shift: {str(cumulative_shift)}")
+    # logger.debug(f"cumulative_shift shape: {cumulative_shift.shape}")
+    # logger.debug(f"all_shift shape: {all_shift.shape}")
+
     # if fiducial_locs were separately given, shift channel_locs
-    if channel_locs != fiducial_locs:
+    if use_fiducials:  # channel_locs != fiducial_locs:
         for i, locs_ in enumerate(channel_locs):
-            locs_.y -= cumulative_shift[0]
-            locs_.x -= cumulative_shift[1]
-            if len(cumulative_shift) > 2:
-                locs_.z -= cumulative_shift[2]
+            # logger.debug(f"shifting x by {str(cumulative_shift[0, i, -1])}")
+            locs_.x -= cumulative_shift[0, i, -1]
+            # logger.debug(f"shifting y by {str(cumulative_shift[1, i, -1])}")
+            locs_.y -= cumulative_shift[1, i, -1]
+            if len(shift) == 3:
+                locs_.z -= cumulative_shift[2, i, -1]
     return shift, cumulative_shift
 
 

@@ -25,7 +25,7 @@ class Test_A_ConfluenceInterface(unittest.TestCase):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
-
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
         self.testpgtitle = "mytestpage"
         self.bodytxt = "mybodytext"
 
@@ -37,6 +37,7 @@ class Test_A_ConfluenceInterface(unittest.TestCase):
             self.confluence_url,
             self.confluence_space,
             self.confluence_page,
+            self.confluence_username,
             self.confluence_token,
         )
 
@@ -104,6 +105,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
 
         report_name = "my test report"
 
@@ -119,6 +121,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             self.confluence_space,
             self.confluence_page,
             report_name,
+            self.confluence_username,
             self.confluence_token,
         )
         # self.cr.ci.upda
@@ -907,6 +910,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
 
         report_name = "my test report"
 
@@ -922,6 +926,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
             self.confluence_space,
             self.confluence_page,
             report_name,
+            self.confluence_username,
             self.confluence_token,
         )
         # self.cr.ci.upda
@@ -942,6 +947,7 @@ class Test_C_ConfluenceReporter(Test_B_ConfluenceReporter):
         self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
         self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
         self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
 
         report_name = "my test report"
 
@@ -950,5 +956,9 @@ class Test_C_ConfluenceReporter(Test_B_ConfluenceReporter):
             self.confluence_space,
             self.confluence_page,
             report_name,
+            self.confluence_username,
             self.confluence_token,
         )
+
+        pgid, pgtitle = self.cr.ci.get_page_properties(report_name)
+        self.cr.ci.delete_page(pgid)

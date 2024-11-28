@@ -7,8 +7,9 @@ Description: Interaction with Confluence
 """
 import logging
 import os
-import requests
 import pandas as pd
+from atlassian import Confluence as con
+from requests.exceptions import ConnectionError, HTTPError
 
 from picasso_workflow.util import AbstractModuleCollection
 
@@ -22,26 +23,23 @@ class ConfluenceReporter(AbstractModuleCollection):
     """
 
     def __init__(
-        self, base_url, space_key, parent_page_title, report_name, token=None
+        self,
+        base_url,
+        space_key,
+        parent_page_title,
+        report_name,
+        username=None,
+        token=None,
     ):
         logger.debug("Initializing ConfluenceReporter.")
+
         self.ci = ConfluenceInterface(
-            base_url, space_key, parent_page_title, token=token
+            base_url, space_key, parent_page_title, username, token
         )
 
         # create page
         self.report_page_name = report_name
-        # # option A: create new pages if the old one exists
-        # for i in range(1, 30):
-        #     try:
-        #         self.report_page_id = self.ci.create_page(
-        #             self.report_page_name, body_text=""
-        #         )
-        #         logger.debug(f"Created page {self.report_page_name}")
-        #         break
-        #     except ConfluenceInterfaceError:
-        #         self.report_page_name = report_name + "_{:02d}".format(i)
-        # option B: if page creation fails, use the already existing page.
+
         try:
             self.report_page_id = self.ci.create_page(
                 self.report_page_name, body_text=""
@@ -256,7 +254,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Locs Column names: {results['locs_columns']}</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        # text = "<p><strong>Localize</strong></p>"
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -1549,22 +1546,89 @@ class UndriftError(Exception):
     pass
 
 
+def confluence_call(method):
+    """When calling the confluence API, sometimes the connection is lost.
+    Therefore, wrap the functions using this decorator in order to
+    re-connect and call again in that case.
+    """
+
+    def confluence_call_wrapper(self, *args, **kwargs):
+        try:
+            # call the confluence api
+            status = method(self, *args, **kwargs)
+        except ConnectionError as e:
+            logger.exception(e)
+            self.connect()
+            status = method(self, *args, **kwargs)
+        except HTTPError as e:
+            if "unauthorized" in str(e).lower():
+                raise e
+            raise ConfluenceInterfaceError(
+                f"Calling {method.__name__} failed with HTTPError: {str(e)}"
+            )
+
+        return status
+
+    return confluence_call_wrapper
+
+
 class ConfluenceInterface:
     """A Interface class to access Confluence
 
     For access to the Confluence API, create an API token in confluence,
     and store it as an environment variable:
     $ setx CONFLUENCE_BEARER "your_confluence_api_token"
+    If the token is not stored as an environment variable, specify it
+    here at initialization.
+
+    Args:
+        base_url : str
+            the confluence url to connect to.
+        space_key : str
+            the confluence space key to work in
+        parent_page_title : str
+            the (already existing) parent page to crate the reports under
+        username : str, default None
+            the username to authenticate with.
+            If given, authentiation is performed with url, username and
+            password.
+            If None or "", authentication is performed with url and token.
+            For Confluence Server, token-based authentication is needed.
+        token : str, default None
+            the password (if username-based authentication), or token.
+            If None, the environment variable CONFLUENCE_BEARER is polled.
     """
 
-    def __init__(self, base_url, space_key, parent_page_title, token=None):
+    def __init__(
+        self, base_url, space_key, parent_page_title, username=None, token=None
+    ):
+        """ """
         if token is None:
             self.bearer_token = self.get_bearer_token()
         else:
             self.bearer_token = token
         self.base_url = base_url
+        if username != "":
+            self.username = username
+        else:
+            self.username = None
         self.space_key = space_key
+        self.connect()
+
         self.parent_page_id, _ = self.get_page_properties(parent_page_title)
+
+    def connect(self):
+        """Connect to confluence (cloud or server) by authentification depending
+        on the settings stored at initialization.
+        """
+        if self.username is not None:
+            self.confluence = con(
+                url=self.base_url,
+                username=self.username,
+                password=self.bearer_token,
+            )
+        else:
+            self.confluence = con(url=self.base_url, token=self.bearer_token)
 
     def get_bearer_token(self):
         """Set this by setting the environment variable in the windows command
@@ -1573,8 +1637,9 @@ class ConfluenceInterface:
         The confluence api token can be generated and copied in the personal
         details of confluence.
         """
-        return os.environ.get("CONFLUENCE_BEARER")
+        return os.environ.get("CONFLUENCE_TOKEN")
 
+    @confluence_call
     def get_page_properties(self, page_title="", page_id=""):
         """
         Returns:
@@ -1584,27 +1649,21 @@ class ConfluenceInterface:
                 the page title
         """
         if page_title != "":
-            url = self.base_url + "/rest/api/content"
-            params = {"spaceKey": self.space_key, "title": page_title}
+            page = self.confluence.get_page_by_title(
+                space=self.space_key, title=page_title
+            )
         elif page_id != "":
-            url = self.base_url + f"/rest/api/content/{page_id}"
-            params = {
-                "spaceKey": self.space_key,
-            }
+            page = self.confluence.get_page_by_id(page_id=page_id)
         else:
             logger.error("One of page_title and page_id must be given.")
             raise ConfluenceInterfaceError(
                 "Cannot get page properties. "
                 + "One of page_title and page_id must be given."
             )
-        headers = {"Authorization": f"Bearer {self.bearer_token}"}
-        response = requests.get(url, headers=headers, params=params)
-        if response.status_code != 200:
-            logger.error("Failed to get page content.")
-            raise ConfluenceInterfaceError("Failed to get page content.")
-        results = response.json()["results"][0]
-        return results["id"], results["title"]
 
+        return page["id"], page["title"]
+
+    @confluence_call
     def get_page_version(self, page_title="", page_id=""):
         """
         Returns:
@@ -1613,24 +1672,19 @@ class ConfluenceInterface:
                     id, title, version
         """
         if page_title != "":
-            url = self.base_url + "/rest/api/content"
-            params = {
-                "spaceKey": self.space_key,
-                "title": page_title,
-            }
+            page = self.confluence.get_page_by_title(
+                space=self.space_key, title=page_title, expand="version"
+            )
         elif page_id != "":
-            url = self.base_url + f"/rest/api/content/{page_id}"
-            params = {}
+            page = self.confluence.get_page_by_id(
+                page_id=page_id, expand="body.version"
+            )
         else:
-            logger.error("One of page_title and page_id must be given.")
-        params["expand"] = ["version"]
-        headers = {"Authorization": f"Bearer {self.bearer_token}"}
-        response = requests.get(url, headers=headers, params=params)
-        if response.status_code != 200:
-            logger.error("Failed to get page content.")
-            raise ConfluenceInterfaceError("Failed to get page content.")
-        return response.json()["results"][0]["version"]["number"]
+            logger.exception("One of page_title and page_id must be given.")
 
+        return page["version"]["number"]
+
+    @confluence_call
     def get_page_body(self, page_title="", page_id=""):
         """
         Returns:
@@ -1639,23 +1693,19 @@ class ConfluenceInterface:
                     id, title, version
         """
         if page_title != "":
-            url = self.base_url + "/rest/api/content"
-            params = {
-                "spaceKey": self.space_key,
-                "title": page_title,
-            }
+            page = self.confluence.get_page_by_title(
+                space=self.space_key, title=page_title, expand="body.storage"
+            )
         elif page_id != "":
-            url = self.base_url + f"/rest/api/content/{page_id}"
-            params = {}
+            page = self.confluence.get_page_by_id(
+                page_id=page_id, expand="body.storage"
+            )
         else:
-            logger.error("One of page_title and page_id must be given.")
-        params["expand"] = ["body.storage"]
-        headers = {"Authorization": f"Bearer {self.bearer_token}"}
-        response = requests.get(url, headers=headers, params=params)
-        if response.status_code != 200:
-            logger.warn("Failed to get page content.")
-        return response.json()["results"][0]["body"]["storage"]["value"]
+            logger.exception("One of page_title and page_id must be given.")
 
+        return page["body"]["storage"]["value"]
+
+    @confluence_call
     def create_page(self, page_title, body_text, parent_id="rootparent"):
         """
         Args:
@@ -1672,45 +1722,27 @@ class ConfluenceInterface:
         """
         if parent_id == "rootparent":
             parent_id = self.parent_page_id
-        url = self.base_url + "/rest/api/content"
-        headers = {
-            "Authorization": "Bearer {:s}".format(self.bearer_token),
-            "Content-Type": "application/json",
-        }
-        data = {
-            "type": "page",
-            "title": page_title,
-            "space": {"key": self.space_key},
-            "ancestors": [{"id": parent_id}],
-            "body": {
-                "storage": {"value": body_text, "representation": "storage"}
-            },
-        }
-        response = requests.post(url, headers=headers, json=data)
-        if response.status_code != 200:
-            logger.error(f"Failed to create page {page_title}.")
-            raise ConfluenceInterfaceError(
-                f"Failed to create page {page_title}."
-            )
+        page = self.confluence.create_page(
+            space=self.space_key,
+            title=page_title,
+            body=body_text,
+            parent_id=parent_id,
+            type="page",
+            representation="storage",
+            editor="v2",
+            full_width=True,
+        )
+        return page["id"]
 
-        return response.json()["id"]
-
-    def delete_page(self, page_id):
+    @confluence_call
+    def delete_page(self, page_id, recursive=False):
         # allow the page name to be used instead of page_id
         if isinstance(page_id, str) and not page_id.isnumeric():
             page_id, pgname = self.get_page_properties(page_id)
-        url = self.base_url + f"/rest/api/content/{page_id}"
-        headers = {
-            "Authorization": "Bearer {:s}".format(self.bearer_token),
-            "Content-Type": "application/json",
-        }
-        response = requests.delete(url, headers=headers)
-        if response.status_code == 204:
-            logger.debug("Page deleted successfully.")
-        else:
-            logger.error("Failed to delete the page.")
-            raise ConfluenceInterfaceError("Failed to delete page.")
+        self.confluence.remove_page(page_id, status=None, recursive=recursive)
+        # implement logger
 
+    @confluence_call
     def upload_attachment(self, page_id, filename):
         """Uploads an attachment to a page
         Args:
@@ -1722,22 +1754,20 @@ class ConfluenceInterface:
             attachment_id : str
                 the id of the attachment
         """
-        url = self.base_url + f"/rest/api/content/{page_id}/child/attachment"
-        headers = {
-            "Authorization": "Bearer {:s}".format(self.bearer_token),
-            "X-Atlassian-Token": "nocheck",
-        }
-        with open(filename, "rb") as f:
-            files = {"file": f}
-            response = requests.post(url, headers=headers, files=files)
-            # response = requests.put(url, headers=headers, files=files)
-        if response.status_code != 200:
-            logger.error("Failed to upload attachment.")
-            raise ConfluenceInterfaceError("Failed to upload attachment.")
+        self.confluence.attach_file(
+            filename=filename, page_id=page_id, space=self.space_key
+        )
 
-        attachment_id = response.json()["results"][0]["id"]
+        attachments_container = self.confluence.get_attachments_from_content(
+            page_id=page_id, start=0, limit=500
+        )
+        for attachment in attachments_container["results"]:
+            attachment_id = attachment["id"]
+            break
+
         return attachment_id
 
+    @confluence_call
     def get_attachment_id(self, page_id, filename):
         """Get the id of an attachment to a page
         Args:
@@ -1749,27 +1779,18 @@ class ConfluenceInterface:
             attachment_id : str
                 the id of the attachment
         """
-        url = self.base_url + f"/rest/api/content/{page_id}/child/attachment"
-        headers = {
-            "Authorization": "Bearer {:s}".format(self.bearer_token),
-            "X-Atlassian-Token": "nocheck",
-        }
-        response = requests.get(url, headers=headers)
-        if response.status_code != 200:
-            logger.error("Failed to upload attachment.")
-            raise ConfluenceInterfaceError("Failed to upload attachment.")
-        print(response.json())
-        print(response.json().keys())
-        print(response.json()["results"])
-        # print(response.json()["results"].keys())
-        results = response.json()["results"]
-        for attachment in results:
+        attachments_container = self.confluence.get_attachments_from_content(
+            page_id, start=0, limit=500
+        )
+        attachments = attachments_container["results"]
+        for attachment in attachments:
             if attachment["title"].lower() == filename.lower():
                 attachment_id = attachment["id"]
                 break
 
         return attachment_id
 
+    @confluence_call
     def delete_attachment(self, page_id, attachment_id):
         """Deletes an attachment to a page
         Args:
@@ -1779,72 +1800,19 @@ class ConfluenceInterface:
                 the id of the attachment
         Returns:
         """
-        # https://pypi.org/project/atlassian-python-api/
-        # https://github.com/atlassian-api/atlassian-python-api
-        #   /blob/master/atlassian/confluence.py
-        #
-        # return self.delete(
-        #     "rest/experimental/content/" +
-        # "{id}/version/{versionId}".format(
-        #       id=attachment_id, versionId=version)
-        # )
+        self.confluence.delete_attachment(page_id, attachment_id, version=None)
 
-        # or
-
-        # params = {"pageId": page_id, "fileName": filename}
-        #         if version:
-        #             params["version"] = version
-        #         return self.post(
-        #             "json/removeattachment.action",
-        #             params=params,
-        #             headers=self.form_token_headers,
-        #         )
-        #
-        # https://github.com/atlassian-api/atlassian-python-api
-        #   /blob/master/atlassian/rest_client.py
-        url = (
-            self.base_url
-            + f"/rest/api/content/{page_id}/child/attachment/{attachment_id}"
-        )
-        headers = {
-            "Authorization": "Bearer {:s}".format(self.bearer_token),
-            "X-Atlassian-Token": "nocheck",
-        }
-        response = requests.delete(url, headers=headers)
-        if response.status_code != 200:
-            logger.error("Failed to delete attachment.")
-            raise ConfluenceInterfaceError("Failed to delete attachment.")
-
+    @confluence_call
     def update_page_content(self, page_name, page_id, body_update):
-        prev_version = self.get_page_version(page_name)
-        prev_body = self.get_page_body(page_name)
-        _, prev_title = self.get_page_properties(page_name)
+        status = self.confluence.append_page(
+            parent_id=None,
+            page_id=page_id,
+            title=page_name,
+            append_body=body_update,
+        )
+        return status
 
-        url = self.base_url + f"/rest/api/content/{page_id}"
-        headers = {
-            "Authorization": "Bearer {:s}".format(self.bearer_token),
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-        data = {
-            "version": {
-                "number": prev_version + 1,
-                "message": "version update",
-            },
-            "type": "page",
-            "title": prev_title,
-            "body": {
-                "storage": {
-                    "value": prev_body + body_update,
-                    "representation": "storage",
-                }
-            },
-        }
-        response = requests.put(url, headers=headers, json=data)
-        if response.status_code != 200:
-            logger.error("Failed to update page content.")
-            raise ConfluenceInterfaceError("Failed to update page content.")
-
+    @confluence_call
     def update_page_content_with_movie_attachment(
         self, page_name, page_id, filename
     ):
@@ -1858,8 +1826,17 @@ class ConfluenceInterface:
             <ac:parameter ac:name="height">30%</ac:parameter>
             </ac:structured-macro>
             """
-        self.update_page_content(page_name, page_id, body_update)
+        self.confluence.append_page(
+            page_id,
+            page_name,
+            append_body=body_update,
+            parent_id=None,
+            type="page",
+            representation="storage",
+            minor_edit=False,
+        )
 
+    @confluence_call
     def update_page_content_with_image_attachment(
         self, page_name, page_id, filename
     ):
@@ -1867,7 +1844,15 @@ class ConfluenceInterface:
             f'<ac:image><ri:attachment ri:filename="{filename}" />'
             + "</ac:image>"
         )
-        self.update_page_content(page_name, page_id, body_update)
+        self.confluence.append_page(
+            page_id,
+            page_name,
+            append_body=body_update,
+            parent_id=None,
+            type="page",
+            representation="storage",
+            minor_edit=False,
+        )
 
 
 class ConfluenceInterfaceError(Exception):

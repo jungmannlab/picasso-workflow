@@ -203,12 +203,13 @@ class AggregationWorkflowRunner:
         return latest_postfix
 
     def _initialize_confluence_interface(
-        self, base_url, space_key, parent_page_title, token=None
+        self, base_url, space_key, parent_page_title, username=None, token=None
     ):
         self.ci = ConfluenceInterface(
             base_url=base_url,
             space_key=space_key,
             parent_page_title=parent_page_title,
+            username=username,
             token=token,
         )
 
