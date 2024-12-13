@@ -2334,7 +2334,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @module_decorator
     def ripleysk(self, i, parameters, results):
-        """Perforn Ripley's K analysis between the channels.
+        """Perforn Ripley's K analysis between the channels using
+        Magdalena's code.
         Args:
             parameters:
                 ripleys_n_random_controls : int
@@ -2419,6 +2420,117 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         results["ripleys_significant"] = self._find_ripleys_significant(
             ripleysMeanVal,
+            parameters["ripleys_threshold"],
+            self.channel_tags,
+        )
+
+        return parameters, results
+
+    @module_decorator
+    def ripleysk2(self, i, parameters, results):
+        """Perforn Ripley's K analysis between the channels using
+        Rafal's code.
+        Args:
+            parameters:
+                ripleys_n_random_controls : int
+                    number of random controls, default: 100
+                ripleys_rmax : int
+                    the maximum radius, default 200
+                ripleys_dr : float
+                    the radius interval, default 5
+                radii : 1D np array
+                    the radius values. If given, ripleys_rmax and
+                    ripleys_dr are ignored.
+                ripleys_threshold : float
+                    the threshold of ripleys integrals above which the
+                    interaction is deemed significant.
+                area : float
+                    the cell area in µm^2
+                fp_mask : str
+                    the filepath to the cell mask
+                fp_combined_locs : str
+                    filepath to the combined locs of all channel_locs
+                atype : str
+                    the type of analysis: 'Ripleys' for the standard
+                    Ripley's K analysis, or 'RDF' for calculation of the
+                    radial distribution function instead of K, and random
+                    controls by relocating each point by a random x/y in a
+                    circle with the currently investigated r, which preserves
+                    the density fluctuations (instead of CSR simulation)
+        """
+        nRandomControls = parameters.get("ripleys_n_random_controls", 100)
+        # radii = np.concatenate(
+        #     (
+        #         np.arange(0, 100, 2),
+        #         np.arange(100, parameters.get("ripleys_rmax", 200), 12),
+        #     )
+        # )
+        if (radii := parameters.get("radii")) is not None:
+            radii = np.array(radii)
+        else:
+            radii = np.concatenate(
+                (
+                    np.arange(
+                        0,
+                        parameters.get("ripleys_rmax", 200),
+                        parameters.get("ripleys_dr", 5),
+                    ),
+                )
+            )
+
+        if isinstance(parameters["fp_combined_locs"], list):
+            fp_combined_locs = parameters["fp_combined_locs"][0]
+        else:
+            fp_combined_locs = parameters["fp_combined_locs"]
+        combined_locs, _ = io.load_locs(fp_combined_locs)
+
+        mask = np.load(parameters["fp_mask"])
+        area = parameters["area"]
+
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+
+        mol_coords = [
+            outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
+            for mol in self.channel_locs
+        ]
+
+        (ripley_matrix, fig_u, fig_n) = (
+            outpost_modules.ripleys.analyze_all_channels(
+                mol_coords,
+                mask,
+                area,
+                radii,
+                nRandomControls,
+                names=self.channel_tags,
+            )
+        )
+
+        ripley_matrix = outpost_modules.ripleys.postprocess_ripley_matrix(
+            ripley_matrix, radii
+        )
+
+        results["fp_ripleys_meanval"] = os.path.join(
+            results["folder"], "Ripleys_IntegralsMean.txt"
+        )
+        np.savetxt(results["fp_ripleys_meanval"], ripley_matrix)
+
+        results["fp_fig_ripleys_meanval"] = self._plot_ripleys_integrals(
+            ripley_matrix,
+            results["folder"],
+            self.channel_tags,
+            parameters["atype"],
+        )
+        results["fp_fig_unnormalized"] = os.path.join(
+            results["folder"], f"{parameters['atype']}_unnormalized.png"
+        )
+        fig_u.savefig(results["fp_fig_unnormalized"])
+        results["fp_fig_normalized"] = os.path.join(
+            results["folder"], f"{parameters['atype']}_normalized.png"
+        )
+        fig_n.savefig(results["fp_fig_normalized"])
+
+        results["ripleys_significant"] = self._find_ripleys_significant(
+            ripley_matrix,
             parameters["ripleys_threshold"],
             self.channel_tags,
         )

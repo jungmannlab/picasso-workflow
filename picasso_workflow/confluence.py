@@ -919,6 +919,76 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    def ripleysk2(self, i, parameters, results):
+        logger.debug("Reporting ripleysk2.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Ripley's K Analysis (2)</strong></p>
+        <ul>
+        <p>Ripley's K analyis investigates pair-wise clustering or dispersing
+        organization between different channels.
+        </p>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Type of analysis:
+        {str(parameters["atype"])}</li>
+        <li>Integral significance threshold:
+        {parameters["ripleys_threshold"]}</li>
+        <li>Ripleys Integrals location: {results["fp_ripleys_meanval"]}</li>
+        <li>Significantly interacting pairs:
+        {str(results["ripleys_significant"])}</li>
+        </ul>"""
+
+        if fp_fig := results.get("fp_fig_normalized"):
+            text += "<ul><table>"
+            text += "<tr><td><b>Normalized Curves</b></td>"
+            text += "<td><b>Un-normalized Curves</b></td></tr>"
+            text += "<tr><td>"
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += f"""
+                <ac:image ac:width="750"><ri:attachment
+                ri:filename="{fp_fig}" />
+                </ac:image>"""
+            text += "</td><td>"
+            fp_fig = results.get("fp_fig_unnormalized")
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += f"""
+                <ac:image ac:width="750"><ri:attachment
+                ri:filename="{fp_fig}" />
+                </ac:image>"""
+            text += "</td></tr></table></ul>"
+        if fp_fig := results.get("fp_fig_ripleys_meanval"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+            text += (
+                "The Ripley's mean value is the Ripley's K integral"
+                + ", divided by the maximum integration distance."
+            )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
     def ripleysk_average(self, i, parameters, results):
         logger.debug("Reporting ripleysk_average.")
         text = f"""

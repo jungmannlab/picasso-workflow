@@ -243,7 +243,18 @@ def convert_picasso_to_coords(mols, pixelsize):
     return np.array([mols["x"], mols["y"]]).T * pixelsize
 
 
-def analyze_2_channels(exp_X1, exp_X2, mask, area, radii):
+def analyze_2_channels(
+    exp_X1,
+    exp_X2,
+    mask,
+    area,
+    radii,
+    n_simulations,
+    ax_u,
+    ax_n,
+    name1="",
+    name2="",
+):
     """Runs the analysis of any two channels of the dataset (2 protein
     species)."""
 
@@ -252,12 +263,71 @@ def analyze_2_channels(exp_X1, exp_X2, mask, area, radii):
     else:
         n_points = (len(exp_X1), len(exp_X2))
     K_exp = ripley_K(exp_X1, exp_X2, radii, area)
-    K_csr = ripley_K_CSR(n_points, mask, area, radii=radii, n_simulations=100)
+    K_csr = ripley_K_CSR(
+        n_points, mask, area, radii=radii, n_simulations=n_simulations
+    )
     K_exp_norm = normalize_to_CSR(K_exp, K_csr)
     # r_max = radii.max()
     # ripley_integral = np.trapz(K_exp_norm, radii) / r_max
     ripley_integral = np.trapz(K_exp_norm, radii)
+    if ax_u is not None and ax_n is not None:
+        plot_ripleys(
+            radii,
+            K_exp,
+            K_csr,
+            ci=0.95,
+            normalized=True,
+            showControls=True,
+            title=f"{name1} -> {name2}",
+            labelFontsize=30,
+            axes=ax_n,
+        )
+        plot_ripleys(
+            radii,
+            K_exp,
+            K_csr,
+            ci=0.95,
+            normalized=False,
+            showControls=True,
+            title=f"{name1} -> {name2}",
+            labelFontsize=30,
+            axes=ax_u,
+        )
     return ripley_integral
+
+
+def analyze_all_channels(
+    mol_coords, mask, area, radii, n_simulations, do_plot=True, names=""
+):
+    n_targets = len(mol_coords)
+    if do_plot:
+        fig_u, ax_u = init_plot(n_targets)
+        fig_n, ax_n = init_plot(n_targets)
+    else:
+        fig_u, ax_u = None, None
+        fig_n, ax_n = None, None
+    if not names:
+        names = [""] * n_targets
+    ripley_matrix = np.zeros((n_targets, n_targets), dtype=np.float64)
+    for i, X1 in enumerate(mol_coords):
+        for j, X2 in enumerate(mol_coords):
+            # print(f"Analyzing interaction between receptor {i} and {j}...")
+            val = analyze_2_channels(
+                X1,
+                X2,
+                mask,
+                area,
+                radii=radii,
+                n_simulations=n_simulations,
+                ax_u=ax_u,
+                ax_n=ax_n,
+                name1=names[i],
+                name2=names[j],
+            )
+            if val is np.nan:
+                val = 0
+            ripley_matrix[i, j] = val
+    return ripley_matrix, fig_u, fig_n
 
 
 def analyze(mols, radii):
@@ -276,17 +346,9 @@ def analyze(mols, radii):
         pair of molecular species. N is the number of targets, which
         is the length of the mols list.
     """
-    n_targets = len(mols)
-    ripley_matrix = np.zeros((n_targets, n_targets), dtype=np.float64)
     mol_coords = [convert_picasso_to_coords(mol) for mol in mols]
     mask, area = get_cell_mask(mol_coords)
-    for i, X1 in enumerate(mol_coords):
-        for j, X2 in enumerate(mol_coords):
-            # print(f"Analyzing interaction between receptor {i} and {j}...")
-            val = analyze_2_channels(X1, X2, mask, area, radii=radii)
-            if val is np.nan:
-                val = 0
-            ripley_matrix[i, j] = val
+    ripley_matrix = analyze_all_channels(mol_coords, mask, area, radii)
     return ripley_matrix
 
 
@@ -297,3 +359,88 @@ def postprocess_ripley_matrix(ripley_matrix, radii):
     ci = radii.max() - radii.min()
     postprocessed[(postprocessed < ci) & (postprocessed > -ci)] = 0
     return postprocessed
+
+
+def init_plot(n_targets, figsize=30):
+    fig, ax = plt.subplots(n_targets, n_targets, figsize=(figsize, figsize))
+    return fig, ax
+
+
+def plot_ripleys(
+    radii,
+    Kexp,
+    Kctrl,
+    ci=0.95,
+    normalized=True,
+    showControls=False,
+    title=None,
+    labelFontsize=14,
+    axes=None,
+):
+    # Plot Ripley's K and confidence interval
+    if axes is None:
+        plt.figure()
+        axes = plt.gca()
+
+    # show data
+    axes.plot(
+        radii,
+        Kexp,
+        c="k",
+        linewidth=2.0,
+        label="Observed data",
+    )
+    # show controls
+    if showControls:
+        for k in range(Kctrl):
+            axes.plot(
+                radii,
+                Kctrl,
+                c="lightgray",
+                label="Random controls",
+                linestyle="-",
+            )
+    axes.set_xlabel("d [nm]", fontsize=labelFontsize)
+    if normalized:
+        axes.plot(
+            radii,
+            np.zeros(len(radii)),
+            c="k",
+            label=f"{ci*100}% envelope",
+            linestyle="--",
+        )
+        axes.plot(radii, np.ones(len(radii)), c="k", linestyle=":")
+        axes.plot(radii, -np.ones(len(radii)), c="k", linestyle=":")
+        axes.set_xlabel("d [nm]", fontsize=labelFontsize)
+        axes.set_ylabel("Normalized K(d)", fontsize=labelFontsize)
+    else:
+        quantileLow = (1 - ci) / 2
+        quantileHigh = 1 - (1 - ci) / 2
+        axes.plot(
+            radii,
+            np.mean(Kctrl, axis=1),
+            c="k",
+            label="Mean of random controls",
+            linestyle="--",
+        )
+        axes.plot(
+            radii,
+            np.quantile(Kctrl, quantileHigh, axis=1),
+            c="k",
+            label=f"{ci*100}% envelope",
+            linestyle=":",
+        )
+        axes.plot(
+            radii,
+            np.quantile(Kctrl, quantileLow, axis=1),
+            c="k",
+            linestyle=":",
+        )
+        axes.set_ylabel("K(d)", fontsize=labelFontsize)
+
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys(), fontsize=labelFontsize)
+
+    if title is not None:
+        axes.set_title(title, fontsize=labelFontsize)
