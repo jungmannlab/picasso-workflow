@@ -531,6 +531,27 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    def gaussian_mixture_cluster(self):
+        parameters = {
+            "min_locs": 3,
+            "min_sigma": 0.4,
+            "max_sigma": 1.1,
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "n_locs_in": 2000000,
+            "n_locs_clustered": 1800000,
+            "n_centers": 100000,
+        }
+        self.cr.gaussian_mixture_cluster(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
     # @unittest.skip("")
     def spinna_manual(self):
         parameters = {}

@@ -514,6 +514,44 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    def gaussian_mixture_cluster(self, i, parameters, results):
+        logger.debug("Reporting gaussian_mixture_cluster.")
+
+        required_args = ["min_locs", "min_sigma", "max_sigma"]
+        optional_args = [
+            "max_rounds_without_best_bic",
+            "bootstrap_check",
+            "calibration",
+            "pixelsize",
+            "asynch",
+        ]
+        parameter_text = ""
+        for a in required_args + optional_args:
+            parameter_text += f"<li>{a}: {parameters.get(a)}</li>"
+
+        result_keys = ["n_locs_in", "n_locs_clustered", "n_centers"]
+        result_text = ""
+        for a in result_keys:
+            result_text += f"<li>{a}: {results.get(a)}</li>"
+
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Gaussian Mixture Model clustering</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        {parameter_text}
+        {result_text}
+        </ul>"""
+
+        text += """
+        <b>TODO: generate plot for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
     def nneighbor(self, i, parameters, results):
         logger.debug("Reporting nneighbor.")
         d = len(parameters["dims"])

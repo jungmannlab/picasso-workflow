@@ -123,6 +123,11 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def gaussian_mixture_cluster(self):
+        """Perform clustering using gaussian mixture models"""
+        pass
+
+    @abc.abstractmethod
     def nneighbor(self):
         """Calculate Nearest Neighbor distances"""
         pass

@@ -510,6 +510,36 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_smlm_clusterer"))
 
+    @patch("picasso_workflow.analyse.gmm.gmm_search")
+    def gaussian_mixture_cluster(self, mock_gmms):
+        self.ap.info = [{"Width": 1000, "Height": 1000}]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        self.ap.locs = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        mock_gmms.return_value = self.ap.locs, self.ap.locs, self.ap.info
+
+        parameters = {"min_locs": 10, "min_sigma": 0.2, "max_sigma": 0.9}
+        parameters, results = self.ap.gaussian_mixture_cluster(0, parameters)
+        # logger.debug(f'parameters: {parameters}')
+        logger.debug(f"results: {results}")
+        assert results["duration"] > -1
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_gaussian_mixture_cluster")
+        )
+
     @patch("picasso_workflow.analyse.distance.cdist")
     def nneighbor(self, mock_cdist):
         mock_cdist.return_value = np.random.rand(len(self.ap.movie), 4)
