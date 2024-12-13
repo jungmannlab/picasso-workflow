@@ -27,7 +27,7 @@ import pickle
 
 from picasso_workflow import util
 from picasso_workflow import process_brightfield
-from picasso_workflow import picasso_outpost
+from picasso_workflow import picasso_outpost, outpost_modules
 from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
 
@@ -3062,6 +3062,11 @@ class AutoPicasso(util.AbstractModuleCollection):
     @module_decorator
     def create_mask(self, i, parameters, results):
         """
+        This is Susanne's implementation of calculating a cell mask,
+        written (ni part?) for the initial version of the DC-Atlas.
+        May be obsolete with create_mask2, but kept for backwards
+        compatibility. To be deprecated on the long run.
+
         Args:
             i : int
                 the index of the module
@@ -3163,6 +3168,95 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_mask_dict"] = fp_mask_dict
         with open(fp_mask_dict, "wb+") as f:
             pickle.dump(mask_dict, f)
+
+        return parameters, results
+
+    @module_decorator
+    def create_mask2(self, i, parameters, results):
+        """
+        This is Rafal's implementation of cell masking, written for the
+        3rd version of the DC Atlas. It is (mostly?) identical with an
+        implementation of it in spinna, which will be integrated into
+        picasso soon. Evaluate deprecation (or moving source from
+        outpost_modules/ripleys to picasso/spinna) at that time.
+
+        the locs must be protein positions at this stage.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    binsize : float
+                        the bin size in nanometers. A good value is 20
+                    blursize : float
+                        the gaussian blur to apply in nanometers.
+                        A good value is 400
+                    mask_pixel_size : float
+                        the pixelsize of the final mask, in nanometers.
+                        Often used: 10
+                    threshold : float
+                        the threshold value below which the mask is set
+                        to zero. For example 1 / 3
+                    binary : boolean
+                        whether to create a binary or density mask
+                and optional keys:
+                    fp_combined_locs : str default: None or ''
+                        filepath to the locs combined in 'combine_channels'
+                        module. If None or '', loaded channel_locs is used
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    combine_col : str
+                        the name of the combine column, e.g. 'combine_id'
+                        or 'protein'. Same as used in 'combine_channels' module
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        # # get map
+        # with open(parameters["fp_channel_map"], "r") as f:
+        #     channel_map = yaml.safe_load(f)
+        # locs for the mask are the combined locs
+        fp_combined_locs = parameters.get("fp_combined_locs", None)
+        if fp_combined_locs:
+            if isinstance(parameters["fp_combined_locs"], list):
+                fp_combined_locs = parameters["fp_combined_locs"][0]
+            else:
+                fp_combined_locs = parameters["fp_combined_locs"]
+            combined_locs, combined_info = io.load_locs(fp_combined_locs)
+            mols = [combined_locs]
+        else:
+            mols = [locs for locs in self.channel_locs]
+
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+
+        mol_coords = [
+            outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
+            for mol in mols
+        ]
+        binsize = parameters["binsize"]
+        blur = parameters["blursize"] / binsize
+        threshold = parameters["threshold"]
+        mask_pixel_size = parameters["mask_pixel_size"]
+        binary = parameters["binary"]
+        mask, area = outpost_modules.ripleys.get_cell_mask(
+            mol_coords,
+            pixelsize,
+            binsize=binsize,
+            blur=blur,
+            threshold=threshold,
+            upsample=mask_pixel_size,
+            binary=binary,
+        )
+
+        results["area"] = area
+        results["fp_mask"] = os.path.join(results["folder"], "mask.npy")
+        np.save(mask, results["fp_mask"])
+
+        results["fp_fig_mask"] = os.path.join(results["folder"], "mask.png")
+        outpost_modules.ripleys.plot_mask(mask, mask_pixel_size)
 
         return parameters, results
 

@@ -714,6 +714,11 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_create_mask"))
 
+    def create_mask2(self):
+        """Create a density mask"""
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_create_mask2"))
+
     def dbscan_molint(self):
         """TO BE CLEANED UP
         dbscan implementation for molecular interactions workflow
