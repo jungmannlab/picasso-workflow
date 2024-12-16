@@ -917,6 +917,8 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "duration": 4.12,
             "success": True,
             "fp_locs": "path/to/locs",
+            "nlocs_before": 2000,
+            "nlocs_after": 1700,
         }
         self.cr.filter_locs(0, parameters, results)
 

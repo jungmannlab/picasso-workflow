@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
+from matplotlib.colors import LogNorm
 import yaml
 import os
 from aicsimageio import AICSImage
@@ -1746,3 +1747,37 @@ def _undrift_from_picked(locs, info, picked_locs):
 ########################################################################
 # End Labeling Efficiency Workflow Modules
 ########################################################################
+
+
+def plot_1dhist(locs, field, fig, ax):
+    data = locs[field]
+    data = data[np.isfinite(data)]
+    bins = lib.calculate_optimal_bins(data, 1000)
+    # Prepare the figure
+    fig.clear()
+    fig.suptitle(field)
+    ax.hist(data, bins, rwidth=1, linewidth=0)
+    data_range = data.ptp()
+    ax.set_xlim([bins[0] - 0.05 * data_range, data.max() + 0.05 * data_range])
+
+
+def plot_2dhist(locs, field_x, field_y, fig, ax):
+    x = locs[field_x]
+    y = locs[field_y]
+    valid = np.isfinite(x) & np.isfinite(y)
+    x = x[valid]
+    y = y[valid]
+    # Start hist2 version
+    bins_x = lib.calculate_optimal_bins(x, 1000)
+    bins_y = lib.calculate_optimal_bins(y, 1000)
+    counts, x_edges, y_edges, image = ax.hist2d(
+        x, y, bins=[bins_x, bins_y], norm=LogNorm()
+    )
+    x_range = x.ptp()
+    ax.set_xlim([bins_x[0] - 0.05 * x_range, x.max() + 0.05 * x_range])
+    y_range = y.ptp()
+    ax.set_ylim([bins_y[0] - 0.05 * y_range, y.max() + 0.05 * y_range])
+    fig.colorbar(image, ax=ax)
+    ax.grid(False)
+    ax.get_xaxis().set_label_text(field_x)
+    ax.get_yaxis().set_label_text(field_y)

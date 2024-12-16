@@ -1602,6 +1602,17 @@ class ConfluenceReporter(AbstractModuleCollection):
                 in the decorator wrapper
         """
         logger.debug("Reporting filter_locs.")
+
+        if isinstance(parameters["field"], str):
+            fields = [parameters["field"]]
+            minvals = [parameters["minval"]]
+            maxvals = [parameters["maxval"]]
+        else:
+            fields = parameters["field"]
+            minvals = parameters["minval"]
+            maxvals = parameters["maxval"]
+        for field, minval, maxval in zip(fields, minvals, maxvals):
+            txtfilt = f"<li>{field}: {minval} - {maxval}</li>"
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Filter localizations</strong></p>
@@ -1609,10 +1620,41 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>Field to filter on: {parameters["field"]}</li>
-        <li>Range to accept (inclusive):
-        {parameters["minval"]} - {parameters["maxval"]}</li>
+        <li>Locs filtered from:{results["nlocs_before"]} to
+        {results["nlocs_after"]} (down
+        {(results["nlocs_before"] - results["nlocs_after"])
+         / results["nlocs_before"]:.1f}%)
+        </li>
+        <li>Fields filtered:{txtfilt}</li>
         </ul>"""
+
+        if fp_fig := results.get("fp_fig_before"):
+            text += "<ul><table>"
+            text += "<tr><td><b>Before Filtering</b></td>"
+            text += "<td><b>After Filtering</b></td></tr>"
+            text += "<tr><td>"
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += f"""
+                <ac:image ac:width="750"><ri:attachment
+                ri:filename="{fp_fig}" />
+                </ac:image>"""
+            text += "</td><td>"
+            fp_fig = results.get("fp_fig_after")
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += f"""
+                <ac:image ac:width="750"><ri:attachment
+                ri:filename="{fp_fig}" />
+                </ac:image>"""
+            text += "</td></tr></table></ul>"
+
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """

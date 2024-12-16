@@ -4269,29 +4269,79 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the index of the module
             parameters: dict
                 with required keys:
-                    field : str
-                        the field to filter on
-                    minval : dtype of field
-                        the minimum value to accept
-                    maxval : dtype of field
-                        the maximum value to accept
+                    field : str or list of str
+                        the field(s) to filter on
+                    minval : dtype of field (or list of it)
+                        the minimum value(s) to accept
+                    maxval : dtype of field (or list of it)
+                        the maximum value(s) to accept
                 and optional keys:
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        field = parameters["field"]
-        xmin = parameters["minval"]
-        xmax = parameters["maxval"]
-        self.locs = self.locs[
-            (self.locs[field] >= xmin) & (self.locs[field] <= xmax)
-        ]
+        all_field = parameters["field"]
+        all_xmin = parameters["minval"]
+        all_xmax = parameters["maxval"]
+        if isinstance(all_field, str):
+            all_field = [all_field]
+            all_xmin = [all_xmin]
+            all_xmax = [all_xmax]
+
+        results["nlocs_before"] = len(self.locs)
+        # plot heatmaps before filtering
+        fig, ax = self.plot_heatmaps(all_field)
+        results["fp_fig_before"] = os.path.join(
+            results["folder"], "hist_before.png"
+        )
+        fig.savefig(results["fp_fig_before"])
+
+        # filter
+        for field, xmin, xmax in zip(all_field, all_xmin, all_xmax):
+            self.locs = self.locs[
+                (self.locs[field] >= xmin) & (self.locs[field] <= xmax)
+            ]
+
+        results["nlocs_after"] = len(self.locs)
+        # plot heatmaps after filtering
+        fig, ax = self.plot_heatmaps(all_field)
+        results["fp_fig_after"] = os.path.join(
+            results["folder"], "hist_after.png"
+        )
+        fig.savefig(results["fp_fig_after"])
 
         fp_locs = os.path.join(results["folder"], "locs.hdf5")
         results["fp_locs"] = fp_locs
         self._save_locs(fp_locs)
 
         return parameters, results
+
+    def plot_heatmaps(self, fields):
+        """Plot headmaps between all tuples of fields given
+
+        Args:
+            fields : list of str
+
+        Returns:
+            fig, ax: fig and ax of all tuples of fields
+        """
+        if len(fields) == 1:
+            fig, ax = plt.subplots()
+            picasso_outpost.plot_1dhist(self.locs, fields[0], fig, ax)
+        else:
+            fig, ax = plt.subplots(
+                nrows=len(fields) - 1, ncols=len(fields) - 1
+            )
+            for i, field_x in enumerate(fields[:-1]):
+                for j, field_y in enumerate(fields[i + 1 :]):
+                    picasso_outpost.plot_2dhist(
+                        self.locs, field_x, field_y, fig, ax[i, j]
+                    )
+                if i > 0:
+                    for j in range(len(fields) - i, len(fields) - 1):
+                        ax[i, j].axis("off")
+
+        return fig, ax
 
     @module_decorator
     def link_locs(self, i, parameters, results):
