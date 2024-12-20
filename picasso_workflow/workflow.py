@@ -342,6 +342,7 @@ class AggregationWorkflowRunner:
         self.cpage_names.append(wr.reporter_config["report_name"])
         wr.run()
         self.all_results["aggregation"] = wr.results
+        self.save(self.result_folder)
 
     def save(self, dirn="."):
         """Save the current config and results into

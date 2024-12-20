@@ -17,6 +17,25 @@ from picasso_workflow.util import AbstractModuleCollection
 logger = logging.getLogger(__name__)
 
 
+def module_decorator(method):
+    def module_wrapper(self, i, parameters, results):
+        # create parameter and results documentation
+        parameter_text = "Parameters:<ul>"
+        for k, v in parameters.items():
+            parameter_text += f"<li>{k}: {v}</li>"
+        parameter_text += "</ul>"
+
+        result_text = "Results:<ul>"
+        for k, v in results.items():
+            result_text += f"<li>{k}: {v}</li>"
+        result_text += "</ul>"
+
+        # call the module
+        method(self, i, parameters, results, parameter_text, result_text)
+
+    return module_wrapper
+
+
 class ConfluenceReporter(AbstractModuleCollection):
     """A class to upload reports of automated picasso evaluations
     to confluence
@@ -459,13 +478,23 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>dbscan clustering</strong></p>
         <ul><li>Start Time: {results['start time']}</li>
-        <ul><li>Duration: {results['duration']} s</li>
-        <li>Radius: {parameters.get('radius')}</li>
-        <li>min_density: {parameters.get('min_density')}</li>
+        <li>Duration: {results['duration']} s</li>
+        <li>Radius: {parameters.get('radius')} nm</li>
+        <li>min_samples: {parameters.get('min_samples')}</li>
         </ul>"""
+        if fp_fig := results.get("fp_fig_clustersizes"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
 
         text += """
-        <b>TODO: generate plot for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(
@@ -514,45 +543,54 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def gaussian_mixture_cluster(self, i, parameters, results):
+    @module_decorator
+    def gaussian_mixture_cluster(
+        self, i, parameters, results, parameter_text, result_text
+    ):
         logger.debug("Reporting gaussian_mixture_cluster.")
 
-        required_args = ["min_locs", "min_sigma", "max_sigma"]
-        optional_args = [
-            "max_rounds_without_best_bic",
-            "bootstrap_check",
-            "calibration",
-            "pixelsize",
-            "asynch",
-        ]
-        parameter_text = ""
-        for a in required_args + optional_args:
-            parameter_text += f"<li>{a}: {parameters.get(a)}</li>"
-
-        result_keys = ["n_locs_in", "n_locs_clustered", "n_centers"]
-        result_text = ""
-        for a in result_keys:
-            result_text += f"<li>{a}: {results.get(a)}</li>"
-
+        pct_discarded = (
+            (results["n_locs_in"] - results["n_locs_clustered"])
+            / results["n_locs_in"]
+            * 100
+        )
+        locspctr = results["n_locs_clustered"] / results["n_centers"]
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Gaussian Mixture Model clustering</strong></p>
-        <ul><li>Start Time: {results['start time']}</li>
+        Keeping centers as new locs.
+        Summary:
+        <ul>
+        <li>Locs discarded: {pct_discarded:.1f} %</li>
+        <li>Mean number of locs per center: {locspctr:.1f}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
         {parameter_text}
         {result_text}
-        </ul>"""
+        """
+
+        if fp_fig := results.get("fp_fig_clustersizes"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
 
         text += """
-        <b>TODO: generate plot for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
 
-    def nneighbor(self, i, parameters, results):
+    @module_decorator
+    def nneighbor(self, i, parameters, results, parameter_text, result_text):
         logger.debug("Reporting nneighbor.")
         d = len(parameters["dims"])
         text = f"""
@@ -564,19 +602,21 @@ class ConfluenceReporter(AbstractModuleCollection):
         from the overall density, it means there is structure at that
         lengthscale in the data. E.g. the RDF is low at small distances due to
         finite resoltion.
-        <ul><li>Start Time: {results['start time']}</li>
+        Summary:
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         <li>Dimensions taken into account: {parameters['dims']}</li>
         <li>Bin size is the median of the first NN, divided by:
         {parameters['subsample_1stNN']}</li>
-        <li>Displayed NN up to nearest neighbor #: {parameters['nth_NN']}</li>
         <li>Displayed RDF up to nearest neighbor #: {parameters['nth_rdf']}
         </li>
         <li>Saved numpy txt file as: {results["nneighbors"]}</li>
-        <li>Density from RDF: {results['density_rdf'] * 1e3**d:.02f} µm^{d}
+        <li>Density from RDF: {results['density_rdf'] * 1e3**d:.02f} µm^{-d}
         </li>
-        </ul>"""
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
         if fp_fig := results.get("fp_fig"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)
@@ -646,6 +686,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         <li>filepath: {results.get('filepath')}</li>
+        <li>saved number of locs: {results.get('nlocs')}</li>
         </ul>"""
 
         text += """
@@ -919,26 +960,31 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def ripleysk2(self, i, parameters, results):
+    @module_decorator
+    def ripleysk2(self, i, parameters, results, parameter_text, result_text):
         logger.debug("Reporting ripleysk2.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Ripley's K Analysis (2)</strong></p>
-        <ul>
         <p>Ripley's K analyis investigates pair-wise clustering or dispersing
         organization between different channels.
         </p>
-        <li>Start Time: {results['start time']}</li>
+        Summary:
+        <ul>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>Type of analysis:
-        {str(parameters["atype"])}</li>
-        <li>Integral significance threshold:
+        <li>Metric:
+        {str(parameters["metric"])}</li>
+        <li>Control Type:
+        {str(parameters["controltype"])}</li>
+        <li>z-score significance threshold:
         {parameters["ripleys_threshold"]}</li>
-        <li>Ripleys Integrals location: {results["fp_ripleys_meanval"]}</li>
         <li>Significantly interacting pairs:
         {str(results["ripleys_significant"])}</li>
-        </ul>"""
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
 
         if fp_fig := results.get("fp_fig_normalized"):
             text += "<ul><table>"
@@ -1006,6 +1052,44 @@ class ConfluenceReporter(AbstractModuleCollection):
         {parameters["fp_workflows"]}</li>
         <li>Folders to save significant pairs:
         {results["output_folders"]}</li>
+        <li>Ripleys Integrals location:
+        {results["fp_ripleys_significant"]}</li>
+        <li>Significantly interacting pairs:
+        {str(results["ripleys_significant"])}</li>
+        </ul>"""
+
+        if fp_fig := results.get("fp_figmeanvals"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def ripleysk_average2(self, i, parameters, results):
+        logger.debug("Reporting ripleysk_average2.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Averaging of Repley's K Integrals</strong></p>
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Loaded from workflows:
+        {parameters["report_names"]}</li>
+        <li>in folders:
+        {parameters["fp_workflows"]}</li>
         <li>Ripleys Integrals location:
         {results["fp_ripleys_significant"]}</li>
         <li>Significantly interacting pairs:
@@ -1611,8 +1695,9 @@ class ConfluenceReporter(AbstractModuleCollection):
             fields = parameters["field"]
             minvals = parameters["minval"]
             maxvals = parameters["maxval"]
+        txtfilt = ""
         for field, minval, maxval in zip(fields, minvals, maxvals):
-            txtfilt = f"<li>{field}: {minval} - {maxval}</li>"
+            txtfilt += f"<li>{field}: {minval} - {maxval}</li>"
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Filter localizations</strong></p>
@@ -1623,9 +1708,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Locs filtered from:{results["nlocs_before"]} to
         {results["nlocs_after"]} (down
         {(results["nlocs_before"] - results["nlocs_after"])
-         / results["nlocs_before"]:.1f}%)
+         / results["nlocs_before"] * 100:.1f}%)
         </li>
-        <li>Fields filtered:{txtfilt}</li>
+        <li>Fields filtered:<ul>{txtfilt}</ul></li>
         </ul>"""
 
         if fp_fig := results.get("fp_fig_before"):
@@ -1995,13 +2080,22 @@ class ConfluenceInterface:
         self.confluence.delete_attachment(page_id, attachment_id, version=None)
 
     @confluence_call
-    def update_page_content(self, page_name, page_id, body_update):
-        status = self.confluence.append_page(
-            parent_id=None,
-            page_id=page_id,
-            title=page_name,
-            append_body=body_update,
-        )
+    def update_page_content(
+        self, page_name, page_id, body_update, replace=False
+    ):
+        if not replace:
+            status = self.confluence.append_page(
+                parent_id=None,
+                page_id=page_id,
+                title=page_name,
+                append_body=body_update,
+            )
+        else:
+            status = self.confluence.update_page(
+                page_id=page_id,
+                title=page_name,
+                body=body_update,
+            )
         return status
 
     @confluence_call

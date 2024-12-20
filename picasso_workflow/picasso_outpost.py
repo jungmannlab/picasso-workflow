@@ -1754,7 +1754,6 @@ def plot_1dhist(locs, field, fig, ax):
     data = data[np.isfinite(data)]
     bins = lib.calculate_optimal_bins(data, 1000)
     # Prepare the figure
-    fig.clear()
     fig.suptitle(field)
     ax.hist(data, bins, rwidth=1, linewidth=0)
     data_range = data.ptp()

@@ -195,7 +195,15 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def ripleysk2(self):
+        pass
+
+    @abc.abstractmethod
     def ripleysk_average(self):
+        pass
+
+    @abc.abstractmethod
+    def ripleysk_average2(self):
         pass
 
     @abc.abstractmethod
@@ -208,6 +216,11 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def create_mask(self):
+        """Create a density mask"""
+        pass
+
+    @abc.abstractmethod
+    def create_mask2(self):
         """Create a density mask"""
         pass
 

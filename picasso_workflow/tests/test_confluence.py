@@ -404,7 +404,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "start time": "now",
             "duration": 4.12,
             "radius": 5,
-            "min_density": 0.3,
+            "min_samples": 3,
         }
         self.cr.dbscan(0, parameters, results)
 

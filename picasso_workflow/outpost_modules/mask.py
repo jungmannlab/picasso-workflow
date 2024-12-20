@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class CellMask:
-    _mask = np.array()
+    _mask = np.array(np.nan)
     _area = 0
     _pixelsize = 0
     _binsize = 0
