@@ -912,13 +912,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["fp_fig"], parameters["dimensions"], pixelsize
         )
 
-        # save locs
-        if pars := parameters.get("save_locs"):
-            if "filename" in pars.keys():
-                pars["filename"] = os.path.join(
-                    results["folder"], pars["filename"]
-                )
-            self._save_locs(pars["filename"])
+        # # save locs
+        # if pars := parameters.get("save_locs"):
+        #     if "filename" in pars.keys():
+        #         pars["filename"] = os.path.join(
+        #             results["folder"], pars["filename"]
+        #         )
+        #     self._save_locs(pars["filename"])
 
         return parameters, results
 
@@ -1017,13 +1017,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         }
         self.info = self.info + [new_info]
 
-        # save locs
-        if pars := parameters.get("save_locs"):
-            if "filename" in pars.keys():
-                pars["filename"] = os.path.join(
-                    results["folder"], pars["filename"]
-                )
-            self._save_locs(pars["filename"])
+        # # save locs
+        # if pars := parameters.get("save_locs"):
+        #     if "filename" in pars.keys():
+        #         pars["filename"] = os.path.join(
+        #             results["folder"], pars["filename"]
+        #         )
+        #     self._save_locs(pars["filename"])
 
         return parameters, results
 
@@ -1223,10 +1223,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             "Wrapped by": "picasso-workflow : dbscan",
         }
         self.info.append(dbscan_info)
-        results["fp_locs"] = os.path.join(
-            results["folder"], "locs_dbscan.hdf5"
-        )
-        self._save_locs(results["fp_locs"])
+        # results["fp_locs"] = os.path.join(
+        #     results["folder"], "locs_dbscan.hdf5"
+        # )
+        # self._save_locs(results["fp_locs"])
 
         # plot: histogram of cluster sizes
         fig, ax = plt.subplots()
@@ -2606,7 +2606,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_fig_normalized"] = os.path.join(
             results["folder"],
             f"{parameters['metric']}_{parameters['controltype']}_"
-            + "normalized_{rcode}.png",
+            + f"normalized_{rcode}.png",
         )
         fig_n.savefig(results["fp_fig_normalized"])
 
@@ -3573,6 +3573,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                         to zero. For example 1 / 3
                     binary : boolean
                         whether to create a binary or density mask
+                    select_cell : boolean
+                        whether to select the largest connected component,
+                        assumed to be the cell of interest.
                 and optional keys:
                     fp_combined_locs : str default: None or ''
                         filepath to the locs combined in 'combine_channels'
@@ -3623,6 +3626,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             upsample=mask_pixel_size,
             binary=binary,
         )
+        if parameters.get("select_cell"):
+            mask = outpost_modules.ripleys.filter_mask(mask)
 
         results["area"] = area
         results["fp_mask"] = os.path.join(
@@ -4552,9 +4557,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig.savefig(fp_fig)
         plt.close(fig)
 
-        fp_locs = os.path.join(results["folder"], "locs.hdf5")
-        results["fp_locs"] = fp_locs
-        self._save_locs(fp_locs)
+        # fp_locs = os.path.join(results["folder"], "locs.hdf5")
+        # results["fp_locs"] = fp_locs
+        # self._save_locs(fp_locs)
         return parameters, results
 
     @module_decorator
@@ -4606,9 +4611,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         fig.savefig(results["fp_fig_after"])
 
-        fp_locs = os.path.join(results["folder"], "locs.hdf5")
-        results["fp_locs"] = fp_locs
-        self._save_locs(fp_locs)
+        # fp_locs = os.path.join(results["folder"], "locs.hdf5")
+        # results["fp_locs"] = fp_locs
+        # self._save_locs(fp_locs)
 
         return parameters, results
 
@@ -4666,9 +4671,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         }
         self.info.append(link_info)
 
-        fp_locs = os.path.join(results["folder"], "locs.hdf5")
-        results["fp_locs"] = fp_locs
-        self._save_locs(fp_locs)
+        # fp_locs = os.path.join(results["folder"], "locs.hdf5")
+        # results["fp_locs"] = fp_locs
+        # self._save_locs(fp_locs)
 
         return parameters, results
 

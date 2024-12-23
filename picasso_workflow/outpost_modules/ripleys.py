@@ -11,7 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from scipy.spatial import KDTree
-from scipy.ndimage import zoom, gaussian_filter
+from scipy.ndimage import zoom, gaussian_filter, label
 
 
 logger = logging.getLogger(__name__)
@@ -101,10 +101,11 @@ def first_nn(X1, X2, r, univariate):
         k = 2
     else:
         k = 1
-    alldist, indices = tree1.query(tree2, k=k)
-    alldist = np.sort(alldist, axis=1)
-    alldist = alldist[:, k - 1]
-    nnhist, _ = np.histogram(alldist, bins=r)
+    alldist, indices = tree1.query(tree2.data, k=k)
+    if len(alldist.shape) > 1:
+        alldist = alldist[:, k - 1]
+    bins = np.append(r, np.max(r) + (r[1] - r[0]))
+    nnhist, _ = np.histogram(alldist, bins=bins)
     return nnhist
 
 
@@ -306,6 +307,22 @@ def get_cell_mask(
     return mask_final, area
 
 
+def filter_mask(mask):
+    """Select the largest connected area in the mask"""
+    binary_mask = mask.copy()
+    binary_mask[binary_mask > 0] = 1
+
+    labeled_array, num_features = label(binary_mask)
+    sizes = np.bincount(labeled_array.ravel())
+    largest_component_index = sizes[1:].argmax() + 1
+    largest_component_mask = (labeled_array == largest_component_index).astype(
+        np.int8
+    )
+    filtered_mask = mask.copy()
+    filtered_mask[largest_component_mask == 0] = 0
+    return filtered_mask
+
+
 def plot_mask(mask, pixelsize, fp):
     fig, ax = plt.subplots()
     ax.set_box_aspect(1)
@@ -315,7 +332,7 @@ def plot_mask(mask, pixelsize, fp):
         mask_plot = mask.copy()
         mask_plot[mask_plot > 0] = 1
         mask_plot[mask_plot < 1] = 0
-        mask_plot = mask_plot.astype(np.int8)
+        mask_plot = mask_plot.astype(np.bool_)
         cmap = "binary"
     else:
         mask_plot = mask
@@ -481,12 +498,12 @@ def analyze_all_channels(
                 metric=metric,
                 randomization_radius=randomization_radius,
             )
-            if j < n_targets - 1:
+            if i < n_targets - 1:
                 ax_u[i, j].xaxis.label.set_visible(False)
                 ax_n[i, j].xaxis.label.set_visible(False)
                 ax_u[i, j].set_xticks([])
                 ax_n[i, j].set_xticks([])
-            if i > 0:
+            if j > 0:
                 ax_u[i, j].yaxis.label.set_visible(False)
                 ax_n[i, j].yaxis.label.set_visible(False)
 
@@ -558,14 +575,6 @@ def plot_ripleys(
         plt.figure()
         axes = plt.gca()
 
-    # show data
-    axes.plot(
-        radii,
-        Kexp,
-        c="k",
-        linewidth=2.0,
-        label="Observed data",
-    )
     # show controls
     if showControls:
         for k, Kct in enumerate(Kctrl):
@@ -613,6 +622,15 @@ def plot_ripleys(
             linestyle=":",
         )
         axes.set_ylabel(metric, fontsize=labelFontsize)
+
+    # show data
+    axes.plot(
+        radii,
+        Kexp,
+        c="k",
+        linewidth=2.0,
+        label="Observed data",
+    )
 
     handles, labels = plt.gca().get_legend_handles_labels()
     by_label = dict(zip(labels, handles))

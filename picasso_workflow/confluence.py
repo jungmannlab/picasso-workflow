@@ -603,6 +603,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         lengthscale in the data. E.g. the RDF is low at small distances due to
         finite resoltion.
         Summary:
+        <ul>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         <li>Dimensions taken into account: {parameters['dims']}</li>
