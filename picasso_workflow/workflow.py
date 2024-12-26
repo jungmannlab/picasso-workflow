@@ -12,6 +12,7 @@ import logging
 import inspect
 import yaml
 import copy
+from concurrent.futures import ProcessPoolExecutor
 
 from picasso_workflow.analyse import AutoPicasso, AutoPicassoError
 from picasso_workflow.confluence import (
@@ -62,6 +63,7 @@ class AggregationWorkflowRunner:
         else:
             self.postfix = datetime.now().strftime("%y%m%d-%H%M")
         self.continue_workflow = False
+        self.single_workflow_parallel = True
         self.sgl_workflow_locations = []
         self.cpage_names = []
 
@@ -228,6 +230,11 @@ class AggregationWorkflowRunner:
         sgl_wkfl_analysis_config = copy.deepcopy(self.analysis_config)
 
         sgl_dataset_success = [None] * len(tags)
+        if self.single_workflow_parallel:
+            wrs = []
+            tasks = []
+            futures = []
+            executor = ProcessPoolExecutor()
         for i, (parameter_set, tag) in enumerate(
             zip(individual_parametersets, tags)
         ):
@@ -275,10 +282,21 @@ class AggregationWorkflowRunner:
                     postfix=self.postfix,
                 )
             self.cpage_names.append(wr.reporter_config["report_name"])
-            sgl_dataset_success[i] = wr.run()
-            self.all_results["single_dataset"][i] = wr.results
-            self.sgl_workflow_locations.append(wr.result_folder)
-            self.save(self.result_folder)
+            if not self.single_workflow_parallel:
+                sgl_dataset_success[i] = wr.run()
+                self.all_results["single_dataset"][i] = wr.results
+                self.sgl_workflow_locations.append(wr.result_folder)
+                self.save(self.result_folder)
+            else:
+                future = executor.submit(wr.run)
+                futures.append(future)
+        if self.single_workflow_parallel:
+            for i, task in enumerate(tasks):
+                sgl_dataset_success[i] = futures[i].result()
+                self.all_results["single_dataset"][i] = wrs[i].results
+                self.sgl_workflow_locations.append(wrs[i].result_folder)
+                self.save(self.result_folder)
+            executor.shutdown()
 
         if not all(sgl_dataset_success):
             msg = (
