@@ -2550,6 +2550,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         if fp_mask := parameters.get("fp_mask"):
             mask = np.load(fp_mask)
+            mask = mask / np.sum(mask)
         else:
             mask = None
         mask_pixel_size = parameters.get("mask_pixel_size")
