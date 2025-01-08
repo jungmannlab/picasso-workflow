@@ -6,6 +6,7 @@ Initial Date: March 7, 2024
 Description: Interaction with Confluence
 """
 import logging
+import traceback
 import os
 import pandas as pd
 from atlassian import Confluence as con
@@ -72,6 +73,21 @@ class ConfluenceReporter(AbstractModuleCollection):
                 f"""Failed to create page {self.report_page_name}.
                 Continuing on the pre-existing page"""
             )
+
+    def report_error(self, e, module):
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>ERROR OCCURRED</strong></p>
+        During analysis of {module}, an error occurred.
+        """
+        text += str(e)
+        text += traceback.format_exc()
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
 
     def dummy_module(self, i, parameters, results):
         """A module that does nothing, for quickly removing
@@ -977,11 +993,11 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Metric:
         {str(parameters["metric"])}</li>
         <li>Control Type:
-        {str(parameters["controltype"])}</li>
+        {str(parameters.get("controltype"))}</li>
         <li>z-score significance threshold:
-        {parameters["ripleys_threshold"]}</li>
+        {parameters.get("ripleys_threshold")}</li>
         <li>Significantly interacting pairs:
-        {str(results["ripleys_significant"])}</li>
+        {str(results.get("ripleys_significant"))}</li>
         </ul>
         {parameter_text}
         {result_text}
@@ -1097,17 +1113,45 @@ class ConfluenceReporter(AbstractModuleCollection):
         {str(results["ripleys_significant"])}</li>
         </ul>"""
 
-        if fp_fig := results.get("fp_figmeanvals"):
+        if fp_fig := results.get("fp_fig_normalized"):
+            text += "<ul><table>"
+            text += "<tr><td><b>Mean and std of mean values</b></td>"
+            text += "<tr><td><b>Normalized Curves of all datasets</b></td>"
+            text += "<td><b>Un-normalized Curves of all datasets</b></td></tr>"
+            text += "<tr><td>"
+            fp_fig = results.get("fp_figmeanvals")
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)
             except ConfluenceInterfaceError:
                 pass
             _, fp_fig = os.path.split(fp_fig)
-            text += (
-                "<ul><ac:image><ri:attachment "
-                + f'ri:filename="{fp_fig}" />'
-                + "</ac:image></ul>"
-            )
+            text += f"""
+                <ul><ac:image ac:width="500"><ri:attachment
+                ri:filename="{fp_fig}" />
+                </ac:image></ul>"""
+            text += "</td><td>"
+            fp_fig = results.get("fp_fig_normalized")
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += f"""
+                <ac:image ac:width="500"><ri:attachment
+                ri:filename="{fp_fig}" />
+                </ac:image>"""
+            text += "</td><td>"
+            fp_fig = results.get("fp_fig_unnormalized")
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += f"""
+                <ac:image ac:width="500"><ri:attachment
+                ri:filename="{fp_fig}" />
+                </ac:image>"""
+            text += "</td></tr></table></ul>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>

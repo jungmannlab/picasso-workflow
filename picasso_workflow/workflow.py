@@ -63,7 +63,7 @@ class AggregationWorkflowRunner:
         else:
             self.postfix = datetime.now().strftime("%y%m%d-%H%M")
         self.continue_workflow = False
-        self.single_workflow_parallel = True
+        self.single_workflow_parallel = False
         self.sgl_workflow_locations = []
         self.cpage_names = []
 
@@ -75,6 +75,7 @@ class AggregationWorkflowRunner:
         aggregation_workflow,
         postfix=None,
         continue_previous_runner=False,
+        single_workflow_parallel=False,
     ):
         """To keep flexibility for initialization methods, this is not
         done in __init__. This way in the future, we can instantiate
@@ -128,6 +129,7 @@ class AggregationWorkflowRunner:
                 "single_dataset_tileparameters"."""
             )
         instance = cls(postfix)
+        instance.single_workflow_parallel = single_workflow_parallel
         instance.parameter_tiler = ParameterTiler(instance, sgltilepars)
         instance.all_results = {
             "single_dataset": [None] * instance.parameter_tiler.ntiles,
@@ -350,7 +352,7 @@ class AggregationWorkflowRunner:
                     postfix=self.postfix,
                 )
         else:
-            logger.debug("not dontinuing workflow.starting new.")
+            logger.debug("not continuing workflow.starting new.")
             wr = WorkflowRunner.config_from_dicts(
                 agg_reporter_config,
                 agg_analysis_config,
@@ -722,8 +724,12 @@ class WorkflowRunner:
         try:
             parameters, self.results[key] = fun_ap(i, parameters)
         except AutoPicassoError as e:
-            self.results[key]["success"] = False
             logger.error(e)
+            self.confluencereporter.report_error(e, fun_name)
+            raise e
+        except Exception as e:
+            logger.error(e)
+            self.confluencereporter.report_error(e, fun_name)
             raise e
         logger.debug(f"RESULTS: {self.results[key]}")
         fun_cr = getattr(self.confluencereporter, fun_name)

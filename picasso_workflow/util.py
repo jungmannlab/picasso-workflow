@@ -330,6 +330,8 @@ class DictSimpleTyper:
             res = self.scan_tuple(itrbl)
         elif isinstance(itrbl, np.ndarray):
             res = self.scan_ndarray(itrbl)
+        elif isinstance(itrbl, np.core.multiarray):
+            res = self.scan_ndarray(itrbl)
         elif isinstance(itrbl, np.generic):
             if self.to_simple_type:
                 res = float(itrbl)

@@ -190,7 +190,8 @@ def shift_from_rcc(channel_locs, channel_info):
         images.append(image)
     n_pairs = int(n_channels * (n_channels - 1) / 2)
     logger.debug(f"Correlating {n_pairs} image pairs.")
-    return imageprocess.rcc(images)
+    progress = lib.MockProgress()
+    return imageprocess.rcc(images, callback=progress.set_value)
 
 
 def convert_zeiss_file(filepath_czi, filepath_raw, info=None):

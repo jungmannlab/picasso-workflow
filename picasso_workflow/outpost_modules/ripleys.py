@@ -109,6 +109,137 @@ def first_nn(X1, X2, r, univariate):
     return nnhist
 
 
+def fraction_types(
+    Xall,
+    types,
+    type_self,
+    r,
+    nshuffle=20,
+    shuffle_self=True,
+    relocate_self=True,
+):
+    """Calculates the mean fraction of types within a given radius
+    around type_self spots. This is done for original data, and data in which
+    type identities are shuffled as a control
+    Args:
+        Xall : 2D array (2-3, N)
+            x, y (, z) positions of spots
+        types : 1D int
+            spot types (represented as integers)
+        type_self : int
+            spot type to use as center
+        r : 1D array
+            the radii at which to evaluate
+        nshuffle : int
+            the number of times to shuffle type identities
+        shuffle_self : bool
+            whether to shuffle only other types or also the self type
+        relocate_self : bool
+            whether to relocate centerpoints to 'type_self' after
+            shuffling.
+    Returns:
+        fract_types : dict of 1D array
+            the fractions of various types within the ball radii, for
+            each value of r
+        fract_types_ctrl : dict of 2D array
+            the fractions of various types within the ball radii, for
+            each value of r, and for each iteration of shuffling
+    """
+    types_present = np.unique(types)
+    idx_self = np.argwhere(types == type_self).flatten()
+    tree_all = KDTree(Xall)
+    tree_self = KDTree(Xall[idx_self, :])
+
+    neighbor_types_fract = [{} for radius in r]
+    neighbor_types_ctrl_fract = [[{}] * nshuffle for radius in r]
+    for ir, radius in enumerate(r):
+        balls_indices = tree_self.query_ball_tree(tree_all, radius)
+
+        neighbor_types_fract[ir] = type_fractions(
+            balls_indices, types, types_present, type_self=type_self
+        )
+        # do controls
+        types_ctrl = types.copy().flatten()
+        for ictrl in range(nshuffle):
+            if shuffle_self:
+                np.random.shuffle(types_ctrl)
+                tp_self = types_ctrl[idx_self]
+            else:
+                idx_other = np.argwhere(types_ctrl != type_self)
+                idx_other_shuffled = idx_other.copy()
+                np.random.shuffle(idx_other_shuffled)
+                types_ctrl[idx_other] = types_ctrl[idx_other_shuffled]
+                tp_self = type_self
+            if relocate_self:
+                idx_self_ctrl = np.argwhere(types_ctrl == type_self).flatten()
+                tree_self_ctrl = KDTree(Xall[idx_self_ctrl, :])
+                balls_indices = tree_self_ctrl.query_ball_tree(
+                    tree_all, radius
+                )
+                tp_self = types[idx_self_ctrl]
+            neighbor_types_ctrl_fract[ir][ictrl] = type_fractions(
+                balls_indices, types_ctrl, types_present, type_self=tp_self
+            )
+
+    # re shape from list of dicts to dict of array
+    fract_types = {
+        t: np.array([neighbor_types_fract[ir][t] for ir in range(len(r))])
+        for t in types_present
+    }
+    fract_types_ctrl = {
+        t: np.array(
+            [
+                [
+                    neighbor_types_ctrl_fract[ir][ictrl][t]
+                    for ir in range(len(r))
+                ]
+                for ictrl in range(nshuffle)
+            ]
+        )
+        for t in types_present
+    }
+    return fract_types, fract_types_ctrl
+
+
+def type_fractions(balls_indices, types, types_present, type_self=None):
+    """Counts types and calculates their fraction
+    Args:
+        balls_indices : list of lists of int
+            the indices of types for each origin of balls
+        types : 1D array of int
+            the types of the spots indexed
+    """
+    total_neighbors = sum(
+        [len(ball_indices) - 1 for ball_indices in balls_indices]
+    )
+
+    neighbor_types_fract = {type: 0 for type in types_present}
+    for i, ball_indices in enumerate(balls_indices):
+        # ball_indices is the list of tree_all indices within the ball
+        # of one of the points of tree_self
+        ball_types = types[ball_indices]
+        if len(ball_types) > 1:
+            # # leave out the origin spot (assuming the list is sorted by distance)
+            # ball_types = ball_types[1:]
+            pass
+        else:
+            # no spots apart from the origin spot
+            continue
+        tp, counts = np.unique(ball_types, return_counts=True)
+        for t, c in zip(tp, counts):
+            if isinstance(type_self, list) or isinstance(
+                type_self, np.ndarray
+            ):
+                if t == type_self[i]:
+                    c = c - 1
+            elif type_self is not None:
+                # leave out the origin spot (assuming the list is sorted by distance)
+                if t == type_self:
+                    c = c - 1
+            neighbor_types_fract[t] += c / total_neighbors
+    return neighbor_types_fract
+
+
 def simulate_density_mask_CSR(n_points, mask, n_simulations, pixelsize):
     """Simulates monomeric molecules based on density mask, see
     simulate_CSR to see the inputs.
@@ -451,7 +582,7 @@ def analyze_2_channels(
             axes=ax_n,
             metric=metric,
         )
-    return ripley_integral
+    return ripley_integral, K_exp, K_exp_norm
 
 
 def analyze_all_channels(
@@ -467,7 +598,41 @@ def analyze_all_channels(
     metric="RK",  # RK or RDF
     randomization_radius=None,
 ):
+    """Do the neighborhood analysis of all channels with each other
+    and generate a mean value matrix. This has been initially written for
+    Ripley's K analysis, but can also be used for the radial distribution
+    function.
+    Args:
+        mol_coords : list of np.rec.arrays
+            the molecular coordinates of target types
+        mask : 2D np array
+            the binary or density mask. Only needed if controltype is "CSR"
+        mask_pixel_size : float
+            the pixel size of the mask, in nm. Only needed if controltype is "CSR"
+        area : float
+            the area, in square nm (?). Only needed if metric is "RK"
+        radii : np array 1D
+            the radii to probe at
+        n_simulations : int
+            the number of controls to do
+        do_plot : bool
+            whether to create a plot of all the metric curves in a matrix subplot
+        names : list of str
+            the names of the molecular types
+        controltype : str
+            can be "CSR" (to control by creating a (pseudo) completely spatially
+            random point pattern), or "RND" (to calculate controls by randomizing
+            the input data coordinates by adding random vectors to each data point)
+        metric : str
+            the metric to calculate. Can be "RK" for Ripley's K, or "RDF" for
+            radial density function
+        randomization_radius : float
+            defines the maximum length of the randomization vectors if controltype
+            is "RND"
+    """
     n_targets = len(mol_coords)
+    curves = np.zeros((n_targets, n_targets, len(radii)))
+    curves_norm = np.zeros((n_targets, n_targets, len(radii)))
     if do_plot:
         fig_n, ax_n = init_plot(n_targets, "normalized", controltype, metric)
         fig_u, ax_u = init_plot(
@@ -482,7 +647,7 @@ def analyze_all_channels(
     for i, X1 in enumerate(mol_coords):
         for j, X2 in enumerate(mol_coords):
             # print(f"Analyzing interaction between receptor {i} and {j}...")
-            ripley_integral = analyze_2_channels(
+            ripley_integral, K_exp, K_exp_norm = analyze_2_channels(
                 X1,
                 X2,
                 mask,
@@ -498,6 +663,8 @@ def analyze_all_channels(
                 metric=metric,
                 randomization_radius=randomization_radius,
             )
+            curves[i, j, :] = K_exp
+            curves_norm[i, j, :] = K_exp_norm
             if i < n_targets - 1:
                 ax_u[i, j].xaxis.label.set_visible(False)
                 ax_n[i, j].xaxis.label.set_visible(False)
@@ -511,7 +678,123 @@ def analyze_all_channels(
                 ripley_integral = 0
             ripley_mean = ripley_integral / (np.max(radii) - np.min(radii))
             ripley_matrix[i, j] = ripley_mean
-    return ripley_matrix, fig_u, fig_n
+    return ripley_matrix, fig_u, fig_n, curves, curves_norm
+
+
+def typefraction_all_channels(
+    mol_coords,
+    radii,
+    n_simulations,
+    do_plot=True,
+    names="",
+    shuffle_self=True,
+    relocate_self=False,
+):
+    """
+    Args:
+        mol_coords : list of np.rec.arrays
+            the molecular coordinates of target types
+        radii : np array 1D
+            the radii to probe at
+        n_simulations : int
+            the number of controls to do
+        do_plot : bool
+            whether to create a plot of all the metric curves in a
+            matrix subplot
+        names : list of str, len N
+            the names of the molecular types
+        shuffle_self : bool
+            whether to shuffle only other types or also the self type
+        relocate_self : bool
+            whether to relocate centerpoints to 'type_self' after
+            shuffling.
+    Returns:
+        curves : 3D array (N, N, len(radii))
+            the fraction curves
+        curves_norm : 3D array
+            the normalized fraction curves
+    """
+    types = np.concatenate(
+        [i * np.ones(len(coords)) for i, coords in enumerate(mol_coords)]
+    )
+    all_coords = np.concatenate(mol_coords)
+    n_targets = len(mol_coords)
+
+    curves = np.zeros((n_targets, n_targets, len(radii)))
+    curves_norm = np.zeros((n_targets, n_targets, len(radii)))
+    if do_plot:
+        fig_n, ax_n = init_plot(
+            n_targets, "normalized", "shuffle", "type fraction"
+        )
+        fig_u, ax_u = init_plot(
+            n_targets, "un-normalized", "shuffle", "type fraction"
+        )
+    else:
+        fig_u, ax_u = None, None
+        fig_n, ax_n = None, None
+    if not names:
+        names = [""] * n_targets
+    ripley_matrix = np.zeros((n_targets, n_targets), dtype=np.float64)
+    for i, X1 in enumerate(mol_coords):
+        fract_types, fract_types_ctrl = fraction_types(
+            all_coords,
+            types,
+            i,
+            radii,
+            nshuffle=n_simulations,
+            shuffle_self=shuffle_self,
+            relocate_self=relocate_self,
+        )
+        for j, X2 in enumerate(mol_coords):
+
+            K_exp = fract_types[j]
+            K_csr = fract_types_ctrl[j]
+            name1 = names[i]
+            name2 = names[j]
+
+            K_exp_norm = normalize_to_CSR(K_exp, K_csr)
+            K_csr_norm = np.array(
+                [normalize_to_CSR(K_c, K_csr) for K_c in K_csr]
+            )
+            curves[i, j, :] = K_exp
+            curves_norm[i, j, :] = K_exp_norm
+
+            if ax_u is not None and ax_n is not None:
+                plot_ripleys(
+                    radii,
+                    K_exp,
+                    K_csr,
+                    ci=0.95,
+                    normalized=False,
+                    showControls=True,
+                    title=f"{name1} -> {name2}",
+                    labelFontsize=30,
+                    axes=ax_u[i, j],
+                    metric="type fraction",
+                )
+                plot_ripleys(
+                    radii,
+                    K_exp_norm,
+                    K_csr_norm,
+                    ci=0.95,
+                    normalized=True,
+                    showControls=True,
+                    title=f"{name1} -> {name2}",
+                    labelFontsize=30,
+                    axes=ax_n[i, j],
+                    metric="type fraction",
+                )
+
+            if i < n_targets - 1:
+                ax_u[i, j].xaxis.label.set_visible(False)
+                ax_n[i, j].xaxis.label.set_visible(False)
+                ax_u[i, j].set_xticks([])
+                ax_n[i, j].set_xticks([])
+            if j > 0:
+                ax_u[i, j].yaxis.label.set_visible(False)
+                ax_n[i, j].yaxis.label.set_visible(False)
+
+    return ripley_matrix, fig_u, fig_n, curves, curves_norm
 
 
 def analyze(mols, radii):
@@ -553,7 +836,13 @@ def postprocess_ripley_matrix(ripley_matrix, radii):
 
 
 def init_plot(n_targets, treatment, controltype, metric, figsize=30):
-    fig, ax = plt.subplots(n_targets, n_targets, figsize=(figsize, figsize))
+    fig, ax = plt.subplots(
+        n_targets,
+        n_targets,
+        figsize=(figsize, figsize),
+        sharey=True,
+        sharex=True,
+    )
     fig.suptitle(f"{metric}, {treatment} to {controltype}")
     return fig, ax
 
@@ -569,6 +858,8 @@ def plot_ripleys(
     labelFontsize=14,
     axes=None,
     metric="",
+    label_data="Observed data",
+    showControlEnvelope=True,
 ):
     # Plot Ripley's K and confidence interval
     if axes is None:
@@ -586,42 +877,43 @@ def plot_ripleys(
                 linestyle="-",
             )
     axes.set_xlabel("d [nm]", fontsize=labelFontsize)
-    if normalized:
-        axes.plot(
-            radii,
-            np.zeros(len(radii)),
-            c="k",
-            label=f"{ci*100}% envelope",
-            linestyle="--",
-        )
-        axes.plot(radii, np.ones(len(radii)), c="k", linestyle=":")
-        axes.plot(radii, -np.ones(len(radii)), c="k", linestyle=":")
-        axes.set_xlabel("d [nm]", fontsize=labelFontsize)
-        axes.set_ylabel(f"Normalized {metric}", fontsize=labelFontsize)
-    else:
-        quantileLow = (1 - ci) / 2
-        quantileHigh = 1 - (1 - ci) / 2
-        axes.plot(
-            radii,
-            np.mean(Kctrl, axis=0),
-            c="k",
-            label="Mean of random controls",
-            linestyle="--",
-        )
-        axes.plot(
-            radii,
-            np.quantile(Kctrl, quantileHigh, axis=0),
-            c="k",
-            label=f"{ci*100}% envelope",
-            linestyle=":",
-        )
-        axes.plot(
-            radii,
-            np.quantile(Kctrl, quantileLow, axis=0),
-            c="k",
-            linestyle=":",
-        )
-        axes.set_ylabel(metric, fontsize=labelFontsize)
+    if showControlEnvelope:
+        if normalized:
+            axes.plot(
+                radii,
+                np.zeros(len(radii)),
+                c="k",
+                label=f"{ci*100}% envelope",
+                linestyle="--",
+            )
+            axes.plot(radii, np.ones(len(radii)), c="k", linestyle=":")
+            axes.plot(radii, -np.ones(len(radii)), c="k", linestyle=":")
+            axes.set_xlabel("d [nm]", fontsize=labelFontsize)
+            axes.set_ylabel(f"Normalized {metric}", fontsize=labelFontsize)
+        else:
+            quantileLow = (1 - ci) / 2
+            quantileHigh = 1 - (1 - ci) / 2
+            axes.plot(
+                radii,
+                np.mean(Kctrl, axis=0),
+                c="k",
+                label="Mean of random controls",
+                linestyle="--",
+            )
+            axes.plot(
+                radii,
+                np.quantile(Kctrl, quantileHigh, axis=0),
+                c="k",
+                label=f"{ci*100}% envelope",
+                linestyle=":",
+            )
+            axes.plot(
+                radii,
+                np.quantile(Kctrl, quantileLow, axis=0),
+                c="k",
+                linestyle=":",
+            )
+            axes.set_ylabel(metric, fontsize=labelFontsize)
 
     # show data
     axes.plot(
@@ -629,7 +921,7 @@ def plot_ripleys(
         Kexp,
         c="k",
         linewidth=2.0,
-        label="Observed data",
+        label=label_data,
     )
 
     handles, labels = plt.gca().get_legend_handles_labels()

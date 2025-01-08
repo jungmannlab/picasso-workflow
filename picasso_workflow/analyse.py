@@ -890,6 +890,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the analysis results
         """
         pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        progress = parameters.get("progress", None)
 
         # dirty debug: picasso.aim.aim expects the existence of info[1]["Pixelsize"]
         self.info[1]["Pixelsize"] = pixelsize
@@ -900,6 +901,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             segmentation=parameters["segmentation"],
             intersect_d=parameters["intersect_d"] / pixelsize,
             roi_r=parameters["roi_r"] / pixelsize,
+            progress=progress,
         )
 
         results["success"] = True
@@ -1399,10 +1401,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                         If True, the GMM search is run in parallel using
                         multiprocessing. If False, the GMM search is run
                         without multiprocessing.
-                    callback_parent : function (default=None)
+                    callback_parent : function (default='silent')
                         Callback function's parent object for displaying
                         progress bar. If None, the progress bar displayed
-                        directly to the console.
+                        directly to the console. If 'silent', no progress
+                        is displayed
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -1414,6 +1417,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ("calibration", None),
             ("pixelsize", None),
             ("asynch", None),
+            ("callback_parent", "silent"),
         ]
         try:
             kwargs = {k: parameters[k] for k in required_args}
@@ -2513,6 +2517,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     controls by relocating each point by a random x/y in a
                     circle with the currently investigated r, which preserves
                     the density fluctuations (instead of CSR simulation)
+                    Alternatively, "FRC" for fraction of molecular types
+                    within the radii.
                 controltype : str
                     "CSR" or "RND". Control n_random_controls by either
                     CSR simulation within the density mask, or randomizing
@@ -2521,6 +2527,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                     for controltype "RND", the radius [nm] by which
                     to randomize.
                     optional.
+                shuffle_self : bool
+                    for metric "FRC", whether to shuffle only other types or
+                    also the self type
+                relocate_self : bool
+                    for metric "FRC", whether to relocate centerpoints to
+                    'type_self' after shuffling.
         """
         nRandomControls = parameters.get("ripleys_n_random_controls", 100)
         # radii = np.concatenate(
@@ -2563,20 +2575,41 @@ class AutoPicasso(util.AbstractModuleCollection):
             for mol in self.channel_locs
         ]
 
-        (ripley_matrix, fig_u, fig_n) = (
-            outpost_modules.ripleys.analyze_all_channels(
-                mol_coords,
-                mask,
-                mask_pixel_size,
-                area,
-                radii,
-                nRandomControls,
-                names=self.channel_tags,
-                metric=parameters["metric"],
-                controltype=parameters["controltype"],
-                randomization_radius=parameters.get("randomization_radius"),
+        if parameters["metric"] == "FRC":
+            (ripley_matrix, fig_u, fig_n, curves, curves_norm) = (
+                outpost_modules.ripleys.typefraction_all_channels(
+                    mol_coords,
+                    radii,
+                    nRandomControls,
+                    names=self.channel_tags,
+                    shuffle_self=parameters.get("shuffle_self"),
+                    relocate_self=parameters.get("relocate_self"),
+                )
             )
+        else:
+            (ripley_matrix, fig_u, fig_n, curves, curves_norm) = (
+                outpost_modules.ripleys.analyze_all_channels(
+                    mol_coords,
+                    mask,
+                    mask_pixel_size,
+                    area,
+                    radii,
+                    nRandomControls,
+                    names=self.channel_tags,
+                    metric=parameters["metric"],
+                    controltype=parameters.get("controltype"),
+                    randomization_radius=parameters.get(
+                        "randomization_radius"
+                    ),
+                )
+            )
+
+        results["fp_curves"] = os.path.join(results["folder"], "curves.npy")
+        np.save(results["fp_curves"], curves)
+        results["fp_curves_norm"] = os.path.join(
+            results["folder"], "curves_norm.npy"
         )
+        np.save(results["fp_curves_norm"], curves_norm)
 
         ripley_matrix = outpost_modules.ripleys.postprocess_ripley_matrix(
             ripley_matrix, radii
@@ -2594,26 +2627,26 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["folder"],
             self.channel_tags,
             parameters["metric"],
-            parameters["controltype"],
-            parameters["ripleys_threshold"],
+            parameters.get("controltype", "None"),
+            parameters.get("ripleys_threshold", 1),
             suffix=rcode,
         )
         results["fp_fig_unnormalized"] = os.path.join(
             results["folder"],
-            f"{parameters['metric']}_{parameters['controltype']}"
+            f"{parameters['metric']}_{parameters.get('controltype', 'None')}"
             + f"_unnormalized_{rcode}.png",
         )
         fig_u.savefig(results["fp_fig_unnormalized"])
         results["fp_fig_normalized"] = os.path.join(
             results["folder"],
-            f"{parameters['metric']}_{parameters['controltype']}_"
+            f"{parameters['metric']}_{parameters.get('controltype', 'None')}_"
             + f"normalized_{rcode}.png",
         )
         fig_n.savefig(results["fp_fig_normalized"])
 
         results["ripleys_significant"] = self._find_ripleys_significant(
             ripley_matrix,
-            parameters["ripleys_threshold"],
+            parameters.get("ripleys_threshold", 1),
             self.channel_tags,
         )
 
@@ -2882,6 +2915,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # check single intregals based on workflow file
         fp_ripleys_meanvals = []  # [""] * len(parameters["fp_workflows"])
+        fp_curves = []
+        fp_curves_norm = []
 
         channel_tags = None
 
@@ -2891,6 +2926,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                 parameters["swkfl_ripleysk_key"],
                 "fp_ripleys_meanval",
             ): fp_ripleys_meanvals,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "fp_curves",
+            ): fp_curves,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "fp_curves_norm",
+            ): fp_curves_norm,
         }
         for folder, name in zip(
             parameters["fp_workflows"], parameters["report_names"]
@@ -2915,6 +2958,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         ripleys_thresholds = []
         ripleys_metrics = []
         ripleys_controltypes = []
+        ripleys_radii = []
         search_dict = {
             (
                 parameters["swkfl_ripleysk_key"],
@@ -2928,6 +2972,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 parameters["swkfl_ripleysk_key"],
                 "controltype",
             ): ripleys_controltypes,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "radii",
+            ): ripleys_radii,
         }
         for folder, name in zip(
             parameters["fp_workflows"], parameters["report_names"]
@@ -2959,6 +3007,77 @@ class AutoPicasso(util.AbstractModuleCollection):
                 + f"got: {ripleys_controltypes}"
             )
         ripleys_controltype = ripleys_controltypes[0]
+
+        ripleys_radii = ripleys_radii[0]
+
+        # load and plot the single curves
+        fig_curves, ax_curves = outpost_modules.ripleys.init_plot(
+            len(channel_tags),
+            "un-normalized",
+            ripleys_controltype,
+            ripleys_metric,
+            figsize=30,
+        )
+        fig_curves_norm, ax_curves_norm = outpost_modules.ripleys.init_plot(
+            len(channel_tags),
+            "normalized",
+            ripleys_controltype,
+            ripleys_metric,
+            figsize=30,
+        )
+        for fp_curve, fp_curve_norm, reportname in zip(
+            fp_curves, fp_curves_norm, parameters["report_names"]
+        ):
+            curves = np.load(fp_curve)
+            curves_norm = np.load(fp_curve_norm)
+            for i, name1 in enumerate(channel_tags):
+                for j, name2 in enumerate(channel_tags):
+                    outpost_modules.ripleys.plot_ripleys(
+                        ripleys_radii,
+                        curves[i, j, :],
+                        None,
+                        ci=0.95,
+                        normalized=False,
+                        showControls=False,
+                        title=f"{name1} -> {name2}",
+                        labelFontsize=30,
+                        axes=ax_curves[i, j],
+                        metric=ripleys_metric,
+                        label_data=reportname,
+                        showControlEnvelope=False,
+                    )
+                    outpost_modules.ripleys.plot_ripleys(
+                        ripleys_radii,
+                        curves_norm[i, j, :],
+                        None,
+                        ci=0.95,
+                        normalized=True,
+                        showControls=False,
+                        title=f"{name1} -> {name2}",
+                        labelFontsize=30,
+                        axes=ax_curves_norm[i, j],
+                        metric=ripleys_metric,
+                        label_data=reportname,
+                        showControlEnvelope=False,
+                    )
+                    if i < len(channel_tags) - 1:
+                        ax_curves[i, j].xaxis.label.set_visible(False)
+                        ax_curves_norm[i, j].xaxis.label.set_visible(False)
+                        ax_curves[i, j].set_xticks([])
+                        ax_curves_norm[i, j].set_xticks([])
+                    if j > 0:
+                        ax_curves[i, j].yaxis.label.set_visible(False)
+                        ax_curves_norm[i, j].yaxis.label.set_visible(False)
+        results["fp_fig_unnormalized"] = os.path.join(
+            results["folder"],
+            f"{ripleys_metric}_{ripleys_controltype}" + "_unnormalized.png",
+        )
+        fig_curves.savefig(results["fp_fig_unnormalized"])
+        results["fp_fig_normalized"] = os.path.join(
+            results["folder"],
+            f"{ripleys_metric}_{ripleys_controltype}_" + "normalized.png",
+        )
+        fig_curves_norm.savefig(results["fp_fig_normalized"])
 
         # load and average the integrals
         all_integrals = np.stack(
@@ -3773,7 +3892,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     search_i, search_name = search_module.split("_")
                     search_i = int(search_i)
                     if search_i == i and search_name == module_name:
-                        parameter_val = module_pars[search_parname]
+                        parameter_val = module_pars.get(search_parname)
                         loaded_data[(search_module, search_parname)] = (
                             parameter_val
                         )
