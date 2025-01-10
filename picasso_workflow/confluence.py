@@ -212,7 +212,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <p><strong>Load localizations</strong></p>
         <ul>
         <li>Picasso Version: {results['picasso version']}</li>
-        <li>Movie Location: {parameters['filename']}</li>
+        <li>Localications Location: {parameters['filename']}</li>
         <li>Number of localizations: {results['nlocs']}</li>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -736,7 +736,10 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def align_channels(self, i, parameters, results):
+    @module_decorator
+    def align_channels(
+        self, i, parameters, results, parameter_text, result_text
+    ):
         """Describes the align_channels module
         Args:
             parameters : dict
@@ -750,14 +753,19 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting align_channels.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Align Channels via RCC</strong></p>
+        <p><strong>Align Channels</strong></p>
+        <p>Channels are aligned via RCC if no fiducials are given, and via
+        picked localizations if (picked, e.g. from find_gold) fiducials
+        are given.</p>
+
+        Summary:
         <ul><li>Shifts in x [px]: {results.get('shifts')[0, :]}</li>
         <li>Shifts in y [px]: {results.get('shifts')[1, :]}</li>
         <li>Shifts in z [px]: {results.get('shifts')[2, :]}</li>
-        <li>Start Time: {results['start time']}</li>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
-        </ul>"""
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -1005,16 +1013,29 @@ class ConfluenceReporter(AbstractModuleCollection):
 
         if fp_fig := results.get("fp_fig_normalized"):
             text += "<ul><table>"
-            text += "<tr><td><b>Normalized Curves</b></td>"
+            text += "<tr><td><b>Mean Value</b></td>"
+            text += "<td><b>Normalized Curves</b></td>"
             text += "<td><b>Un-normalized Curves</b></td></tr>"
             text += "<tr><td>"
+            fp_fig = results.get("fp_fig_ripleys_meanval")
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)
             except ConfluenceInterfaceError:
                 pass
             _, fp_fig = os.path.split(fp_fig)
             text += f"""
-                <ac:image ac:width="750"><ri:attachment
+                <ul><ac:image ac:width="500"><ri:attachment
+                ri:filename="{fp_fig}" />
+                </ac:image></ul>"""
+            text += "</td><td>"
+            fp_fig = results.get("fp_fig_normalized")
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += f"""
+                <ac:image ac:width="500"><ri:attachment
                 ri:filename="{fp_fig}" />
                 </ac:image>"""
             text += "</td><td>"
@@ -1025,26 +1046,15 @@ class ConfluenceReporter(AbstractModuleCollection):
                 pass
             _, fp_fig = os.path.split(fp_fig)
             text += f"""
-                <ac:image ac:width="750"><ri:attachment
+                <ac:image ac:width="500"><ri:attachment
                 ri:filename="{fp_fig}" />
                 </ac:image>"""
             text += "</td></tr></table></ul>"
-        if fp_fig := results.get("fp_fig_ripleys_meanval"):
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
-            _, fp_fig = os.path.split(fp_fig)
-            text += (
-                "<ul><ac:image><ri:attachment "
-                + f'ri:filename="{fp_fig}" />'
-                + "</ac:image></ul>"
-            )
-            text += (
-                "The Ripley's mean value is the Ripley's K integral"
-                + ", divided by the maximum integration distance."
-            )
 
+        text += (
+            "The Ripley's mean value is the Ripley's K integral"
+            + ", divided by the maximum integration distance."
+        )
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -1116,7 +1126,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         if fp_fig := results.get("fp_fig_normalized"):
             text += "<ul><table>"
             text += "<tr><td><b>Mean and std of mean values</b></td>"
-            text += "<tr><td><b>Normalized Curves of all datasets</b></td>"
+            text += "<td><b>Normalized Curves of all datasets</b></td>"
             text += "<td><b>Un-normalized Curves of all datasets</b></td></tr>"
             text += "<tr><td>"
             fp_fig = results.get("fp_figmeanvals")

@@ -83,7 +83,9 @@ def align_channels(
             # assignment by reference. Any changes to fiducial_locs will act on
             # channel_locs and vice versa.
             fiducial_locs = channel_locs
-        shift = shift_from_rcc(fiducial_locs, channel_info)
+            shift = shift_from_rcc(fiducial_locs, channel_info)
+        else:
+            shift = shift_from_picked(fiducial_locs)
         logger.debug("Shifting channels.")
         temp_shift_x = []
         temp_shift_y = []
@@ -1743,6 +1745,65 @@ def _undrift_from_picked(locs, info, picked_locs):
     locs.y -= drift_y[locs.frame]
 
     return locs, info, (drift_x, drift_y)
+
+
+def shift_from_picked(channel_fiducials):
+    """
+    Calculate shift based on picked fiducials
+
+    Args:
+        channel_fiducials : list of np.recarray
+            the picked localizations to evaluate shifts from.
+            Must contain a 'x', 'y', 'group' columns
+
+    Returns
+    -------
+    tuple
+        With shifts; shape (2,) or (3,) (if z coordinate present)
+    """
+    dy = shifts_from_picked_coordinate(channel_fiducials, "y")
+    dx = shifts_from_picked_coordinate(channel_fiducials, "x")
+    if all([hasattr(_[0], "z") for _ in channel_fiducials]):
+        dz = shifts_from_picked_coordinate(channel_fiducials, "z")
+    else:
+        dz = None
+    return lib.minimize_shifts(dx, dy, shifts_z=dz)
+
+
+def shifts_from_picked_coordinate(locs, coordinate):
+    """
+    Calculates shifts between channels along a given coordinate.
+
+    Parameters
+    ----------
+    locs : np.recarray
+        Picked locs from all channels
+    coordinate : str
+        Specifies which coordinate should be used (x, y, z)
+
+    Returns
+    -------
+    np.array
+        Array of shape (n_channels, n_channels) with shifts between
+        all channels
+    """
+
+    n_channels = len(locs)
+    # Calculating center of mass for each channel and pick
+    coms = []
+    for channel_locs in locs:
+        coms.append([])
+        n_pick_groups = np.unique(channel_locs["group"])
+        for pick_group_idx in n_pick_groups:
+            group_locs = channel_locs[channel_locs["group"] == pick_group_idx]
+            group_com = np.mean(getattr(group_locs, coordinate))
+            coms[-1].append(group_com)
+    # Calculating image shifts
+    d = np.zeros((n_channels, n_channels))
+    for i in range(n_channels - 1):
+        for j in range(i + 1, n_channels):
+            d[i, j] = np.nanmean([cj - ci for ci, cj in zip(coms[i], coms[j])])
+    return d
 
 
 ########################################################################

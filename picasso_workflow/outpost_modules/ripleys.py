@@ -117,6 +117,7 @@ def fraction_types(
     nshuffle=20,
     shuffle_self=True,
     relocate_self=True,
+    fraction_exclude=None,
 ):
     """Calculates the mean fraction of types within a given radius
     around type_self spots. This is done for original data, and data in which
@@ -137,6 +138,9 @@ def fraction_types(
         relocate_self : bool
             whether to relocate centerpoints to 'type_self' after
             shuffling.
+        fraction_exclude : int or None
+            the type to exclude from normalization (e.g. the
+            'real' (not shuffled and relocated) type_self)
     Returns:
         fract_types : dict of 1D array
             the fractions of various types within the ball radii, for
@@ -156,7 +160,11 @@ def fraction_types(
         balls_indices = tree_self.query_ball_tree(tree_all, radius)
 
         neighbor_types_fract[ir] = type_fractions(
-            balls_indices, types, types_present, type_self=type_self
+            balls_indices,
+            types,
+            types_present,
+            type_self=type_self,
+            fraction_exclude=fraction_exclude,
         )
         # do controls
         types_ctrl = types.copy().flatten()
@@ -176,9 +184,13 @@ def fraction_types(
                 balls_indices = tree_self_ctrl.query_ball_tree(
                     tree_all, radius
                 )
-                tp_self = types[idx_self_ctrl]
+                tp_self = types_ctrl[idx_self_ctrl]
             neighbor_types_ctrl_fract[ir][ictrl] = type_fractions(
-                balls_indices, types_ctrl, types_present, type_self=tp_self
+                balls_indices,
+                types_ctrl,
+                types_present,
+                type_self=tp_self,
+                fraction_exclude=fraction_exclude,
             )
 
     # re shape from list of dicts to dict of array
@@ -201,17 +213,40 @@ def fraction_types(
     return fract_types, fract_types_ctrl
 
 
-def type_fractions(balls_indices, types, types_present, type_self=None):
+def type_fractions(
+    balls_indices, types, types_present, type_self=None, fraction_exclude=None
+):
     """Counts types and calculates their fraction
     Args:
         balls_indices : list of lists of int
             the indices of types for each origin of balls
         types : 1D array of int
             the types of the spots indexed
+        fraction_exclude : int or None
+            the type to exclude from normalization (e.g. the
+            'real' (not shuffled and relocated) type_self)
     """
-    total_neighbors = sum(
-        [len(ball_indices) - 1 for ball_indices in balls_indices]
-    )
+    if fraction_exclude is None or fraction_exclude is False:
+        total_neighbors = sum(
+            [len(ball_indices) - 1 for ball_indices in balls_indices]
+        )
+    else:
+        total_neighbors = 0
+        for i, ball_indices in enumerate(balls_indices):
+            ball_types = np.array(types[ball_indices])
+            n_nonexcluded = np.sum(ball_types != fraction_exclude)
+            # additionally exclude center point if it hasn't been excluded yet
+            if isinstance(type_self, list) or isinstance(
+                type_self, np.ndarray
+            ):
+                ctr_type = type_self[i]
+            elif type_self is not None:
+                ctr_type = type_self
+            else:
+                ctr_type = -1
+            if ctr_type != fraction_exclude:
+                n_nonexcluded -= 1
+            total_neighbors += n_nonexcluded
 
     neighbor_types_fract = {type: 0 for type in types_present}
     for i, ball_indices in enumerate(balls_indices):
@@ -236,7 +271,8 @@ def type_fractions(balls_indices, types, types_present, type_self=None):
                 # leave out the origin spot (assuming the list is sorted by distance)
                 if t == type_self:
                     c = c - 1
-            neighbor_types_fract[t] += c / total_neighbors
+            if (fraction_exclude is None) or (t != fraction_exclude):
+                neighbor_types_fract[t] += c / total_neighbors
     return neighbor_types_fract
 
 
@@ -689,6 +725,8 @@ def typefraction_all_channels(
     names="",
     shuffle_self=True,
     relocate_self=False,
+    fraction_exclude_self=False,
+    normalize_to_bulkfraction=False,
 ):
     """
     Args:
@@ -708,12 +746,21 @@ def typefraction_all_channels(
         relocate_self : bool
             whether to relocate centerpoints to 'type_self' after
             shuffling.
+        fraction_exclude_self : bool
+            Whether to exclude self type from normalization when caluclating
+            type fractions
+        normalize_to_bulkfraction : bool
+            if False, normalize to the controls,
+            if True, normalize to the fraction at largest r. Sets
+                n_simulations to 0
     Returns:
         curves : 3D array (N, N, len(radii))
             the fraction curves
         curves_norm : 3D array
             the normalized fraction curves
     """
+    if normalize_to_bulkfraction:
+        n_simulations = 0
     types = np.concatenate(
         [i * np.ones(len(coords)) for i, coords in enumerate(mol_coords)]
     )
@@ -736,6 +783,10 @@ def typefraction_all_channels(
         names = [""] * n_targets
     ripley_matrix = np.zeros((n_targets, n_targets), dtype=np.float64)
     for i, X1 in enumerate(mol_coords):
+        if fraction_exclude_self:
+            fraction_exclude = i
+        else:
+            fraction_exclude = None
         fract_types, fract_types_ctrl = fraction_types(
             all_coords,
             types,
@@ -744,20 +795,32 @@ def typefraction_all_channels(
             nshuffle=n_simulations,
             shuffle_self=shuffle_self,
             relocate_self=relocate_self,
+            fraction_exclude=fraction_exclude,
         )
         for j, X2 in enumerate(mol_coords):
-
-            K_exp = fract_types[j]
-            K_csr = fract_types_ctrl[j]
             name1 = names[i]
             name2 = names[j]
+            if not normalize_to_bulkfraction:
+                K_exp = fract_types[j]
+                K_csr = fract_types_ctrl[j]
 
-            K_exp_norm = normalize_to_CSR(K_exp, K_csr)
-            K_csr_norm = np.array(
-                [normalize_to_CSR(K_c, K_csr) for K_c in K_csr]
-            )
-            curves[i, j, :] = K_exp
-            curves_norm[i, j, :] = K_exp_norm
+                K_exp_norm = normalize_to_CSR(K_exp, K_csr)
+                K_csr_norm = np.array(
+                    [normalize_to_CSR(K_c, K_csr) for K_c in K_csr]
+                )
+                curves[i, j, :] = K_exp
+                curves_norm[i, j, :] = K_exp_norm
+                show_controls = True
+                show_control_envelope = True
+            else:
+                curves[i, j, :] = fract_types[j]
+                curves_norm[i, j, :] = fract_types[j] / fract_types[j][-1]
+                K_exp = curves[i, j, :]
+                K_exp_norm = curves_norm[i, j, :]
+                K_csr = K_exp
+                K_csr_norm = K_csr
+                show_controls = False
+                show_control_envelope = False
 
             if ax_u is not None and ax_n is not None:
                 plot_ripleys(
@@ -766,7 +829,8 @@ def typefraction_all_channels(
                     K_csr,
                     ci=0.95,
                     normalized=False,
-                    showControls=True,
+                    showControls=show_controls,
+                    showControlEnvelope=show_control_envelope,
                     title=f"{name1} -> {name2}",
                     labelFontsize=30,
                     axes=ax_u[i, j],
@@ -778,7 +842,8 @@ def typefraction_all_channels(
                     K_csr_norm,
                     ci=0.95,
                     normalized=True,
-                    showControls=True,
+                    showControls=show_controls,
+                    showControlEnvelope=show_control_envelope,
                     title=f"{name1} -> {name2}",
                     labelFontsize=30,
                     axes=ax_n[i, j],

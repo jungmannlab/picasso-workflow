@@ -2533,6 +2533,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 relocate_self : bool
                     for metric "FRC", whether to relocate centerpoints to
                     'type_self' after shuffling.
+                fraction_exclude
         """
         nRandomControls = parameters.get("ripleys_n_random_controls", 100)
         # radii = np.concatenate(
@@ -2582,8 +2583,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                     radii,
                     nRandomControls,
                     names=self.channel_tags,
-                    shuffle_self=parameters.get("shuffle_self"),
-                    relocate_self=parameters.get("relocate_self"),
+                    shuffle_self=parameters.get("shuffle_self", False),
+                    relocate_self=parameters.get("relocate_self", False),
+                    fraction_exclude_self=parameters.get(
+                        "fraction_exclude_self", False
+                    ),
+                    normalize_to_bulkfraction=parameters.get(
+                        "normalize_to_bulkfraction", None
+                    ),
                 )
             )
         else:
@@ -2659,11 +2666,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         channel_tags,
         metric,
         controltype,
-        threshold,
+        threshold=None,
         std=None,
         suffix="",
     ):
         fig, ax = plt.subplots()
+        if threshold is None:
+            threshold = 1
         heatmap = ax.imshow(
             ripleysMeanVal, cmap="coolwarm_r", vmin=-threshold, vmax=threshold
         )
@@ -2702,6 +2711,8 @@ class AutoPicasso(util.AbstractModuleCollection):
     ):
         # elucidate significant pairs
         significant_pairs = []
+        if threshold is None:
+            return significant_pairs
         for i in range(len(channel_tags)):
             for j in range(i, len(channel_tags)):
                 if ripleysIntegrals[i, j] > threshold:
