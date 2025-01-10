@@ -2562,8 +2562,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         # combined_locs, _ = io.load_locs(fp_combined_locs)
 
         if fp_mask := parameters.get("fp_mask"):
-            mask = np.load(fp_mask)
-            mask = mask / np.sum(mask)
+            # mask = np.load(fp_mask)
+            # mask = mask / np.sum(mask)
+            mask = outpost_modules.mask.CellMask.load(fp_mask)
         else:
             mask = None
         mask_pixel_size = parameters.get("mask_pixel_size")
@@ -3707,6 +3708,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     select_cell : boolean
                         whether to select the largest connected component,
                         assumed to be the cell of interest.
+                    apply_to_locs : boolean
+                        whether to drop all localizations outside the area
                 and optional keys:
                     fp_combined_locs : str default: None or ''
                         filepath to the locs combined in 'combine_channels'
@@ -3739,41 +3742,68 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
 
-        mol_coords = [
-            outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
-            for mol in mols
-        ]
+        # mol_coords = [
+        #     outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
+        #     for mol in mols
+        # ]
         binsize = parameters["binsize"]
-        blur = parameters["blursize"] / binsize
+        blursize = parameters["blursize"]
+        # blur = parameters["blursize"] / binsize
         threshold = parameters["threshold"]
         mask_pixel_size = parameters["mask_pixel_size"]
-        binary = parameters["binary"]
-        mask, area = outpost_modules.ripleys.get_cell_mask(
-            mol_coords,
+        # binary = parameters["binary"]
+        cell_mask = outpost_modules.mask.CellMask.from_mol_coords(
+            mols,
             pixelsize,
-            binsize=binsize,
-            blur=blur,
-            threshold=threshold,
+            binsize,
+            blursize,
+            threshold,
             upsample=mask_pixel_size,
-            binary=binary,
         )
         if parameters.get("select_cell"):
-            mask = outpost_modules.ripleys.filter_mask(mask)
+            cell_mask.filter_mask()
+        if parameters.get("apply_to_locs"):
+            self.channel_locs = [
+                cell_mask.apply_to_locs(locs) for locs in self.channel_locs
+            ]
+        area = cell_mask.area
+
+        # mask, area = outpost_modules.ripleys.get_cell_mask(
+        #     mol_coords,
+        #     pixelsize,
+        #     binsize=binsize,
+        #     blur=blur,
+        #     threshold=threshold,
+        #     upsample=mask_pixel_size,
+        #     binary=binary,
+        # )
+        # if parameters.get("select_cell"):
+        #     mask = outpost_modules.ripleys.filter_mask(mask)
 
         results["area"] = area
-        results["fp_mask"] = os.path.join(
-            results["folder"], f"mask_binary-{binary}.npy"
-        )
-        np.save(results["fp_mask"], mask)
+        # results["fp_mask"] = os.path.join(
+        #     results["folder"], f"mask_binary-{binary}.npy"
+        # )
+        # np.save(results["fp_mask"], mask)
+        results["fp_mask"] = os.path.join(results["folder"], "mask.pkl")
+        cell_mask.save(results["fp_mask"])
         results["mask_pixel_size"] = mask_pixel_size
 
         rcode = generate_random_code(6)
-        results["fp_fig_mask"] = os.path.join(
-            results["folder"], f"mask_binary-{binary}_{rcode}.png"
+        # results["fp_fig_mask"] = os.path.join(
+        #     results["folder"], f"mask_binary-{binary}_{rcode}.png"
+        # )
+        # outpost_modules.ripleys.plot_mask(
+        #     mask, mask_pixel_size, results["fp_fig_mask"]
+        # )
+        results["fp_fig_mask_binary"] = os.path.join(
+            results["folder"], f"mask_binary_{rcode}.png"
         )
-        outpost_modules.ripleys.plot_mask(
-            mask, mask_pixel_size, results["fp_fig_mask"]
+        cell_mask.plot_mask(results["fp_fig_mask_binary"], binary=True)
+        results["fp_fig_mask_density"] = os.path.join(
+            results["folder"], f"mask_density_{rcode}.png"
         )
+        cell_mask.plot_mask(results["fp_fig_mask_density"], binary=False)
 
         return parameters, results
 

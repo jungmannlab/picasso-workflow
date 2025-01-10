@@ -536,7 +536,7 @@ def analyze_2_channels(
     ax_n,
     name1="",
     name2="",
-    controltype="CSR",  # CSR or RND
+    controltype="CSR",  # CSRbin or CSRdens or RND
     metric="RK",  # RK or RDF or 1NN
     randomization_radius=None,
 ):
@@ -561,8 +561,12 @@ def analyze_2_channels(
 
     K_csr = []
     for i in range(n_simulations):
-        if controltype == "CSR":
-            X_ctrl = simulate_CSR(n_points, mask, 1, mask_pixel_size)
+        if "CSR" in controltype:
+            # X_ctrl = simulate_CSR(n_points, mask, 1, mask_pixel_size)
+            if "bin" in controltype:
+                X_ctrl = mask.random_points(n_points, binary=True)
+            elif "dens" in controltype:
+                X_ctrl = mask.random_points(n_points, binary=False)
             X1_ctrl = X_ctrl[0][0]
             X2_ctrl = X_ctrl[1][0]
         elif controltype == "RND":
@@ -641,7 +645,7 @@ def analyze_all_channels(
     Args:
         mol_coords : list of np.rec.arrays
             the molecular coordinates of target types
-        mask : 2D np array
+        mask : 2D np array - outpost_modules.mask.CellMask
             the binary or density mask. Only needed if controltype is "CSR"
         mask_pixel_size : float
             the pixel size of the mask, in nm. Only needed if controltype is "CSR"

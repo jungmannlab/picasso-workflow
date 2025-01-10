@@ -1352,7 +1352,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s</li>
         <li>Area: {results["area"]} µm^2</li>
         </ul>"""
-        if fp_fig_mask := results.get("fp_fig_mask"):
+        if fp_fig_mask := results.get("fp_fig_mask_binary"):
             for fp in [fp_fig_mask]:
                 try:
                     self.ci.upload_attachment(self.report_page_id, fp)
@@ -1363,13 +1363,26 @@ class ConfluenceReporter(AbstractModuleCollection):
             text += "<table>"
             text += """
                 <tr>
-                <td><b>Final Mask</b></td>
+                <td><b>Binary Mask</b></td>
+                <td><b>Density Mask</b></td>
                 </tr>"""
             text += f"""
                 <tr>
                 <td>
                       <ac:image ac:height="350">
                       <ri:attachment ri:filename="{fp_fig_mask}" />
+                      </ac:image>
+                </td>"""
+            fp_fig_dmask = results.get("fp_fig_mask_density")
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig_dmask)
+            except ConfluenceInterfaceError:
+                pass
+            fp_fig_dmask = os.path.split(fp_fig_dmask)[1]
+            text += f"""
+                <td>
+                      <ac:image ac:height="350">
+                      <ri:attachment ri:filename="{fp_fig_dmask}" />
                       </ac:image>
                 </td>
                 </tr>"""
