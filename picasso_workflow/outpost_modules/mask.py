@@ -33,7 +33,7 @@ class CellMask:
     @classmethod
     def from_mol_coords(
         cls,
-        locs,
+        locs_list,
         pixelsize,
         binsize=20,
         blursize=400,
@@ -70,7 +70,9 @@ class CellMask:
         instance._threshold = threshold
         instance._upsample = upsample
 
-        mol_coords = picassolocs_to_coords(locs, pixelsize)
+        mol_coords = [
+            picassolocs_to_coords(locs, pixelsize) for locs in locs_list
+        ]
         # combine all coordinates into one array
         combined_coords = np.vstack(mol_coords) / binsize
         n_bins = int(np.ceil(512 * pixelsize / binsize))
@@ -78,8 +80,9 @@ class CellMask:
         mask = np.histogram2d(
             combined_coords[:, 0], combined_coords[:, 1], bins=bins
         )[0]
-        mask = np.flipud(np.rot90(mask))
-        blur = blursize / pixelsize
+        # assuming: for display. Now using imshow origin "lower"
+        # mask = np.flipud(np.rot90(mask))
+        blur = blursize / binsize
         mask = gaussian_filter(mask, blur)
         thresh = otsu(mask) * threshold
         mask[mask < thresh] = 0
@@ -110,15 +113,15 @@ class CellMask:
         # combine all coordinates into one array
         mask_coords = np.vstack(mol_coords) / self._binsize * factor
         mask_coords = np.floor(mask_coords).astype(np.int32)
-        # flip and turn (corresponding to the flipud, rot90 operations)
-        # basically switches x and y coordinates
-        mask_x = mask_coords[:, 0]
-        mask_coords[:, 0] = mask_coords[:, 1]
-        mask_coords[:, 1] = mask_x
+        # # flip and turn (corresponding to the flipud, rot90 operations)
+        # # basically switches x and y coordinates
+        # mask_x = mask_coords[:, 0]
+        # mask_coords[:, 0] = mask_coords[:, 1]
+        # mask_coords[:, 1] = mask_x
         # set the coordinates that are out of bounds to -1
         mask_coords[mask_coords < 0] = -1
-        mask_coords[mask_coords[:, 0] > self.mask.shape[0], 0] = -1
-        mask_coords[mask_coords[:, 1] > self.mask.shape[1], 1] = -1
+        mask_coords[mask_coords[:, 0] > self._mask.shape[0], 0] = -1
+        mask_coords[mask_coords[:, 1] > self._mask.shape[1], 1] = -1
         return mask_coords
 
     def save(self, fp):
@@ -155,8 +158,7 @@ class CellMask:
         mask_final = self._mask.copy()
         mask_final[mask_final <= 0] = 0
         mask_final[mask_final > 0] = 1
-        mask_final /= mask_final.sum()
-        return mask_final
+        return mask_final.astype(np.bool_)
 
     @property
     def area(self):
@@ -186,10 +188,19 @@ class CellMask:
         """
         mask_coords = self.picassolocs_to_maskbins(locs)
         # eliminate out of bound entries
-        inbound = (mask_coords[:, 0] >= 0) | (mask_coords[:, 1] >= 0)
-        mask_coords = mask_coords[inbound, :]
+        maskshape = self._mask.shape
+        inbound = (
+            (mask_coords[:, 0] >= 0)
+            & (mask_coords[:, 1] >= 0)
+            & (mask_coords[:, 0] < maskshape[0])
+            & (mask_coords[:, 1] < maskshape[1])
+        )
+        # mask_coords = mask_coords[inbound, :]
         bmask = self.binary_mask
-        in_cell = bmask[mask_coords[:, 0], mask_coords[:, 1]]
+        in_cell = np.zeros(locs.shape[0], dtype=np.bool_)
+        in_cell[inbound] = bmask[
+            mask_coords[inbound, 0], mask_coords[inbound, 1]
+        ]
         return locs[in_cell]
 
     def plot_mask(self, fp, binary=False):
@@ -214,6 +225,7 @@ class CellMask:
                 self._upsample * mask_plot.shape[1],
             ],
             cmap=cmap,
+            origin="lower",
         )
 
         ax.set_xlabel("x [nm]")
@@ -235,6 +247,7 @@ class CellMask:
         if mask is None:
             if binary:
                 mask = self.binary_mask
+                mask = mask / np.sum(mask)
             else:
                 mask = self.density_mask
         x_min = y_min = 0
@@ -257,6 +270,7 @@ class CellMask:
     def random_points_sets(self, n_sets, n_points_per_set, binary=False):
         if binary:
             mask = self.binary_mask
+            mask = mask / np.sum(mask)
         else:
             mask = self.density_mask
         X = np.stack(

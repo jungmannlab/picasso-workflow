@@ -488,16 +488,22 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def dbscan(self, i, parameters, results):
+    @module_decorator
+    def dbscan(self, i, parameters, results, parameter_text, result_text):
         logger.debug("Reporting dbscan.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>dbscan clustering</strong></p>
-        <ul><li>Start Time: {results['start time']}</li>
-        <li>Duration: {results['duration']} s</li>
+        Summary:
+        <ul>
         <li>Radius: {parameters.get('radius')} nm</li>
         <li>min_samples: {parameters.get('min_samples')}</li>
-        </ul>"""
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
         if fp_fig := results.get("fp_fig_clustersizes"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)

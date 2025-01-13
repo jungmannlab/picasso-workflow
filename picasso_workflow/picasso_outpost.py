@@ -10,6 +10,7 @@ Description: This is a collection of exploratory DNA-PAINT analysis / picasso
 """
 import logging
 import numpy as np
+import copy
 
 # from numpy.lib.recfunctions import stack_arrays
 import pandas as pd
@@ -64,17 +65,74 @@ def align_channels(
             the cumulative shift in the three dimensions, in all channels
             the total shift is the last value (in iterations) fo the cum shift
     """
+    logger.debug("Aligning datasets")
+    if fiducial_locs is None:
+        use_fiducials = False
+        shift, cumulative_shift, channel_locs = align_by_picked(
+            channel_locs,
+            channel_info,
+            max_iterations,
+            convergence,
+            fiducial_locs,
+        )
+    else:
+        use_fiducials = True
+        shift, cumulative_shift, channel_locs = align_by_rcc(
+            channel_locs,
+            channel_info,
+            max_iterations,
+            convergence,
+            fiducial_locs,
+        )
+
+    # logger.debug(f"calculated shifts:")
+    # logger.debug(f"last shift: {str(shift)}")
+    # # logger.debug(f'shift_y: {str(shift_y)}')
+    # # logger.debug(f'shift_z: {str(shift_z)}')
+    # logger.debug(f"all shift: {str(all_shift)}")
+    # logger.debug(f"cumulative_shift: {str(cumulative_shift)}")
+    # logger.debug(f"cumulative_shift shape: {cumulative_shift.shape}")
+    # logger.debug(f"all_shift shape: {all_shift.shape}")
+
+    # if fiducial_locs were separately given, shift channel_locs
+    if use_fiducials:  # channel_locs != fiducial_locs:
+        for i, locs_ in enumerate(channel_locs):
+            # logger.debug(f"shifting x by {str(cumulative_shift[0, i, -1])}")
+            locs_.x -= cumulative_shift[0, i, -1]
+            # logger.debug(f"shifting y by {str(cumulative_shift[1, i, -1])}")
+            locs_.y -= cumulative_shift[1, i, -1]
+            if len(shift) == 3:
+                locs_.z -= cumulative_shift[2, i, -1]
+    return shift, cumulative_shift
+
+
+def align_by_picked(channel_locs, fiducial_locs):
+    # find shift between channels
+    shift = shift_from_picked(fiducial_locs)
+    # print("Shift {}".format(shift))
+
+    # align each channel
+    for i, locs_ in enumerate(channel_locs):
+        locs_.y -= shift[0][i]
+        locs_.x -= shift[1][i]
+        if len(shift) == 3:
+            locs_.z -= shift[2][i]
+        channel_locs[i] = copy.copy(locs_)
+    cumulative_shift = np.array(shift)[..., np.newaxis]
+    return shift, cumulative_shift, channel_locs
+
+
+def align_by_rcc(
+    channel_locs,
+    channel_info,
+    max_iterations=5,
+    convergence=0.001,
+    fiducial_locs=None,
+):
     shift_x = []
     shift_y = []
     shift_z = []
     all_shift = np.zeros((3, len(channel_locs), max_iterations))
-
-    logger.debug("Aligning datasets")
-    if fiducial_locs is None:
-        use_fiducials = False
-    else:
-        use_fiducials = True
-
     for iteration in range(max_iterations):
         completed = True
 
@@ -83,9 +141,7 @@ def align_channels(
             # assignment by reference. Any changes to fiducial_locs will act on
             # channel_locs and vice versa.
             fiducial_locs = channel_locs
-            shift = shift_from_rcc(fiducial_locs, channel_info)
-        else:
-            shift = shift_from_picked(fiducial_locs)
+        shift = shift_from_rcc(fiducial_locs, channel_info)
         logger.debug("Shifting channels.")
         temp_shift_x = []
         temp_shift_y = []
@@ -123,26 +179,7 @@ def align_channels(
     shift = [shift_x, shift_y]
     if shift_z != []:
         shift.append(shift_z)
-
-    # logger.debug(f"calculated shifts:")
-    # logger.debug(f"last shift: {str(shift)}")
-    # # logger.debug(f'shift_y: {str(shift_y)}')
-    # # logger.debug(f'shift_z: {str(shift_z)}')
-    # logger.debug(f"all shift: {str(all_shift)}")
-    # logger.debug(f"cumulative_shift: {str(cumulative_shift)}")
-    # logger.debug(f"cumulative_shift shape: {cumulative_shift.shape}")
-    # logger.debug(f"all_shift shape: {all_shift.shape}")
-
-    # if fiducial_locs were separately given, shift channel_locs
-    if use_fiducials:  # channel_locs != fiducial_locs:
-        for i, locs_ in enumerate(channel_locs):
-            # logger.debug(f"shifting x by {str(cumulative_shift[0, i, -1])}")
-            locs_.x -= cumulative_shift[0, i, -1]
-            # logger.debug(f"shifting y by {str(cumulative_shift[1, i, -1])}")
-            locs_.y -= cumulative_shift[1, i, -1]
-            if len(shift) == 3:
-                locs_.z -= cumulative_shift[2, i, -1]
-    return shift, cumulative_shift
+    return shift, cumulative_shift, channel_locs
 
 
 def plot_shift(shifts, cum_shifts, filepath):

@@ -42,6 +42,12 @@ def generate_random_code(length):
     return random_code
 
 
+def create_unique_filename(folder, fn, len_code=6):
+    rcode = generate_random_code(len_code)
+    fparts = os.path.split(fn)
+    return os.path.join(folder, f"{fparts[0]}_{rcode}{fparts[1]}")
+
+
 def module_decorator(method):
     def module_wrapper(self, i, parameters):
         # create the results direcotry
@@ -905,7 +911,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         results["success"] = True
-        results["fp_driftfile"] = os.path.join(results["folder"], "drift.txt")
+        results["fp_driftfile"] = create_unique_filename(
+            results["folder"], "drift.txt"
+        )
         np.savetxt(results["fp_driftfile"], self.drift, delimiter=",")
         results["fp_fig"] = (
             os.path.splitext(results["fp_driftfile"])[0] + ".png"
@@ -2534,6 +2542,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     for metric "FRC", whether to relocate centerpoints to
                     'type_self' after shuffling.
                 fraction_exclude
+                significance_threshold : float
+                    threshold above which heatmap entries are colored
         """
         nRandomControls = parameters.get("ripleys_n_random_controls", 100)
         # radii = np.concatenate(
@@ -2619,9 +2629,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         np.save(results["fp_curves_norm"], curves_norm)
 
-        ripley_matrix = outpost_modules.ripleys.postprocess_ripley_matrix(
-            ripley_matrix, radii
-        )
+        # ripley_matrix = outpost_modules.ripleys.postprocess_ripley_matrix(
+        #     ripley_matrix, radii
+        # )
 
         results["fp_ripleys_meanval"] = os.path.join(
             results["folder"], "Ripleys_IntegralsMean.txt"
@@ -2638,6 +2648,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters.get("controltype", "None"),
             parameters.get("ripleys_threshold", 1),
             suffix=rcode,
+            significance_threshold=parameters.get("significance_threshold", 1),
         )
         results["fp_fig_unnormalized"] = os.path.join(
             results["folder"],
@@ -2670,16 +2681,25 @@ class AutoPicasso(util.AbstractModuleCollection):
         threshold=None,
         std=None,
         suffix="",
+        significance_threshold=None,
     ):
         fig, ax = plt.subplots()
+        plot_ripleysMeanVal = ripleysMeanVal.copy()
         if threshold is None:
             threshold = 1
+        if significance_threshold is not None:
+            plot_ripleysMeanVal[
+                np.abs(plot_ripleysMeanVal) <= significance_threshold
+            ] = 0
         heatmap = ax.imshow(
-            ripleysMeanVal, cmap="coolwarm_r", vmin=-threshold, vmax=threshold
+            plot_ripleysMeanVal,
+            cmap="coolwarm_r",
+            vmin=-threshold,
+            vmax=threshold,
         )
         ax.grid(False)
-        ax.set_xticks(np.arange(ripleysMeanVal.shape[0]))
-        ax.set_yticks(np.arange(ripleysMeanVal.shape[1]))
+        ax.set_xticks(np.arange(plot_ripleysMeanVal.shape[0]))
+        ax.set_yticks(np.arange(plot_ripleysMeanVal.shape[1]))
         # Add number annotations to cells
         for i in range(ripleysMeanVal.shape[0]):
             for j in range(ripleysMeanVal.shape[1]):

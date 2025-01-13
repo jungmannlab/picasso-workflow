@@ -563,12 +563,19 @@ def analyze_2_channels(
     for i in range(n_simulations):
         if "CSR" in controltype:
             # X_ctrl = simulate_CSR(n_points, mask, 1, mask_pixel_size)
+            # X1_ctrl = X_ctrl[0][0]
+            # X2_ctrl = X_ctrl[1][0]
             if "bin" in controltype:
-                X_ctrl = mask.random_points(n_points, binary=True)
+                binary = True
             elif "dens" in controltype:
-                X_ctrl = mask.random_points(n_points, binary=False)
-            X1_ctrl = X_ctrl[0][0]
-            X2_ctrl = X_ctrl[1][0]
+                binary = False
+
+            if univariate:
+                X1_ctrl = mask.random_points(n_points, binary=binary)
+                X2_ctrl = X1_ctrl
+            else:
+                X1_ctrl = mask.random_points(n_points[0], binary=binary)
+                X2_ctrl = mask.random_points(n_points[1], binary=binary)
         elif controltype == "RND":
             X1_ctrl = randomize_data(exp_X1, randomization_radius)
             # X1_ctrl = exp_X1
@@ -579,7 +586,7 @@ def analyze_2_channels(
         else:
             raise NotImplementedError()
         if metric == "RK":
-            K_csr.append(ripley_K(X1_ctrl, X1_ctrl, radii, area))
+            K_csr.append(ripley_K(X1_ctrl, X2_ctrl, radii, area))
         elif metric == "RDF":
             K_csr.append(
                 radial_distribution_function(
@@ -819,6 +826,7 @@ def typefraction_all_channels(
             else:
                 curves[i, j, :] = fract_types[j]
                 curves_norm[i, j, :] = fract_types[j] / fract_types[j][-1]
+                ripley_matrix[i, j] = np.sum(curves_norm[i, j, :] - 1)
                 K_exp = curves[i, j, :]
                 K_exp_norm = curves_norm[i, j, :]
                 K_csr = K_exp

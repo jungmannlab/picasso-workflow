@@ -330,8 +330,8 @@ class DictSimpleTyper:
             res = self.scan_tuple(itrbl)
         elif isinstance(itrbl, np.ndarray):
             res = self.scan_ndarray(itrbl)
-        elif isinstance(itrbl, np.core.multiarray):
-            res = self.scan_ndarray(itrbl)
+        # elif isinstance(itrbl, np.core.multiarray):
+        #     res = self.scan_ndarray(itrbl)
         elif isinstance(itrbl, np.generic):
             if self.to_simple_type:
                 res = float(itrbl)
@@ -340,8 +340,25 @@ class DictSimpleTyper:
         return res
 
     def scan_dict(self, d):
+        addl_items = {}
         for k, v in d.items():
-            d[k] = self.scan(v)
+            result = self.scan(v)
+            # not elegant, but should work: In case this is a
+            # ParameterCommandExecutor, keep the original commands
+            # commands are always tuples and reside in dicts
+            # and return dicts with 'original' and 'parsed' keys
+            if (
+                isinstance(v, tuple)
+                and isinstance(result, dict)
+                and "parsed" in result.keys()
+                and "original" in result.keys()
+            ):
+                d[k] = result["parsed"]
+                addl_items[f"{k}_originalnocmd"] = result["original"]
+            else:
+                d[k] = result
+        for k, v in addl_items.items():
+            d[k] = v
         return d
 
     def scan_list(self, li, root_level=False):
@@ -477,7 +494,9 @@ class ParameterCommandExecutor(DictSimpleTyper):
                         + "arithmetic expression."
                     )
                 res = eval(str(res) + aritexp)
-            return res
+            # to deactivate, leave out ocmmand sign
+            t_out = tuple([t[0][len(self.command_sign) :], t[1]])
+            return {"parsed": res, "original": t_out}
         else:
             # it's just a normal tuple
             tout = []
