@@ -1950,13 +1950,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             fiducial_locs = None
 
-        shifts, cum_shifts = picasso_outpost.align_channels(
+        shifts, cum_shifts, used_fiducials = picasso_outpost.align_channels(
             self.channel_locs,
             self.channel_info,
             fiducial_locs=fiducial_locs,
             **parameters.get("align_pars", {}),
         )
         results["shifts"] = cum_shifts[:, :, -1]
+        if used_fiducials:
+            results["aligned_by"] = "picked fiducials"
+        else:
+            results["aligned_by"] = "RCC of locs"
 
         fp_shifts = os.path.join(results["folder"], "shifts.txt")
         np.savetxt(fp_shifts, results["shifts"])
@@ -2991,6 +2995,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         ripleys_metrics = []
         ripleys_controltypes = []
         ripleys_radii = []
+        significance_thresholds = []
         search_dict = {
             (
                 parameters["swkfl_ripleysk_key"],
@@ -3008,6 +3013,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 parameters["swkfl_ripleysk_key"],
                 "radii",
             ): ripleys_radii,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "significance_threshold",
+            ): significance_thresholds,
         }
         for folder, name in zip(
             parameters["fp_workflows"], parameters["report_names"]
@@ -3041,6 +3050,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         ripleys_controltype = ripleys_controltypes[0]
 
         ripleys_radii = ripleys_radii[0]
+
+        significance_threshold = significance_thresholds[0]
 
         # load and plot the single curves
         fig_curves, ax_curves = outpost_modules.ripleys.init_plot(
@@ -3100,14 +3111,18 @@ class AutoPicasso(util.AbstractModuleCollection):
                     if j > 0:
                         ax_curves[i, j].yaxis.label.set_visible(False)
                         ax_curves_norm[i, j].yaxis.label.set_visible(False)
+
+        rcode = generate_random_code(6)
         results["fp_fig_unnormalized"] = os.path.join(
             results["folder"],
-            f"{ripleys_metric}_{ripleys_controltype}" + "_unnormalized.png",
+            f"{ripleys_metric}_{ripleys_controltype}_{rcode}"
+            + "_unnormalized.png",
         )
         fig_curves.savefig(results["fp_fig_unnormalized"])
         results["fp_fig_normalized"] = os.path.join(
             results["folder"],
-            f"{ripleys_metric}_{ripleys_controltype}_" + "normalized.png",
+            f"{ripleys_metric}_{ripleys_controltype}_{rcode}_"
+            + "normalized.png",
         )
         fig_curves_norm.savefig(results["fp_fig_normalized"])
 
@@ -3132,6 +3147,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             ripleys_controltype,
             ripleys_threshold,
             std=std_integrals,
+            suffix=rcode,
+            significance_threshold=significance_threshold,
         )
 
         significant_pairs = self._find_ripleys_significant(
@@ -3728,6 +3745,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                     select_cell : boolean
                         whether to select the largest connected component,
                         assumed to be the cell of interest.
+                    fill_holes : boolean
+                        whether to fill holes in the cell mask
+                    dilate_nm : float
+                        the nanometers to dilate the mask (useful if a large
+                        threshold has been used)
                     apply_to_locs : boolean
                         whether to drop all localizations outside the area
                 and optional keys:
@@ -3781,6 +3803,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             upsample=mask_pixel_size,
         )
         if parameters.get("select_cell"):
+            kwargs = {}
+            if fill_holes := parameters.get("fill_holes"):
+                kwargs["fill_holes"] = fill_holes
+            if dilate_nm := parameters.get("dilate_nm"):
+                kwargs["dilate_nm"] = dilate_nm
             cell_mask.filter_mask()
         if parameters.get("apply_to_locs"):
             self.channel_locs = [
@@ -4647,7 +4674,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Not engouh gold particles found. Skipping further undrifting
                 steps for this file" continue without gold undrifting"""
             )
-            gold_locs = self.locs
+            dtypes = self.locs.dtype
+            gold_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
+            nongold_locs = self.locs
         else:
             # function needs to return the locs in a r radius around the gold
             # coordinates

@@ -71,6 +71,13 @@ def ripley_K(X1, X2, r, area):
         return bivariate_ripley_K(X1, X2, r, area)
 
 
+def ripley_H(X1, X2, r, area):
+    rK = ripley_K(X1, X2, r, area)
+    rL = np.sqrt(rK / np.pi)
+    rH = rL - r
+    return rH
+
+
 def radial_distribution_function(X1, X2, r, univariate):
     """Calculates the density of X1 spots at annuli around
     X2 spots
@@ -537,7 +544,7 @@ def analyze_2_channels(
     name1="",
     name2="",
     controltype="CSR",  # CSRbin or CSRdens or RND
-    metric="RK",  # RK or RDF or 1NN
+    metric="RK",  # RK or RDF or 1NN or RH (ripley's H)
     randomization_radius=None,
 ):
     """Runs the analysis of any two channels of the dataset (2 protein
@@ -552,6 +559,8 @@ def analyze_2_channels(
 
     if metric == "RK":
         K_exp = ripley_K(exp_X1, exp_X2, radii, area)
+    elif metric == "RH":
+        K_exp = ripley_H(exp_X1, exp_X2, radii, area)
     elif metric == "RDF":
         K_exp = radial_distribution_function(exp_X1, exp_X2, radii, univariate)
     elif metric == "1NN":
@@ -587,6 +596,8 @@ def analyze_2_channels(
             raise NotImplementedError()
         if metric == "RK":
             K_csr.append(ripley_K(X1_ctrl, X2_ctrl, radii, area))
+        elif metric == "RH":
+            K_csr.append(ripley_H(X1_ctrl, X2_ctrl, radii, area))
         elif metric == "RDF":
             K_csr.append(
                 radial_distribution_function(
@@ -821,6 +832,7 @@ def typefraction_all_channels(
                 )
                 curves[i, j, :] = K_exp
                 curves_norm[i, j, :] = K_exp_norm
+                ripley_matrix[i, j] = np.sum(curves_norm[i, j, :])
                 show_controls = True
                 show_control_envelope = True
             else:

@@ -116,9 +116,9 @@ class ConfluenceReporter(AbstractModuleCollection):
     def analysis_documentation(self, i, parameters, results):
         """This module documents where and how analysis is being performed"""
         logger.debug("Reporting analysis_documentation.")
-        text = """
+        text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Analysis Hard- and Software</strong></p>
+        <p><strong>Module {i:02d}: Analysis Hard- and Software</strong></p>
         <ul>
         """
         for k, v in results.items():
@@ -140,7 +140,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting convert_zeiss_movie.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Converting Movie from .czi into .raw</strong></p>
+        <p><strong>Module {i:02d}: Converting Movie from .czi into .raw</strong></p>
         <p>Converted the file {parameters["filepath"]} to
         {results["filepath_raw"]} in {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s.</p>
@@ -160,7 +160,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting a loaded dataset.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Load Movie</strong></p>
+        <p><strong>Module {i:02d}: Load Movie</strong></p>
         <ul>
         <li>Picasso Version: {results_load['picasso version']}</li>
         <li>Movie Location: {pars_load['filename']}</li>
@@ -209,7 +209,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting a loaded dataset.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Load localizations</strong></p>
+        <p><strong>Module {i:02d}: Load localizations</strong></p>
         <ul>
         <li>Picasso Version: {results['picasso version']}</li>
         <li>Localications Location: {parameters['filename']}</li>
@@ -238,7 +238,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting Identification.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Identify</strong></p>
+        <p><strong>Module {i:02d}: Identify</strong></p>
         <ul>
         <li>Min Net Gradient: {parameters['min_gradient']:,.0f}</li>
         <li>Box Size: {parameters['box_size']} px</li>
@@ -282,7 +282,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting Localization of spots.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Localize</strong></p>
+        <p><strong>Module {i:02d}: Localize</strong></p>
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
@@ -307,9 +307,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         Args:
         """
         logger.debug("Reporting export_brightfield.")
-        text = """
+        text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Exporting Brightfield</strong></p>
+        <p><strong>Module {i:02d}: Exporting Brightfield</strong></p>
         <ul>
         """
         text += f"""
@@ -341,7 +341,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting undrifting via RCC.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Undrifting via RCC</strong></p>
+        <p><strong>Module {i:02d}: Undrifting via RCC</strong></p>
         <ul><li>Dimensions: {parameters.get('dimensions')}</li>
         <li>Segmentation: {parameters.get('segmentation')}</li>
         """
@@ -365,21 +365,26 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(driftimg_fn)[1],
             )
 
-    def undrift_aim(self, i, parameters, results):
+    @module_decorator
+    def undrift_aim(self, i, parameters, results, parameter_text, result_text):
         """Describes the AIM undrifting
         Args:
         """
         logger.debug("Reporting undrift_aim.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Undrifting via AIM</strong></p>
-        <ul><li>Dimensions: {parameters.get('dimensions')}</li>
+        <p><strong>Module {i:02d}: Undrifting via AIM</strong></p>
+        Summary:
+        <ul>
+        <li>Dimensions: {parameters.get('dimensions')}</li>
         <li>Segmentation: {parameters.get('segmentation')} frames</li>
         <li>Intersect distance: {parameters.get('intersect_d')} nm</li>
         <li>Local search region radius: {parameters.get('roi_r')} nm</li>
-        <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li></ul>
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
         """
         if fp_fig := results.get("fp_fig"):
             try:
@@ -405,7 +410,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting manual step")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Manual step</strong></p>
+        <p><strong>Module {i:02d}: Manual step</strong></p>
         <ul><li>prompt: {parameters.get('prompt')}</li>
         <li>filename: {parameters.get('filename')}</li>
         <li>file present: {results.get('success')}</li>
@@ -422,9 +427,9 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     def summarize_dataset(self, i, parameters, results):
         logger.debug("Reporting dataset description.")
-        text = """
+        text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Descriptive Statistics</strong></p>"""
+        <p><strong>Module {i:02d}: Descriptive Statistics</strong></p>"""
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
                 meth_res = results["nena"]
@@ -473,7 +478,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting density.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Local density computation</strong></p>
+        <p><strong>Module {i:02d}: Local density computation</strong></p>
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
@@ -493,7 +498,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting dbscan.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>dbscan clustering</strong></p>
+        <p><strong>Module {i:02d}: dbscan clustering</strong></p>
         Summary:
         <ul>
         <li>Radius: {parameters.get('radius')} nm</li>
@@ -527,7 +532,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting hdbscan.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>dbscan clustering</strong></p>
+        <p><strong>Module {i:02d}: hdbscan clustering</strong></p>
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
@@ -547,7 +552,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting smlm_clusterer.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>smlm_clusterer clustering</strong></p>
+        <p><strong>Module {i:02d}: smlm_clusterer clustering</strong></p>
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
@@ -579,7 +584,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         locspctr = results["n_locs_clustered"] / results["n_centers"]
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Gaussian Mixture Model clustering</strong></p>
+        <p><strong>Module {i:02d}: Gaussian Mixture Model clustering</strong></p>
         Keeping centers as new locs.
         Summary:
         <ul>
@@ -617,7 +622,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         d = len(parameters["dims"])
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Nearest Neighbor analysis</strong></p>
+        <p><strong>Module {i:02d}: Nearest Neighbor analysis</strong></p>
         Radial Distribution Function (RDF) and Nearest Neighbor Distributions.
         The RDF shows the density of spots in an annulus of a given radius
         r and thickness delta r, averaged over all spots. If the RDF deviates
@@ -663,7 +668,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting fit_csr.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Completely Spatially Random Distribution Fit</strong></p>
+        <p><strong>Module {i:02d}: Completely Spatially Random Distribution
+        Fit</strong></p>
         The distance distributions of the first N neighbors in the data are
         fitted to the analytical CSR distributions simultaneously, using a
         maximum likelihood esitmator.
@@ -704,7 +710,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting dataset saving.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Saving Resulting Dataset</strong></p>
+        <p><strong>Module {i:02d}: Saving Resulting Dataset</strong></p>
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
@@ -727,7 +733,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting load_datasets_to_aggregate.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Loading Datasets to aggregate</strong></p>
+        <p><strong>Module {i:02d}: Loading Datasets to aggregate</strong></p>
         <ul><li>filepaths: {results.get('filepaths')}</li>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -759,7 +765,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting align_channels.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Align Channels</strong></p>
+        <p><strong>Module {i:02d}: Align Channels</strong></p>
         <p>Channels are aligned via RCC if no fiducials are given, and via
         picked localizations if (picked, e.g. from find_gold) fiducials
         are given.</p>
@@ -799,7 +805,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting combine_channels.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Combine Channels</strong></p>
+        <p><strong>Module {i:02d}: Combine Channels</strong></p>
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
@@ -818,7 +824,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting save_datasets_aggregated.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Saving Datasets aggregated</strong></p>
+        <p><strong>Module {i:02d}: Saving Datasets aggregated</strong></p>
         <ul><li>filepaths: {results.get('filepaths')}</li>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -838,7 +844,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting spinna_manual.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>SPINNA-Manual</strong></p>
+        <p><strong>Module {i:02d}: SPINNA-Manual</strong></p>
         <ul><li>file present: {results.get('success')}</li>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -874,7 +880,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting spinna_manual.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>SPINNA-Manual</strong></p>
+        <p><strong>Module {i:02d}: SPINNA</strong></p>
         <ul><li>file present: {results.get('success')}</li>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -914,7 +920,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting ripleysk.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Ripley's K Analysis</strong></p>
+        <p><strong>Module {i:02d}: Ripley's K Analysis</strong></p>
         <ul>
         <p>Ripley's K analyis investigates pair-wise clustering or dispersing
         organization between different channels. It is currently implemented
@@ -996,7 +1002,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting ripleysk2.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Ripley's K Analysis (2)</strong></p>
+        <p><strong>Module {i:02d}: Ripley's K Analysis (2)</strong></p>
         <p>Ripley's K analyis investigates pair-wise clustering or dispersing
         organization between different channels.
         </p>
@@ -1072,7 +1078,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting ripleysk_average.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Averaging of Repley's K Integrals</strong></p>
+        <p><strong>Module {i:02d}: Averaging of Repley's K Integrals</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1110,15 +1116,16 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def ripleysk_average2(self, i, parameters, results):
+    @module_decorator
+    def ripleysk_average2(
+        self, i, parameters, results, parameter_text, result_text
+    ):
         logger.debug("Reporting ripleysk_average2.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Averaging of Repley's K Integrals</strong></p>
+        <p><strong>Module {i:02d}: Averaging of Ripley's K Integrals</strong></p>
+        Summary:
         <ul>
-        <li>Start Time: {results['start time']}</li>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
         <li>Loaded from workflows:
         {parameters["report_names"]}</li>
         <li>in folders:
@@ -1127,7 +1134,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         {results["fp_ripleys_significant"]}</li>
         <li>Significantly interacting pairs:
         {str(results["ripleys_significant"])}</li>
-        </ul>"""
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
 
         if fp_fig := results.get("fp_fig_normalized"):
             text += "<ul><table>"
@@ -1180,7 +1192,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("protein_interactions.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Direct Protein Interaction Analysis</strong></p>
+        <p><strong>Module {i:02d}: Direct Protein Interaction Analysis</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1261,7 +1273,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("protein_interactions_average.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Direct Protein Interaction Analysis Average</strong></p>
+        <p><strong>Module {i:02d}: Direct Protein Interaction Analysis
+        Average</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1302,7 +1315,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting create_mask.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Create Density Mask</strong></p>
+        <p><strong>Module {i:02d}: Create Density Mask</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1346,18 +1359,24 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def create_mask2(self, i, parameters, results):
+    @module_decorator
+    def create_mask2(
+        self, i, parameters, results, parameter_text, result_text
+    ):
         """Create a density mask"""
         logger.debug("Reporting create_mask2.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Create Density Mask</strong></p>
+        <p><strong>Module {i:02d}: Create Density Mask</strong></p>
+        Summary:
         <ul>
-        <li>Start Time: {results['start time']}</li>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
         <li>Area: {results["area"]} µm^2</li>
-        </ul>"""
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
         if fp_fig_mask := results.get("fp_fig_mask_binary"):
             for fp in [fp_fig_mask]:
                 try:
@@ -1408,7 +1427,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting dbscan_molint.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>DBSCAN - Molecular Interaction version</strong></p>
+        <p><strong>Module {i:02d}: DBSCAN - Molecular Interaction version</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1440,7 +1459,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting CSR_sim_in_mask.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>CSR simulation in density mask</strong></p>
+        <p><strong>Module {i:02d}: CSR simulation in density mask</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1458,7 +1477,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("dbscan_merge_cells.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Merge DBSCAN results over multiple cells</strong></p>
+        <p><strong>Module {i:02d}: Merge DBSCAN results over multiple
+        cells</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1476,7 +1496,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("dbscan_merge_stimulations.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Merge DBSCAN results over multiple stimulations</strong></p>
+        <p><strong>Module {i:02d}: Merge DBSCAN results over multiple
+        stimulations</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1494,7 +1515,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("binary_barcodes.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Analyse and plot binary barcodes</strong></p>
+        <p><strong>Module {i:02d}: Analyse and plot binary barcodes</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1523,7 +1544,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("plot_densities.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Show Densities</strong></p>
+        <p><strong>Module {i:02d}: Show Densities</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1563,7 +1584,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("find_cluster_motifs.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Analyse and plot Cluster Motifs</strong></p>
+        <p><strong>Module {i:02d}: Analyse and plot Cluster Motifs</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1647,7 +1668,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting interaction_graph.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Interaction Graph</strong></p>
+        <p><strong>Module {i:02d}: Interaction Graph</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1672,7 +1693,8 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def find_gold(self, i, parameters, results):
+    @module_decorator
+    def find_gold(self, i, parameters, results, parameter_text, result_text):
         """Find localizations stemming from gold beads based on blinking
         kinetics.
         The metrics used are number of locs and rms deviation from mean
@@ -1690,15 +1712,18 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting find_gold.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Find Gold Beads</strong></p>
+        <p><strong>Module {i:02d}: Find Gold Beads</strong></p>
+        Summary:
         <ul>
-        <li>Start Time: {results['start time']}</li>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
         <li># Gold Beads found: {results["n_gold"]}</li>
         <li># Gold Bead locs saved at: {results["fp_gold"]}</li>
         <li># Non-gold Bead locs saved at: {results["fp_nogold"]}</li>
-        </ul>"""
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -1721,7 +1746,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting undrift_from_picked.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Undrift from picked</strong></p>
+        <p><strong>Module {i:02d}: Undrift from picked</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1774,7 +1799,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             txtfilt += f"<li>{field}: {minval} - {maxval}</li>"
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Filter localizations</strong></p>
+        <p><strong>Module {i:02d}: Filter localizations</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1836,7 +1861,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting link_locs.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Link localizations</strong></p>
+        <p><strong>Module {i:02d}: Link localizations</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1866,7 +1891,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting labeling_efficiency_analysis.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Labeling Efficiency Evaluation</strong></p>
+        <p><strong>Module {i:02d}: Labeling Efficiency Evaluation</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min

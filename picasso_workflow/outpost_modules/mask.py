@@ -8,7 +8,14 @@ Description: This module provides a mask class for cell masking operations.
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.ndimage import zoom, gaussian_filter, label
+from scipy.ndimage import (
+    zoom,
+    gaussian_filter,
+    label,
+    binary_fill_holes,
+    generate_binary_structure,
+    binary_dilation,
+)
 import pickle
 
 logger = logging.getLogger(__name__)
@@ -18,7 +25,8 @@ class CellMask:
     # FOR NOW THIS IS ONLY ABOUT 2D MASKING
 
     # The internal mask (2D density mask)
-    _mask = np.array(np.nan)
+    _binary_mask = np.array(np.nan)
+    _density_mask = np.array(np.nan)
     # computed area in µm^2
     _area = 0
     # the camera pixel size in nm
@@ -87,14 +95,31 @@ class CellMask:
         thresh = otsu(mask) * threshold
         mask[mask < thresh] = 0
         factor = int(binsize / upsample)
-        mask_final = zoom(mask.astype(np.float64), factor)
-        mask_final[mask_final < 0] = 0
-        area = (mask_final > 0).sum() * upsample**2
+        density_mask = zoom(mask.astype(np.float64), factor)
+        density_mask[density_mask < 0] = 0
+        area = (density_mask > 0).sum() * upsample**2
         area = area / 1e6  # convert from nm^2 to um^2
-        mask_final /= mask_final.sum()
-        mask_final[np.isnan(mask_final)] = 0
+        density_mask /= density_mask.sum()
+        density_mask[np.isnan(density_mask)] = 0
 
-        instance._mask = mask_final
+        # create binary mask
+        binary_mask = density_mask.copy()
+        binary_mask[binary_mask <= 0] = 0
+        binary_mask[binary_mask > 0] = 1
+        # blur and apply threshold to get more accurate mask
+        # (remove added area on cell border, keep potential
+        # low-density inside cell area - no 'holes')
+        binary_mask = gaussian_filter(binary_mask, blur)
+        reduction_threshold = 0.9
+        binary_mask[binary_mask <= reduction_threshold] = 0
+        binary_mask[binary_mask > reduction_threshold] = 1
+        binary_mask = binary_mask.astype(np.bool_)
+        instance._binary_mask = binary_mask
+
+        density_mask[~binary_mask] = 0
+        density_mask /= density_mask.sum()
+
+        instance._density_mask = density_mask
         instance._area = area
         return instance
 
@@ -120,13 +145,14 @@ class CellMask:
         # mask_coords[:, 1] = mask_x
         # set the coordinates that are out of bounds to -1
         mask_coords[mask_coords < 0] = -1
-        mask_coords[mask_coords[:, 0] > self._mask.shape[0], 0] = -1
-        mask_coords[mask_coords[:, 1] > self._mask.shape[1], 1] = -1
+        mask_coords[mask_coords[:, 0] > self.shape[0], 0] = -1
+        mask_coords[mask_coords[:, 1] > self.shape[1], 1] = -1
         return mask_coords
 
     def save(self, fp):
         save_dict = {
-            "mask": self._mask,
+            "density_mask": self._density_mask,
+            "binary_mask": self._binary_mask,
             "area": self._area,
             "binsize": self._binsize,
             "blursize": self._blursize,
@@ -141,7 +167,8 @@ class CellMask:
         with open(fp, "rb") as f:
             save_dict = pickle.load(f)
         instance = cls()
-        instance._mask = save_dict["mask"]
+        instance._density_mask = save_dict["density_mask"]
+        instance._binary_mask = save_dict["binary_mask"]
         instance._area = save_dict["area"]
         instance._binsize = save_dict["binsize"]
         instance._blursize = save_dict["blursize"]
@@ -151,21 +178,25 @@ class CellMask:
 
     @property
     def density_mask(self):
-        return self._mask
+        return self._density_mask
 
     @property
     def binary_mask(self):
-        mask_final = self._mask.copy()
-        mask_final[mask_final <= 0] = 0
-        mask_final[mask_final > 0] = 1
-        return mask_final.astype(np.bool_)
+        return self._binary_mask
+
+    @property
+    def shape(self):
+        """The mask(s) shape"""
+        return self._binary_mask.shape
 
     @property
     def area(self):
         return self._area
 
-    def filter_mask(self):
-        """Select the largest connected area in the mask"""
+    def filter_mask(self, fill_holes=True, dilate_nm=0):
+        """Select the largest connected area in the mask, and fill
+        potential holes in this area.
+        """
 
         binary_mask = self.binary_mask
         labeled_array, num_features = label(binary_mask)
@@ -174,9 +205,19 @@ class CellMask:
         largest_component_mask = (
             labeled_array == largest_component_index
         ).astype(np.int8)
+        if fill_holes:
+            # fill holes in the mask
+            largest_component_mask = binary_fill_holes(largest_component_mask)
+        if dilate_nm > 0:
+            dilate_px = int(np.round(dilate_nm / self._upsample))
+            dilation_struct = generate_binary_structure(2, 1)
+            largest_component_mask = binary_dilation(
+                largest_component_mask, dilation_struct, iterations=dilate_px
+            ).astype(np.int8)
 
-        self._mask[largest_component_mask == 0] = 0
-        self._mask /= self._mask.sum()
+        self._binary_mask[largest_component_mask == 0] = False
+        self._density_mask[largest_component_mask == 0] = 0
+        self._density_mask /= self._density_mask.sum()
 
     def apply_to_locs(self, locs):
         """Applies the binary mask to localizations: locs
@@ -188,7 +229,7 @@ class CellMask:
         """
         mask_coords = self.picassolocs_to_maskbins(locs)
         # eliminate out of bound entries
-        maskshape = self._mask.shape
+        maskshape = self.shape
         inbound = (
             (mask_coords[:, 0] >= 0)
             & (mask_coords[:, 1] >= 0)
@@ -210,11 +251,10 @@ class CellMask:
         ax.set_title("mask - final")
         # check if mask is binary
         if binary:
-            mask_plot = self.density_mask
-            mask_plot = mask_plot.astype(np.bool_)
+            mask_plot = self.binary_mask
             cmap = "binary"
         else:
-            mask_plot = self._mask
+            mask_plot = self.density_mask
             cmap = "hot"
         ax.imshow(
             mask_plot,

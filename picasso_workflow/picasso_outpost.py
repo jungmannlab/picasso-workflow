@@ -64,8 +64,18 @@ def align_channels(
         cumulative_shift : np array (3, channels, iterations)
             the cumulative shift in the three dimensions, in all channels
             the total shift is the last value (in iterations) fo the cum shift
+        use_fiducials : bool
+            reports on whether fiducials have been used (and aligned by picked)
+            or not (and alignment was by rcc)
     """
     logger.debug("Aligning datasets")
+    # check whether any of the fiducial locs are empty
+    if fiducial_locs is not None:
+        for locs in fiducial_locs:
+            if locs.size == 0:
+                fiducial_locs = None
+                break
+
     if fiducial_locs is None:
         use_fiducials = False
         shift, cumulative_shift, channel_locs = align_by_picked(
@@ -103,7 +113,7 @@ def align_channels(
             locs_.y -= cumulative_shift[1, i, -1]
             if len(shift) == 3:
                 locs_.z -= cumulative_shift[2, i, -1]
-    return shift, cumulative_shift
+    return shift, cumulative_shift, use_fiducials
 
 
 def align_by_picked(channel_locs, fiducial_locs):
