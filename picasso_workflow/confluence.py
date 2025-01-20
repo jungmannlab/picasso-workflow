@@ -501,7 +501,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <p><strong>Module {i:02d}: dbscan clustering</strong></p>
         Summary:
         <ul>
-        <li>Radius: {parameters.get('radius')} nm</li>
+        <li>Radius: {parameters.get('radius'):.2f} nm</li>
         <li>min_samples: {parameters.get('min_samples')}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.2f} s</li>

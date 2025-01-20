@@ -72,9 +72,10 @@ def ripley_K(X1, X2, r, area):
 
 
 def ripley_H(X1, X2, r, area):
+    """https://pmc.ncbi.nlm.nih.gov/articles/PMC2726315/"""
     rK = ripley_K(X1, X2, r, area)
     rL = np.sqrt(rK / np.pi)
-    rH = rL - r
+    rH = rL  # - r
     return rH
 
 
@@ -114,6 +115,17 @@ def first_nn(X1, X2, r, univariate):
     bins = np.append(r, np.max(r) + (r[1] - r[0]))
     nnhist, _ = np.histogram(alldist, bins=bins)
     return nnhist
+
+
+def overpopulation(X1, X2, r, univariate):
+    """Calculates the "overpopulation": The mean number of X2 molecules
+    between r[i] and r[i+1] from the X1 molecules surpassing the expected
+    number, based on the density between r[-2] and r[-1]. This corrects
+    for local density differences, and gives a meaningful measure if there
+    is a mechanistic reason for X2 molecules to be at overrepresented around
+    X1 molecules, and r extends to distances at which this effect is negligible.
+    """
+    pass
 
 
 def fraction_types(
@@ -543,12 +555,35 @@ def analyze_2_channels(
     ax_n,
     name1="",
     name2="",
-    controltype="CSR",  # CSRbin or CSRdens or RND
-    metric="RK",  # RK or RDF or 1NN or RH (ripley's H)
+    controltype="CSR",
+    metric="RK",
+    normalization="zscore",
     randomization_radius=None,
 ):
     """Runs the analysis of any two channels of the dataset (2 protein
-    species)."""
+    species).
+    Args:
+        metric : str
+            the metric to calculate from the data
+            "RK": Ripley's K
+            "RH": Ripley's H
+            "RDF": Radial Distribution function
+            "1NN": first nearest neighbor distance distribution
+        controltype : str
+            the method of creating controls
+            "CSRbin": draw random points from a previously generated mask,
+                using binary mask information -> CSR
+            "CSRdens": draw random points from a previously generated mask,
+                with weighting density (of all targets combined)
+            "RND": randomization of experimental data by uniformly relocating
+                datapoints by a vector on a circle with randomization_radius
+        normalization : str
+            the method of normalizing experimental data
+            "zscore" (units of  95% ci from mean of conrols)
+            "diff" (difference to mean of controls)
+            "deltaAprepeak" (only positive difference to mean of controls,
+                before peak of mean of controls)
+    """
 
     if np.array_equal(exp_X1, exp_X2):
         n_points = len(exp_X1)
@@ -610,8 +645,28 @@ def analyze_2_channels(
             raise NotImplementedError()
     K_csr = np.array(K_csr)
 
-    K_exp_norm = normalize_to_CSR(K_exp, K_csr)
-    K_csr_norm = np.array([normalize_to_CSR(K_c, K_csr) for K_c in K_csr])
+    if normalization == "zscore":
+        K_exp_norm = normalize_to_CSR(K_exp, K_csr)
+        K_csr_norm = np.array([normalize_to_CSR(K_c, K_csr) for K_c in K_csr])
+    elif normalization == "diff":
+        K_csr_mean = np.mean(K_csr, axis=0)
+        K_exp_norm = K_exp - K_csr_mean
+        K_csr_norm = np.array([K_c - K_csr_mean for K_c in K_csr])
+    elif normalization == "deltaAprepeak":
+        K_csr_mean = np.mean(K_csr, axis=0)
+        peak_idx = np.argmax(K_csr_mean)
+
+        def posdiffpreidx(K_data, K_ctrl_mean, idx):
+            K_norm = K_data - K_ctrl_mean
+            K_norm[idx:] = 0
+            K_norm[K_norm < 0] = 0
+            return K_norm
+
+        K_exp_norm = posdiffpreidx(K_exp, K_csr_mean, peak_idx)
+        K_csr_norm = np.array(
+            [posdiffpreidx(K_c, K_csr_mean, peak_idx) for K_c in K_csr]
+        )
+
     # r_max = radii.max()
     # ripley_integral = np.trapz(K_exp_norm, radii) / r_max
     ripley_integral = np.trapz(K_exp_norm, radii)
@@ -726,8 +781,10 @@ def analyze_all_channels(
             if i < n_targets - 1:
                 ax_u[i, j].xaxis.label.set_visible(False)
                 ax_n[i, j].xaxis.label.set_visible(False)
-                ax_u[i, j].set_xticks([])
-                ax_n[i, j].set_xticks([])
+                # ax_u[i, j].set_xticks([])
+                # ax_n[i, j].set_xticks([])
+                # due to sharex=True this is not necessary any more.
+                pass
             if j > 0:
                 ax_u[i, j].yaxis.label.set_visible(False)
                 ax_n[i, j].yaxis.label.set_visible(False)

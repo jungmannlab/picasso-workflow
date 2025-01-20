@@ -80,9 +80,6 @@ def align_channels(
         use_fiducials = False
         shift, cumulative_shift, channel_locs = align_by_picked(
             channel_locs,
-            channel_info,
-            max_iterations,
-            convergence,
             fiducial_locs,
         )
     else:
