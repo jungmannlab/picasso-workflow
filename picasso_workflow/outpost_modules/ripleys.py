@@ -65,6 +65,13 @@ def bivariate_ripley_K(X1, X2, r, area):
 
 
 def ripley_K(X1, X2, r, area):
+    """
+    Alternatively, use spatial statistics packages, with
+    Ripley's functions implemented, including edge correction
+    e.g.
+    https://docs.astropy.org/en/stable/stats/ripley.html
+    https://docs.astropy.org/en/stable/api/astropy.stats.RipleysKEstimator.html#astropy.stats.RipleysKEstimator
+    """
     if np.array_equal(X1, X2):
         return univariate_ripley_K(X1, r, area)
     else:
@@ -75,7 +82,7 @@ def ripley_H(X1, X2, r, area):
     """https://pmc.ncbi.nlm.nih.gov/articles/PMC2726315/"""
     rK = ripley_K(X1, X2, r, area)
     rL = np.sqrt(rK / np.pi)
-    rH = rL  # - r
+    rH = rL - r
     return rH
 
 
@@ -583,14 +590,19 @@ def analyze_2_channels(
             "diff" (difference to mean of controls)
             "deltaAprepeak" (only positive difference to mean of controls,
                 before peak of mean of controls)
+            "deltaAprepeakNorm" (only positive difference to mean of controls,
+                before peak of mean of controls, divided by number of X2 spots)
+            "to_max_r" (divide by value of curve at maximum r)
     """
-
     if np.array_equal(exp_X1, exp_X2):
         n_points = len(exp_X1)
         univariate = True
     else:
         n_points = (len(exp_X1), len(exp_X2))
         univariate = False
+
+    if normalization is None:
+        normalization = "zscore"
 
     if metric == "RK":
         K_exp = ripley_K(exp_X1, exp_X2, radii, area)
@@ -645,6 +657,12 @@ def analyze_2_channels(
             raise NotImplementedError()
     K_csr = np.array(K_csr)
 
+    def posdiffpreidx(K_data, K_ctrl_mean, idx):
+        K_norm = K_data - K_ctrl_mean
+        K_norm[idx:] = 0
+        K_norm[K_norm < 0] = 0
+        return K_norm
+
     if normalization == "zscore":
         K_exp_norm = normalize_to_CSR(K_exp, K_csr)
         K_csr_norm = np.array([normalize_to_CSR(K_c, K_csr) for K_c in K_csr])
@@ -656,16 +674,30 @@ def analyze_2_channels(
         K_csr_mean = np.mean(K_csr, axis=0)
         peak_idx = np.argmax(K_csr_mean)
 
-        def posdiffpreidx(K_data, K_ctrl_mean, idx):
-            K_norm = K_data - K_ctrl_mean
-            K_norm[idx:] = 0
-            K_norm[K_norm < 0] = 0
-            return K_norm
-
         K_exp_norm = posdiffpreidx(K_exp, K_csr_mean, peak_idx)
         K_csr_norm = np.array(
             [posdiffpreidx(K_c, K_csr_mean, peak_idx) for K_c in K_csr]
         )
+    elif normalization == "deltaAprepeakNorm":
+        N2 = len(exp_X2)
+        K_csr_mean = np.mean(K_csr, axis=0)
+        peak_idx = np.argmax(K_csr_mean)
+
+        K_exp_norm = posdiffpreidx(K_exp, K_csr_mean, peak_idx) / N2
+        K_csr_norm = (
+            np.array(
+                [posdiffpreidx(K_c, K_csr_mean, peak_idx) for K_c in K_csr]
+            )
+            / N2
+        )
+    elif normalization == "to_max_r":
+
+        def norm_to_max_r(K_data):
+            K_norm = K_data / K_data[-1]
+            return K_norm
+
+        K_exp_norm = norm_to_max_r(K_exp)
+        K_csr_norm = np.array([norm_to_max_r(K_c) for K_c in K_csr])
 
     # r_max = radii.max()
     # ripley_integral = np.trapz(K_exp_norm, radii) / r_max
@@ -710,6 +742,8 @@ def analyze_all_channels(
     controltype="CSR",  # CSR or RND
     metric="RK",  # RK or RDF
     randomization_radius=None,
+    normalization="zscore",
+    aggfun="mean",
 ):
     """Do the neighborhood analysis of all channels with each other
     and generate a mean value matrix. This has been initially written for
@@ -732,16 +766,33 @@ def analyze_all_channels(
             whether to create a plot of all the metric curves in a matrix subplot
         names : list of str
             the names of the molecular types
-        controltype : str
-            can be "CSR" (to control by creating a (pseudo) completely spatially
-            random point pattern), or "RND" (to calculate controls by randomizing
-            the input data coordinates by adding random vectors to each data point)
-        metric : str
-            the metric to calculate. Can be "RK" for Ripley's K, or "RDF" for
-            radial density function
         randomization_radius : float
             defines the maximum length of the randomization vectors if controltype
             is "RND"
+        metric : str
+            the metric to calculate from the data
+            "RK": Ripley's K
+            "RH": Ripley's H
+            "RDF": Radial Distribution function
+            "1NN": first nearest neighbor distance distribution
+        controltype : str
+            the method of creating controls
+            "CSRbin": draw random points from a previously generated mask,
+                using binary mask information -> CSR
+            "CSRdens": draw random points from a previously generated mask,
+                with weighting density (of all targets combined)
+            "RND": randomization of experimental data by uniformly relocating
+                datapoints by a vector on a circle with randomization_radius
+        normalization : str
+            the method of normalizing experimental data
+            "zscore" (units of  95% ci from mean of conrols)
+            "diff" (difference to mean of controls)
+            "deltaAprepeak" (only positive difference to mean of controls,
+                before peak of mean of controls)
+        aggfun : str
+            the aggregation of normalized curves to values to put into the matrix
+            "mean", "sum"
+            default: "mean"
     """
     n_targets = len(mol_coords)
     curves = np.zeros((n_targets, n_targets, len(radii)))
@@ -775,6 +826,7 @@ def analyze_all_channels(
                 controltype=controltype,
                 metric=metric,
                 randomization_radius=randomization_radius,
+                normalization=normalization,
             )
             curves[i, j, :] = K_exp
             curves_norm[i, j, :] = K_exp_norm
@@ -791,7 +843,12 @@ def analyze_all_channels(
 
             if ripley_integral is np.nan:
                 ripley_integral = 0
-            ripley_mean = ripley_integral / (np.max(radii) - np.min(radii))
+            if aggfun == "mean":
+                ripley_mean = ripley_integral / (np.max(radii) - np.min(radii))
+            elif aggfun == "sum":
+                ripley_mean = ripley_integral
+            else:
+                raise NotImplementedError(f"aggfun {aggfun} not implemented.")
             ripley_matrix[i, j] = ripley_mean
     return ripley_matrix, fig_u, fig_n, curves, curves_norm
 
@@ -981,11 +1038,14 @@ def postprocess_ripley_matrix(ripley_matrix, radii):
     return postprocessed
 
 
-def init_plot(n_targets, treatment, controltype, metric, figsize=30):
+def init_plot(n_targets, treatment, controltype, metric, figsize_per_target=5):
     fig, ax = plt.subplots(
         n_targets,
         n_targets,
-        figsize=(figsize, figsize),
+        figsize=(
+            int(n_targets * figsize_per_target),
+            int(n_targets * figsize_per_target),
+        ),
         sharey=True,
         sharex=True,
     )

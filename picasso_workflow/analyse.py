@@ -26,6 +26,7 @@ import yaml
 import pickle
 import random
 import string
+import copy
 
 from picasso_workflow import util
 from picasso_workflow import process_brightfield
@@ -2548,6 +2549,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 fraction_exclude
                 significance_threshold : float
                     threshold above which heatmap entries are colored
+                normalization : str
+                edge_correction : bool
+                    if True, only locs further from mask edges than max radius
+                    are used for evaluation
         """
         nRandomControls = parameters.get("ripleys_n_random_controls", 100)
         # radii = np.concatenate(
@@ -2579,16 +2584,30 @@ class AutoPicasso(util.AbstractModuleCollection):
             # mask = np.load(fp_mask)
             # mask = mask / np.sum(mask)
             mask = outpost_modules.mask.CellMask.load(fp_mask)
+            area = mask.area
+            mask_pixel_size = mask._upsample
         else:
             mask = None
-        mask_pixel_size = parameters.get("mask_pixel_size")
-        area = parameters.get("area")
+        # mask_pixel_size = parameters.get("mask_pixel_size")
+        # area = parameters.get("area")
 
         pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
 
+        if parameters.get("edge_correction"):
+            # make the mask smaller by the maximum radius, and apply
+            max_r = np.max(radii)
+            ec_mask = copy.copy(mask)
+            ec_mask.erode(max_r)
+            area = ec_mask.area
+            locs_used = [
+                ec_mask.apply_to_locs(locs) for locs in self.channel_locs
+            ]
+        else:
+            locs_used = self.channel_locs
+
         mol_coords = [
             outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
-            for mol in self.channel_locs
+            for mol in locs_used
         ]
 
         if parameters["metric"] == "FRC":
@@ -2623,6 +2642,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     randomization_radius=parameters.get(
                         "randomization_radius"
                     ),
+                    normalization=parameters.get("normalization"),
                 )
             )
 
@@ -3808,7 +3828,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 kwargs["fill_holes"] = fill_holes
             if dilate_nm := parameters.get("dilate_nm"):
                 kwargs["dilate_nm"] = dilate_nm
-            cell_mask.filter_mask()
+            cell_mask.filter_mask(**kwargs)
         if parameters.get("apply_to_locs"):
             self.channel_locs = [
                 cell_mask.apply_to_locs(locs) for locs in self.channel_locs

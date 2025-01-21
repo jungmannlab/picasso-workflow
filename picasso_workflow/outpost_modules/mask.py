@@ -13,8 +13,8 @@ from scipy.ndimage import (
     gaussian_filter,
     label,
     binary_fill_holes,
-    generate_binary_structure,
     binary_dilation,
+    binary_erosion,
 )
 import pickle
 
@@ -120,7 +120,6 @@ class CellMask:
         density_mask /= density_mask.sum()
 
         instance._density_mask = density_mask
-        instance._area = area
         return instance
 
     def picassolocs_to_maskbins(self, locs):
@@ -153,7 +152,6 @@ class CellMask:
         save_dict = {
             "density_mask": self._density_mask,
             "binary_mask": self._binary_mask,
-            "area": self._area,
             "binsize": self._binsize,
             "blursize": self._blursize,
             "threshold": self._threshold,
@@ -169,7 +167,6 @@ class CellMask:
         instance = cls()
         instance._density_mask = save_dict["density_mask"]
         instance._binary_mask = save_dict["binary_mask"]
-        instance._area = save_dict["area"]
         instance._binsize = save_dict["binsize"]
         instance._blursize = save_dict["blursize"]
         instance._threshold = save_dict["threshold"]
@@ -191,7 +188,9 @@ class CellMask:
 
     @property
     def area(self):
-        return self._area
+        area = (self.binary_mask > 0).sum() * self._upsample**2
+        area = area / 1e6  # convert from nm^2 to um^2
+        return area
 
     def filter_mask(self, fill_holes=True, dilate_nm=0):
         """Select the largest connected area in the mask, and fill
@@ -207,16 +206,27 @@ class CellMask:
         ).astype(np.int8)
         if fill_holes:
             # fill holes in the mask
-            largest_component_mask = binary_fill_holes(largest_component_mask)
+            largest_component_mask = binary_fill_holes(
+                largest_component_mask
+            ).astype(int)
         if dilate_nm > 0:
             dilate_px = int(np.round(dilate_nm / self._upsample))
-            dilation_struct = generate_binary_structure(2, 1)
             largest_component_mask = binary_dilation(
-                largest_component_mask, dilation_struct, iterations=dilate_px
+                largest_component_mask, iterations=dilate_px
             ).astype(np.int8)
 
         self._binary_mask[largest_component_mask == 0] = False
         self._density_mask[largest_component_mask == 0] = 0
+        self._density_mask /= self._density_mask.sum()
+
+    def erode(self, erode_nm):
+        """Focus the mask by a given number of nanometers"""
+        erode_px = int(np.round(erode_nm / self._upsample))
+        mask_mod = binary_erosion(
+            self.binary_mask, iterations=erode_px
+        ).astype(np.int8)
+        self._binary_mask[mask_mod == 0] = False
+        self._density_mask[mask_mod == 0] = 0
         self._density_mask /= self._density_mask.sum()
 
     def apply_to_locs(self, locs):

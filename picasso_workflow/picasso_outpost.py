@@ -76,14 +76,14 @@ def align_channels(
                 fiducial_locs = None
                 break
 
-    if fiducial_locs is None:
-        use_fiducials = False
+    if fiducial_locs is not None:
+        use_fiducials = True
         shift, cumulative_shift, channel_locs = align_by_picked(
             channel_locs,
             fiducial_locs,
         )
     else:
-        use_fiducials = True
+        use_fiducials = False
         shift, cumulative_shift, channel_locs = align_by_rcc(
             channel_locs,
             channel_info,
