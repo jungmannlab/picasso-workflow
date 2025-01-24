@@ -542,7 +542,7 @@ class WorkflowRunner:
         self.report_name = reporter_config["report_name"]
         if init_kwargs := reporter_config.get("ConfluenceReporter"):
             init_kwargs["report_name"] = self.report_name
-            logger.debug(init_kwargs)
+            # logger.debug(init_kwargs)
             self.confluencereporter = ConfluenceReporter(**init_kwargs)
 
     def run(self):
@@ -631,8 +631,8 @@ class WorkflowRunner:
             "analysis_config": pce.run(self.analysis_config),
             "workflow_modules": pce.run(self.workflow_modules),
         }
-        logger.debug("saving data:")
-        logger.debug(str(data))
+        # logger.debug("saving data:")
+        # logger.debug(str(data))
         with open(filepath, "w") as f:
             yaml.dump(data, f)
 
@@ -731,7 +731,7 @@ class WorkflowRunner:
             logger.error(e)
             self.confluencereporter.report_error(e, fun_name)
             raise e
-        logger.debug(f"RESULTS: {self.results[key]}")
+        # logger.debug(f"RESULTS: {self.results[key]}")
         fun_cr = getattr(self.confluencereporter, fun_name)
         try:
             fun_cr(i, parameters, self.results[key])

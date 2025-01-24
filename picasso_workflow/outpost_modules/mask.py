@@ -27,6 +27,7 @@ class CellMask:
     # The internal mask (2D density mask)
     _binary_mask = np.array(np.nan)
     _density_mask = np.array(np.nan)
+    _initial_density = np.array(np.nan)
     # computed area in µm^2
     _area = 0
     # the camera pixel size in nm
@@ -83,29 +84,29 @@ class CellMask:
         ]
         # combine all coordinates into one array
         combined_coords = np.vstack(mol_coords) / binsize
+        # print(combined_coords.shape)
         n_bins = int(np.ceil(512 * pixelsize / binsize))
         bins = np.arange(0, n_bins, 1, dtype=np.float64)
         mask = np.histogram2d(
             combined_coords[:, 0], combined_coords[:, 1], bins=bins
         )[0]
-        # assuming: for display. Now using imshow origin "lower"
+        # assuming: this is for display. Now using imshow origin "lower"
         # mask = np.flipud(np.rot90(mask))
+
         blur = blursize / binsize
-        mask = gaussian_filter(mask, blur)
-        thresh = otsu(mask) * threshold
-        mask[mask < thresh] = 0
         factor = int(binsize / upsample)
-        density_mask = zoom(mask.astype(np.float64), factor)
-        density_mask[density_mask < 0] = 0
-        area = (density_mask > 0).sum() * upsample**2
-        area = area / 1e6  # convert from nm^2 to um^2
-        density_mask /= density_mask.sum()
-        density_mask[np.isnan(density_mask)] = 0
+
+        initial_density = gaussian_filter(mask, blur)
+        initial_density = zoom(initial_density.astype(np.float64), factor)
+        initial_density[initial_density < 0] = 0
+        instance._initial_density = initial_density
 
         # create binary mask
-        binary_mask = density_mask.copy()
-        binary_mask[binary_mask <= 0] = 0
-        binary_mask[binary_mask > 0] = 1
+        binary_mask = initial_density.copy()
+        thresh = otsu(initial_density) * threshold
+        binary_mask[binary_mask < thresh] = 0
+        binary_mask[binary_mask >= thresh] = 1
+
         # blur and apply threshold to get more accurate mask
         # (remove added area on cell border, keep potential
         # low-density inside cell area - no 'holes')
@@ -113,14 +114,28 @@ class CellMask:
         reduction_threshold = 0.9
         binary_mask[binary_mask <= reduction_threshold] = 0
         binary_mask[binary_mask > reduction_threshold] = 1
+
         binary_mask = binary_mask.astype(np.bool_)
         instance._binary_mask = binary_mask
 
-        density_mask[~binary_mask] = 0
-        density_mask /= density_mask.sum()
+        instance._recalc_density_mask_from_binary()
 
-        instance._density_mask = density_mask
+        # import matplotlib.pyplot as plt
+        # fig, ax = plt.subplots(ncols=2, nrows=2, sharex=True, sharey=True)
+        # ax[0, 0].imshow(instance._initial_density)
+        # ax[0, 0].set_title('initial density')
+        # ax[0, 1].imshow(instance._binary_mask)
+        # ax[0, 1].set_title('binary_mask')
+        # ax[1, 1].imshow(instance._density_mask)
+        # ax[1, 1].set_title('density mask')
+        # plt.show()
+
         return instance
+
+    def _recalc_density_mask_from_binary(self):
+        self._density_mask = self._initial_density.copy()
+        self._density_mask[~self._binary_mask] = 0
+        self._density_mask /= self._density_mask.sum()
 
     def picassolocs_to_maskbins(self, locs):
         """Convert picasso localizations to bin locations in the mask
@@ -150,6 +165,7 @@ class CellMask:
 
     def save(self, fp):
         save_dict = {
+            "initial_density": self._initial_density,
             "density_mask": self._density_mask,
             "binary_mask": self._binary_mask,
             "binsize": self._binsize,
@@ -165,6 +181,7 @@ class CellMask:
         with open(fp, "rb") as f:
             save_dict = pickle.load(f)
         instance = cls()
+        instance._initial_density = save_dict["initial_density"]
         instance._density_mask = save_dict["density_mask"]
         instance._binary_mask = save_dict["binary_mask"]
         instance._binsize = save_dict["binsize"]
@@ -192,42 +209,49 @@ class CellMask:
         area = area / 1e6  # convert from nm^2 to um^2
         return area
 
-    def filter_mask(self, fill_holes=True, dilate_nm=0):
+    def filter_mask(self, fill_holes=True):
         """Select the largest connected area in the mask, and fill
         potential holes in this area.
         """
-
         binary_mask = self.binary_mask
+        # print('binary mask shape in', binary_mask.shape)
         labeled_array, num_features = label(binary_mask)
         sizes = np.bincount(labeled_array.ravel())
-        largest_component_index = sizes[1:].argmax() + 1
+        try:
+            largest_component_index = sizes[1:].argmax() + 1
+        except ValueError:
+            largest_component_index = 1
         largest_component_mask = (
             labeled_array == largest_component_index
         ).astype(np.int8)
+
         if fill_holes:
             # fill holes in the mask
             largest_component_mask = binary_fill_holes(
                 largest_component_mask
             ).astype(int)
-        if dilate_nm > 0:
-            dilate_px = int(np.round(dilate_nm / self._upsample))
-            largest_component_mask = binary_dilation(
-                largest_component_mask, iterations=dilate_px
-            ).astype(np.int8)
 
-        self._binary_mask[largest_component_mask == 0] = False
-        self._density_mask[largest_component_mask == 0] = 0
-        self._density_mask /= self._density_mask.sum()
+        self._binary_mask = largest_component_mask.astype(np.bool_)
+
+        self._recalc_density_mask_from_binary()
 
     def erode(self, erode_nm):
         """Focus the mask by a given number of nanometers"""
         erode_px = int(np.round(erode_nm / self._upsample))
-        mask_mod = binary_erosion(
+        self._binary_mask = binary_erosion(
             self.binary_mask, iterations=erode_px
-        ).astype(np.int8)
-        self._binary_mask[mask_mod == 0] = False
-        self._density_mask[mask_mod == 0] = 0
-        self._density_mask /= self._density_mask.sum()
+        ).astype(np.bool_)
+
+        self._recalc_density_mask_from_binary()
+
+    def dilate(self, dilate_nm):
+        """Focus the mask by a given number of nanometers"""
+        dilate_px = int(np.round(dilate_nm / self._upsample))
+        self._binary_mask = binary_dilation(
+            self.binary_mask, iterations=dilate_px
+        ).astype(np.bool_)
+
+        self._recalc_density_mask_from_binary()
 
     def apply_to_locs(self, locs):
         """Applies the binary mask to localizations: locs
@@ -254,7 +278,7 @@ class CellMask:
         ]
         return locs[in_cell]
 
-    def plot_mask(self, fp, binary=False):
+    def plot_mask(self, fp=None, binary=False):
         """plot binary or density version of the mask"""
         fig, ax = plt.subplots()
         ax.set_box_aspect(1)
@@ -270,20 +294,22 @@ class CellMask:
             mask_plot,
             extent=[
                 0,
-                self._upsample * mask_plot.shape[0],
+                self._upsample * mask_plot.shape[0] / 1000,
                 0,
-                self._upsample * mask_plot.shape[1],
+                self._upsample * mask_plot.shape[1] / 1000,
             ],
             cmap=cmap,
             origin="lower",
         )
 
-        ax.set_xlabel("x [nm]")
-        ax.set_ylabel("y [nm]")
+        ax.set_xlabel("x [µm]")
+        ax.set_ylabel("y [µm]")
         # ax.set_xticks()
         # ax.set_xlim(x0, x0 + length)
         # ax.set_ylim(y0, y0 + length)
-        fig.savefig(fp)
+        if fp is not None:
+            fig.savefig(fp)
+        return fig, ax
 
     def random_points(self, n_points, binary=False, mask=None):
         """Simulates monomeric molecules based on density mask, see

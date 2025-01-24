@@ -10,7 +10,6 @@ Description: This is a collection of exploratory DNA-PAINT analysis / picasso
 """
 import logging
 import numpy as np
-import copy
 
 # from numpy.lib.recfunctions import stack_arrays
 import pandas as pd
@@ -40,6 +39,8 @@ def align_channels(
     max_iterations=5,
     convergence=0.001,
     fiducial_locs=None,
+    force_method=None,
+    max_shift=None,
 ):
     """This is taken from picasso.gui.render.View.align. As the code is not
     modular enough, it is replicated here. Potentially, this could go into
@@ -57,6 +58,11 @@ def align_channels(
         fiducial_locs : list of recarray
             the localizations to use as a basis for the alignment. If None,
             the channel_locs are used as fiducials.
+        force_method : None or str
+            "RCC": force usage of RCC algorithm, also with fiducials present.
+            "picked": force usage of 'by picked' algorithm
+        max_shift : float
+            the maximum shift between picks, if undifting fiducials by picked
     Returns:
         shift : list (len 2-3) of lists (len iterations)
             the shifts in x, y, (z) for each iteration, averaged over
@@ -69,22 +75,32 @@ def align_channels(
             or not (and alignment was by rcc)
     """
     logger.debug("Aligning datasets")
+    if force_method is None:
+        force_method = ""
     # check whether any of the fiducial locs are empty
     if fiducial_locs is not None:
+        use_fiducials = True
         for locs in fiducial_locs:
             if locs.size == 0:
                 fiducial_locs = None
                 break
-
-    if fiducial_locs is not None:
-        use_fiducials = True
-        shift, cumulative_shift, channel_locs = align_by_picked(
-            channel_locs,
-            fiducial_locs,
-        )
     else:
         use_fiducials = False
-        shift, cumulative_shift, channel_locs = align_by_rcc(
+
+    if fiducial_locs is not None and not force_method == "RCC":
+        # sort and select corresponding fiducials
+        fiducial_locs = sort_picked_locs(fiducial_locs, max_shift=max_shift)
+
+        algo_used = "by picked"
+        (shift, cumulative_shift, channel_locs, fiducial_locs) = (
+            align_by_picked(
+                channel_locs,
+                fiducial_locs,
+            )
+        )
+    else:
+        algo_used = "RCC"
+        (shift, cumulative_shift, channel_locs, fiducial_locs) = align_by_rcc(
             channel_locs,
             channel_info,
             max_iterations,
@@ -92,25 +108,7 @@ def align_channels(
             fiducial_locs,
         )
 
-    # logger.debug(f"calculated shifts:")
-    # logger.debug(f"last shift: {str(shift)}")
-    # # logger.debug(f'shift_y: {str(shift_y)}')
-    # # logger.debug(f'shift_z: {str(shift_z)}')
-    # logger.debug(f"all shift: {str(all_shift)}")
-    # logger.debug(f"cumulative_shift: {str(cumulative_shift)}")
-    # logger.debug(f"cumulative_shift shape: {cumulative_shift.shape}")
-    # logger.debug(f"all_shift shape: {all_shift.shape}")
-
-    # if fiducial_locs were separately given, shift channel_locs
-    if use_fiducials:  # channel_locs != fiducial_locs:
-        for i, locs_ in enumerate(channel_locs):
-            # logger.debug(f"shifting x by {str(cumulative_shift[0, i, -1])}")
-            locs_.x -= cumulative_shift[0, i, -1]
-            # logger.debug(f"shifting y by {str(cumulative_shift[1, i, -1])}")
-            locs_.y -= cumulative_shift[1, i, -1]
-            if len(shift) == 3:
-                locs_.z -= cumulative_shift[2, i, -1]
-    return shift, cumulative_shift, use_fiducials
+    return shift, cumulative_shift, use_fiducials, algo_used
 
 
 def align_by_picked(channel_locs, fiducial_locs):
@@ -119,14 +117,19 @@ def align_by_picked(channel_locs, fiducial_locs):
     # print("Shift {}".format(shift))
 
     # align each channel
-    for i, locs_ in enumerate(channel_locs):
-        locs_.y -= shift[0][i]
-        locs_.x -= shift[1][i]
+    for i in range(len(channel_locs)):
+        channel_locs[i].y -= shift[0][i]
+        channel_locs[i].x -= shift[1][i]
         if len(shift) == 3:
-            locs_.z -= shift[2][i]
-        channel_locs[i] = copy.copy(locs_)
+            channel_locs[i].z -= shift[2][i]
+
+        fiducial_locs[i].y -= shift[0][i]
+        fiducial_locs[i].x -= shift[1][i]
+        if len(shift) == 3:
+            fiducial_locs[i].z -= shift[2][i]
+
     cumulative_shift = np.array(shift)[..., np.newaxis]
-    return shift, cumulative_shift, channel_locs
+    return shift, cumulative_shift, channel_locs, fiducial_locs
 
 
 def align_by_rcc(
@@ -145,15 +148,19 @@ def align_by_rcc(
 
         # find shift between channels
         if fiducial_locs is None:
+            use_fiducials = False
             # assignment by reference. Any changes to fiducial_locs will act on
             # channel_locs and vice versa.
-            fiducial_locs = channel_locs
-        shift = shift_from_rcc(fiducial_locs, channel_info)
+            rcc_locs = channel_locs
+        else:
+            use_fiducials = True
+            rcc_locs = fiducial_locs
+        shift = shift_from_rcc(rcc_locs, channel_info)
         logger.debug("Shifting channels.")
         temp_shift_x = []
         temp_shift_y = []
         temp_shift_z = []
-        for i, locs_ in enumerate(fiducial_locs):
+        for i, locs_ in enumerate(rcc_locs):
             if (
                 np.absolute(shift[0][i]) + np.absolute(shift[1][i])
                 > convergence
@@ -186,7 +193,20 @@ def align_by_rcc(
     shift = [shift_x, shift_y]
     if shift_z != []:
         shift.append(shift_z)
-    return shift, cumulative_shift, channel_locs
+
+    # shift the locs that were not rcc'ed
+    if use_fiducials:
+        postshift_locs = channel_locs
+    else:
+        postshift_locs = fiducial_locs
+    if use_fiducials:  # channel_locs != fiducial_locs:
+        for i in range(len(postshift_locs)):
+            postshift_locs[i].x -= cumulative_shift[0, i, -1]
+            postshift_locs[i].y -= cumulative_shift[1, i, -1]
+            if len(shift) == 3:
+                postshift_locs[i].z -= cumulative_shift[2, i, -1]
+
+    return shift, cumulative_shift, channel_locs, fiducial_locs
 
 
 def plot_shift(shifts, cum_shifts, filepath):
@@ -1814,13 +1834,113 @@ def shift_from_picked(channel_fiducials):
     return lib.minimize_shifts(dx, dy, shifts_z=dz)
 
 
+def sort_picked_locs(channel_picks, max_shift=None):
+    """Sorts picked localizations to match between channels.
+    Args:
+        max_shift : None or float
+            the maximum shift between channel picks. If given, picks are only
+            considered if they have corresponding picks in all other channels,
+            and resorted accordingly.
+    Returns:
+        channel_locs : list of np.rec.array
+            the accepted picks in corresponding order
+    """
+    n_channels = len(channel_picks)
+    # ngroups = [len(np.unique(picks['group'])) for picks in channel_picks]
+    # logger.debug(f"#groups in: {str(ngroups)}")
+    max_picks = max(
+        [len(np.unique(picks["group"])) for picks in channel_picks]
+    )
+    pick_means = np.nan * np.ones((n_channels, max_picks, 2), dtype=np.float64)
+    for chan in range(n_channels):
+        picks = channel_picks[chan]
+        for i, pick_group in enumerate(np.unique(picks["group"])):
+            pick_locs = picks[picks["group"] == pick_group]
+            pick_means[chan, i, 0] = np.mean(pick_locs.x)
+            pick_means[chan, i, 1] = np.mean(pick_locs.y)
+
+    # logger.debug(f"pick means: {str(pick_means)}")
+
+    def mean_distances(means, ch, picki, ref):
+        """returns the distances of all picks in channel ch
+        from pick picki in channel ref
+        """
+        dist = np.sqrt(
+            (means[ch, picki, 0] - means[ref, :, 0]) ** 2
+            + (means[ch, picki, 1] - means[ref, :, 1]) ** 2
+        )
+        return dist
+
+    # offset the channels to avoid collisions
+    for i in range(n_channels):
+        channel_picks[i]["group"] += max_picks
+
+    # find pick groups corresponding to first channel picks
+    pick_group = -1 * np.ones((n_channels, max_picks), dtype=np.int16)
+    pick_drop = {ch: [] for ch in range(n_channels)}
+    for chan in range(n_channels):
+        chan_groups = np.unique(channel_picks[chan]["group"])
+        logger.debug(f"channel {chan} groups: {str(chan_groups)}")
+        if chan == 0:
+            pick_group[chan, : len(chan_groups)] = chan_groups
+            continue
+
+        for i, group in enumerate(chan_groups):
+            dists = mean_distances(pick_means, chan, i, 0)
+            dists = dists[: len(chan_groups)]
+            mindist_i = np.argmin(dists).flatten()
+            if len(mindist_i) == 0:
+                # discard the pick
+                pick_drop[chan].append(group)
+                continue
+            mindist_i = mindist_i[0]
+            mindist = dists[mindist_i]
+            if (max_shift is not None) and (mindist > max_shift):
+                # discard the pick
+                pick_drop[chan].append(group)
+                continue
+
+            # set the index as the corresponding pick index
+            pick_group[chan, mindist_i] = group
+
+    # now check back: all cols where at least one entry is -1 are incomplete,
+    # corresponding picks need to be dropped.
+    for i in range(max_picks):
+        if np.min(pick_group[:, i]) < 0:
+            for chan in range(n_channels):
+                if pick_group[chan, i] > 0:
+                    pick_drop[chan].append(pick_group[chan, i])
+                    pick_group[chan, i] = -1
+
+    # re-sort the groups, and drop
+    for chan in range(n_channels):
+        for dropgroup in pick_drop[chan]:
+            channel_picks[chan] = channel_picks[chan][
+                channel_picks[chan]["group"] != dropgroup
+            ]
+        for i in range(max_picks):
+            corresponding_group = pick_group[chan, i]
+            dest_group = i
+            if corresponding_group >= 0:
+                # set the group to the index
+                selected_locs = (
+                    channel_picks[chan]["group"] == corresponding_group
+                )
+                channel_picks[chan]["group"][selected_locs] = dest_group
+
+    # ngroups = [len(np.unique(picks['group'])) for picks in channel_picks]
+    # logger.debug(f"#groups out: {str(ngroups)}")
+
+    return channel_picks
+
+
 def shifts_from_picked_coordinate(locs, coordinate):
     """
     Calculates shifts between channels along a given coordinate.
 
     Parameters
     ----------
-    locs : np.recarray
+    locs : list of np.recarray
         Picked locs from all channels
     coordinate : str
         Specifies which coordinate should be used (x, y, z)
@@ -1842,6 +1962,9 @@ def shifts_from_picked_coordinate(locs, coordinate):
             group_locs = channel_locs[channel_locs["group"] == pick_group_idx]
             group_com = np.mean(getattr(group_locs, coordinate))
             coms[-1].append(group_com)
+    # for i, c in enumerate(coms):
+    #     logger.debug(f"coms {i}: {str(c)}")
+
     # Calculating image shifts
     d = np.zeros((n_channels, n_channels))
     for i in range(n_channels - 1):

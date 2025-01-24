@@ -527,14 +527,14 @@ class ParameterCommandExecutor(DictSimpleTyper):
             if att_name == f"{self.command_sign}all":
                 # root_att is a list, and all items should be equally processed
                 # in the next rounds
-                logger.debug(f"Leaving {root_att}, to get all.")
+                # logger.debug(f"Leaving {root_att}, to get all.")
                 pass
             else:
                 try:
                     if isinstance(root_att, list):
-                        logger.debug(
-                            f"Getting all {att_name} attributes of {root_att}"
-                        )
+                        # logger.debug(
+                        #     f"Getting all {att_name} attributes of {root_att}"
+                        # )
                         root_att = [
                             self.get_attribute(list_att, att_name)
                             for list_att in root_att
@@ -548,7 +548,7 @@ class ParameterCommandExecutor(DictSimpleTyper):
                         + f"workflow {self.command_sign}get_prior_result "
                         + "argument."
                     )
-        logger.debug(f"Prior Result of {locator} is {root_att}")
+        # logger.debug(f"Prior Result of {locator} is {root_att}")
         return root_att
 
     def get_previous_module_result(self, locator):

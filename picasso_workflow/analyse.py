@@ -32,6 +32,7 @@ from picasso_workflow import util
 from picasso_workflow import process_brightfield
 from picasso_workflow import picasso_outpost, outpost_modules
 from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
+from picasso_workflow.outpost_modules import render
 
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,7 @@ def module_decorator(method):
             results["end time"], "%y-%m-%d %H:%M:%S"
         ) - datetime.strptime(results["start time"], "%y-%m-%d %H:%M:%S")
         results["duration"] = td.total_seconds()
-        logger.debug(f"RESULTS: {results}")
+        # logger.debug(f"RESULTS: {results}")
 
         # close all figures potentially still open
         plt.close("all")
@@ -1932,6 +1933,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        rcode = generate_random_code(6)
         if parameters.get("filepaths"):
             self.channel_locs = []
             self.channel_info = []
@@ -1951,17 +1953,39 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             fiducial_locs = None
 
-        shifts, cum_shifts, used_fiducials = picasso_outpost.align_channels(
-            self.channel_locs,
-            self.channel_info,
-            fiducial_locs=fiducial_locs,
-            **parameters.get("align_pars", {}),
+        results["fp_scene_locs_before"] = os.path.join(
+            results["folder"], f"locs_before_{rcode}.png"
+        )
+        render.plot_scene(
+            self.channel_locs, 100, 130, fp=results["fp_scene_locs_before"]
+        )
+        if fiducial_locs is not None:
+            results["fp_scene_fids_before"] = os.path.join(
+                results["folder"], f"fiducials_before_{rcode}.png"
+            )
+            fid_render_kwargs = {
+                "blur_method": "gaussian",
+                "min_blur_width": 2,
+            }
+            render.plot_scene(
+                fiducial_locs,
+                130,
+                130,
+                fp=results["fp_scene_fids_before"],
+                render_kwargs=fid_render_kwargs,
+            )
+
+        (shifts, cum_shifts, used_fiducials, algo_used) = (
+            picasso_outpost.align_channels(
+                self.channel_locs,
+                self.channel_info,
+                fiducial_locs=fiducial_locs,
+                **parameters.get("align_pars", {}),
+            )
         )
         results["shifts"] = cum_shifts[:, :, -1]
-        if used_fiducials:
-            results["aligned_by"] = "picked fiducials"
-        else:
-            results["aligned_by"] = "RCC of locs"
+        results["alignment_algorithm"] = algo_used
+        results["used_fiducials"] = used_fiducials
 
         fp_shifts = os.path.join(results["folder"], "shifts.txt")
         np.savetxt(fp_shifts, results["shifts"])
@@ -1972,6 +1996,35 @@ class AutoPicasso(util.AbstractModuleCollection):
             fig_filepath = os.path.join(results["folder"], fn)
             picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath
+
+        results["fp_scene_locs_after"] = os.path.join(
+            results["folder"], f"locs_after_{rcode}.png"
+        )
+        render.plot_scene(
+            self.channel_locs, 100, 130, fp=results["fp_scene_locs_after"]
+        )
+
+        if fiducial_locs is not None:
+            results["fp_scene_fids_after"] = os.path.join(
+                results["folder"], f"fiducials_after_{rcode}.png"
+            )
+            render.plot_scene(
+                fiducial_locs,
+                130,
+                130,
+                fp=results["fp_scene_fids_after"],
+                render_kwargs=fid_render_kwargs,
+            )
+            # save the potentially changed fiducials
+            fp_fiducials = []
+            for tag, flocs, finfo in zip(
+                self.channel_tags, fiducial_locs, fiducial_info
+            ):
+                fp_fiducials.append(
+                    os.path.join(results["folder"], f"{tag}_fiducials.hdf5")
+                )
+                io.save_locs(fp_fiducials[-1], flocs, finfo)
+            results["fp_fiducials"] = fp_fiducials
 
         # add info
         new_info = {
@@ -2588,8 +2641,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             mask_pixel_size = mask._upsample
         else:
             mask = None
+            area = parameters.get("area", 1)
+            mask_pixel_size = 1
         # mask_pixel_size = parameters.get("mask_pixel_size")
-        # area = parameters.get("area")
 
         pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
 
@@ -3826,9 +3880,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             kwargs = {}
             if fill_holes := parameters.get("fill_holes"):
                 kwargs["fill_holes"] = fill_holes
-            if dilate_nm := parameters.get("dilate_nm"):
-                kwargs["dilate_nm"] = dilate_nm
             cell_mask.filter_mask(**kwargs)
+        if dilate_nm := parameters.get("dilate_nm"):
+            cell_mask.dilate(dilate_nm)
         if parameters.get("apply_to_locs"):
             self.channel_locs = [
                 cell_mask.apply_to_locs(locs) for locs in self.channel_locs

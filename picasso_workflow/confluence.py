@@ -763,6 +763,15 @@ class ConfluenceReporter(AbstractModuleCollection):
                     fig_filepath
         """
         logger.debug("Reporting align_channels.")
+        shifttxt = f"""
+        <li>Shifts in x [px]: {results.get('shifts')[0, :]}</li>
+        <li>Shifts in y [px]: {results.get('shifts')[1, :]}</li>
+        """
+        try:
+            shifttxt += f"""
+                <li>Shifts in z [px]: {results.get('shifts')[2, :]}</li>"""
+        except TypeError:
+            pass
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Align Channels</strong></p>
@@ -771,27 +780,56 @@ class ConfluenceReporter(AbstractModuleCollection):
         are given.</p>
 
         Summary:
-        <ul><li>Shifts in x [px]: {results.get('shifts')[0, :]}</li>
-        <li>Shifts in y [px]: {results.get('shifts')[1, :]}</li>
-        <li>Shifts in z [px]: {results.get('shifts')[2, :]}</li>
+        <ul>
+        {shifttxt}
         </ul>
         {parameter_text}
         {result_text}
         """
+        fig_fps = []
+        titles = []
+        if fp_fig := results.get("fp_scene_locs_before"):
+            fig_fps.append(fp_fig)
+            titles.append("Localizations before alignment")
+        if fp_fig := results.get("fp_scene_locs_after"):
+            fig_fps.append(fp_fig)
+            titles.append("Localizations after alignment")
+        if fp_fig := results.get("fp_scene_fids_before"):
+            fig_fps.append(fp_fig)
+            titles.append("Fiducials before alignment")
+        if fp_fig := results.get("fp_scene_fids_after"):
+            fig_fps.append(fp_fig)
+            titles.append("Fiducials after alignment")
+
+        if len(fig_fps) > 1:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
-
-        if driftimg_fn := results.get("fig_filepath"):
-            self.ci.upload_attachment(self.report_page_id, driftimg_fn)
-            self.ci.update_page_content_with_image_attachment(
-                self.report_page_name,
-                self.report_page_id,
-                os.path.split(driftimg_fn)[1],
-            )
 
     def combine_channels(self, i, parameters, results):
         """Describes the combine_channels module
