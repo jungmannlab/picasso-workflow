@@ -566,6 +566,7 @@ def analyze_2_channels(
     metric="RK",
     normalization="zscore",
     randomization_radius=None,
+    showControlEnvelope=True,
 ):
     """Runs the analysis of any two channels of the dataset (2 protein
     species).
@@ -592,6 +593,7 @@ def analyze_2_channels(
                 before peak of mean of controls)
             "deltaAprepeakNorm" (only positive difference to mean of controls,
                 before peak of mean of controls, divided by number of X2 spots)
+            "deltaAprepeakPerc" (same as deltaAprepeakNorm, but in percent)
             "to_max_r" (divide by value of curve at maximum r)
     """
     if np.array_equal(exp_X1, exp_X2):
@@ -690,6 +692,18 @@ def analyze_2_channels(
             )
             / N2
         )
+    elif normalization == "deltaAprepeakPerc":
+        N2 = len(exp_X2)
+        K_csr_mean = np.mean(K_csr, axis=0)
+        peak_idx = np.argmax(K_csr_mean)
+
+        K_exp_norm = 100 * posdiffpreidx(K_exp, K_csr_mean, peak_idx) / N2
+        K_csr_norm = 100 * (
+            np.array(
+                [posdiffpreidx(K_c, K_csr_mean, peak_idx) for K_c in K_csr]
+            )
+            / N2
+        )
     elif normalization == "to_max_r":
 
         def norm_to_max_r(K_data):
@@ -714,6 +728,7 @@ def analyze_2_channels(
             labelFontsize=30,
             axes=ax_u,
             metric=metric,
+            showControlEnvelope=showControlEnvelope,
         )
         plot_ripleys(
             radii,
@@ -726,6 +741,7 @@ def analyze_2_channels(
             labelFontsize=30,
             axes=ax_n,
             metric=metric,
+            showControlEnvelope=showControlEnvelope,
         )
     return ripley_integral, K_exp, K_exp_norm
 
@@ -744,6 +760,7 @@ def analyze_all_channels(
     randomization_radius=None,
     normalization="zscore",
     aggfun="mean",
+    showControlEnvelope=True,
 ):
     """Do the neighborhood analysis of all channels with each other
     and generate a mean value matrix. This has been initially written for
@@ -827,6 +844,7 @@ def analyze_all_channels(
                 metric=metric,
                 randomization_radius=randomization_radius,
                 normalization=normalization,
+                showControlEnvelope=showControlEnvelope,
             )
             curves[i, j, :] = K_exp
             curves_norm[i, j, :] = K_exp_norm
@@ -863,6 +881,7 @@ def typefraction_all_channels(
     relocate_self=False,
     fraction_exclude_self=False,
     normalize_to_bulkfraction=False,
+    showControlEnvelope=None,
 ):
     """
     Args:
@@ -946,19 +965,21 @@ def typefraction_all_channels(
                 )
                 curves[i, j, :] = K_exp
                 curves_norm[i, j, :] = K_exp_norm
-                ripley_matrix[i, j] = np.sum(curves_norm[i, j, :])
+                ripley_matrix[i, j] = np.mean(curves_norm[i, j, :])
                 show_controls = True
-                show_control_envelope = True
+                if showControlEnvelope is None:
+                    showControlEnvelope = True
             else:
                 curves[i, j, :] = fract_types[j]
                 curves_norm[i, j, :] = fract_types[j] / fract_types[j][-1]
-                ripley_matrix[i, j] = np.sum(curves_norm[i, j, :] - 1)
+                ripley_matrix[i, j] = np.mean(curves_norm[i, j, :] - 1)
                 K_exp = curves[i, j, :]
                 K_exp_norm = curves_norm[i, j, :]
-                K_csr = K_exp
+                K_csr = K_exp[np.newaxis, ...]
                 K_csr_norm = K_csr
                 show_controls = False
-                show_control_envelope = False
+                if showControlEnvelope is None:
+                    showControlEnvelope = False
 
             if ax_u is not None and ax_n is not None:
                 plot_ripleys(
@@ -968,7 +989,7 @@ def typefraction_all_channels(
                     ci=0.95,
                     normalized=False,
                     showControls=show_controls,
-                    showControlEnvelope=show_control_envelope,
+                    showControlEnvelope=showControlEnvelope,
                     title=f"{name1} -> {name2}",
                     labelFontsize=30,
                     axes=ax_u[i, j],
@@ -981,7 +1002,7 @@ def typefraction_all_channels(
                     ci=0.95,
                     normalized=True,
                     showControls=show_controls,
-                    showControlEnvelope=show_control_envelope,
+                    showControlEnvelope=showControlEnvelope,
                     title=f"{name1} -> {name2}",
                     labelFontsize=30,
                     axes=ax_n[i, j],

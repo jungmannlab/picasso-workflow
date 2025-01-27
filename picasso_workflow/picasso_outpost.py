@@ -89,7 +89,11 @@ def align_channels(
 
     if fiducial_locs is not None and not force_method == "RCC":
         # sort and select corresponding fiducials
+        nfidu = [len(np.unique(locs["group"])) for locs in fiducial_locs]
+        logger.debug(f"# fiducials before match and sort: {nfidu}")
         fiducial_locs = sort_picked_locs(fiducial_locs, max_shift=max_shift)
+        nfidu = [len(np.unique(locs["group"])) for locs in fiducial_locs]
+        logger.debug(f"# fiducials after match and sort: {nfidu}")
 
         algo_used = "by picked"
         (shift, cumulative_shift, channel_locs, fiducial_locs) = (
@@ -1827,10 +1831,14 @@ def shift_from_picked(channel_fiducials):
     """
     dy = shifts_from_picked_coordinate(channel_fiducials, "y")
     dx = shifts_from_picked_coordinate(channel_fiducials, "x")
-    if all([hasattr(_[0], "z") for _ in channel_fiducials]):
+    try:
         dz = shifts_from_picked_coordinate(channel_fiducials, "z")
-    else:
+    except (IndexError, KeyError, AttributeError):
         dz = None
+    # if all([hasattr(_[0], "z") for _ in channel_fiducials]):
+    #     dz = shifts_from_picked_coordinate(channel_fiducials, "z")
+    # else:
+    #     dz = None
     return lib.minimize_shifts(dx, dy, shifts_z=dz)
 
 
@@ -1888,20 +1896,33 @@ def sort_picked_locs(channel_picks, max_shift=None):
         for i, group in enumerate(chan_groups):
             dists = mean_distances(pick_means, chan, i, 0)
             dists = dists[: len(chan_groups)]
-            mindist_i = np.argmin(dists).flatten()
-            if len(mindist_i) == 0:
+            try:
+                mindist_i = np.nanargmin(dists).flatten()
+                mindist_i = mindist_i[0]
+            except (IndexError, ValueError):
                 # discard the pick
-                pick_drop[chan].append(group)
+                # pick_drop[chan].append(group)
+                # logger.debug(
+                #     f"dropping: chan {chan}, group {group}, dists: {dists}")
                 continue
-            mindist_i = mindist_i[0]
+
             mindist = dists[mindist_i]
             if (max_shift is not None) and (mindist > max_shift):
                 # discard the pick
+                # logger.debug(
+                #     f"""dropping: chan {chan}, group {group},
+                #     mindist: {mindist}, i: {mindist_i}""")
                 pick_drop[chan].append(group)
                 continue
 
             # set the index as the corresponding pick index
+            # logger.debug(
+            #     f"""keeping: chan {chan}, group {group},
+            #     mindist: {mindist}, i: {mindist_i}""")
             pick_group[chan, mindist_i] = group
+
+    # logger.debug(f"pick groups: {str(pick_group)}")
+    # logger.debug(f"dropping groups: {pick_drop}")
 
     # now check back: all cols where at least one entry is -1 are incomplete,
     # corresponding picks need to be dropped.
@@ -1911,6 +1932,9 @@ def sort_picked_locs(channel_picks, max_shift=None):
                 if pick_group[chan, i] > 0:
                     pick_drop[chan].append(pick_group[chan, i])
                     pick_group[chan, i] = -1
+
+    # logger.debug(f"pick groups doublechecked: {str(pick_group)}")
+    # logger.debug(f"dropping groups: {pick_drop}")
 
     # re-sort the groups, and drop
     for chan in range(n_channels):

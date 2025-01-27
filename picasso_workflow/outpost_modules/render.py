@@ -285,9 +285,17 @@ def get_default_render_kwargs(channel_locs, image_px_size, cam_px_size):
 def plot_scene(
     channel_locs, image_px_size, cam_px_size, fp=None, render_kwargs=None
 ):
-    kwargs = get_default_render_kwargs(
-        channel_locs, image_px_size, cam_px_size
-    )
+    try:
+        kwargs = get_default_render_kwargs(
+            channel_locs, image_px_size, cam_px_size
+        )
+    except ValueError as e:
+        logger.error(f"Error plotting locs: {e}")
+        nlocs = [len(locs) for locs in channel_locs]
+        ngroups = [len(np.unique(locs["group"])) for locs in channel_locs]
+        logger.debug(f"#locs: {nlocs}; #groups{ngroups}")
+        fig, ax = plt.subplots()
+        return fig, ax
     # overwrite default kwargs with input kwargs
     if render_kwargs is not None:
         for k, v in render_kwargs.items():

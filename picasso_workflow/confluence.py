@@ -772,6 +772,8 @@ class ConfluenceReporter(AbstractModuleCollection):
                 <li>Shifts in z [px]: {results.get('shifts')[2, :]}</li>"""
         except TypeError:
             pass
+        except IndexError:
+            pass
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Align Channels</strong></p>

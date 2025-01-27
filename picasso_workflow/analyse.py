@@ -2606,6 +2606,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 edge_correction : bool
                     if True, only locs further from mask edges than max radius
                     are used for evaluation
+                showControlEnvelope : bool
+
         """
         nRandomControls = parameters.get("ripleys_n_random_controls", 100)
         # radii = np.concatenate(
@@ -2678,6 +2680,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     ),
                     normalize_to_bulkfraction=parameters.get(
                         "normalize_to_bulkfraction", None
+                    ),
+                    showControlEnvelope=parameters.get(
+                        "showControlEnvelope", None
                     ),
                 )
             )
@@ -3133,14 +3138,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             "un-normalized",
             ripleys_controltype,
             ripleys_metric,
-            figsize=30,
+            figsize_per_target=5,
         )
         fig_curves_norm, ax_curves_norm = outpost_modules.ripleys.init_plot(
             len(channel_tags),
             "normalized",
             ripleys_controltype,
             ripleys_metric,
-            figsize=30,
+            figsize_per_target=5,
         )
         for fp_curve, fp_curve_norm, reportname in zip(
             fp_curves, fp_curves_norm, parameters["report_names"]
