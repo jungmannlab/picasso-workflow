@@ -130,9 +130,34 @@ def overpopulation(X1, X2, r, univariate):
     number, based on the density between r[-2] and r[-1]. This corrects
     for local density differences, and gives a meaningful measure if there
     is a mechanistic reason for X2 molecules to be at overrepresented around
-    X1 molecules, and r extends to distances at which this effect is negligible.
+    X1 molecules, and r extends to distances at which this effect is
+    negligible.
     """
-    pass
+    # for every X1 spot, find the X2 spots and calculate their densities
+    tree1 = KDTree(X1)
+    tree2 = KDTree(X2)
+    deltar = r[-2] - r[-1]
+    rs = np.append(r, np.max(r) + deltar)
+    nbrs = np.zeros((tree1.n, len(rs)))
+    for ir, radius in enumerate(rs):
+        balls_indices = tree1.query_ball_tree(tree2, radius)
+        for ix, neighbors in enumerate(balls_indices):
+            nbrs[ix, ir] = len(neighbors)
+            if univariate:
+                nbrs[ix, ir] -= 1
+    # calculate radial distribution like, but for every X1 spot
+    d_rs = rs[1:] - rs[:-1]
+    r_means = (rs[1:] + rs[:-1]) / 2
+    d_areas = 2 * np.pi * r_means * d_rs
+
+    d_nbrs = nbrs[:, 1:] - nbrs[:, :-1]
+    rdfs = d_nbrs / d_areas[None, :]
+
+    overdensities = rdfs - rdfs[:, -1][:, None]
+
+    # now, transform back from density to number, and average
+    overpopulation = np.mean(overdensities * d_areas, axis=0)
+    return overpopulation
 
 
 def fraction_types(
@@ -577,6 +602,9 @@ def analyze_2_channels(
             "RH": Ripley's H
             "RDF": Radial Distribution function
             "1NN": first nearest neighbor distance distribution
+            "OVP": overpopulation: The number of points there are more on
+                between r_i and r_i+1 than expected from the density
+                between r_-2 and r_-1, for each point, averaged over all points
         controltype : str
             the method of creating controls
             "CSRbin": draw random points from a previously generated mask,
@@ -614,6 +642,8 @@ def analyze_2_channels(
         K_exp = radial_distribution_function(exp_X1, exp_X2, radii, univariate)
     elif metric == "1NN":
         K_exp = first_nn(exp_X1, exp_X2, radii, univariate)
+    elif metric == "OVP":
+        K_exp = overpopulation(exp_X1, exp_X2, radii, univariate)
     else:
         raise NotImplementedError()
 
@@ -655,6 +685,8 @@ def analyze_2_channels(
             )
         elif metric == "1NN":
             K_csr.append(first_nn(X1_ctrl, X2_ctrl, radii, univariate))
+        elif metric == "OVP":
+            K_csr.append(overpopulation(X1_ctrl, X2_ctrl, radii, univariate))
         else:
             raise NotImplementedError()
     K_csr = np.array(K_csr)
@@ -712,6 +744,9 @@ def analyze_2_channels(
 
         K_exp_norm = norm_to_max_r(K_exp)
         K_csr_norm = np.array([norm_to_max_r(K_c) for K_c in K_csr])
+    elif normalization.lower() == "none":
+        K_exp_norm = K_exp.copy()
+        K_csr_norm = np.array(K_csr)
 
     # r_max = radii.max()
     # ripley_integral = np.trapz(K_exp_norm, radii) / r_max

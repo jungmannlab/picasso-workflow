@@ -292,9 +292,14 @@ def plot_scene(
     except ValueError as e:
         logger.error(f"Error plotting locs: {e}")
         nlocs = [len(locs) for locs in channel_locs]
-        ngroups = [len(np.unique(locs["group"])) for locs in channel_locs]
+        ngroups = [
+            len(np.unique(locs["group"])) if hasattr(locs, "group") else 0
+            for locs in channel_locs
+        ]
         logger.debug(f"#locs: {nlocs}; #groups{ngroups}")
         fig, ax = plt.subplots()
+        if fp is not None:
+            fig.savefig(fp)
         return fig, ax
     # overwrite default kwargs with input kwargs
     if render_kwargs is not None:
