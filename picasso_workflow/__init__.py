@@ -19,8 +19,9 @@ def config_logger():
     )
     job_id = os.getenv("SLURM_JOB_ID")  # Get the job ID from the environment
     rank_id = os.getenv("SLURM_PROCID")
+    os.makedirs("logs", exist_ok=True)
     file_handler = handlers.RotatingFileHandler(
-        f"picasso-workflow-job{job_id}-rank{rank_id}.log",
+        f"logs/picasso-workflow-job{job_id}-rank{rank_id}.log",
         maxBytes=1e6,
         backupCount=5,
     )
