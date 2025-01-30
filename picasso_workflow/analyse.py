@@ -5,7 +5,8 @@ Author: Heinrich Grabmayr
 Initial Date: March 7, 2024
 Description: This is the picasso interface of picasso-workflow
 """
-from picasso import lib, io, localize, gausslq, postprocess, clusterer, aim
+from picasso import lib, io, localize, gausslq, postprocess, clusterer
+from picasso import aim, gmm
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import os
@@ -23,14 +24,30 @@ import logging
 from datetime import datetime
 import yaml
 import pickle
+import random
+import string
+import copy
 
 from picasso_workflow import util
 from picasso_workflow import process_brightfield
-from picasso_workflow import picasso_outpost
+from picasso_workflow import picasso_outpost, outpost_modules
 from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
+from picasso_workflow.outpost_modules import render
 
 
 logger = logging.getLogger(__name__)
+
+
+def generate_random_code(length):
+    letters = string.ascii_letters
+    random_code = "".join(random.choices(letters, k=length))
+    return random_code
+
+
+def create_unique_filename(folder, fn, len_code=6):
+    rcode = generate_random_code(len_code)
+    fparts = os.path.split(fn)
+    return os.path.join(folder, f"{fparts[0]}_{rcode}{fparts[1]}")
 
 
 def module_decorator(method):
@@ -76,7 +93,10 @@ def module_decorator(method):
             results["end time"], "%y-%m-%d %H:%M:%S"
         ) - datetime.strptime(results["start time"], "%y-%m-%d %H:%M:%S")
         results["duration"] = td.total_seconds()
-        logger.debug(f"RESULTS: {results}")
+        # logger.debug(f"RESULTS: {results}")
+
+        # close all figures potentially still open
+        plt.close("all")
         return parameters, results
 
     return module_wrapper
@@ -878,6 +898,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the analysis results
         """
         pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        progress = parameters.get("progress", None)
 
         # dirty debug: picasso.aim.aim expects the existence of info[1]["Pixelsize"]
         self.info[1]["Pixelsize"] = pixelsize
@@ -888,23 +909,28 @@ class AutoPicasso(util.AbstractModuleCollection):
             segmentation=parameters["segmentation"],
             intersect_d=parameters["intersect_d"] / pixelsize,
             roi_r=parameters["roi_r"] / pixelsize,
+            progress=progress,
         )
 
         results["success"] = True
-        results["fp_driftfile"] = os.path.join(results["folder"], "drift.txt")
+        results["fp_driftfile"] = create_unique_filename(
+            results["folder"], "drift.txt"
+        )
         np.savetxt(results["fp_driftfile"], self.drift, delimiter=",")
         results["fp_fig"] = (
             os.path.splitext(results["fp_driftfile"])[0] + ".png"
         )
-        self._plot_drift(results["fp_fig"], parameters["dimensions"])
+        self._plot_drift(
+            results["fp_fig"], parameters["dimensions"], pixelsize
+        )
 
-        # save locs
-        if pars := parameters.get("save_locs"):
-            if "filename" in pars.keys():
-                pars["filename"] = os.path.join(
-                    results["folder"], pars["filename"]
-                )
-            self._save_locs(pars["filename"])
+        # # save locs
+        # if pars := parameters.get("save_locs"):
+        #     if "filename" in pars.keys():
+        #         pars["filename"] = os.path.join(
+        #             results["folder"], pars["filename"]
+        #         )
+        #     self._save_locs(pars["filename"])
 
         return parameters, results
 
@@ -936,6 +962,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             results : dict
                 the analysis results
         """
+        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+
         seg_init = parameters["segmentation"]
         for i in range(parameters.get("max_iter_segmentations", 3)):
             # if the segmentation is too low, the process raises an error
@@ -991,7 +1019,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 os.path.splitext(results["filepath_driftfile"])[0] + ".png"
             )
             self._plot_drift(
-                results["filepath_plot"], parameters["dimensions"]
+                results["filepath_plot"], parameters["dimensions"], pixelsize
             )
 
         # add info
@@ -1001,26 +1029,26 @@ class AutoPicasso(util.AbstractModuleCollection):
         }
         self.info = self.info + [new_info]
 
-        # save locs
-        if pars := parameters.get("save_locs"):
-            if "filename" in pars.keys():
-                pars["filename"] = os.path.join(
-                    results["folder"], pars["filename"]
-                )
-            self._save_locs(pars["filename"])
+        # # save locs
+        # if pars := parameters.get("save_locs"):
+        #     if "filename" in pars.keys():
+        #         pars["filename"] = os.path.join(
+        #             results["folder"], pars["filename"]
+        #         )
+        #     self._save_locs(pars["filename"])
 
         return parameters, results
 
-    def _plot_drift(self, filename, dimensions):
+    def _plot_drift(self, filename, dimensions, pixelsize):
         fig, ax = plt.subplots()
         frames = np.arange(self.drift.shape[0])
         for i, dim in enumerate(dimensions):
             if isinstance(self.drift, np.recarray):
-                ax.plot(frames, self.drift[dim], label=dim)
+                ax.plot(frames, self.drift[dim] * pixelsize, label=dim)
             else:
-                ax.plot(frames, self.drift[:, i], label=dim)
+                ax.plot(frames, self.drift[:, i] * pixelsize, label=dim)
         ax.set_xlabel("frame")
-        ax.set_ylabel("drift [px]")
+        ax.set_ylabel("drift [nm]")
         ax.set_title("drift graph")
         ax.legend()
         fig.savefig(filename)
@@ -1065,12 +1093,13 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @module_decorator
     def summarize_dataset(self, i, parameters, results):
+        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
                 try:
                     res, best_val = postprocess.nena(self.locs, self.info)
                     fp_plot = os.path.join(results["folder"], "nena.png")
-                    self._plot_nena(res, fp_plot)
+                    self._plot_nena(res, fp_plot, pixelsize)
                     all_best_vals = {
                         "a": res.best_values["a"],
                         "s": res.best_values["s"],
@@ -1078,9 +1107,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                         "dc": res.best_values["dc"],
                         "sc": res.best_values["sc"],
                     }
-                    pixelsize = self.analysis_config["camera_info"][
-                        "pixelsize"
-                    ]
                     results["nena"] = {
                         "res": str(all_best_vals),
                         "chisqr": res.chisqr,
@@ -1107,13 +1133,18 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
         return parameters, results
 
-    def _plot_nena(self, nena_result, filepath_plot):
+    def _plot_nena(self, nena_result, filepath_plot, pixelsize=None):
         fig, ax = plt.subplots()
         d = nena_result.userkws["d"]
+        if pixelsize is None:
+            xlabel = "Distance [px]"
+        else:
+            d = d * pixelsize
+            xlabel = "Distance [nm]"
         ax.set_title("Next frame neighbor distance histogram")
         ax.plot(d, nena_result.data, label="Data")
         ax.plot(d, nena_result.best_fit, label="Fit")
-        ax.set_xlabel("Distance [px]")
+        ax.set_xlabel(xlabel)
         ax.set_ylabel("Counts")
         ax.legend(loc="best")
         fig.savefig(filepath_plot)
@@ -1180,9 +1211,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters: dict
                 with required keys:
                     radius : float
-                        the dbscan radius
-                    min_density : float
-                        the dbscan min_density
+                        the dbscan radius, in nm
+                    min_samples : float
+                        the dbscan min_samples
+                    continue_with_centers : bool
+                        whether to keep the centers as locs for the next steps
                 and optional keys:
                     save_locs : bool
                         whether to save the locs into the results folder
@@ -1190,23 +1223,43 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        radius = parameters["radius"]
-        min_density = parameters["min_density"]
         pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        radius = parameters["radius"] / pixelsize
+        min_samples = parameters["min_samples"]
         # label locs according to clusters
-        self.locs = clusterer.dbscan(self.locs, radius, min_density, pixelsize)
+        self.locs = clusterer.dbscan(self.locs, radius, min_samples, pixelsize)
         dbscan_info = {
             "Generated by": "Picasso DBSCAN",
             "Radius": radius,
-            "Minimum local density": min_density,
+            "Minimum number of locs": min_samples,
             "Wrapped by": "picasso-workflow : dbscan",
         }
         self.info.append(dbscan_info)
-        filepath = os.path.join(results["folder"], "locs_dbscan.hdf5")
-        self._save_locs(filepath)
+        # results["fp_locs"] = os.path.join(
+        #     results["folder"], "locs_dbscan.hdf5"
+        # )
+        # self._save_locs(results["fp_locs"])
 
-        self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
-        logger.warning("saving cluster centeras as locs. Is that intended?")
+        # plot: histogram of cluster sizes
+        fig, ax = plt.subplots()
+        uniques, counts = np.unique(self.locs["group"], return_counts=True)
+        maxbin = int(np.quantile(counts, 0.95))
+        ax.hist(counts, bins=np.arange(maxbin))
+        ax.set_xlabel("cluster size [locs]")
+        ax.set_ylabel("Frequency")
+        results["fp_fig_clustersizes"] = os.path.join(
+            results["folder"], "fig_dbscan_clustersize.png"
+        )
+        fig.savefig(results["fp_fig_clustersizes"])
+
+        cluster_centers = clusterer.find_cluster_centers(self.locs, pixelsize)
+        results["fp_centers"] = os.path.join(
+            results["folder"], "centers_dbscan.hdf5"
+        )
+        io.save_locs(results["fp_centers"], cluster_centers, self.info)
+        if parameters["continue_with_centers"]:
+            self.locs = cluster_centers
+
         return parameters, results
 
     @module_decorator
@@ -1308,6 +1361,117 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         filepath = os.path.join(results["folder"], "cluster_smlm_centers.hdf5")
         self._save_locs(filepath)
+
+        return parameters, results
+
+    @module_decorator
+    def gaussian_mixture_cluster(self, i, parameters, results):
+        """Perform clustering using gaussian mixture modelsAfter this module,
+        the standard locs will be the Gaussian centers.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    locs : np.recarray
+                        Localizations.
+                    info : list
+                        Information dictionaries.
+                    min_locs : int
+                        Minimum number of localizations per component. Used to
+                        filter out components with too few localizations that
+                        likely  represent background.
+                    min_sigma : float
+                        Minimum standard deviation of the Gaussian components
+                        in nanometers. Useful for
+                        avoiding overfitting within a single localization
+                        cloud.
+                    max_sigma : float
+                        Maximum standard deviation of the Gaussian components
+                        in nanometers. Useful for
+                        avoiding fitting extra components fitting background.
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+                    max_rounds_without_best_bic : int
+                        (default=3)
+                        Maximum number of rounds without BIC improvement to
+                        terminate the optimal GMM search.
+                    bootstrap_check : bool (default=False)
+                        If True, the standard error of the means (SEM) is
+                        calculated using bootstrapping. If False, the standard,
+                        single Gaussian SEM is used as approximation.
+                    calibration : dict (default=None)
+                        Calibration dictionary with x and y coefficients, z
+                        step size and the number of frames. Only required for
+                        3D data.
+                    pixelsize : float (default=None)
+                        Camera pixel size in nm. Only required for 3D data.
+                    asynch : bool (default=True)
+                        If True, the GMM search is run in parallel using
+                        multiprocessing. If False, the GMM search is run
+                        without multiprocessing.
+                    callback_parent : function (default='silent')
+                        Callback function's parent object for displaying
+                        progress bar. If None, the progress bar displayed
+                        directly to the console. If 'silent', no progress
+                        is displayed
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        required_args = ["min_locs", "min_sigma", "max_sigma"]
+        optional_args = [
+            ("max_rounds_without_best_bic", 3),
+            ("bootstrap_check", None),
+            ("calibration", None),
+            ("pixelsize", None),
+            ("asynch", None),
+            ("callback_parent", "silent"),
+        ]
+        try:
+            kwargs = {k: parameters[k] for k in required_args}
+        except KeyError as e:
+            logger.error(
+                f"""All of the following arguments are required for
+                picasso.gmm.gmm_search: {required_args}"""
+            )
+            raise e
+        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        kwargs["min_sigma"] = kwargs["min_sigma"] * pixelsize
+        kwargs["max_sigma"] = kwargs["max_sigma"] * pixelsize
+        for oa, default in optional_args:
+            kwargs[oa] = parameters.get(oa, default)
+
+        center_locs, clustered_locs, gmm_info = gmm.gmm_search(
+            self.locs, self.info, **kwargs
+        )
+
+        if parameters.get("save_locs"):
+            fp_centers = os.path.join(results["folder"], "gmm_centers.hdf5")
+            io.save_locs(fp_centers, center_locs, gmm_info)
+            fp_centers = os.path.join(
+                results["folder"], "gmm_clustered_locs.hdf5"
+            )
+            io.save_locs(fp_centers, clustered_locs, gmm_info)
+
+        # plot: histogram of cluster sizes
+        fig, ax = plt.subplots()
+        maxbin = int(np.quantile(center_locs["n"], 0.95))
+        ax.hist(center_locs["n"], bins=np.arange(maxbin))
+        ax.set_xlabel("cluster size [locs]")
+        ax.set_ylabel("Frequency")
+        results["fp_fig_clustersizes"] = os.path.join(
+            results["folder"], "fig_gmm_clustersize.png"
+        )
+        fig.savefig(results["fp_fig_clustersizes"])
+
+        results["n_locs_in"] = len(self.locs)
+        results["n_locs_clustered"] = len(clustered_locs)
+        results["n_centers"] = len(center_locs)
+
+        self.locs = center_locs
+        self.info = gmm_info
 
         return parameters, results
 
@@ -1467,7 +1631,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # plot results
         ax.plot(rs, rdf * 1e3**d)
         ax.set_xlabel("Radius [nm]")
-        ax.set_ylabel(f"density [µm^{d}]")
+        ax.set_ylabel(f"density [µm^{-d}]")
         ax.set_title("Radial Distribution Function")
         return rs, rdf, density
 
@@ -1496,7 +1660,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # plot results
         ax.plot(rs, rdf * 1e3**d)
         ax.set_xlabel("Radius [nm]")
-        ax.set_ylabel(f"density [µm^{d}]")
+        ax.set_ylabel(f"density [µm^{-d}]")
         ax.set_title("Radial Distribution Function")
         return rs, rdf, density
 
@@ -1677,6 +1841,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["filepath"] = os.path.join(
             results["folder"], parameters["filename"]
         )
+        results["nlocs"] = len(self.locs)
         res = self._save_locs(results["filepath"])
         for k, v in res.items():
             results[k] = v
@@ -1768,6 +1933,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        rcode = generate_random_code(6)
         if parameters.get("filepaths"):
             self.channel_locs = []
             self.channel_info = []
@@ -1787,13 +1953,39 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             fiducial_locs = None
 
-        shifts, cum_shifts = picasso_outpost.align_channels(
-            self.channel_locs,
-            self.channel_info,
-            fiducial_locs=fiducial_locs,
-            **parameters.get("align_pars", {}),
+        results["fp_scene_locs_before"] = os.path.join(
+            results["folder"], f"locs_before_{rcode}.png"
+        )
+        render.plot_scene(
+            self.channel_locs, 100, 130, fp=results["fp_scene_locs_before"]
+        )
+        if fiducial_locs is not None:
+            results["fp_scene_fids_before"] = os.path.join(
+                results["folder"], f"fiducials_before_{rcode}.png"
+            )
+            fid_render_kwargs = {
+                "blur_method": "gaussian",
+                "min_blur_width": 2,
+            }
+            render.plot_scene(
+                fiducial_locs,
+                130,
+                130,
+                fp=results["fp_scene_fids_before"],
+                render_kwargs=fid_render_kwargs,
+            )
+
+        (shifts, cum_shifts, used_fiducials, algo_used) = (
+            picasso_outpost.align_channels(
+                self.channel_locs,
+                self.channel_info,
+                fiducial_locs=fiducial_locs,
+                **parameters.get("align_pars", {}),
+            )
         )
         results["shifts"] = cum_shifts[:, :, -1]
+        results["alignment_algorithm"] = algo_used
+        results["used_fiducials"] = used_fiducials
 
         fp_shifts = os.path.join(results["folder"], "shifts.txt")
         np.savetxt(fp_shifts, results["shifts"])
@@ -1804,6 +1996,35 @@ class AutoPicasso(util.AbstractModuleCollection):
             fig_filepath = os.path.join(results["folder"], fn)
             picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath
+
+        results["fp_scene_locs_after"] = os.path.join(
+            results["folder"], f"locs_after_{rcode}.png"
+        )
+        render.plot_scene(
+            self.channel_locs, 100, 130, fp=results["fp_scene_locs_after"]
+        )
+
+        if fiducial_locs is not None:
+            results["fp_scene_fids_after"] = os.path.join(
+                results["folder"], f"fiducials_after_{rcode}.png"
+            )
+            render.plot_scene(
+                fiducial_locs,
+                130,
+                130,
+                fp=results["fp_scene_fids_after"],
+                render_kwargs=fid_render_kwargs,
+            )
+            # save the potentially changed fiducials
+            fp_fiducials = []
+            for tag, flocs, finfo in zip(
+                self.channel_tags, fiducial_locs, fiducial_info
+            ):
+                fp_fiducials.append(
+                    os.path.join(results["folder"], f"{tag}_fiducials.hdf5")
+                )
+                io.save_locs(fp_fiducials[-1], flocs, finfo)
+            results["fp_fiducials"] = fp_fiducials
 
         # add info
         new_info = {
@@ -2235,7 +2456,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @module_decorator
     def ripleysk(self, i, parameters, results):
-        """Perforn Ripley's K analysis between the channels.
+        """Perforn Ripley's K analysis between the channels using
+        Magdalena's code.
         Args:
             parameters:
                 ripleys_n_random_controls : int
@@ -2326,14 +2548,241 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @module_decorator
+    def ripleysk2(self, i, parameters, results):
+        """Perforn Ripley's K analysis between the channels using
+        Rafal's code.
+        Args:
+            parameters:
+                ripleys_n_random_controls : int
+                    number of random controls, default: 100
+                ripleys_rmax : int
+                    the maximum radius, default 200
+                ripleys_dr : float
+                    the radius interval, default 5
+                radii : 1D np array
+                    the radius values. If given, ripleys_rmax and
+                    ripleys_dr are ignored.
+                ripleys_threshold : float
+                    the threshold of ripleys integrals above which the
+                    interaction is deemed significant.
+                area : float
+                    the cell area in µm^2
+                    optional. only used with controltype=CSR
+                fp_mask : str
+                    the filepath to the cell mask.
+                    optional, only used with CSR. can be binary or density mask
+                mask_pixel_size : float
+                    the pixel size of mask pixels (move to mask class which
+                    internally keeps this information)
+                    optional, only used with controltype=CSR
+                metric : str
+                    the type of analysis: 'RK' for the standard
+                    Ripley's K analysis, or 'RDF' for calculation of the
+                    radial distribution function instead of K, and random
+                    controls by relocating each point by a random x/y in a
+                    circle with the currently investigated r, which preserves
+                    the density fluctuations (instead of CSR simulation)
+                    Alternatively, "FRC" for fraction of molecular types
+                    within the radii.
+                controltype : str
+                    "CSR" or "RND". Control n_random_controls by either
+                    CSR simulation within the density mask, or randomizing
+                    the real data
+                randomization_radius : float
+                    for controltype "RND", the radius [nm] by which
+                    to randomize.
+                    optional.
+                shuffle_self : bool
+                    for metric "FRC", whether to shuffle only other types or
+                    also the self type
+                relocate_self : bool
+                    for metric "FRC", whether to relocate centerpoints to
+                    'type_self' after shuffling.
+                fraction_exclude
+                significance_threshold : float
+                    threshold above which heatmap entries are colored
+                normalization : str
+                edge_correction : bool
+                    if True, only locs further from mask edges than max radius
+                    are used for evaluation
+                showControlEnvelope : bool
+
+        """
+        nRandomControls = parameters.get("ripleys_n_random_controls", 100)
+        # radii = np.concatenate(
+        #     (
+        #         np.arange(0, 100, 2),
+        #         np.arange(100, parameters.get("ripleys_rmax", 200), 12),
+        #     )
+        # )
+        if (radii := parameters.get("radii")) is not None:
+            radii = np.array(radii)
+        else:
+            radii = np.concatenate(
+                (
+                    np.arange(
+                        0,
+                        parameters.get("ripleys_rmax", 200),
+                        parameters.get("ripleys_dr", 5),
+                    ),
+                )
+            )
+
+        # if isinstance(parameters["fp_combined_locs"], list):
+        #     fp_combined_locs = parameters["fp_combined_locs"][0]
+        # else:
+        #     fp_combined_locs = parameters["fp_combined_locs"]
+        # combined_locs, _ = io.load_locs(fp_combined_locs)
+
+        if fp_mask := parameters.get("fp_mask"):
+            # mask = np.load(fp_mask)
+            # mask = mask / np.sum(mask)
+            mask = outpost_modules.mask.CellMask.load(fp_mask)
+            area = mask.area
+            mask_pixel_size = mask._upsample
+        else:
+            mask = None
+            area = parameters.get("area", 1)
+            mask_pixel_size = 1
+        # mask_pixel_size = parameters.get("mask_pixel_size")
+
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+
+        if parameters.get("edge_correction"):
+            # make the mask smaller by the maximum radius, and apply
+            max_r = np.max(radii)
+            ec_mask = copy.copy(mask)
+            ec_mask.erode(max_r)
+            area = ec_mask.area
+            locs_used = [
+                ec_mask.apply_to_locs(locs) for locs in self.channel_locs
+            ]
+        else:
+            locs_used = self.channel_locs
+
+        mol_coords = [
+            outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
+            for mol in locs_used
+        ]
+
+        if parameters["metric"] == "FRC":
+            (ripley_matrix, fig_u, fig_n, curves, curves_norm) = (
+                outpost_modules.ripleys.typefraction_all_channels(
+                    mol_coords,
+                    radii,
+                    nRandomControls,
+                    names=self.channel_tags,
+                    shuffle_self=parameters.get("shuffle_self", False),
+                    relocate_self=parameters.get("relocate_self", False),
+                    fraction_exclude_self=parameters.get(
+                        "fraction_exclude_self", False
+                    ),
+                    normalize_to_bulkfraction=parameters.get(
+                        "normalize_to_bulkfraction", None
+                    ),
+                    showControlEnvelope=parameters.get(
+                        "showControlEnvelope", None
+                    ),
+                )
+            )
+        else:
+            (ripley_matrix, fig_u, fig_n, curves, curves_norm) = (
+                outpost_modules.ripleys.analyze_all_channels(
+                    mol_coords,
+                    mask,
+                    mask_pixel_size,
+                    area,
+                    radii,
+                    nRandomControls,
+                    names=self.channel_tags,
+                    metric=parameters["metric"],
+                    controltype=parameters.get("controltype"),
+                    randomization_radius=parameters.get(
+                        "randomization_radius"
+                    ),
+                    normalization=parameters.get("normalization"),
+                )
+            )
+
+        results["fp_curves"] = os.path.join(results["folder"], "curves.npy")
+        np.save(results["fp_curves"], curves)
+        results["fp_curves_norm"] = os.path.join(
+            results["folder"], "curves_norm.npy"
+        )
+        np.save(results["fp_curves_norm"], curves_norm)
+
+        # ripley_matrix = outpost_modules.ripleys.postprocess_ripley_matrix(
+        #     ripley_matrix, radii
+        # )
+
+        results["fp_ripleys_meanval"] = os.path.join(
+            results["folder"], "Ripleys_IntegralsMean.txt"
+        )
+        np.savetxt(results["fp_ripleys_meanval"], ripley_matrix)
+
+        rcode = generate_random_code(6)
+
+        results["fp_fig_ripleys_meanval"] = self._plot_ripleys_integrals(
+            ripley_matrix,
+            results["folder"],
+            self.channel_tags,
+            parameters["metric"],
+            parameters.get("controltype", "None"),
+            parameters.get("ripleys_threshold", 1),
+            suffix=rcode,
+            significance_threshold=parameters.get("significance_threshold", 1),
+        )
+        results["fp_fig_unnormalized"] = os.path.join(
+            results["folder"],
+            f"{parameters['metric']}_{parameters.get('controltype', 'None')}"
+            + f"_unnormalized_{rcode}.png",
+        )
+        fig_u.savefig(results["fp_fig_unnormalized"])
+        results["fp_fig_normalized"] = os.path.join(
+            results["folder"],
+            f"{parameters['metric']}_{parameters.get('controltype', 'None')}_"
+            + f"normalized_{rcode}.png",
+        )
+        fig_n.savefig(results["fp_fig_normalized"])
+
+        results["ripleys_significant"] = self._find_ripleys_significant(
+            ripley_matrix,
+            parameters.get("ripleys_threshold", 1),
+            self.channel_tags,
+        )
+
+        return parameters, results
+
     def _plot_ripleys_integrals(
-        self, ripleysMeanVal, folder, channel_tags, atype, std=None
+        self,
+        ripleysMeanVal,
+        folder,
+        channel_tags,
+        metric,
+        controltype,
+        threshold=None,
+        std=None,
+        suffix="",
+        significance_threshold=None,
     ):
         fig, ax = plt.subplots()
-        heatmap = ax.imshow(ripleysMeanVal, cmap="coolwarm_r", vmin=-1, vmax=1)
+        plot_ripleysMeanVal = ripleysMeanVal.copy()
+        if threshold is None:
+            threshold = 1
+        if significance_threshold is not None:
+            plot_ripleysMeanVal[
+                np.abs(plot_ripleysMeanVal) <= significance_threshold
+            ] = 0
+        heatmap = ax.imshow(
+            plot_ripleysMeanVal,
+            cmap="coolwarm_r",
+            vmin=-threshold,
+            vmax=threshold,
+        )
         ax.grid(False)
-        ax.set_xticks(np.arange(ripleysMeanVal.shape[0]))
-        ax.set_yticks(np.arange(ripleysMeanVal.shape[1]))
+        ax.set_xticks(np.arange(plot_ripleysMeanVal.shape[0]))
+        ax.set_yticks(np.arange(plot_ripleysMeanVal.shape[1]))
         # Add number annotations to cells
         for i in range(ripleysMeanVal.shape[0]):
             for j in range(ripleysMeanVal.shape[1]):
@@ -2351,9 +2800,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
         ax.set_xticklabels(channel_tags, rotation=45)
         ax.set_yticklabels(channel_tags, rotation=45)
-        ax.set_title("Ripleys Mean Value")
-        plt.colorbar(heatmap, format="%.2f")
-        fp_integrals = os.path.join(folder, f"{atype}_ripleysMeanVal.png")
+        ax.set_title(f"Mean Value - {metric} normalized to {controltype}")
+        cbar = plt.colorbar(heatmap, format="%.2f")
+        cbar.set_label("z-score [95% ci intervals]", rotation=90, labelpad=15)
+        fp_integrals = os.path.join(
+            folder, f"{metric}_{controltype}_ripleysMeanVal_{suffix}.png"
+        )
         fig.set_size_inches((9, 7))
         fig.savefig(fp_integrals)
         return fp_integrals
@@ -2363,6 +2815,8 @@ class AutoPicasso(util.AbstractModuleCollection):
     ):
         # elucidate significant pairs
         significant_pairs = []
+        if threshold is None:
+            return significant_pairs
         for i in range(len(channel_tags)):
             for j in range(i, len(channel_tags)):
                 if ripleysIntegrals[i, j] > threshold:
@@ -2521,6 +2975,272 @@ class AutoPicasso(util.AbstractModuleCollection):
             with open(fp, "w") as f:
                 yaml.dump(significant_pairs, f)
             # np.savetxt(fp, significant_pairs)
+
+        return parameters, results
+
+    @module_decorator
+    def ripleysk_average2(self, i, parameters, results):
+        """Average the results of multiple Ripley's K Analyses, analyse
+        the significant pairs after averaging, and save them into the
+        separate workflow manual folders (for further analysis there)
+        Args:
+            parameters:
+                # fp_ripleys_integrals : list of str
+                #     the various single analyses to average, e.g. of
+                #     different workflows
+                fp_workflows : list of str
+                    the paths to the folders of separate workflows
+                    where the separate ripleys analyses have been done
+                report_names : list of str
+                    the report names of those worklfows
+                ripleys_threshold : float
+                    the threshold of ripleys integrals above which the
+                    interaction is deemed significant.
+                metric : str
+                    the type of analysis: 'RK' for the standard
+                    Ripley's K analysis, or 'RDF' for calculation of the
+                    radial distribution function instead of K, and random
+                    controls by relocating each point by a random x/y in a
+                    circle with the currently investigated r, which preserves
+                    the density fluctuations (instead of CSR simulation)
+                controltype : str
+                    "CSR" or "RND". Control n_random_controls by either
+                    CSR simulation within the density mask, or randomizing
+                    the real data
+                randomization_radius : float
+                    for controltype "RND", the radius [nm] by which to randomize.
+                # output_folders : list of str
+                #     folders to write the significant pairs into. This can
+                #     e.g. be the 'manual' results folders of the
+                #     workflows, so these can proceed.
+            optional:
+                swkfl_ripleysk_key : str
+                    the results key of the ripleysk module.
+                    e.g. '05_ripleysk'
+                swkfl_manual_key : str
+                    the results key of the manual module to save the
+                    integrals to
+                if those two are not given, saving is not performed
+        """
+        # from picasso_workflow.workflow import WorkflowRunner
+
+        # all_integrals = np.concat(
+        #     [np.loadtxt(fp) for fp in parameters["fp_ripleys_integrals"]])
+        # averaged_integrals = np.mean(all_integrals, axis=0)
+
+        # check single intregals based on workflow file
+        fp_ripleys_meanvals = []  # [""] * len(parameters["fp_workflows"])
+        fp_curves = []
+        fp_curves_norm = []
+
+        channel_tags = None
+
+        # load single dataset results
+        search_dict = {
+            (
+                parameters["swkfl_ripleysk_key"],
+                "fp_ripleys_meanval",
+            ): fp_ripleys_meanvals,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "fp_curves",
+            ): fp_curves,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "fp_curves_norm",
+            ): fp_curves_norm,
+        }
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_dict.keys()
+            )
+            for key, res in loaded_data.items():
+                search_dict[key].append(res)
+
+            # make sure all channel tags (e.g. protein names)
+            # are the same across workflows to be merged
+            if channel_tags is None:
+                channel_tags = wf_channel_tags
+            else:
+                if channel_tags != wf_channel_tags:
+                    raise KeyError(
+                        "Loaded datasets have different channel tags!"
+                    )
+
+        # load single dataset parameters
+        ripleys_thresholds = []
+        ripleys_metrics = []
+        ripleys_controltypes = []
+        ripleys_radii = []
+        significance_thresholds = []
+        search_dict = {
+            (
+                parameters["swkfl_ripleysk_key"],
+                "ripleys_threshold",
+            ): ripleys_thresholds,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "metric",
+            ): ripleys_metrics,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "controltype",
+            ): ripleys_controltypes,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "radii",
+            ): ripleys_radii,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "significance_threshold",
+            ): significance_thresholds,
+        }
+        for folder, name in zip(
+            parameters["fp_workflows"], parameters["report_names"]
+        ):
+            loaded_data, wf_channel_tags = self._load_other_workflow_data(
+                folder, name, search_parameter_keys=search_dict.keys()
+            )
+            for key, res in loaded_data.items():
+                search_dict[key].append(res)
+        # check that all thresholds, metrics and controltypes are the same
+        ripleys_threshold = set(ripleys_thresholds)
+        if len(ripleys_threshold) > 1:
+            raise ValueError(
+                "All ripleys_threshold values should be the same, but "
+                + f"got: {ripleys_thresholds}"
+            )
+        ripleys_threshold = ripleys_thresholds[0]
+        ripleys_metric = set(ripleys_metrics)
+        if len(ripleys_metric) > 1:
+            raise ValueError(
+                "All ripleys_metric values should be the same, but "
+                + f"got: {ripleys_metrics}"
+            )
+        ripleys_metric = ripleys_metrics[0]
+        ripleys_controltype = set(ripleys_controltypes)
+        if len(ripleys_controltype) > 1:
+            raise ValueError(
+                "All ripleys_controltype values should be the same, but "
+                + f"got: {ripleys_controltypes}"
+            )
+        ripleys_controltype = ripleys_controltypes[0]
+
+        ripleys_radii = ripleys_radii[0]
+
+        significance_threshold = significance_thresholds[0]
+
+        # load and plot the single curves
+        fig_curves, ax_curves = outpost_modules.ripleys.init_plot(
+            len(channel_tags),
+            "un-normalized",
+            ripleys_controltype,
+            ripleys_metric,
+            figsize_per_target=5,
+        )
+        fig_curves_norm, ax_curves_norm = outpost_modules.ripleys.init_plot(
+            len(channel_tags),
+            "normalized",
+            ripleys_controltype,
+            ripleys_metric,
+            figsize_per_target=5,
+        )
+        for fp_curve, fp_curve_norm, reportname in zip(
+            fp_curves, fp_curves_norm, parameters["report_names"]
+        ):
+            curves = np.load(fp_curve)
+            curves_norm = np.load(fp_curve_norm)
+            for i, name1 in enumerate(channel_tags):
+                for j, name2 in enumerate(channel_tags):
+                    outpost_modules.ripleys.plot_ripleys(
+                        ripleys_radii,
+                        curves[i, j, :],
+                        None,
+                        ci=0.95,
+                        normalized=False,
+                        showControls=False,
+                        title=f"{name1} -> {name2}",
+                        labelFontsize=30,
+                        axes=ax_curves[i, j],
+                        metric=ripleys_metric,
+                        label_data=reportname,
+                        showControlEnvelope=False,
+                    )
+                    outpost_modules.ripleys.plot_ripleys(
+                        ripleys_radii,
+                        curves_norm[i, j, :],
+                        None,
+                        ci=0.95,
+                        normalized=True,
+                        showControls=False,
+                        title=f"{name1} -> {name2}",
+                        labelFontsize=30,
+                        axes=ax_curves_norm[i, j],
+                        metric=ripleys_metric,
+                        label_data=reportname,
+                        showControlEnvelope=False,
+                    )
+                    if i < len(channel_tags) - 1:
+                        ax_curves[i, j].xaxis.label.set_visible(False)
+                        ax_curves_norm[i, j].xaxis.label.set_visible(False)
+                        ax_curves[i, j].set_xticks([])
+                        ax_curves_norm[i, j].set_xticks([])
+                    if j > 0:
+                        ax_curves[i, j].yaxis.label.set_visible(False)
+                        ax_curves_norm[i, j].yaxis.label.set_visible(False)
+
+        rcode = generate_random_code(6)
+        results["fp_fig_unnormalized"] = os.path.join(
+            results["folder"],
+            f"{ripleys_metric}_{ripleys_controltype}_{rcode}"
+            + "_unnormalized.png",
+        )
+        fig_curves.savefig(results["fp_fig_unnormalized"])
+        results["fp_fig_normalized"] = os.path.join(
+            results["folder"],
+            f"{ripleys_metric}_{ripleys_controltype}_{rcode}_"
+            + "normalized.png",
+        )
+        fig_curves_norm.savefig(results["fp_fig_normalized"])
+
+        # load and average the integrals
+        all_integrals = np.stack(
+            [np.loadtxt(fp) for fp in fp_ripleys_meanvals]
+        )
+        averaged_integrals = np.nanmean(all_integrals, axis=0)
+        std_integrals = np.nanstd(all_integrals, axis=0)
+
+        # save into own results folder
+        results["fp_ripleys_meanvals"] = os.path.join(
+            results["folder"], "Ripleys_MeanVals.txt"
+        )
+        np.savetxt(results["fp_ripleys_meanvals"], averaged_integrals)
+
+        results["fp_figmeanvals"] = self._plot_ripleys_integrals(
+            averaged_integrals,
+            results["folder"],
+            channel_tags,
+            ripleys_metric,
+            ripleys_controltype,
+            ripleys_threshold,
+            std=std_integrals,
+            suffix=rcode,
+            significance_threshold=significance_threshold,
+        )
+
+        significant_pairs = self._find_ripleys_significant(
+            averaged_integrals, ripleys_threshold, channel_tags
+        )
+        results["ripleys_significant"] = significant_pairs
+
+        # save significant pairs into given folders
+        results["fp_ripleys_significant"] = os.path.join(
+            results["folder"], "significant_pairs.txt"
+        )
+        with open(results["fp_ripleys_significant"], "w") as f:
+            yaml.dump(significant_pairs, f)
 
         return parameters, results
 
@@ -2963,6 +3683,11 @@ class AutoPicasso(util.AbstractModuleCollection):
     @module_decorator
     def create_mask(self, i, parameters, results):
         """
+        This is Susanne's implementation of calculating a cell mask,
+        written (ni part?) for the initial version of the DC-Atlas.
+        May be obsolete with create_mask2, but kept for backwards
+        compatibility. To be deprecated on the long run.
+
         Args:
             i : int
                 the index of the module
@@ -3068,6 +3793,147 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     @module_decorator
+    def create_mask2(self, i, parameters, results):
+        """
+        This is Rafal's implementation of cell masking, written for the
+        3rd version of the DC Atlas. It is (mostly?) identical with an
+        implementation of it in spinna, which will be integrated into
+        picasso soon. Evaluate deprecation (or moving source from
+        outpost_modules/ripleys to picasso/spinna) at that time.
+
+        the locs must be protein positions at this stage.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    binsize : float
+                        the bin size in nanometers. A good value is 20
+                    blursize : float
+                        the gaussian blur to apply in nanometers.
+                        A good value is 400
+                    mask_pixel_size : float
+                        the pixelsize of the final mask, in nanometers.
+                        Often used: 10
+                    threshold : float
+                        the threshold value below which the mask is set
+                        to zero. For example 1 / 3
+                    binary : boolean
+                        whether to create a binary or density mask
+                    select_cell : boolean
+                        whether to select the largest connected component,
+                        assumed to be the cell of interest.
+                    fill_holes : boolean
+                        whether to fill holes in the cell mask
+                    dilate_nm : float
+                        the nanometers to dilate the mask (useful if a large
+                        threshold has been used)
+                    apply_to_locs : boolean
+                        whether to drop all localizations outside the area
+                and optional keys:
+                    fp_combined_locs : str default: None or ''
+                        filepath to the locs combined in 'combine_channels'
+                        module. If None or '', loaded channel_locs is used
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    combine_col : str
+                        the name of the combine column, e.g. 'combine_id'
+                        or 'protein'. Same as used in 'combine_channels' module
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        # # get map
+        # with open(parameters["fp_channel_map"], "r") as f:
+        #     channel_map = yaml.safe_load(f)
+        # locs for the mask are the combined locs
+        fp_combined_locs = parameters.get("fp_combined_locs", None)
+        if fp_combined_locs:
+            if isinstance(parameters["fp_combined_locs"], list):
+                fp_combined_locs = parameters["fp_combined_locs"][0]
+            else:
+                fp_combined_locs = parameters["fp_combined_locs"]
+            combined_locs, combined_info = io.load_locs(fp_combined_locs)
+            mols = [combined_locs]
+        else:
+            mols = [locs for locs in self.channel_locs]
+
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+
+        # mol_coords = [
+        #     outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
+        #     for mol in mols
+        # ]
+        binsize = parameters["binsize"]
+        blursize = parameters["blursize"]
+        # blur = parameters["blursize"] / binsize
+        threshold = parameters["threshold"]
+        mask_pixel_size = parameters["mask_pixel_size"]
+        # binary = parameters["binary"]
+        cell_mask = outpost_modules.mask.CellMask.from_mol_coords(
+            mols,
+            pixelsize,
+            binsize,
+            blursize,
+            threshold,
+            upsample=mask_pixel_size,
+        )
+        if parameters.get("select_cell"):
+            kwargs = {}
+            if fill_holes := parameters.get("fill_holes"):
+                kwargs["fill_holes"] = fill_holes
+            cell_mask.filter_mask(**kwargs)
+        if dilate_nm := parameters.get("dilate_nm"):
+            cell_mask.dilate(dilate_nm)
+        if parameters.get("apply_to_locs"):
+            self.channel_locs = [
+                cell_mask.apply_to_locs(locs) for locs in self.channel_locs
+            ]
+        area = cell_mask.area
+
+        # mask, area = outpost_modules.ripleys.get_cell_mask(
+        #     mol_coords,
+        #     pixelsize,
+        #     binsize=binsize,
+        #     blur=blur,
+        #     threshold=threshold,
+        #     upsample=mask_pixel_size,
+        #     binary=binary,
+        # )
+        # if parameters.get("select_cell"):
+        #     mask = outpost_modules.ripleys.filter_mask(mask)
+
+        results["area"] = area
+        # results["fp_mask"] = os.path.join(
+        #     results["folder"], f"mask_binary-{binary}.npy"
+        # )
+        # np.save(results["fp_mask"], mask)
+        results["fp_mask"] = os.path.join(results["folder"], "mask.pkl")
+        cell_mask.save(results["fp_mask"])
+        results["mask_pixel_size"] = mask_pixel_size
+
+        rcode = generate_random_code(6)
+        # results["fp_fig_mask"] = os.path.join(
+        #     results["folder"], f"mask_binary-{binary}_{rcode}.png"
+        # )
+        # outpost_modules.ripleys.plot_mask(
+        #     mask, mask_pixel_size, results["fp_fig_mask"]
+        # )
+        results["fp_fig_mask_binary"] = os.path.join(
+            results["folder"], f"mask_binary_{rcode}.png"
+        )
+        cell_mask.plot_mask(results["fp_fig_mask_binary"], binary=True)
+        results["fp_fig_mask_density"] = os.path.join(
+            results["folder"], f"mask_density_{rcode}.png"
+        )
+        cell_mask.plot_mask(results["fp_fig_mask_density"], binary=False)
+
+        return parameters, results
+
+    @module_decorator
     def dbscan_molint(self, i, parameters, results):
         """TO BE CLEANED UP
         dbscan implementation for molecular interactions workflow
@@ -3126,7 +3992,13 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    def _load_other_workflow_data(self, fp_workflow, report_name, search_keys):
+    def _load_other_workflow_data(
+        self,
+        fp_workflow,
+        report_name,
+        search_keys=None,
+        search_parameter_keys=None,
+    ):
         """Load result data from a different workflow
         Args:
             fp_workflow : str
@@ -3136,6 +4008,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 workflow result data will be in
                 fp_workflow/report_name_[postfix]
             search_keys : tuple of
+                1st : str
+                    the module keys (e.g. '04_manual')
+                2nd : str
+                    the result entries (e.g. 'filepath')
+                set this None or search_parameter_keys None
+            search_parameter_keys: tuple of
                 1st : str
                     the module keys (e.g. '04_manual')
                 2nd : str
@@ -3165,12 +4043,27 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         with open(fp_wr_cfg, "r") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
-        # check for results of the modules
-        for mod_key, mod_res in data["results"].items():
-            for search_mod, search_res in search_keys:
-                if mod_key == search_mod:
-                    res = mod_res[search_res]
-                    loaded_data[(search_mod, search_res)] = res
+        if search_keys is not None:
+            # check for results of the modules
+            for mod_key, mod_res in data["results"].items():
+                for search_mod, search_res in search_keys:
+                    if mod_key == search_mod:
+                        res = mod_res[search_res]
+                        loaded_data[(search_mod, search_res)] = res
+        elif search_parameter_keys is not None:
+            # check for parameters of the modules
+            for i, (module_name, module_pars) in enumerate(
+                data["workflow_modules"]
+            ):
+                for search_module, search_parname in search_parameter_keys:
+                    search_i, search_name = search_module.split("_")
+                    search_i = int(search_i)
+                    if search_i == i and search_name == module_name:
+                        parameter_val = module_pars.get(search_parname)
+                        loaded_data[(search_module, search_parname)] = (
+                            parameter_val
+                        )
+
         # find AggregationWorkflowRunner config
         fp_wr_cfg = os.path.join(
             fp_workflow,
@@ -3860,7 +4753,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Not engouh gold particles found. Skipping further undrifting
                 steps for this file" continue without gold undrifting"""
             )
-            gold_locs = self.locs
+            dtypes = self.locs.dtype
+            gold_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
+            nongold_locs = self.locs
         else:
             # function needs to return the locs in a r radius around the gold
             # coordinates
@@ -3927,7 +4822,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         picked_locs, info = io.load_locs(parameters["fp_picked_locs"])
         # with open(parameters["fp_picked_locs"], "rb") as f:
         #     result = pickle.load(f)
-        
+
         if not isinstance(picked_locs, list):
             # picked locs are saved as one recarray, with the 'group' the pick
             groups = np.unique(picked_locs["group"])
@@ -3951,9 +4846,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig.savefig(fp_fig)
         plt.close(fig)
 
-        fp_locs = os.path.join(results["folder"], "locs.hdf5")
-        results["fp_locs"] = fp_locs
-        self._save_locs(fp_locs)
+        # fp_locs = os.path.join(results["folder"], "locs.hdf5")
+        # results["fp_locs"] = fp_locs
+        # self._save_locs(fp_locs)
         return parameters, results
 
     @module_decorator
@@ -3964,29 +4859,79 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the index of the module
             parameters: dict
                 with required keys:
-                    field : str
-                        the field to filter on
-                    minval : dtype of field
-                        the minimum value to accept
-                    maxval : dtype of field
-                        the maximum value to accept
+                    field : str or list of str
+                        the field(s) to filter on
+                    minval : dtype of field (or list of it)
+                        the minimum value(s) to accept
+                    maxval : dtype of field (or list of it)
+                        the maximum value(s) to accept
                 and optional keys:
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        field = parameters["field"]
-        xmin = parameters["minval"]
-        xmax = parameters["maxval"]
-        self.locs = self.locs[
-            (self.locs[field] >= xmin) & (self.locs[field] <= xmax)
-        ]
+        all_field = parameters["field"]
+        all_xmin = parameters["minval"]
+        all_xmax = parameters["maxval"]
+        if isinstance(all_field, str):
+            all_field = [all_field]
+            all_xmin = [all_xmin]
+            all_xmax = [all_xmax]
 
-        fp_locs = os.path.join(results["folder"], "locs.hdf5")
-        results["fp_locs"] = fp_locs
-        self._save_locs(fp_locs)
+        results["nlocs_before"] = len(self.locs)
+        # plot heatmaps before filtering
+        fig, ax = self.plot_heatmaps(all_field)
+        results["fp_fig_before"] = os.path.join(
+            results["folder"], f"hist_before_{i:02d}.png"
+        )
+        fig.savefig(results["fp_fig_before"])
+
+        # filter
+        for field, xmin, xmax in zip(all_field, all_xmin, all_xmax):
+            self.locs = self.locs[
+                (self.locs[field] >= xmin) & (self.locs[field] <= xmax)
+            ]
+
+        results["nlocs_after"] = len(self.locs)
+        # plot heatmaps after filtering
+        fig, ax = self.plot_heatmaps(all_field)
+        results["fp_fig_after"] = os.path.join(
+            results["folder"], f"hist_after_{i:02d}.png"
+        )
+        fig.savefig(results["fp_fig_after"])
+
+        # fp_locs = os.path.join(results["folder"], "locs.hdf5")
+        # results["fp_locs"] = fp_locs
+        # self._save_locs(fp_locs)
 
         return parameters, results
+
+    def plot_heatmaps(self, fields):
+        """Plot headmaps between all tuples of fields given
+
+        Args:
+            fields : list of str
+
+        Returns:
+            fig, ax: fig and ax of all tuples of fields
+        """
+        if len(fields) == 1:
+            fig, ax = plt.subplots()
+            picasso_outpost.plot_1dhist(self.locs, fields[0], fig, ax)
+        else:
+            fig, ax = plt.subplots(
+                nrows=len(fields) - 1, ncols=len(fields) - 1, squeeze=False
+            )
+            for i, field_x in enumerate(fields[:-1]):
+                for j, field_y in enumerate(fields[i + 1 :]):
+                    picasso_outpost.plot_2dhist(
+                        self.locs, field_x, field_y, fig, ax[i, j]
+                    )
+                # if i > 0:
+                #     for j in range(len(fields) - i, len(fields) - 1):
+                #         ax[i, j].axis("off")
+
+        return fig, ax
 
     @module_decorator
     def link_locs(self, i, parameters, results):
@@ -4015,9 +4960,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         }
         self.info.append(link_info)
 
-        fp_locs = os.path.join(results["folder"], "locs.hdf5")
-        results["fp_locs"] = fp_locs
-        self._save_locs(fp_locs)
+        # fp_locs = os.path.join(results["folder"], "locs.hdf5")
+        # results["fp_locs"] = fp_locs
+        # self._save_locs(fp_locs)
 
         return parameters, results
 

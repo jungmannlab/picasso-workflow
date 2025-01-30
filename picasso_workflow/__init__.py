@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 import logging
+import os
 from logging import handlers
 from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
 from picasso_workflow import standard_singledataset_workflows
@@ -16,8 +17,13 @@ def config_logger():
     formatter = logging.Formatter(
         "%(asctime)s | %(name)s | %(funcName)s | %(levelname)s -> %(message)s"
     )
+    job_id = os.getenv("SLURM_JOB_ID")  # Get the job ID from the environment
+    rank_id = os.getenv("SLURM_PROCID")
+    os.makedirs("logs", exist_ok=True)
     file_handler = handlers.RotatingFileHandler(
-        "picasso-workflow.log", maxBytes=1e6, backupCount=5
+        f"logs/picasso-workflow-job{job_id}-rank{rank_id}.log",
+        maxBytes=1e6,
+        backupCount=5,
     )
     file_handler.setFormatter(formatter)
     file_handler.setLevel(logging.DEBUG)

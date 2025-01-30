@@ -12,6 +12,7 @@ import logging
 import inspect
 import yaml
 import copy
+from concurrent.futures import ProcessPoolExecutor
 
 from picasso_workflow.analyse import AutoPicasso, AutoPicassoError
 from picasso_workflow.confluence import (
@@ -62,6 +63,7 @@ class AggregationWorkflowRunner:
         else:
             self.postfix = datetime.now().strftime("%y%m%d-%H%M")
         self.continue_workflow = False
+        self.single_workflow_parallel = False
         self.sgl_workflow_locations = []
         self.cpage_names = []
 
@@ -73,6 +75,7 @@ class AggregationWorkflowRunner:
         aggregation_workflow,
         postfix=None,
         continue_previous_runner=False,
+        single_workflow_parallel=False,
     ):
         """To keep flexibility for initialization methods, this is not
         done in __init__. This way in the future, we can instantiate
@@ -126,6 +129,7 @@ class AggregationWorkflowRunner:
                 "single_dataset_tileparameters"."""
             )
         instance = cls(postfix)
+        instance.single_workflow_parallel = single_workflow_parallel
         instance.parameter_tiler = ParameterTiler(instance, sgltilepars)
         instance.all_results = {
             "single_dataset": [None] * instance.parameter_tiler.ntiles,
@@ -228,6 +232,11 @@ class AggregationWorkflowRunner:
         sgl_wkfl_analysis_config = copy.deepcopy(self.analysis_config)
 
         sgl_dataset_success = [None] * len(tags)
+        if self.single_workflow_parallel:
+            wrs = []
+            tasks = []
+            futures = []
+            executor = ProcessPoolExecutor()
         for i, (parameter_set, tag) in enumerate(
             zip(individual_parametersets, tags)
         ):
@@ -275,10 +284,21 @@ class AggregationWorkflowRunner:
                     postfix=self.postfix,
                 )
             self.cpage_names.append(wr.reporter_config["report_name"])
-            sgl_dataset_success[i] = wr.run()
-            self.all_results["single_dataset"][i] = wr.results
-            self.sgl_workflow_locations.append(wr.result_folder)
-            self.save(self.result_folder)
+            if not self.single_workflow_parallel:
+                sgl_dataset_success[i] = wr.run()
+                self.all_results["single_dataset"][i] = wr.results
+                self.sgl_workflow_locations.append(wr.result_folder)
+                self.save(self.result_folder)
+            else:
+                future = executor.submit(wr.run)
+                futures.append(future)
+        if self.single_workflow_parallel:
+            for i, task in enumerate(tasks):
+                sgl_dataset_success[i] = futures[i].result()
+                self.all_results["single_dataset"][i] = wrs[i].results
+                self.sgl_workflow_locations.append(wrs[i].result_folder)
+                self.save(self.result_folder)
+            executor.shutdown()
 
         if not all(sgl_dataset_success):
             msg = (
@@ -332,7 +352,7 @@ class AggregationWorkflowRunner:
                     postfix=self.postfix,
                 )
         else:
-            logger.debug("not dontinuing workflow.starting new.")
+            logger.debug("not continuing workflow.starting new.")
             wr = WorkflowRunner.config_from_dicts(
                 agg_reporter_config,
                 agg_analysis_config,
@@ -342,6 +362,7 @@ class AggregationWorkflowRunner:
         self.cpage_names.append(wr.reporter_config["report_name"])
         wr.run()
         self.all_results["aggregation"] = wr.results
+        self.save(self.result_folder)
 
     def save(self, dirn="."):
         """Save the current config and results into
@@ -521,7 +542,7 @@ class WorkflowRunner:
         self.report_name = reporter_config["report_name"]
         if init_kwargs := reporter_config.get("ConfluenceReporter"):
             init_kwargs["report_name"] = self.report_name
-            logger.debug(init_kwargs)
+            # logger.debug(init_kwargs)
             self.confluencereporter = ConfluenceReporter(**init_kwargs)
 
     def run(self):
@@ -610,8 +631,8 @@ class WorkflowRunner:
             "analysis_config": pce.run(self.analysis_config),
             "workflow_modules": pce.run(self.workflow_modules),
         }
-        logger.debug("saving data:")
-        logger.debug(str(data))
+        # logger.debug("saving data:")
+        # logger.debug(str(data))
         with open(filepath, "w") as f:
             yaml.dump(data, f)
 
@@ -703,10 +724,14 @@ class WorkflowRunner:
         try:
             parameters, self.results[key] = fun_ap(i, parameters)
         except AutoPicassoError as e:
-            self.results[key]["success"] = False
             logger.error(e)
+            self.confluencereporter.report_error(e, fun_name)
             raise e
-        logger.debug(f"RESULTS: {self.results[key]}")
+        except Exception as e:
+            logger.error(e)
+            self.confluencereporter.report_error(e, fun_name)
+            raise e
+        # logger.debug(f"RESULTS: {self.results[key]}")
         fun_cr = getattr(self.confluencereporter, fun_name)
         try:
             fun_cr(i, parameters, self.results[key])

@@ -123,6 +123,11 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def gaussian_mixture_cluster(self):
+        """Perform clustering using gaussian mixture models"""
+        pass
+
+    @abc.abstractmethod
     def nneighbor(self):
         """Calculate Nearest Neighbor distances"""
         pass
@@ -190,7 +195,15 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def ripleysk2(self):
+        pass
+
+    @abc.abstractmethod
     def ripleysk_average(self):
+        pass
+
+    @abc.abstractmethod
+    def ripleysk_average2(self):
         pass
 
     @abc.abstractmethod
@@ -203,6 +216,11 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def create_mask(self):
+        """Create a density mask"""
+        pass
+
+    @abc.abstractmethod
+    def create_mask2(self):
         """Create a density mask"""
         pass
 
@@ -312,6 +330,8 @@ class DictSimpleTyper:
             res = self.scan_tuple(itrbl)
         elif isinstance(itrbl, np.ndarray):
             res = self.scan_ndarray(itrbl)
+        # elif isinstance(itrbl, np.core.multiarray):
+        #     res = self.scan_ndarray(itrbl)
         elif isinstance(itrbl, np.generic):
             if self.to_simple_type:
                 res = float(itrbl)
@@ -320,8 +340,25 @@ class DictSimpleTyper:
         return res
 
     def scan_dict(self, d):
+        addl_items = {}
         for k, v in d.items():
-            d[k] = self.scan(v)
+            result = self.scan(v)
+            # not elegant, but should work: In case this is a
+            # ParameterCommandExecutor, keep the original commands
+            # commands are always tuples and reside in dicts
+            # and return dicts with 'original' and 'parsed' keys
+            if (
+                isinstance(v, tuple)
+                and isinstance(result, dict)
+                and "parsed" in result.keys()
+                and "original" in result.keys()
+            ):
+                d[k] = result["parsed"]
+                addl_items[f"{k}_originalnocmd"] = result["original"]
+            else:
+                d[k] = result
+        for k, v in addl_items.items():
+            d[k] = v
         return d
 
     def scan_list(self, li, root_level=False):
@@ -457,7 +494,9 @@ class ParameterCommandExecutor(DictSimpleTyper):
                         + "arithmetic expression."
                     )
                 res = eval(str(res) + aritexp)
-            return res
+            # to deactivate, leave out ocmmand sign
+            t_out = tuple([t[0][len(self.command_sign) :], t[1]])
+            return {"parsed": res, "original": t_out}
         else:
             # it's just a normal tuple
             tout = []
@@ -488,14 +527,14 @@ class ParameterCommandExecutor(DictSimpleTyper):
             if att_name == f"{self.command_sign}all":
                 # root_att is a list, and all items should be equally processed
                 # in the next rounds
-                logger.debug(f"Leaving {root_att}, to get all.")
+                # logger.debug(f"Leaving {root_att}, to get all.")
                 pass
             else:
                 try:
                     if isinstance(root_att, list):
-                        logger.debug(
-                            f"Getting all {att_name} attributes of {root_att}"
-                        )
+                        # logger.debug(
+                        #     f"Getting all {att_name} attributes of {root_att}"
+                        # )
                         root_att = [
                             self.get_attribute(list_att, att_name)
                             for list_att in root_att
@@ -509,7 +548,7 @@ class ParameterCommandExecutor(DictSimpleTyper):
                         + f"workflow {self.command_sign}get_prior_result "
                         + "argument."
                     )
-        logger.debug(f"Prior Result of {locator} is {root_att}")
+        # logger.debug(f"Prior Result of {locator} is {root_att}")
         return root_att
 
     def get_previous_module_result(self, locator):

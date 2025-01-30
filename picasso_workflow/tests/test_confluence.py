@@ -404,7 +404,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "start time": "now",
             "duration": 4.12,
             "radius": 5,
-            "min_density": 0.3,
+            "min_samples": 3,
         }
         self.cr.dbscan(0, parameters, results)
 
@@ -531,6 +531,27 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    def gaussian_mixture_cluster(self):
+        parameters = {
+            "min_locs": 3,
+            "min_sigma": 0.4,
+            "max_sigma": 1.1,
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "n_locs_in": 2000000,
+            "n_locs_clustered": 1800000,
+            "n_centers": 100000,
+        }
+        self.cr.gaussian_mixture_cluster(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
     # @unittest.skip("")
     def spinna_manual(self):
         parameters = {}
@@ -599,6 +620,27 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
+    def ripleysk2(self):
+        parameters = {
+            "ripleys_threshold": 1.2,
+            "atype": "Ripleys",
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "ripleys_significant": [("a", "b")],
+            "fp_ripleys_meanval": "bklab",
+        }
+        self.cr.ripleysk2(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
     def ripleysk_average(self):
         parameters = {
             "ripleys_threshold": 1.2,
@@ -645,6 +687,24 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "start time": "now",
             "duration": 4.12,
             "success": True,
+        }
+        self.cr.create_mask(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def create_mask2(self):
+        """Create a density mask"""
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "area": 43,
         }
         self.cr.create_mask(0, parameters, results)
 
@@ -857,6 +917,8 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "duration": 4.12,
             "success": True,
             "fp_locs": "path/to/locs",
+            "nlocs_before": 2000,
+            "nlocs_after": 1700,
         }
         self.cr.filter_locs(0, parameters, results)
 
