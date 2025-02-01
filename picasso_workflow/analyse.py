@@ -51,17 +51,22 @@ def create_unique_filename(folder, fn, len_code=6):
 
 
 def module_decorator(method):
-    def module_wrapper(self, i, parameters):
+    def module_wrapper(
+        self, i, parameters, calling_module_dir=None, suffix=""
+    ):
         # create the results direcotry
         # method_name = get_caller_name(2)
         method_name = method.__name__
-        module_result_dir = os.path.join(
-            self.results_folder, f"{i:02d}_" + method_name
-        )
-        try:
-            os.mkdir(module_result_dir)
-        except FileExistsError:
-            pass
+
+        if calling_module_dir is None:
+            module_result_dir = os.path.join(
+                self.results_folder, f"{i:02d}_" + method_name + suffix
+            )
+        else:
+            module_result_dir = os.path.join(
+                calling_module_dir, f"{i:02d}_" + method_name + suffix
+            )
+        os.makedirs(module_result_dir, exist_ok=True)
 
         results = {
             "folder": os.path.normpath(module_result_dir),
@@ -4968,6 +4973,123 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     @module_decorator
+    def pairwise_module_executor(self, i, parameters, results):
+        """Calls another module (as a sub-module) for all pairs in the
+        channel_locs
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    module_name : str
+                        the module to call
+                    param_target1 : str
+                        parameter name of the first target to set for the
+                        module
+                    param_target2 : str
+                        parameter name of the second target to set for the
+                        module
+                    module_kwargs : dict
+                        the other arguments to the module
+                and optional keys:
+                    result_scalar : str
+                        the key to display in a heatmap as main result
+                    scalar_threshold : float
+                        the saturation value in the heatmap
+                    scalar_minval : float
+                        the minimum value for color in the heatmap
+                    result_fpfig : str or list of str
+                        the key to the filepath of one or more figures
+                        generated to display for documentation
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        fun_name = parameters["module_name"]
+        sub_results = {}
+        sub_params_general = parameters.get("module_kwargs", {})
+        param_target1 = parameters["param_target1"]
+        param_target2 = parameters["param_target2"]
+
+        key_scalar = parameters.get("result_scalar")
+        key_fpfigs = parameters.get("result_fpfig")
+        n_channels = len(self.channel_tags)
+        result_matrix = np.zeros([n_channels] * 2)
+        fp_figs = [["" for c in range(n_channels)] for _ in range(n_channels)]
+        if isinstance(key_fpfigs, list):
+            fp_figs = [fp_figs.copy() for _ in len(key_fpfigs)]
+        else:
+            fp_figs = [fp_figs]
+            key_fpfigs = [key_fpfigs]
+
+        rollover = int(10 ** (np.ceil((len(self.channel_tags)) ** (0.1))))
+        for i, tag1 in enumerate(self.channel_tags):
+            for j, tag2 in enumerate(self.channel_tags):
+                idx = int(rollover * i + j)
+                suffix = f"{tag1}-{tag2}"
+                sub_params = sub_params_general.copy()
+                sub_params[param_target1] = tag1
+                sub_params[param_target2] = tag2
+                logger.debug(f"Working on {fun_name}: {suffix}")
+                fun = getattr(self, fun_name)
+                try:
+                    sub_module_pars, sub_results[suffix] = fun(
+                        idx, sub_params, results["folder"], suffix
+                    )
+                except AutoPicassoError as e:
+                    logger.error(e)
+                    raise e
+                except Exception as e:
+                    logger.error(e)
+                    raise e
+
+                # save the results
+                logger.debug(f"results: {sub_results[suffix]}")
+                logger.debug(f"key_fpfigs {key_fpfigs}")
+                logger.debug(f"result matrix {result_matrix}")
+                result_matrix[i, j] = sub_results[suffix].get(key_scalar)
+                for k, key_fpfig in enumerate(key_fpfigs):
+                    fp_figs[k][i][j] = sub_results[suffix].get(key_fpfig)
+
+        results["sub_module_results"] = sub_results
+        if key_scalar is None:
+            results["result_matrix"] = None
+        else:
+            results["result_matrix"] = result_matrix
+            results["fp_fig_matrix"] = self._plot_ripleys_integrals(
+                result_matrix,
+                results["folder"],
+                self.channel_tags,
+                metric=fun_name,
+                controltype="",
+                threshold=parameters.get("scalar_threshold"),
+                std=None,
+                suffix="",
+                significance_threshold=parameters.get("scalar_minval"),
+            )
+
+        if key_fpfigs is None:
+            results["fp_figs"] = None
+        else:
+            results["fp_figs"] = fp_figs
+
+        return parameters, results
+
+    @module_decorator
+    def random_val(self, i, parameters, results):
+        """For debugging and testing the pairwise module"""
+        results["random_val"] = np.random.rand()
+        fig, ax = plt.subplots()
+        x = np.arange(100)
+        ax.plot(x, np.random.rand(len(x)))
+        ax.set_xlabel(parameters["xlabel"])
+        ax.set_ylabel(parameters["ylabel"])
+        results["fp_fig"] = os.path.join(results["folder"], "myfig.png")
+        fig.savefig(results["fp_fig"])
+
+        return parameters, results
+
+    @module_decorator
     def labeling_efficiency_analysis(self, i, parameters, results):
         """Analyse for labeling efficiency.
         Perform 3 component SPINNA analysis for monomers and heterodimers
@@ -5138,7 +5260,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
         plt.close("all")
 
-        results["fp_fig"] = fp_fig
+        # rename figures with random code
+        rcode = generate_random_code(6)
+        fp_fig_out = []
+        for fp in fp_fig:
+            fparts = os.path.splitext(fp)
+            fp_out = f"{fparts[0]}_{rcode}{fparts[1]}"
+            os.rename(fp, fp_out)
+            fp_fig_out.append(fp_out)
+        results["fp_fig"] = fp_fig_out
         props = result["Fitted proportions of structures"]  # given in percent
         prop_t = props[0]
         prop_r = props[1]
