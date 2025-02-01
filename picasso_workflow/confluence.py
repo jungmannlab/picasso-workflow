@@ -2032,6 +2032,74 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    def insert_image(self, fp_fig):
+        try:
+            self.ci.upload_attachment(self.report_page_id, fp_fig)
+        except ConfluenceInterfaceError:
+            pass
+        _, fn_fig = os.path.split(fp_fig)
+        text = f"""
+            <ac:image ac:width="500"><ri:attachment
+            ri:filename="{fn_fig}" />
+            </ac:image>"""
+        return text
+
+    @module_decorator
+    def pairwise_module_executor(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        """Calls another module (as a sub-module) for all pairs in the
+        channel_locs
+        """
+        logger.debug("Reporting pairwise_module_executor.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Pairwise execution of a submodule
+        </strong></p>
+        Summary:
+        <ul>
+        <li>Submodule executed: {parameters["module_name"]}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        # # add matrix figure
+        # if fp_fig := results.get("fp_fig_matrix"):
+        #     text += "<ul>"
+        #     text += self.insert_image(fp_fig)
+        #     text += "</ul>"
+
+        # # add other figures
+        # if fp_figs := results.get("fp_figs"):
+        #     fig_keys = parameters.get("result_fpfig")
+        #     # first layer: different types of figures
+        #     for matrix_figs, fig_key in zip(fp_figs, fig_keys):
+        #         text += f"<p><b>{fig_key}</b></p>"
+        #         text += "<ul><table>"
+        #         for ir, fp_fig_row in enumerate(matrix_figs):
+        #             text += "<tr>"
+        #             for ic, fp_fig in enumerate(fp_fig_row):
+        #                 text += "<td>"
+        #                 text += self.insert_image(fp_fig)
+        #                 text += "</td>"
+        #             text += "</tr>"
+        #         text += "</ul></table>"
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    @module_decorator
+    def random_val(self, i, parameters, results, parameter_text, result_text):
+        """This is just for debugging"""
+        pass
+
     def labeling_efficiency_analysis(self, i, parameters, results):
         """Analyse for labeling efficiency.
         Args:

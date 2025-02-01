@@ -265,9 +265,9 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def find_gold(self):
-        """Find localizations stemming from gold beads based on blinking kinetics.
-        The metrics used are number of locs and rms deviation from mean
-        frame
+        """Find localizations stemming from gold beads based on blinking
+        kinetics. The metrics used are number of locs and rms deviation
+        from mean frame
         """
         pass
 
@@ -284,6 +284,17 @@ class AbstractModuleCollection(abc.ABC):
     @abc.abstractmethod
     def link_locs(self):
         """Link localizations."""
+        pass
+
+    @abc.abstractmethod
+    def pairwise_module_executor(self):
+        """Calls another module (as a sub-module) for all pairs in the
+        channel_locs."""
+        pass
+
+    @abc.abstractmethod
+    def random_val(self):
+        """For debugging and testing the pairwise module."""
         pass
 
     @abc.abstractmethod
