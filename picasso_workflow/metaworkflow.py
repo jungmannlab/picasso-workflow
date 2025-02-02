@@ -208,16 +208,20 @@ class InvestigationCoordinator:
         self.rank = comm.Get_rank()  # Get the rank of the process
         self.size = comm.Get_size()  # Get the total number of processes
 
-        ci = confluence.ConfluenceInterface(
-            self.confluence_url,
-            self.confluence_space,
-            base_page,
-            token=self.confluence_token,
-        )
-        try:
-            ci.create_page(self.root_page, investigation_description)
-        except confluence.ConfluenceInterfaceError:
-            pass
+        if self.rank == 0:
+            ci = confluence.ConfluenceInterface(
+                self.confluence_url,
+                self.confluence_space,
+                base_page,
+                token=self.confluence_token,
+            )
+            try:
+                ci.create_page(self.root_page, investigation_description)
+            except confluence.ConfluenceInterfaceError:
+                pass
+        else:
+            # ensure rank 0 has created the root page
+            time.sleep(2)
         self.ci = confluence.ConfluenceInterface(
             self.confluence_url,
             self.confluence_space,
@@ -540,7 +544,7 @@ class InvestigationCoordinator:
                     ["aggregation", "00_ripleysk_average2", "fp_figmeanvals"]
         """
         fp_figs = [
-            reduce(lambda d, key: d[key], loc, awr.allresults)
+            reduce(lambda d, key: d[key], loc, awr.all_results)
             for loc in figloc
         ]
         return fp_figs
@@ -602,7 +606,7 @@ class InvestigationCoordinator:
         figloc,
     ):
         if self.rank == 0:
-            sumpgtitle = self.initialize_summary_pages(
+            summary_page_title = self.initialize_summary_pages(
                 self.ci,
                 f"{summary_page_title} - {self.analysis_name}",
                 summary_columns,
@@ -618,4 +622,8 @@ class InvestigationCoordinator:
             self.run_awr(**kwargs)
 
             fp_figs = self.extract_fpfig_from_results(kwargs["awr"], figloc)
-            self.add_to_summary_page(sumpgtitle, kwargs["cell_type"], fp_figs)
+            self.add_to_summary_page(
+                f"{summary_page_title} - {self.analysis_name}",
+                kwargs["cell_type"],
+                fp_figs,
+            )
