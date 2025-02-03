@@ -1930,6 +1930,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                         to be loaded and aligned.
                     fig_filename : str
                         the location to save the drift figure to
+                    crop_boundaries : bool
+                        whether to crop the localizations according to the
+                        image boundaries (after shifting)
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -1997,6 +2000,22 @@ class AutoPicasso(util.AbstractModuleCollection):
             fig_filepath = os.path.join(results["folder"], fn)
             picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath
+
+        if parameters.get("crop_boundaries"):
+            max_xmin, min_xmax = -np.inf, np.inf
+            max_ymin, min_ymax = -np.inf, np.inf
+            for locs in self.channel_locs:
+                max_xmin = max(max_xmin, locs["x"].min())
+                min_xmax = min(min_xmax, locs["x"].max())
+                max_ymin = max(max_ymin, locs["y"].min())
+                min_ymax = min(min_ymax, locs["y"].max())
+            for i, locs in enumerate(self.channel_locs):
+                self.channel_locs[i] = locs[
+                    (locs["x"] > max_xmin) & (locs["x"] < min_xmax)
+                ]
+                self.channel_locs[i] = locs[
+                    (locs["y"] > max_ymin) & (locs["y"] < min_ymax)
+                ]
 
         results["fp_scene_locs_after"] = os.path.join(
             results["folder"], f"locs_after_{rcode}.png"
@@ -3851,6 +3870,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         # with open(parameters["fp_channel_map"], "r") as f:
         #     channel_map = yaml.safe_load(f)
         # locs for the mask are the combined locs
+        rcode = generate_random_code(6)
+        results["fp_scene_locs_before"] = os.path.join(
+            results["folder"], f"locs_before_{rcode}.png"
+        )
+        render.plot_scene(
+            self.channel_locs, 100, 130, fp=results["fp_scene_locs_before"]
+        )
         fp_combined_locs = parameters.get("fp_combined_locs", None)
         if fp_combined_locs:
             if isinstance(parameters["fp_combined_locs"], list):
@@ -3893,6 +3919,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.channel_locs = [
                 cell_mask.apply_to_locs(locs) for locs in self.channel_locs
             ]
+            results["fp_scene_locs_after"] = os.path.join(
+                results["folder"], f"locs_after_{rcode}.png"
+            )
+            render.plot_scene(
+                self.channel_locs, 100, 130, fp=results["fp_scene_locs_after"]
+            )
         area = cell_mask.area
 
         # mask, area = outpost_modules.ripleys.get_cell_mask(
@@ -3916,7 +3948,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         cell_mask.save(results["fp_mask"])
         results["mask_pixel_size"] = mask_pixel_size
 
-        rcode = generate_random_code(6)
         # results["fp_fig_mask"] = os.path.join(
         #     results["folder"], f"mask_binary-{binary}_{rcode}.png"
         # )

@@ -1417,40 +1417,43 @@ class ConfluenceReporter(AbstractModuleCollection):
         {parameter_text}
         {result_text}
         """
-        if fp_fig_mask := results.get("fp_fig_mask_binary"):
-            for fp in [fp_fig_mask]:
+        fig_fps = []
+        titles = []
+        if fp_fig := results.get("fp_scene_locs_before"):
+            fig_fps.append(fp_fig)
+            titles.append("Localizations for creating the mask")
+        if fp_fig := results.get("fp_fig_mask_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("Binary Mask")
+        if fp_fig := results.get("fp_fig_mask_density"):
+            fig_fps.append(fp_fig)
+            titles.append("Density Mask")
+        if fp_fig := results.get("fp_scene_locs_after"):
+            fig_fps.append(fp_fig)
+            titles.append("Localizations after applying the mask")
+
+        if len(fig_fps) > 1:
+            fn_figs = []
+            for fp in fig_fps:
                 try:
                     self.ci.upload_attachment(self.report_page_id, fp)
                 except ConfluenceInterfaceError:
                     pass
-            fp_fig_mask = os.path.split(fp_fig_mask)[1]
+                fn_figs.append(os.path.split(fp)[1])
 
-            text += "<table>"
-            text += """
-                <tr>
-                <td><b>Binary Mask</b></td>
-                <td><b>Density Mask</b></td>
-                </tr>"""
-            text += f"""
-                <tr>
-                <td>
-                      <ac:image ac:height="350">
-                      <ri:attachment ri:filename="{fp_fig_mask}" />
-                      </ac:image>
-                </td>"""
-            fp_fig_dmask = results.get("fp_fig_mask_density")
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig_dmask)
-            except ConfluenceInterfaceError:
-                pass
-            fp_fig_dmask = os.path.split(fp_fig_dmask)[1]
-            text += f"""
-                <td>
-                      <ac:image ac:height="350">
-                      <ri:attachment ri:filename="{fp_fig_dmask}" />
-                      </ac:image>
-                </td>
-                </tr>"""
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
             text += "</table>"
 
         text += """
@@ -1467,7 +1470,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting dbscan_molint.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: DBSCAN - Molecular Interaction version</strong></p>
+        <p><strong>Module {i:02d}: DBSCAN - Molecular Interaction version
+        </strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
