@@ -1771,7 +1771,10 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def undrift_from_picked(self, i, parameters, results):
+    @module_decorator
+    def undrift_from_picked(
+        self, i, parameters, results, parameter_text, result_text
+    ):
         """Performs undrift from piced locs.
         Args:
             i : int
@@ -1787,13 +1790,15 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Undrift from picked</strong></p>
+        Summary:
         <ul>
-        <li>Start Time: {results['start time']}</li>
+        <li># based on picked locs at: {parameters["fp_picked_locs"]}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
-        <li># based on piced locs at: {parameters["fp_picked_locs"]}</li>
-        <li>saved undrifted locs to: {results["fp_locs"]}</li>
-        </ul>"""
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
         if fp_fig := results.get("fp_fig"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)

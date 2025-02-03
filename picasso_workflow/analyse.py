@@ -974,6 +974,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     self.info,
                     segmentation=parameters["segmentation"],
                     display=False,
+                    segmentation_callback=lib.MockProgress(),
                 )
                 results["success"] = True
                 break
