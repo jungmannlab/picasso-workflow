@@ -2066,27 +2066,29 @@ class ConfluenceReporter(AbstractModuleCollection):
         {result_text}
         """
 
-        # # add matrix figure
-        # if fp_fig := results.get("fp_fig_matrix"):
-        #     text += "<ul>"
-        #     text += self.insert_image(fp_fig)
-        #     text += "</ul>"
+        # add matrix figure
+        if fp_fig := results.get("fp_fig_matrix"):
+            text += "<ul>"
+            text += self.insert_image(fp_fig)
+            text += "</ul>"
 
-        # # add other figures
-        # if fp_figs := results.get("fp_figs"):
-        #     fig_keys = parameters.get("result_fpfig")
-        #     # first layer: different types of figures
-        #     for matrix_figs, fig_key in zip(fp_figs, fig_keys):
-        #         text += f"<p><b>{fig_key}</b></p>"
-        #         text += "<ul><table>"
-        #         for ir, fp_fig_row in enumerate(matrix_figs):
-        #             text += "<tr>"
-        #             for ic, fp_fig in enumerate(fp_fig_row):
-        #                 text += "<td>"
-        #                 text += self.insert_image(fp_fig)
-        #                 text += "</td>"
-        #             text += "</tr>"
-        #         text += "</ul></table>"
+        # add other figures
+        if fp_figs := results.get("fp_figs"):
+            fig_keys = parameters.get("result_fpfig")
+            if not isinstance(fig_keys, list):
+                fig_keys = [fig_keys]
+            # first layer: different types of figures
+            for matrix_figs, fig_key in zip(fp_figs, fig_keys):
+                text += f"<p><b>{fig_key}</b></p>"
+                text += "<ul><table>"
+                for ir, fp_fig_row in enumerate(matrix_figs):
+                    text += "<tr>"
+                    for ic, fp_fig in enumerate(fp_fig_row):
+                        text += "<td>"
+                        text += self.insert_image(fp_fig)
+                        text += "</td>"
+                    text += "</tr>"
+                text += "</table></ul>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
