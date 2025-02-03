@@ -5084,7 +5084,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         ax.plot(x, np.random.rand(len(x)))
         ax.set_xlabel(parameters["xlabel"])
         ax.set_ylabel(parameters["ylabel"])
-        results["fp_fig"] = os.path.join(results["folder"], "myfig.png")
+        rcode = generate_random_code(6)
+        results["fp_fig"] = os.path.join(
+            results["folder"], f"myfig_{rcode}.png"
+        )
         fig.savefig(results["fp_fig"])
 
         return parameters, results
@@ -5283,6 +5286,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters["target_name"]: le_target,
             parameters["reference_name"]: le_reference,
         }
+        # results for compatibility with pairwise analysis
+        results["labeling_efficiency_target"] = le_target
+        results["labeling_efficiency_reference"] = le_target
+        results["fp_fig_AA"] = fp_fig_out[0]
+        results["fp_fig_AB"] = fp_fig_out[1]
+        results["fp_fig_BA"] = fp_fig_out[2]
+        results["fp_fig_BB"] = fp_fig_out[3]
 
         return parameters, results
 
