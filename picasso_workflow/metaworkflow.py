@@ -153,7 +153,7 @@ class PathParser:
             if k1 not in filepaths.keys():
                 filepaths[k1] = {}
             if k2 not in filepaths[k1].keys():
-                filepaths[k1][k2] = [None] * 6
+                filepaths[k1][k2] = [None] * len(receptors)
             # check whether input path is windows or posix style
             is_posix = self.check_path_style(v)
             if is_posix:
@@ -216,6 +216,12 @@ class InvestigationCoordinator:
                 token=self.confluence_token,
             )
             try:
+                investigation_description += f"""
+                <p><strong>Analysis file location</strong>
+
+                The files created during the analysis run can be found in
+                {self.root_folder}.</p>
+                """
                 ci.create_page(self.root_page, investigation_description)
             except confluence.ConfluenceInterfaceError:
                 pass

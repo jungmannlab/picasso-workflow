@@ -451,7 +451,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        logger.debug("description text: " + text)
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -1029,6 +1028,114 @@ class ConfluenceReporter(AbstractModuleCollection):
                 "The Ripley's mean value is the Ripley's K integral"
                 + ", divided by the maximum integration distance."
             )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    @module_decorator
+    def ripleysk_rafal(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        logger.debug("Reporting ripleysk_rafal.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Rafal's Ripley's K Analysis</strong></p>
+        Summary:
+        <ul>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        fig_fps = []
+        titles = []
+        if fp_fig := results.get("fp_fig_raw_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("Raw Matrix_binary")
+        if fp_fig := results.get("fp_fig_postprocessed_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("Postprocessed Matrix_binary")
+        if fp_fig := results.get("fp_fig_unnormalized_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("raw Ripley's K curves_binary")
+        if fp_fig := results.get("fp_fig_mask_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("mask used_binary")
+        if fp_fig := results.get("fp_fig_normalized_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("normalized Ripley's K curves_binary")
+
+        if len(fig_fps) > 1:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+
+        fig_fps = []
+        titles = []
+        if fp_fig := results.get("fp_fig_raw_density"):
+            fig_fps.append(fp_fig)
+            titles.append("Raw Matrix_density")
+        if fp_fig := results.get("fp_fig_postprocessed_density"):
+            fig_fps.append(fp_fig)
+            titles.append("Postprocessed Matrix_density")
+        if fp_fig := results.get("fp_fig_unnormalized_density"):
+            fig_fps.append(fp_fig)
+            titles.append("raw Ripley's K curves_density")
+        if fp_fig := results.get("fp_fig_mask_density"):
+            fig_fps.append(fp_fig)
+            titles.append("mask used_density")
+        if fp_fig := results.get("fp_fig_normalized_density"):
+            fig_fps.append(fp_fig)
+            titles.append("normalized Ripley's K curves_density")
+
+        if len(fig_fps) > 1:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>

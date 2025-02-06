@@ -974,7 +974,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     self.info,
                     segmentation=parameters["segmentation"],
                     display=False,
-                    segmentation_callback=lib.MockProgress(),
+                    segmentation_callback=lib.MockProgress().set_value,
+                    rcc_callback=lib.MockProgress().set_value,
                 )
                 results["success"] = True
                 break
@@ -1020,7 +1021,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 os.path.splitext(results["filepath_driftfile"])[0] + ".png"
             )
             self._plot_drift(
-                results["filepath_plot"], parameters["dimensions"], pixelsize
+                results["filepath_plot"],
+                parameters["dimensions"],
+                pixelsize,
+                method="RCC",
             )
 
         # add info
@@ -1040,17 +1044,21 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    def _plot_drift(self, filename, dimensions, pixelsize):
+    def _plot_drift(
+        self, filename, dimensions, pixelsize, method="", drift=None
+    ):
+        if drift is None:
+            drift = self.drift
         fig, ax = plt.subplots()
-        frames = np.arange(self.drift.shape[0])
+        frames = np.arange(drift.shape[0])
         for i, dim in enumerate(dimensions):
-            if isinstance(self.drift, np.recarray):
-                ax.plot(frames, self.drift[dim] * pixelsize, label=dim)
+            if isinstance(drift, np.recarray):
+                ax.plot(frames, drift[dim] * pixelsize, label=dim)
             else:
-                ax.plot(frames, self.drift[:, i] * pixelsize, label=dim)
+                ax.plot(frames, drift[:, i] * pixelsize, label=dim)
         ax.set_xlabel("frame")
         ax.set_ylabel("drift [nm]")
-        ax.set_title("drift graph")
+        ax.set_title(f"undrift by {method}")
         ax.legend()
         fig.savefig(filename)
         plt.close(fig)
@@ -2569,6 +2577,207 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     @module_decorator
+    def ripleysk_rafal(self, i, parameters, results):
+        """Exactly along Rafal's code"""
+        from picasso_workflow.outpost_modules.ripley_dcatlas_analysis import (
+            analyze as analyze_whole_cell,
+        )
+        from picasso_workflow.outpost_modules.ripley_dcatlas_analysis import (
+            postprocess_ripley_matrix,
+        )
+
+        rcode = generate_random_code(6)
+
+        R_MAX = 200  # nm, maximum radius for Ripley's K analysis
+        RADII = np.concatenate(
+            (np.arange(4, 80, 2), np.arange(80, R_MAX + 1, 12))
+        )
+        VMIN, VMAX = [
+            -2000,
+            2000,
+        ]  # boundaries for plotting final ripley matrices (as described in methods)
+
+        # first: binary
+        ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
+            self.channel_locs, RADII, binary=True
+        )
+        postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
+        path_save_integral_raw = os.path.join(
+            results["folder"],
+            f"raw_ripley_integral_binary-{rcode}.npy",
+        )
+        path_save_integral_postprocessed = os.path.join(
+            results["folder"],
+            f"postprocessed_ripley_integral_binary-{rcode}.npy",
+        )
+        np.save(path_save_integral_raw, ripley_matrix)
+        # save in excel format
+        df_raw = pd.DataFrame(
+            ripley_matrix, index=self.channel_tags, columns=self.channel_tags
+        )
+        df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
+        df_pp = pd.DataFrame(
+            postprocessed,
+            index=self.channel_tags,
+            columns=self.channel_tags,
+        )
+        df_pp.to_excel(
+            path_save_integral_postprocessed.replace(".npy", ".xlsx")
+        )
+
+        def plot_and_save(matrix, savepath, vmin, vmax):
+            plt.figure()
+            plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
+            plt.xticks(range(6), self.channel_tags)
+            plt.yticks(range(6), self.channel_tags)
+            plt.colorbar()
+            plt.savefig(savepath, dpi=150)
+            plt.close()
+
+        results["ripley_matrix_raw_binary"] = ripley_matrix
+        results["mask area_binary"] = area
+        results["fp_fig_mask_binary"] = os.path.join(
+            results["folder"], f"mask_binary-{rcode}.png"
+        )
+        fig, ax = plt.subplots()
+        ax.set_box_aspect(1)
+        ax.set_title("mask")
+        cmap = "hot"
+        ax.imshow(
+            mask,
+            extent=[
+                0,
+                mask.shape[0] * 10 / 1000,  # 10 nm mask pixel size (upsample)
+                0,
+                mask.shape[1] * 10 / 1000,
+            ],
+            cmap=cmap,
+            origin="lower",
+        )
+        ax.set_xlabel("x [µm]")
+        ax.set_ylabel("y [µm]")
+        fig.savefig(results["fp_fig_mask_binary"])
+
+        results["fp_fig_unnormalized_binary"] = os.path.join(
+            results["folder"], f"unnormalized_binary-{rcode}.png"
+        )
+        fig_u.savefig(results["fp_fig_unnormalized_binary"])
+        results["fp_fig_normalized_binary"] = os.path.join(
+            results["folder"], f"normalized_binary-{rcode}.png"
+        )
+        fig_n.savefig(results["fp_fig_normalized_binary"])
+
+        results["fp_fig_raw_binary"] = path_save_integral_raw.replace(
+            ".npy", ".png"
+        )
+        plot_and_save(
+            matrix=ripley_matrix,
+            savepath=results["fp_fig_raw_binary"],
+            vmin=-np.max(np.abs(ripley_matrix)),
+            vmax=np.max(np.abs(ripley_matrix)),
+        )
+        results["fp_fig_postprocessed_binary"] = (
+            path_save_integral_postprocessed.replace(".npy", ".png")
+        )
+        plot_and_save(
+            matrix=postprocessed,
+            savepath=results["fp_fig_postprocessed_binary"],
+            vmin=VMIN,
+            vmax=VMAX,
+        )
+
+        # second: density
+        ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
+            self.channel_locs, RADII, binary=False
+        )
+        postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
+        path_save_integral_raw = os.path.join(
+            results["folder"],
+            f"raw_ripley_integral_density-{rcode}.npy",
+        )
+        path_save_integral_postprocessed = os.path.join(
+            results["folder"],
+            f"postprocessed_ripley_integral_density-{rcode}.npy",
+        )
+        np.save(path_save_integral_raw, ripley_matrix)
+        # save in excel format
+        df_raw = pd.DataFrame(
+            ripley_matrix, index=self.channel_tags, columns=self.channel_tags
+        )
+        df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
+        df_pp = pd.DataFrame(
+            postprocessed,
+            index=self.channel_tags,
+            columns=self.channel_tags,
+        )
+        df_pp.to_excel(
+            path_save_integral_postprocessed.replace(".npy", ".xlsx")
+        )
+
+        def plot_and_save(matrix, savepath, vmin, vmax):
+            plt.figure()
+            plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
+            plt.xticks(range(6), self.channel_tags)
+            plt.yticks(range(6), self.channel_tags)
+            plt.colorbar()
+            plt.savefig(savepath, dpi=150)
+            plt.close()
+
+        results["ripley_matrix_raw_density"] = ripley_matrix
+        results["mask area_density"] = area
+        results["fp_fig_mask_density"] = os.path.join(
+            results["folder"], f"mask_density-{rcode}.png"
+        )
+        fig, ax = plt.subplots()
+        ax.set_box_aspect(1)
+        ax.set_title("mask")
+        cmap = "hot"
+        ax.imshow(
+            mask,
+            extent=[
+                0,
+                mask.shape[0] / 1000,
+                0,
+                mask.shape[1] / 1000,
+            ],
+            cmap=cmap,
+            origin="lower",
+        )
+        ax.set_xlabel("x [µm]")
+        ax.set_ylabel("y [µm]")
+        fig.savefig(results["fp_fig_mask_density"])
+
+        results["fp_fig_unnormalized_density"] = os.path.join(
+            results["folder"], f"unnormalized_density-{rcode}.png"
+        )
+        fig_u.savefig(results["fp_fig_unnormalized_density"])
+        results["fp_fig_normalized_density"] = os.path.join(
+            results["folder"], f"normalized_density-{rcode}.png"
+        )
+        fig_n.savefig(results["fp_fig_normalized_density"])
+
+        results["fp_fig_raw_density"] = path_save_integral_raw.replace(
+            ".npy", ".png"
+        )
+        plot_and_save(
+            matrix=ripley_matrix,
+            savepath=results["fp_fig_raw_density"],
+            vmin=-np.max(np.abs(ripley_matrix)),
+            vmax=np.max(np.abs(ripley_matrix)),
+        )
+        results["fp_fig_postprocessed_density"] = (
+            path_save_integral_postprocessed.replace(".npy", ".png")
+        )
+        plot_and_save(
+            matrix=postprocessed,
+            savepath=results["fp_fig_postprocessed_density"],
+            vmin=VMIN,
+            vmax=VMAX,
+        )
+
+        return parameters, results
+
+    @module_decorator
     def ripleysk2(self, i, parameters, results):
         """Perforn Ripley's K analysis between the channels using
         Rafal's code.
@@ -2659,11 +2868,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             # mask = np.load(fp_mask)
             # mask = mask / np.sum(mask)
             mask = outpost_modules.mask.CellMask.load(fp_mask)
-            area = mask.area
+            area = mask.area * 1e6  # in nm^2
             mask_pixel_size = mask._upsample
         else:
             mask = None
-            area = parameters.get("area", 1)
+            area = parameters.get("area", 1) * 1e6  # in nm^2
             mask_pixel_size = 1
         # mask_pixel_size = parameters.get("mask_pixel_size")
 
@@ -2674,7 +2883,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             max_r = np.max(radii)
             ec_mask = copy.copy(mask)
             ec_mask.erode(max_r)
-            area = ec_mask.area
+            area = ec_mask.area * 1e6  # in nm^2
             locs_used = [
                 ec_mask.apply_to_locs(locs) for locs in self.channel_locs
             ]
@@ -4851,6 +5060,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         picked_locs, info = io.load_locs(parameters["fp_picked_locs"])
         # with open(parameters["fp_picked_locs"], "rb") as f:
         #     result = pickle.load(f)
@@ -4867,16 +5077,20 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.locs, self.info, picked_locs
         )
 
-        fig, ax = plt.subplots(nrows=1)
-        ax.plot(drift[0], label="x drift")
-        ax.plot(drift[1], label="y drift")
-        ax.set_title("undrift from picked")
-        ax.set_ylabel("drift")
-        ax.set_xlabel("frame")
+        dims = ["x", "y"]
+        if hasattr(picked_locs, "z"):
+            dims.append("z")
         fp_fig = os.path.join(results["folder"], "undrift_from_picked.png")
         results["fp_fig"] = fp_fig
-        fig.savefig(fp_fig)
-        plt.close(fig)
+        self._plot_drift(fp_fig, dims, pixelsize, method="picked", drift=drift)
+        # fig, ax = plt.subplots(nrows=1)
+        # ax.plot(drift[0], label="x drift")
+        # ax.plot(drift[1], label="y drift")
+        # ax.set_title("undrift from picked")
+        # ax.set_ylabel("drift")
+        # ax.set_xlabel("frame")
+        # fig.savefig(fp_fig)
+        # plt.close(fig)
 
         # fp_locs = os.path.join(results["folder"], "locs.hdf5")
         # results["fp_locs"] = fp_locs

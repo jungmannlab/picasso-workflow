@@ -467,6 +467,29 @@ def normalize_to_CSR(K_exp, K_csr, ci=0.95):
     return K_exp_norm
 
 
+def remove_insignificant(K_exp, K_csr, ci=0.95):
+    """Set values of K_exp that are within the confidence interval
+    of the controls to zero
+    """
+    K_exp_norm = K_exp.copy()
+
+    quantile_low = (1 - ci) / 2
+    quantile_high = 1 - quantile_low
+
+    quantiles_high = np.array(
+        [np.quantile(x, quantile_high) for x in np.transpose(K_csr)]
+    )
+    quantiles_low = np.array(
+        [np.quantile(x, quantile_low) for x in np.transpose(K_csr)]
+    )
+
+    K_exp_norm[
+        (K_exp_norm > quantiles_low) & (K_exp_norm < quantiles_high)
+    ] = 0
+
+    return K_exp_norm
+
+
 def get_cell_mask(
     mol_coords,
     pixelsize,
@@ -744,6 +767,12 @@ def analyze_2_channels(
 
         K_exp_norm = norm_to_max_r(K_exp)
         K_csr_norm = np.array([norm_to_max_r(K_c) for K_c in K_csr])
+    elif normalization.lower() == "remove_insignificant":
+        # set values within the 95% confidence interval to zero
+        K_exp_norm = remove_insignificant(K_exp, K_csr, ci=0.95)
+        K_csr_norm = np.array(
+            [remove_insignificant(K_c, K_csr, ci=0.95) for K_c in K_csr]
+        )
     elif normalization.lower() == "none":
         K_exp_norm = K_exp.copy()
         K_csr_norm = np.array(K_csr)

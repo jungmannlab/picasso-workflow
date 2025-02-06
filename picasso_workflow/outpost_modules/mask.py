@@ -327,17 +327,17 @@ class CellMask:
             else:
                 mask = self.density_mask
         x_min = y_min = 0
-        x_max = y_max = mask.shape[0] * self._binsize
+        x_max = y_max = mask.shape[0] * self._upsample
         X = np.zeros((n_points, 2))
         rng = np.random.default_rng()
         counts = rng.multinomial(n_points, pvals=mask.ravel())
-        bins_x_left = np.arange(x_min, x_max, self._binsize)
-        bins_y_left = np.arange(y_min, y_max, self._binsize)
+        bins_x_left = np.arange(x_min, x_max, self._upsample)
+        bins_y_left = np.arange(y_min, y_max, self._upsample)
         bins_x_left, bins_y_left = np.meshgrid(bins_x_left, bins_y_left)
         lows_x = np.repeat(bins_x_left.ravel(), counts)
         lows_y = np.repeat(bins_y_left.ravel(), counts)
-        highs_x = lows_x + self._binsize
-        highs_y = lows_y + self._binsize
+        highs_x = lows_x + self._upsample
+        highs_y = lows_y + self._upsample
         x = np.random.uniform(lows_x, highs_x)
         y = np.random.uniform(lows_y, highs_y)
         X = np.column_stack((x, y))
