@@ -21,15 +21,35 @@ logger = logging.getLogger(__name__)
 def module_decorator(method):
     def module_wrapper(self, i, parameters, results):
         # create parameter and results documentation
-        parameter_text = "Parameters:<ul>"
+        parameter_text = """
+            <ac:structured-macro ac:name="expand" ac:schema-version="1">
+            <ac:parameter ac:name="title">Parameters</ac:parameter>
+            <ac:rich-text-body>
+            <ul>
+            """
         for k, v in parameters.items():
             parameter_text += f"<li>{k}: {v}</li>"
-        parameter_text += "</ul>"
 
-        result_text = "Results:<ul>"
+        parameter_text += """
+        </ul>
+        </ac:rich-text-body>
+        </ac:structured-macro>
+        """
+
+        result_text = """
+            <ac:structured-macro ac:name="expand" ac:schema-version="1">
+            <ac:parameter ac:name="title">Results</ac:parameter>
+            <ac:rich-text-body>
+            <ul>
+            """
         for k, v in results.items():
             result_text += f"<li>{k}: {v}</li>"
-        result_text += "</ul>"
+
+        result_text += """
+        </ul>
+        </ac:rich-text-body>
+        </ac:structured-macro>
+        """
 
         # call the module
         method(self, i, parameters, results, parameter_text, result_text)

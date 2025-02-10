@@ -2936,6 +2936,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                         "randomization_radius"
                     ),
                     normalization=parameters.get("normalization"),
+                    aggfun=parameters.get("aggfun"),
+                    showControlEnvelope=parameters.get(
+                        "showControlEnvelope", None
+                    ),
                 )
             )
 
@@ -2963,9 +2967,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.channel_tags,
             parameters["metric"],
             parameters.get("controltype", "None"),
-            parameters.get("ripleys_threshold", 1),
+            parameters.get("ripleys_threshold", None),
             suffix=rcode,
-            significance_threshold=parameters.get("significance_threshold", 1),
+            significance_threshold=parameters.get(
+                "significance_threshold", None
+            ),
         )
         results["fp_fig_unnormalized"] = os.path.join(
             results["folder"],
@@ -2980,11 +2986,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         fig_n.savefig(results["fp_fig_normalized"])
 
-        results["ripleys_significant"] = self._find_ripleys_significant(
-            ripley_matrix,
-            parameters.get("ripleys_threshold", 1),
-            self.channel_tags,
-        )
+        if parameters.get("ripleys_threshold"):
+            r_sig = self._find_ripleys_significant(
+                ripley_matrix,
+                parameters.get("ripleys_threshold", 1),
+                self.channel_tags,
+            )
+        else:
+            r_sig = []
+        results["ripleys_significant"] = r_sig
 
         return parameters, results
 
@@ -3003,7 +3013,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig, ax = plt.subplots()
         plot_ripleysMeanVal = ripleysMeanVal.copy()
         if threshold is None:
-            threshold = 1
+            threshold = np.abs(plot_ripleysMeanVal).max()
         if significance_threshold is not None:
             plot_ripleysMeanVal[
                 np.abs(plot_ripleysMeanVal) <= significance_threshold

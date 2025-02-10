@@ -1811,13 +1811,17 @@ def _undrift_from_picked(locs, info, picked_locs):
     drift_y = _undrift_from_picked_coordinate(info, picked_locs, "y")
     locs.x -= drift_x[locs.frame]
     locs.y -= drift_y[locs.frame]
+    dtypes = [("x", "f"), ("y", "f")]
 
     drift = [drift_x, drift_y]
     if hasattr(locs, "z"):
         drift_z = _undrift_from_picked_coordinate(info, picked_locs, "z")
         locs.z -= drift_z[locs.frame]
         drift.append(drift_z)
+        dtypes.append(("z", "f"))
 
+    drift = np.rec.array(drift, dtype=dtypes)
+    # drift = np.array(drift).T
     return locs, info, drift
 
 

@@ -615,6 +615,7 @@ def analyze_2_channels(
     normalization="zscore",
     randomization_radius=None,
     showControlEnvelope=True,
+    aggfun="mean",
 ):
     """Runs the analysis of any two channels of the dataset (2 protein
     species).
@@ -779,7 +780,19 @@ def analyze_2_channels(
 
     # r_max = radii.max()
     # ripley_integral = np.trapz(K_exp_norm, radii) / r_max
-    ripley_integral = np.trapz(K_exp_norm, radii)
+    if aggfun is None:
+        aggfun = "mean"
+    if aggfun == "mean":
+        ripley_integral = np.trapz(K_exp_norm, radii)
+        agg_value = ripley_integral / (np.max(radii) - np.min(radii))
+    elif aggfun == "sum":
+        agg_value = np.sum(K_exp_norm)
+    elif aggfun == "integral":
+        agg_value = np.trapz(K_exp_norm, radii)
+    else:
+        raise NotImplementedError(f"aggfun {aggfun} not implemented.")
+    if agg_value is np.nan:
+        agg_value = 0
     if ax_u is not None and ax_n is not None:
         plot_ripleys(
             radii,
@@ -807,7 +820,7 @@ def analyze_2_channels(
             metric=metric,
             showControlEnvelope=showControlEnvelope,
         )
-    return ripley_integral, K_exp, K_exp_norm
+    return agg_value, K_exp, K_exp_norm
 
 
 def analyze_all_channels(
@@ -871,8 +884,9 @@ def analyze_all_channels(
             "deltaAprepeak" (only positive difference to mean of controls,
                 before peak of mean of controls)
         aggfun : str
-            the aggregation of normalized curves to values to put into the matrix
-            "mean", "sum"
+            the aggregation of normalized curves to values to put into the
+            matrix
+            "mean", "sum", "integral"
             default: "mean"
     """
     n_targets = len(mol_coords)
@@ -892,7 +906,7 @@ def analyze_all_channels(
     for i, X1 in enumerate(mol_coords):
         for j, X2 in enumerate(mol_coords):
             # print(f"Analyzing interaction between receptor {i} and {j}...")
-            ripley_integral, K_exp, K_exp_norm = analyze_2_channels(
+            agg_value, K_exp, K_exp_norm = analyze_2_channels(
                 X1,
                 X2,
                 mask,
@@ -909,6 +923,7 @@ def analyze_all_channels(
                 randomization_radius=randomization_radius,
                 normalization=normalization,
                 showControlEnvelope=showControlEnvelope,
+                aggfun=aggfun,
             )
             curves[i, j, :] = K_exp
             curves_norm[i, j, :] = K_exp_norm
@@ -923,15 +938,9 @@ def analyze_all_channels(
                 ax_u[i, j].yaxis.label.set_visible(False)
                 ax_n[i, j].yaxis.label.set_visible(False)
 
-            if ripley_integral is np.nan:
-                ripley_integral = 0
-            if aggfun == "mean":
-                ripley_mean = ripley_integral / (np.max(radii) - np.min(radii))
-            elif aggfun == "sum":
-                ripley_mean = ripley_integral
-            else:
-                raise NotImplementedError(f"aggfun {aggfun} not implemented.")
-            ripley_matrix[i, j] = ripley_mean
+            if agg_value is np.nan:
+                agg_value = 0
+            ripley_matrix[i, j] = agg_value
     return ripley_matrix, fig_u, fig_n, curves, curves_norm
 
 

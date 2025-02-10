@@ -322,6 +322,7 @@ class InvestigationCoordinator:
                 workflow_modules_multi = get_workflow_modules(
                     cell_type, report_name, datasets
                 )
+                # analyse if the cell has not been analysed yet
                 n_modules = len(workflow_modules_multi["aggregation_modules"])
                 n_success = df.loc[
                     (df["cell_type"] == cell_type)
@@ -329,11 +330,12 @@ class InvestigationCoordinator:
                     "success",
                 ].sum()
                 if n_modules == n_success:
-                    logger.debug(
-                        f"""skipping {cell_type}, {cell_name}
-                        because it was analysed already."""
-                    )
-                    continue
+                    # logger.debug(
+                    #     f"""skipping {cell_type}, {cell_name}
+                    #     because it was analysed already."""
+                    # )
+                    # continue
+                    pass
 
                 awr = AggregationWorkflowRunner.config_from_dicts(
                     reporter_config,
@@ -611,10 +613,11 @@ class InvestigationCoordinator:
         summary_columns,
         figloc,
     ):
+        summary_page_title = f"{summary_page_title} - {self.analysis_name}"
         if self.rank == 0:
             summary_page_title = self.initialize_summary_pages(
                 self.ci,
-                f"{summary_page_title} - {self.analysis_name}",
+                summary_page_title,
                 summary_columns,
             )
 
@@ -629,7 +632,7 @@ class InvestigationCoordinator:
 
             fp_figs = self.extract_fpfig_from_results(kwargs["awr"], figloc)
             self.add_to_summary_page(
-                f"{summary_page_title} - {self.analysis_name}",
+                summary_page_title,
                 kwargs["cell_type"],
                 fp_figs,
             )
