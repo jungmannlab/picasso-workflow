@@ -23,6 +23,7 @@ from aicsimageio import AICSImage
 from picasso import io, localize, render, imageprocess, postprocess, lib
 from picasso_workflow import util
 
+from scipy.spatial import KDTree
 from scipy.special import gamma as _gamma
 from scipy.special import factorial as _factorial
 from scipy.optimize import minimize
@@ -1808,11 +1809,20 @@ def _undrift_from_picked(locs, info, picked_locs):
     """
     drift_x = _undrift_from_picked_coordinate(info, picked_locs, "x")
     drift_y = _undrift_from_picked_coordinate(info, picked_locs, "y")
-
     locs.x -= drift_x[locs.frame]
     locs.y -= drift_y[locs.frame]
+    dtypes = [("x", "f"), ("y", "f")]
 
-    return locs, info, (drift_x, drift_y)
+    drift = [drift_x, drift_y]
+    if hasattr(locs, "z"):
+        drift_z = _undrift_from_picked_coordinate(info, picked_locs, "z")
+        locs.z -= drift_z[locs.frame]
+        drift.append(drift_z)
+        dtypes.append(("z", "f"))
+
+    drift = np.rec.array(drift, dtype=dtypes)
+    # drift = np.array(drift).T
+    return locs, info, drift
 
 
 def shift_from_picked(channel_fiducials):
@@ -2033,3 +2043,32 @@ def plot_2dhist(locs, field_x, field_y, fig, ax):
     ax.grid(False)
     ax.get_xaxis().set_label_text(field_x)
     ax.get_yaxis().set_label_text(field_y)
+
+
+########################################################################
+# resolution by point-pattern auto correlation
+########################################################################
+
+
+def resolution_ppac(locs, pixelsize, delta_r, r_max):
+    """Calculate the resolution by autocorrelation"""
+    r_max = (r_max // delta_r) * delta_r
+    r_search = delta_r / 2
+    rs = np.arange(-r_max, r_max, step=delta_r)
+    idx_ctr = int(len(rs) / 2)
+    intensities = np.zeros([len(rs)] * 2)
+    xy = np.array([locs["x"] * pixelsize, locs["y"] * pixelsize])
+    tree_i = KDTree(xy)
+    for i, delta_x in enumerate(rs):
+        for j, delta_y in enumerate(rs):
+            xy_shift = xy.copy()
+            xy_shift[:, 0] += delta_x
+            xy_shift[:, 1] += delta_y
+            tree_probe = KDTree(xy_shift)
+            intensities[i, j] = tree_i.count_neighbors(tree_probe, r_search)
+
+    # normalize by maximum (no shift)
+    intensities = intensities / intensities[idx_ctr, idx_ctr]
+
+    # now, analyse, fit Gaussian, ..
+    return intensities

@@ -153,7 +153,7 @@ class PathParser:
             if k1 not in filepaths.keys():
                 filepaths[k1] = {}
             if k2 not in filepaths[k1].keys():
-                filepaths[k1][k2] = [None] * 6
+                filepaths[k1][k2] = [None] * len(receptors)
             # check whether input path is windows or posix style
             is_posix = self.check_path_style(v)
             if is_posix:
@@ -208,16 +208,26 @@ class InvestigationCoordinator:
         self.rank = comm.Get_rank()  # Get the rank of the process
         self.size = comm.Get_size()  # Get the total number of processes
 
-        ci = confluence.ConfluenceInterface(
-            self.confluence_url,
-            self.confluence_space,
-            base_page,
-            token=self.confluence_token,
-        )
-        try:
-            ci.create_page(self.root_page, investigation_description)
-        except confluence.ConfluenceInterfaceError:
-            pass
+        if self.rank == 0:
+            ci = confluence.ConfluenceInterface(
+                self.confluence_url,
+                self.confluence_space,
+                base_page,
+                token=self.confluence_token,
+            )
+            try:
+                investigation_description += f"""
+                <p><strong>Analysis file location</strong>
+
+                The files created during the analysis run can be found in
+                {self.root_folder}.</p>
+                """
+                ci.create_page(self.root_page, investigation_description)
+            except confluence.ConfluenceInterfaceError:
+                pass
+        else:
+            # ensure rank 0 has created the root page
+            time.sleep(2)
         self.ci = confluence.ConfluenceInterface(
             self.confluence_url,
             self.confluence_space,
@@ -312,6 +322,7 @@ class InvestigationCoordinator:
                 workflow_modules_multi = get_workflow_modules(
                     cell_type, report_name, datasets
                 )
+                # analyse if the cell has not been analysed yet
                 n_modules = len(workflow_modules_multi["aggregation_modules"])
                 n_success = df.loc[
                     (df["cell_type"] == cell_type)
@@ -319,11 +330,12 @@ class InvestigationCoordinator:
                     "success",
                 ].sum()
                 if n_modules == n_success:
-                    logger.debug(
-                        f"""skipping {cell_type}, {cell_name}
-                        because it was analysed already."""
-                    )
-                    continue
+                    # logger.debug(
+                    #     f"""skipping {cell_type}, {cell_name}
+                    #     because it was analysed already."""
+                    # )
+                    # continue
+                    pass
 
                 awr = AggregationWorkflowRunner.config_from_dicts(
                     reporter_config,
@@ -540,7 +552,7 @@ class InvestigationCoordinator:
                     ["aggregation", "00_ripleysk_average2", "fp_figmeanvals"]
         """
         fp_figs = [
-            reduce(lambda d, key: d[key], loc, awr.allresults)
+            reduce(lambda d, key: d[key], loc, awr.all_results)
             for loc in figloc
         ]
         return fp_figs
@@ -601,10 +613,11 @@ class InvestigationCoordinator:
         summary_columns,
         figloc,
     ):
+        summary_page_title = f"{summary_page_title} - {self.analysis_name}"
         if self.rank == 0:
-            sumpgtitle = self.initialize_summary_pages(
+            summary_page_title = self.initialize_summary_pages(
                 self.ci,
-                f"{summary_page_title} - {self.analysis_name}",
+                summary_page_title,
                 summary_columns,
             )
 
@@ -618,4 +631,8 @@ class InvestigationCoordinator:
             self.run_awr(**kwargs)
 
             fp_figs = self.extract_fpfig_from_results(kwargs["awr"], figloc)
-            self.add_to_summary_page(sumpgtitle, kwargs["cell_type"], fp_figs)
+            self.add_to_summary_page(
+                summary_page_title,
+                kwargs["cell_type"],
+                fp_figs,
+            )

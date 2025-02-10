@@ -21,15 +21,35 @@ logger = logging.getLogger(__name__)
 def module_decorator(method):
     def module_wrapper(self, i, parameters, results):
         # create parameter and results documentation
-        parameter_text = "Parameters:<ul>"
+        parameter_text = """
+            <ac:structured-macro ac:name="expand" ac:schema-version="1">
+            <ac:parameter ac:name="title">Parameters</ac:parameter>
+            <ac:rich-text-body>
+            <ul>
+            """
         for k, v in parameters.items():
             parameter_text += f"<li>{k}: {v}</li>"
-        parameter_text += "</ul>"
 
-        result_text = "Results:<ul>"
+        parameter_text += """
+        </ul>
+        </ac:rich-text-body>
+        </ac:structured-macro>
+        """
+
+        result_text = """
+            <ac:structured-macro ac:name="expand" ac:schema-version="1">
+            <ac:parameter ac:name="title">Results</ac:parameter>
+            <ac:rich-text-body>
+            <ul>
+            """
         for k, v in results.items():
             result_text += f"<li>{k}: {v}</li>"
-        result_text += "</ul>"
+
+        result_text += """
+        </ul>
+        </ac:rich-text-body>
+        </ac:structured-macro>
+        """
 
         # call the module
         method(self, i, parameters, results, parameter_text, result_text)
@@ -451,7 +471,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        logger.debug("description text: " + text)
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -1038,6 +1057,114 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     @module_decorator
+    def ripleysk_rafal(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        logger.debug("Reporting ripleysk_rafal.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Rafal's Ripley's K Analysis</strong></p>
+        Summary:
+        <ul>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        fig_fps = []
+        titles = []
+        if fp_fig := results.get("fp_fig_raw_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("Raw Matrix_binary")
+        if fp_fig := results.get("fp_fig_postprocessed_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("Postprocessed Matrix_binary")
+        if fp_fig := results.get("fp_fig_unnormalized_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("raw Ripley's K curves_binary")
+        if fp_fig := results.get("fp_fig_mask_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("mask used_binary")
+        if fp_fig := results.get("fp_fig_normalized_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("normalized Ripley's K curves_binary")
+
+        if len(fig_fps) > 1:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+
+        fig_fps = []
+        titles = []
+        if fp_fig := results.get("fp_fig_raw_density"):
+            fig_fps.append(fp_fig)
+            titles.append("Raw Matrix_density")
+        if fp_fig := results.get("fp_fig_postprocessed_density"):
+            fig_fps.append(fp_fig)
+            titles.append("Postprocessed Matrix_density")
+        if fp_fig := results.get("fp_fig_unnormalized_density"):
+            fig_fps.append(fp_fig)
+            titles.append("raw Ripley's K curves_density")
+        if fp_fig := results.get("fp_fig_mask_density"):
+            fig_fps.append(fp_fig)
+            titles.append("mask used_density")
+        if fp_fig := results.get("fp_fig_normalized_density"):
+            fig_fps.append(fp_fig)
+            titles.append("normalized Ripley's K curves_density")
+
+        if len(fig_fps) > 1:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    @module_decorator
     def ripleysk2(self, i, parameters, results, parameter_text, result_text):
         logger.debug("Reporting ripleysk2.")
         text = f"""
@@ -1417,40 +1544,43 @@ class ConfluenceReporter(AbstractModuleCollection):
         {parameter_text}
         {result_text}
         """
-        if fp_fig_mask := results.get("fp_fig_mask_binary"):
-            for fp in [fp_fig_mask]:
+        fig_fps = []
+        titles = []
+        if fp_fig := results.get("fp_scene_locs_before"):
+            fig_fps.append(fp_fig)
+            titles.append("Localizations for creating the mask")
+        if fp_fig := results.get("fp_fig_mask_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("Binary Mask")
+        if fp_fig := results.get("fp_fig_mask_density"):
+            fig_fps.append(fp_fig)
+            titles.append("Density Mask")
+        if fp_fig := results.get("fp_scene_locs_after"):
+            fig_fps.append(fp_fig)
+            titles.append("Localizations after applying the mask")
+
+        if len(fig_fps) > 1:
+            fn_figs = []
+            for fp in fig_fps:
                 try:
                     self.ci.upload_attachment(self.report_page_id, fp)
                 except ConfluenceInterfaceError:
                     pass
-            fp_fig_mask = os.path.split(fp_fig_mask)[1]
+                fn_figs.append(os.path.split(fp)[1])
 
-            text += "<table>"
-            text += """
-                <tr>
-                <td><b>Binary Mask</b></td>
-                <td><b>Density Mask</b></td>
-                </tr>"""
-            text += f"""
-                <tr>
-                <td>
-                      <ac:image ac:height="350">
-                      <ri:attachment ri:filename="{fp_fig_mask}" />
-                      </ac:image>
-                </td>"""
-            fp_fig_dmask = results.get("fp_fig_mask_density")
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig_dmask)
-            except ConfluenceInterfaceError:
-                pass
-            fp_fig_dmask = os.path.split(fp_fig_dmask)[1]
-            text += f"""
-                <td>
-                      <ac:image ac:height="350">
-                      <ri:attachment ri:filename="{fp_fig_dmask}" />
-                      </ac:image>
-                </td>
-                </tr>"""
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
             text += "</table>"
 
         text += """
@@ -1467,7 +1597,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         logger.debug("Reporting dbscan_molint.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: DBSCAN - Molecular Interaction version</strong></p>
+        <p><strong>Module {i:02d}: DBSCAN - Molecular Interaction version
+        </strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -1771,7 +1902,10 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def undrift_from_picked(self, i, parameters, results):
+    @module_decorator
+    def undrift_from_picked(
+        self, i, parameters, results, parameter_text, result_text
+    ):
         """Performs undrift from piced locs.
         Args:
             i : int
@@ -1787,13 +1921,15 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Undrift from picked</strong></p>
+        Summary:
         <ul>
-        <li>Start Time: {results['start time']}</li>
+        <li># based on picked locs at: {parameters["fp_picked_locs"]}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
-        <li># based on piced locs at: {parameters["fp_picked_locs"]}</li>
-        <li>saved undrifted locs to: {results["fp_locs"]}</li>
-        </ul>"""
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
         if fp_fig := results.get("fp_fig"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)
@@ -1915,6 +2051,76 @@ class ConfluenceReporter(AbstractModuleCollection):
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
+
+    def insert_image(self, fp_fig):
+        try:
+            self.ci.upload_attachment(self.report_page_id, fp_fig)
+        except ConfluenceInterfaceError:
+            pass
+        _, fn_fig = os.path.split(fp_fig)
+        text = f"""
+            <ac:image ac:width="500"><ri:attachment
+            ri:filename="{fn_fig}" />
+            </ac:image>"""
+        return text
+
+    @module_decorator
+    def pairwise_module_executor(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        """Calls another module (as a sub-module) for all pairs in the
+        channel_locs
+        """
+        logger.debug("Reporting pairwise_module_executor.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Pairwise execution of a submodule
+        </strong></p>
+        Summary:
+        <ul>
+        <li>Submodule executed: {parameters["module_name"]}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        # add matrix figure
+        if fp_fig := results.get("fp_fig_matrix"):
+            text += "<ul>"
+            text += self.insert_image(fp_fig)
+            text += "</ul>"
+
+        # add other figures
+        if fp_figs := results.get("fp_figs"):
+            fig_keys = parameters.get("result_fpfig")
+            if not isinstance(fig_keys, list):
+                fig_keys = [fig_keys]
+            # first layer: different types of figures
+            for matrix_figs, fig_key in zip(fp_figs, fig_keys):
+                text += f"<p><b>{fig_key}</b></p>"
+                text += "<ul><table>"
+                for ir, fp_fig_row in enumerate(matrix_figs):
+                    text += "<tr>"
+                    for ic, fp_fig in enumerate(fp_fig_row):
+                        text += "<td>"
+                        text += self.insert_image(fp_fig)
+                        text += "</td>"
+                    text += "</tr>"
+                text += "</table></ul>"
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    @module_decorator
+    def random_val(self, i, parameters, results, parameter_text, result_text):
+        """This is just for debugging"""
+        pass
 
     def labeling_efficiency_analysis(self, i, parameters, results):
         """Analyse for labeling efficiency.

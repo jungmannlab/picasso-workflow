@@ -38,6 +38,7 @@ class CellMask:
     _blursize = 0
     _threshold = 0
     _upsample = 0
+    _offset = 0
 
     @classmethod
     def from_mol_coords(
@@ -83,15 +84,21 @@ class CellMask:
             picassolocs_to_coords(locs, pixelsize) for locs in locs_list
         ]
         # combine all coordinates into one array
-        combined_coords = np.vstack(mol_coords) / binsize
+        combined_coords = np.vstack(mol_coords)  # / binsize
         # print(combined_coords.shape)
-        n_bins = int(np.ceil(512 * pixelsize / binsize))
-        bins = np.arange(0, n_bins, 1, dtype=np.float64)
+        x_min = np.floor(combined_coords[:, 0].min())
+        x_max = np.ceil(combined_coords[:, 0].max())
+        y_min = np.floor(combined_coords[:, 1].min())
+        y_max = np.ceil(combined_coords[:, 1].max())
+        instance._offset = x_min, y_min
+        bins_x = np.arange(x_min, x_max, step=binsize, dtype=np.float64)
+        bins_y = np.arange(y_min, y_max, step=binsize, dtype=np.float64)
         mask = np.histogram2d(
-            combined_coords[:, 0], combined_coords[:, 1], bins=bins
+            combined_coords[:, 0], combined_coords[:, 1], bins=[bins_x, bins_y]
         )[0]
         # assuming: this is for display. Now using imshow origin "lower"
         # mask = np.flipud(np.rot90(mask))
+        # mask = np.rot90(mask)
 
         blur = blursize / binsize
         factor = int(binsize / upsample)
@@ -148,6 +155,8 @@ class CellMask:
                 localization position, with out-of-bounds positions set to -1
         """
         mol_coords = picassolocs_to_coords(locs, self._pixelsize)
+        mol_coords[:, 0] -= self._offset[0]
+        mol_coords[:, 1] -= self._offset[1]
         factor = int(self._binsize / self._upsample)
         # combine all coordinates into one array
         mask_coords = np.vstack(mol_coords) / self._binsize * factor
@@ -281,17 +290,19 @@ class CellMask:
     def plot_mask(self, fp=None, binary=False):
         """plot binary or density version of the mask"""
         fig, ax = plt.subplots()
-        ax.set_box_aspect(1)
-        ax.set_title("mask - final")
+        # ax.set_aspect("equal")
         # check if mask is binary
         if binary:
             mask_plot = self.binary_mask
             cmap = "binary"
+            title = "binary mask"
         else:
             mask_plot = self.density_mask
             cmap = "hot"
+            title = "density mask"
+        ax.set_title(title)
         ax.imshow(
-            mask_plot,
+            np.rot90(mask_plot),
             extent=[
                 0,
                 self._upsample * mask_plot.shape[0] / 1000,
@@ -320,28 +331,99 @@ class CellMask:
         X - np.array with simulated coordinates of shape (n_simulations,
             n_points, 2).
         """
-        if mask is None:
-            if binary:
+        if binary:
+            if mask is None:
                 mask = self.binary_mask
-                mask = mask / np.sum(mask)
-            else:
+        else:
+            if mask is None:
                 mask = self.density_mask
+        mask = mask / mask.sum()
         x_min = y_min = 0
-        x_max = y_max = mask.shape[0] * self._binsize
+        x_max = mask.shape[0] * self._upsample
+        y_max = mask.shape[1] * self._upsample
         X = np.zeros((n_points, 2))
         rng = np.random.default_rng()
         counts = rng.multinomial(n_points, pvals=mask.ravel())
-        bins_x_left = np.arange(x_min, x_max, self._binsize)
-        bins_y_left = np.arange(y_min, y_max, self._binsize)
+        bins_x_left = np.arange(x_min, x_max, self._upsample)
+        bins_y_left = np.arange(y_min, y_max, self._upsample)
         bins_x_left, bins_y_left = np.meshgrid(bins_x_left, bins_y_left)
         lows_x = np.repeat(bins_x_left.ravel(), counts)
         lows_y = np.repeat(bins_y_left.ravel(), counts)
-        highs_x = lows_x + self._binsize
-        highs_y = lows_y + self._binsize
+        highs_x = lows_x + self._upsample
+        highs_y = lows_y + self._upsample
         x = np.random.uniform(lows_x, highs_x)
         y = np.random.uniform(lows_y, highs_y)
         X = np.column_stack((x, y))
         return X
+
+    # def random_points(self, n_points, binary=False, mask=None):
+    #     """Simulates monomeric molecules based on density mask, see
+    #     simulate_CSR to see the inputs.
+
+    #     Returns
+    #     -------
+    #     X - np.array with simulated coordinates of shape (n_simulations,
+    #         n_points, 2).
+    #     """
+    #     if binary:
+    #         return self.random_points_binary(n_points, mask)
+    #     else:
+    #         return self.random_points_density(n_points, mask)
+
+    # def random_points_density(self, n_points, mask=None):
+    #     """Simulates monomeric molecules based on density mask, see
+    #     simulate_CSR to see the inputs.
+
+    #     Returns
+    #     -------
+    #     X - np.array with simulated coordinates of shape (n_simulations,
+    #         n_points, 2).
+    #     """
+    #     if mask is None:
+    #         mask = self.density_mask
+    #     x_min = y_min = 0
+    #     x_max = mask.shape[0] * self._upsample
+    #     y_max = mask.shape[1] * self._upsample
+    #     X = np.zeros((n_points, 2))
+    #     rng = np.random.default_rng()
+    #     counts = rng.multinomial(n_points, pvals=mask.ravel())
+    #     bins_x_left = np.arange(x_min, x_max, self._upsample)
+    #     bins_y_left = np.arange(y_min, y_max, self._upsample)
+    #     bins_x_left, bins_y_left = np.meshgrid(bins_x_left, bins_y_left)
+    #     lows_x = np.repeat(bins_x_left.ravel(), counts)
+    #     lows_y = np.repeat(bins_y_left.ravel(), counts)
+    #     highs_x = lows_x + self._upsample
+    #     highs_y = lows_y + self._upsample
+    #     x = np.random.uniform(lows_x, highs_x)
+    #     y = np.random.uniform(lows_y, highs_y)
+    #     X = np.column_stack((x, y))
+    #     return X
+
+    # def random_points_binary(self, n_points, mask=None):
+    #     if mask is None:
+    #         mask_area = self.area * 1e6  # convert from um^2 to nm^2
+    #         mask = self.binary_mask
+    #     else:
+    #         mask_area = mask.sum() * self._upsample**2
+    #     density = n_points / mask_area
+
+    #     canvas_area = np.product(mask.shape) * self._upsample**2  # in nm^2
+    #     n_sample = int(density * canvas_area)
+
+    #     # create points on canvas
+    #     X = np.column_stack([
+    #         np.random.uniform(
+    #             0, mask.shape[0] * self._upsample, size=n_sample),
+    #         np.random.uniform(
+    #             0, mask.shape[1] * self._upsample, size=n_sample),
+    #     ])
+
+    #     # Reject points outside of mask
+    #     x_ind = (np.floor(X[:, 0] / self._upsample)).astype(int)
+    #     y_ind = (np.floor(X[:, 1] / self._upsample)).astype(int)
+    #     in_mask = mask[y_ind, x_ind].astype(bool)
+    #     X = X[in_mask]
+    #     return X
 
     def random_points_sets(self, n_sets, n_points_per_set, binary=False):
         if binary:

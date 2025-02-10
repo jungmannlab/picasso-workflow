@@ -51,17 +51,22 @@ def create_unique_filename(folder, fn, len_code=6):
 
 
 def module_decorator(method):
-    def module_wrapper(self, i, parameters):
+    def module_wrapper(
+        self, i, parameters, calling_module_dir=None, suffix=""
+    ):
         # create the results direcotry
         # method_name = get_caller_name(2)
         method_name = method.__name__
-        module_result_dir = os.path.join(
-            self.results_folder, f"{i:02d}_" + method_name
-        )
-        try:
-            os.mkdir(module_result_dir)
-        except FileExistsError:
-            pass
+
+        if calling_module_dir is None:
+            module_result_dir = os.path.join(
+                self.results_folder, f"{i:02d}_" + method_name + suffix
+            )
+        else:
+            module_result_dir = os.path.join(
+                calling_module_dir, f"{i:02d}_" + method_name + suffix
+            )
+        os.makedirs(module_result_dir, exist_ok=True)
 
         results = {
             "folder": os.path.normpath(module_result_dir),
@@ -974,6 +979,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     self.info,
                     segmentation=parameters["segmentation"],
                     display=False,
+                    segmentation_callback=lib.MockProgress().set_value,
+                    rcc_callback=lib.MockProgress().set_value,
                 )
                 results["success"] = True
                 break
@@ -1019,7 +1026,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 os.path.splitext(results["filepath_driftfile"])[0] + ".png"
             )
             self._plot_drift(
-                results["filepath_plot"], parameters["dimensions"], pixelsize
+                results["filepath_plot"],
+                parameters["dimensions"],
+                pixelsize,
+                method="RCC",
             )
 
         # add info
@@ -1039,17 +1049,21 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    def _plot_drift(self, filename, dimensions, pixelsize):
+    def _plot_drift(
+        self, filename, dimensions, pixelsize, method="", drift=None
+    ):
+        if drift is None:
+            drift = self.drift
         fig, ax = plt.subplots()
-        frames = np.arange(self.drift.shape[0])
+        frames = np.arange(drift.shape[0])
         for i, dim in enumerate(dimensions):
-            if isinstance(self.drift, np.recarray):
-                ax.plot(frames, self.drift[dim] * pixelsize, label=dim)
+            if isinstance(drift, np.recarray):
+                ax.plot(frames, drift[dim] * pixelsize, label=dim)
             else:
-                ax.plot(frames, self.drift[:, i] * pixelsize, label=dim)
+                ax.plot(frames, drift[:, i] * pixelsize, label=dim)
         ax.set_xlabel("frame")
         ax.set_ylabel("drift [nm]")
-        ax.set_title("drift graph")
+        ax.set_title(f"undrift by {method}")
         ax.legend()
         fig.savefig(filename)
         plt.close(fig)
@@ -1929,6 +1943,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                         to be loaded and aligned.
                     fig_filename : str
                         the location to save the drift figure to
+                    crop_boundaries : bool
+                        whether to crop the localizations according to the
+                        image boundaries (after shifting)
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -1996,6 +2013,22 @@ class AutoPicasso(util.AbstractModuleCollection):
             fig_filepath = os.path.join(results["folder"], fn)
             picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath
+
+        if parameters.get("crop_boundaries"):
+            max_xmin, min_xmax = -np.inf, np.inf
+            max_ymin, min_ymax = -np.inf, np.inf
+            for locs in self.channel_locs:
+                max_xmin = max(max_xmin, locs["x"].min())
+                min_xmax = min(min_xmax, locs["x"].max())
+                max_ymin = max(max_ymin, locs["y"].min())
+                min_ymax = min(min_ymax, locs["y"].max())
+            for i, locs in enumerate(self.channel_locs):
+                self.channel_locs[i] = locs[
+                    (locs["x"] > max_xmin) & (locs["x"] < min_xmax)
+                ]
+                self.channel_locs[i] = locs[
+                    (locs["y"] > max_ymin) & (locs["y"] < min_ymax)
+                ]
 
         results["fp_scene_locs_after"] = os.path.join(
             results["folder"], f"locs_after_{rcode}.png"
@@ -2549,6 +2582,207 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     @module_decorator
+    def ripleysk_rafal(self, i, parameters, results):
+        """Exactly along Rafal's code"""
+        from picasso_workflow.outpost_modules.ripley_dcatlas_analysis import (
+            analyze as analyze_whole_cell,
+        )
+        from picasso_workflow.outpost_modules.ripley_dcatlas_analysis import (
+            postprocess_ripley_matrix,
+        )
+
+        rcode = generate_random_code(6)
+
+        R_MAX = 200  # nm, maximum radius for Ripley's K analysis
+        RADII = np.concatenate(
+            (np.arange(4, 80, 2), np.arange(80, R_MAX + 1, 12))
+        )
+        VMIN, VMAX = [
+            -2000,
+            2000,
+        ]  # boundaries for plotting final ripley matrices (as described in methods)
+
+        # first: binary
+        ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
+            self.channel_locs, RADII, binary=True
+        )
+        postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
+        path_save_integral_raw = os.path.join(
+            results["folder"],
+            f"raw_ripley_integral_binary-{rcode}.npy",
+        )
+        path_save_integral_postprocessed = os.path.join(
+            results["folder"],
+            f"postprocessed_ripley_integral_binary-{rcode}.npy",
+        )
+        np.save(path_save_integral_raw, ripley_matrix)
+        # save in excel format
+        df_raw = pd.DataFrame(
+            ripley_matrix, index=self.channel_tags, columns=self.channel_tags
+        )
+        df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
+        df_pp = pd.DataFrame(
+            postprocessed,
+            index=self.channel_tags,
+            columns=self.channel_tags,
+        )
+        df_pp.to_excel(
+            path_save_integral_postprocessed.replace(".npy", ".xlsx")
+        )
+
+        def plot_and_save(matrix, savepath, vmin, vmax):
+            plt.figure()
+            plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
+            plt.xticks(range(6), self.channel_tags)
+            plt.yticks(range(6), self.channel_tags)
+            plt.colorbar()
+            plt.savefig(savepath, dpi=150)
+            plt.close()
+
+        results["ripley_matrix_raw_binary"] = ripley_matrix
+        results["mask area_binary"] = area
+        results["fp_fig_mask_binary"] = os.path.join(
+            results["folder"], f"mask_binary-{rcode}.png"
+        )
+        fig, ax = plt.subplots()
+        ax.set_box_aspect(1)
+        ax.set_title("mask")
+        cmap = "hot"
+        ax.imshow(
+            mask,
+            extent=[
+                0,
+                mask.shape[0] * 10 / 1000,  # 10 nm mask pixel size (upsample)
+                0,
+                mask.shape[1] * 10 / 1000,
+            ],
+            cmap=cmap,
+            origin="lower",
+        )
+        ax.set_xlabel("x [µm]")
+        ax.set_ylabel("y [µm]")
+        fig.savefig(results["fp_fig_mask_binary"])
+
+        results["fp_fig_unnormalized_binary"] = os.path.join(
+            results["folder"], f"unnormalized_binary-{rcode}.png"
+        )
+        fig_u.savefig(results["fp_fig_unnormalized_binary"])
+        results["fp_fig_normalized_binary"] = os.path.join(
+            results["folder"], f"normalized_binary-{rcode}.png"
+        )
+        fig_n.savefig(results["fp_fig_normalized_binary"])
+
+        results["fp_fig_raw_binary"] = path_save_integral_raw.replace(
+            ".npy", ".png"
+        )
+        plot_and_save(
+            matrix=ripley_matrix,
+            savepath=results["fp_fig_raw_binary"],
+            vmin=-np.max(np.abs(ripley_matrix)),
+            vmax=np.max(np.abs(ripley_matrix)),
+        )
+        results["fp_fig_postprocessed_binary"] = (
+            path_save_integral_postprocessed.replace(".npy", ".png")
+        )
+        plot_and_save(
+            matrix=postprocessed,
+            savepath=results["fp_fig_postprocessed_binary"],
+            vmin=VMIN,
+            vmax=VMAX,
+        )
+
+        # second: density
+        ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
+            self.channel_locs, RADII, binary=False
+        )
+        postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
+        path_save_integral_raw = os.path.join(
+            results["folder"],
+            f"raw_ripley_integral_density-{rcode}.npy",
+        )
+        path_save_integral_postprocessed = os.path.join(
+            results["folder"],
+            f"postprocessed_ripley_integral_density-{rcode}.npy",
+        )
+        np.save(path_save_integral_raw, ripley_matrix)
+        # save in excel format
+        df_raw = pd.DataFrame(
+            ripley_matrix, index=self.channel_tags, columns=self.channel_tags
+        )
+        df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
+        df_pp = pd.DataFrame(
+            postprocessed,
+            index=self.channel_tags,
+            columns=self.channel_tags,
+        )
+        df_pp.to_excel(
+            path_save_integral_postprocessed.replace(".npy", ".xlsx")
+        )
+
+        def plot_and_save(matrix, savepath, vmin, vmax):
+            plt.figure()
+            plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
+            plt.xticks(range(6), self.channel_tags)
+            plt.yticks(range(6), self.channel_tags)
+            plt.colorbar()
+            plt.savefig(savepath, dpi=150)
+            plt.close()
+
+        results["ripley_matrix_raw_density"] = ripley_matrix
+        results["mask area_density"] = area
+        results["fp_fig_mask_density"] = os.path.join(
+            results["folder"], f"mask_density-{rcode}.png"
+        )
+        fig, ax = plt.subplots()
+        ax.set_box_aspect(1)
+        ax.set_title("mask")
+        cmap = "hot"
+        ax.imshow(
+            mask,
+            extent=[
+                0,
+                mask.shape[0] / 1000,
+                0,
+                mask.shape[1] / 1000,
+            ],
+            cmap=cmap,
+            origin="lower",
+        )
+        ax.set_xlabel("x [µm]")
+        ax.set_ylabel("y [µm]")
+        fig.savefig(results["fp_fig_mask_density"])
+
+        results["fp_fig_unnormalized_density"] = os.path.join(
+            results["folder"], f"unnormalized_density-{rcode}.png"
+        )
+        fig_u.savefig(results["fp_fig_unnormalized_density"])
+        results["fp_fig_normalized_density"] = os.path.join(
+            results["folder"], f"normalized_density-{rcode}.png"
+        )
+        fig_n.savefig(results["fp_fig_normalized_density"])
+
+        results["fp_fig_raw_density"] = path_save_integral_raw.replace(
+            ".npy", ".png"
+        )
+        plot_and_save(
+            matrix=ripley_matrix,
+            savepath=results["fp_fig_raw_density"],
+            vmin=-np.max(np.abs(ripley_matrix)),
+            vmax=np.max(np.abs(ripley_matrix)),
+        )
+        results["fp_fig_postprocessed_density"] = (
+            path_save_integral_postprocessed.replace(".npy", ".png")
+        )
+        plot_and_save(
+            matrix=postprocessed,
+            savepath=results["fp_fig_postprocessed_density"],
+            vmin=VMIN,
+            vmax=VMAX,
+        )
+
+        return parameters, results
+
+    @module_decorator
     def ripleysk2(self, i, parameters, results):
         """Perforn Ripley's K analysis between the channels using
         Rafal's code.
@@ -2639,11 +2873,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             # mask = np.load(fp_mask)
             # mask = mask / np.sum(mask)
             mask = outpost_modules.mask.CellMask.load(fp_mask)
-            area = mask.area
+            area = mask.area * 1e6  # in nm^2
             mask_pixel_size = mask._upsample
         else:
             mask = None
-            area = parameters.get("area", 1)
+            area = parameters.get("area", 1) * 1e6  # in nm^2
             mask_pixel_size = 1
         # mask_pixel_size = parameters.get("mask_pixel_size")
 
@@ -2654,7 +2888,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             max_r = np.max(radii)
             ec_mask = copy.copy(mask)
             ec_mask.erode(max_r)
-            area = ec_mask.area
+            area = ec_mask.area * 1e6  # in nm^2
             locs_used = [
                 ec_mask.apply_to_locs(locs) for locs in self.channel_locs
             ]
@@ -2702,6 +2936,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                         "randomization_radius"
                     ),
                     normalization=parameters.get("normalization"),
+                    aggfun=parameters.get("aggfun"),
+                    showControlEnvelope=parameters.get(
+                        "showControlEnvelope", None
+                    ),
                 )
             )
 
@@ -2729,9 +2967,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.channel_tags,
             parameters["metric"],
             parameters.get("controltype", "None"),
-            parameters.get("ripleys_threshold", 1),
+            parameters.get("ripleys_threshold", None),
             suffix=rcode,
-            significance_threshold=parameters.get("significance_threshold", 1),
+            significance_threshold=parameters.get(
+                "significance_threshold", None
+            ),
         )
         results["fp_fig_unnormalized"] = os.path.join(
             results["folder"],
@@ -2746,11 +2986,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         fig_n.savefig(results["fp_fig_normalized"])
 
-        results["ripleys_significant"] = self._find_ripleys_significant(
-            ripley_matrix,
-            parameters.get("ripleys_threshold", 1),
-            self.channel_tags,
-        )
+        if parameters.get("ripleys_threshold"):
+            r_sig = self._find_ripleys_significant(
+                ripley_matrix,
+                parameters.get("ripleys_threshold", 1),
+                self.channel_tags,
+            )
+        else:
+            r_sig = []
+        results["ripleys_significant"] = r_sig
 
         return parameters, results
 
@@ -2769,7 +3013,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig, ax = plt.subplots()
         plot_ripleysMeanVal = ripleysMeanVal.copy()
         if threshold is None:
-            threshold = 1
+            threshold = np.abs(plot_ripleysMeanVal).max()
         if significance_threshold is not None:
             plot_ripleysMeanVal[
                 np.abs(plot_ripleysMeanVal) <= significance_threshold
@@ -3850,6 +4094,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         # with open(parameters["fp_channel_map"], "r") as f:
         #     channel_map = yaml.safe_load(f)
         # locs for the mask are the combined locs
+        rcode = generate_random_code(6)
+        results["fp_scene_locs_before"] = os.path.join(
+            results["folder"], f"locs_before_{rcode}.png"
+        )
+        render.plot_scene(
+            self.channel_locs, 100, 130, fp=results["fp_scene_locs_before"]
+        )
         fp_combined_locs = parameters.get("fp_combined_locs", None)
         if fp_combined_locs:
             if isinstance(parameters["fp_combined_locs"], list):
@@ -3892,6 +4143,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.channel_locs = [
                 cell_mask.apply_to_locs(locs) for locs in self.channel_locs
             ]
+            results["fp_scene_locs_after"] = os.path.join(
+                results["folder"], f"locs_after_{rcode}.png"
+            )
+            render.plot_scene(
+                self.channel_locs, 100, 130, fp=results["fp_scene_locs_after"]
+            )
         area = cell_mask.area
 
         # mask, area = outpost_modules.ripleys.get_cell_mask(
@@ -3915,7 +4172,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         cell_mask.save(results["fp_mask"])
         results["mask_pixel_size"] = mask_pixel_size
 
-        rcode = generate_random_code(6)
         # results["fp_fig_mask"] = os.path.join(
         #     results["folder"], f"mask_binary-{binary}_{rcode}.png"
         # )
@@ -4819,6 +5075,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         picked_locs, info = io.load_locs(parameters["fp_picked_locs"])
         # with open(parameters["fp_picked_locs"], "rb") as f:
         #     result = pickle.load(f)
@@ -4835,16 +5092,20 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.locs, self.info, picked_locs
         )
 
-        fig, ax = plt.subplots(nrows=1)
-        ax.plot(drift[0], label="x drift")
-        ax.plot(drift[1], label="y drift")
-        ax.set_title("undrift from picked")
-        ax.set_ylabel("drift")
-        ax.set_xlabel("frame")
+        dims = ["x", "y"]
+        if hasattr(picked_locs, "z"):
+            dims.append("z")
         fp_fig = os.path.join(results["folder"], "undrift_from_picked.png")
         results["fp_fig"] = fp_fig
-        fig.savefig(fp_fig)
-        plt.close(fig)
+        self._plot_drift(fp_fig, dims, pixelsize, method="picked", drift=drift)
+        # fig, ax = plt.subplots(nrows=1)
+        # ax.plot(drift[0], label="x drift")
+        # ax.plot(drift[1], label="y drift")
+        # ax.set_title("undrift from picked")
+        # ax.set_ylabel("drift")
+        # ax.set_xlabel("frame")
+        # fig.savefig(fp_fig)
+        # plt.close(fig)
 
         # fp_locs = os.path.join(results["folder"], "locs.hdf5")
         # results["fp_locs"] = fp_locs
@@ -4963,6 +5224,126 @@ class AutoPicasso(util.AbstractModuleCollection):
         # fp_locs = os.path.join(results["folder"], "locs.hdf5")
         # results["fp_locs"] = fp_locs
         # self._save_locs(fp_locs)
+
+        return parameters, results
+
+    @module_decorator
+    def pairwise_module_executor(self, i, parameters, results):
+        """Calls another module (as a sub-module) for all pairs in the
+        channel_locs
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    module_name : str
+                        the module to call
+                    param_target1 : str
+                        parameter name of the first target to set for the
+                        module
+                    param_target2 : str
+                        parameter name of the second target to set for the
+                        module
+                    module_kwargs : dict
+                        the other arguments to the module
+                and optional keys:
+                    result_scalar : str
+                        the key to display in a heatmap as main result
+                    scalar_threshold : float
+                        the saturation value in the heatmap
+                    scalar_minval : float
+                        the minimum value for color in the heatmap
+                    result_fpfig : str or list of str
+                        the key to the filepath of one or more figures
+                        generated to display for documentation
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        fun_name = parameters["module_name"]
+        sub_results = {}
+        sub_params_general = parameters.get("module_kwargs", {})
+        param_target1 = parameters["param_target1"]
+        param_target2 = parameters["param_target2"]
+
+        key_scalar = parameters.get("result_scalar")
+        key_fpfigs = parameters.get("result_fpfig")
+        n_channels = len(self.channel_tags)
+        result_matrix = np.zeros([n_channels] * 2)
+        fp_figs = [["" for c in range(n_channels)] for _ in range(n_channels)]
+        if isinstance(key_fpfigs, list):
+            fp_figs = [fp_figs.copy() for _ in len(key_fpfigs)]
+        else:
+            fp_figs = [fp_figs]
+            key_fpfigs = [key_fpfigs]
+
+        rollover = int(10 ** (np.ceil((len(self.channel_tags)) ** (0.1))))
+        for i, tag1 in enumerate(self.channel_tags):
+            for j, tag2 in enumerate(self.channel_tags):
+                idx = int(rollover * i + j)
+                suffix = f"{tag1}-{tag2}"
+                sub_params = sub_params_general.copy()
+                sub_params[param_target1] = tag1
+                sub_params[param_target2] = tag2
+                logger.debug(f"Working on {fun_name}: {suffix}")
+                fun = getattr(self, fun_name)
+                try:
+                    sub_module_pars, sub_results[suffix] = fun(
+                        idx, sub_params, results["folder"], suffix
+                    )
+                except AutoPicassoError as e:
+                    logger.error(e)
+                    raise e
+                except Exception as e:
+                    logger.error(e)
+                    raise e
+
+                # save the results
+                logger.debug(f"results: {sub_results[suffix]}")
+                logger.debug(f"key_fpfigs {key_fpfigs}")
+                logger.debug(f"result matrix {result_matrix}")
+                result_matrix[i, j] = sub_results[suffix].get(key_scalar)
+                for k, key_fpfig in enumerate(key_fpfigs):
+                    fp_figs[k][i][j] = sub_results[suffix].get(key_fpfig)
+
+        results["sub_module_results"] = sub_results
+        if key_scalar is None:
+            results["result_matrix"] = None
+        else:
+            results["result_matrix"] = result_matrix
+            results["fp_fig_matrix"] = self._plot_ripleys_integrals(
+                result_matrix,
+                results["folder"],
+                self.channel_tags,
+                metric=fun_name,
+                controltype="",
+                threshold=parameters.get("scalar_threshold"),
+                std=None,
+                suffix="",
+                significance_threshold=parameters.get("scalar_minval"),
+            )
+
+        if key_fpfigs is None:
+            results["fp_figs"] = None
+        else:
+            results["fp_figs"] = fp_figs
+
+        return parameters, results
+
+    @module_decorator
+    def random_val(self, i, parameters, results):
+        """For debugging and testing the pairwise module"""
+        results["random_val"] = np.random.rand()
+        fig, ax = plt.subplots()
+        x = np.arange(100)
+        ax.plot(x, np.random.rand(len(x)))
+        ax.set_xlabel(parameters["xlabel"])
+        ax.set_ylabel(parameters["ylabel"])
+        rcode = generate_random_code(6)
+        results["fp_fig"] = os.path.join(
+            results["folder"], f"myfig_{rcode}.png"
+        )
+        fig.savefig(results["fp_fig"])
 
         return parameters, results
 
@@ -5137,7 +5518,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
         plt.close("all")
 
-        results["fp_fig"] = fp_fig
+        # rename figures with random code
+        rcode = generate_random_code(6)
+        fp_fig_out = []
+        for fp in fp_fig:
+            fparts = os.path.splitext(fp)
+            fp_out = f"{fparts[0]}_{rcode}{fparts[1]}"
+            os.rename(fp, fp_out)
+            fp_fig_out.append(fp_out)
+        results["fp_fig"] = fp_fig_out
         props = result["Fitted proportions of structures"]  # given in percent
         prop_t = props[0]
         prop_r = props[1]
@@ -5152,6 +5541,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters["target_name"]: le_target,
             parameters["reference_name"]: le_reference,
         }
+        # results for compatibility with pairwise analysis
+        results["labeling_efficiency_target"] = le_target
+        results["labeling_efficiency_reference"] = le_target
+        results["fp_fig_AA"] = fp_fig_out[0]
+        results["fp_fig_AB"] = fp_fig_out[1]
+        results["fp_fig_BA"] = fp_fig_out[2]
+        results["fp_fig_BB"] = fp_fig_out[3]
 
         return parameters, results
 
