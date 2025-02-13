@@ -9,6 +9,11 @@ from picasso_workflow import standard_aggregation_workflows
 # Load the environment variables from the .env file
 load_dotenv()
 
+if os.getenv("SLURM_JOB_ID") is None:
+    ON_CLUSTER = False
+else:
+    ON_CLUSTER = True
+
 
 # configure logger
 def config_logger():
@@ -17,9 +22,9 @@ def config_logger():
     formatter = logging.Formatter(
         "%(asctime)s | %(name)s | %(funcName)s | %(levelname)s -> %(message)s"
     )
+    os.makedirs("logs", exist_ok=True)
     job_id = os.getenv("SLURM_JOB_ID")  # Get the job ID from the environment
     rank_id = os.getenv("SLURM_PROCID")
-    os.makedirs("logs", exist_ok=True)
     file_handler = handlers.RotatingFileHandler(
         f"logs/picasso-workflow-job{job_id}-rank{rank_id}.log",
         maxBytes=1e6,

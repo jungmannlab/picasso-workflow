@@ -1452,6 +1452,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             raise e
         pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        # sigma values are given in nm in parameters but px in gmm
         kwargs["min_sigma"] = kwargs["min_sigma"] * pixelsize
         kwargs["max_sigma"] = kwargs["max_sigma"] * pixelsize
         for oa, default in optional_args:

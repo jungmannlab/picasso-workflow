@@ -8,11 +8,11 @@ Description: This module implements functionality to do
     multiple conditions and cells, and aggregating over these.
 """
 import os
+from picasso_workflow import ON_CLUSTER
 from picasso_workflow import AggregationWorkflowRunner
 from picasso_workflow import confluence
 import matplotlib.pyplot as plt
 import multiprocessing
-from mpi4py import MPI
 import pandas as pd
 import logging
 import time
@@ -20,6 +20,11 @@ import hashlib
 from picasso import io
 import pathlib
 from functools import reduce
+import textwrap
+import platform
+
+if ON_CLUSTER:
+    from mpi4py import MPI
 
 
 logger = logging.getLogger(__name__)
@@ -124,13 +129,17 @@ class PathParser:
         if dest_machine not in self.drive_paths.keys():
             raise ValueError(f"Machine {dest_machine} not defined in .env!")
 
-        for src_machine, drivepaths in self.drive_paths.items():
-            src_on_machine = []
-            for srcp in src_dict.values():
-                src_on_machine.append(any([p in srcp for p in drivepaths]))
-            if all(src_on_machine):
-                # src_machine has all drive paths defined
+        # find current machine key
+        for src_machine in self.drive_paths.keys():
+            if src_machine in platform.node():
                 break
+        # for src_machine, drivepaths in self.drive_paths.items():
+        #     src_on_machine = []
+        #     for srcp in src_dict.values():
+        #         src_on_machine.append(any([p in srcp for p in drivepaths]))
+        #     if all(src_on_machine):
+        #         # src_machine has all drive paths defined
+        #         break
 
         drive_map = {}
         for src_p, dest_p in zip(
@@ -184,6 +193,7 @@ class InvestigationCoordinator:
         base_page,
         dest_machine="hpcl8001",
         investigation_description="",
+        always_save=False,
     ):
         self.dataset_filepaths = PathParser().parse_source(
             src_loc, receptors, dest_machine
@@ -204,9 +214,15 @@ class InvestigationCoordinator:
         self.confluence_space = confluence_space
         self.confluence_token = confluence_token
 
-        comm = MPI.COMM_WORLD
-        self.rank = comm.Get_rank()  # Get the rank of the process
-        self.size = comm.Get_size()  # Get the total number of processes
+        self.always_save = always_save
+
+        if ON_CLUSTER:
+            comm = MPI.COMM_WORLD
+            self.rank = comm.Get_rank()  # Get the rank of the process
+            self.size = comm.Get_size()  # Get the total number of processes
+        else:
+            self.rank = 0
+            self.size = 1
 
         if self.rank == 0:
             ci = confluence.ConfluenceInterface(
@@ -300,11 +316,11 @@ class InvestigationCoordinator:
                 if execution_item % self.size != self.rank:
                     continue
                 report_name = f"{cell_name}-{analysis_cell_hash}"
-                print(
-                    f"""
+                text = f"""
                     Worker of rank {self.rank} working on {report_name}
                     (execution item {execution_item})"""
-                )
+                text = textwrap.fill(textwrap.dedent(text), width=70)
+                print(text)
                 try:
                     confpagid_cn = self.ci.create_page(
                         report_name, "", parent_id=confpagid_ct
@@ -471,7 +487,7 @@ class InvestigationCoordinator:
             "result_location": result_location,
             "camera_info": camera_info,
             "gpufit_installed": False,
-            "always_save": False,
+            "always_save": self.always_save,
         }
         return reporter_config, analysis_config
 
