@@ -1419,8 +1419,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                         Calibration dictionary with x and y coefficients, z
                         step size and the number of frames. Only required for
                         3D data.
-                    pixelsize : float (default=None)
-                        Camera pixel size in nm. Only required for 3D data.
                     asynch : bool (default=True)
                         If True, the GMM search is run in parallel using
                         multiprocessing. If False, the GMM search is run
@@ -1453,8 +1451,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             raise e
         pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
         # sigma values are given in nm in parameters but px in gmm
-        kwargs["min_sigma"] = kwargs["min_sigma"] * pixelsize
-        kwargs["max_sigma"] = kwargs["max_sigma"] * pixelsize
+        kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
+        kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
         for oa, default in optional_args:
             kwargs[oa] = parameters.get(oa, default)
 
