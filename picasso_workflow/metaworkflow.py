@@ -115,7 +115,7 @@ class PathParser:
         is_posix = num_fwd > num_bwd
         return is_posix
 
-    def parse_source(self, src_loc, receptors, dest_machine="hpcl8001"):
+    def parse_source(self, src_loc, receptors, dest_machine=None):
         """
         Args:
             src_loc : string
@@ -130,22 +130,28 @@ class PathParser:
             raise ValueError(f"Machine {dest_machine} not defined in .env!")
 
         # find current machine key
-        for src_machine in self.drive_paths.keys():
-            if src_machine in platform.node():
+        if dest_machine is None:
+            for dest_machine in self.drive_paths.keys():
+                if dest_machine in platform.node():
+                    break
+
+        for src_machine, drivepaths in self.drive_paths.items():
+            src_on_machine = []
+            for srcp in src_dict.values():
+                src_on_machine.append(any([p in srcp for p in drivepaths]))
+            if all(src_on_machine):
+                # src_machine has all drive paths defined
                 break
-        # for src_machine, drivepaths in self.drive_paths.items():
-        #     src_on_machine = []
-        #     for srcp in src_dict.values():
-        #         src_on_machine.append(any([p in srcp for p in drivepaths]))
-        #     if all(src_on_machine):
-        #         # src_machine has all drive paths defined
-        #         break
+
+        logger.debug(f"found src machine: {src_machine}")
 
         drive_map = {}
         for src_p, dest_p in zip(
             self.drive_paths[src_machine], self.drive_paths[dest_machine]
         ):
             drive_map[src_p] = dest_p
+
+        logger.debug(f"drive map is {drive_map}")
 
         # keys: [dataset]_[treatment]_[cell#]_[receptor]
         # turn into hierarchical dict
