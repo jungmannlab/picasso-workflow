@@ -616,7 +616,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                 autograd_pars["filename"] = os.path.join(
                     results["folder"], autograd_pars["filename"]
                 )
-            res = self._auto_min_netgrad(**autograd_pars)
+            potential_pars = [
+                "box_size",
+                "frame_numbers",
+                "filename",
+                "start_ng",
+                "zscore",
+                "bins",
+            ]
+            pars_to_pass = {
+                k: autograd_pars[k]
+                for k in potential_pars
+                if k in autograd_pars.keys()
+            }
+            res = self._auto_min_netgrad(**pars_to_pass)
             results["auto_netgrad"] = res
             parameters["min_gradient"] = res["estd_net_grad"]
 
