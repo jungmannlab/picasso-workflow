@@ -9,8 +9,8 @@ Description: This module implements functionality to do
 """
 import os
 from picasso_workflow import ON_CLUSTER
-from picasso_workflow import AggregationWorkflowRunner
-from picasso_workflow import confluence
+from picasso_workflow import AggregationWorkflowRunner, WorkflowRunner
+from picasso_workflow import confluence, util
 import matplotlib.pyplot as plt
 import multiprocessing
 import pandas as pd
@@ -180,6 +180,199 @@ class PathParser:
                     v, drive_map=drive_map
                 )
         return filepaths
+
+
+def find_dnapaint_raw(working_folder):
+    datasets = {}
+    for root, dirs, files in os.walk(working_folder):
+        for file in files:
+            if "_MMStack_Pos0.ome.tif" in file:
+                key = os.path.split(root)[-1]
+                datasets[key] = os.path.join(root, file)
+    dest_file = os.path.join(working_folder, "src_loc.yaml")
+    io.save_info(dest_file, [datasets])
+    return datasets, dest_file
+
+
+class SingleWorkflowCoordinator:
+    """A class to coordinate the analysis of a single measurement, e.g.
+    one Exchange round.
+    """
+
+    def __init__(
+        self,
+        src_loc,
+        analysis_name,
+        working_folder,
+        confluence_url,
+        confluence_space,
+        confluence_token,
+        base_page,
+        dest_machine=None,
+        always_save=False,
+    ):
+        self.dataset_filepaths = io.load_info(src_loc)[0]
+        self.tile_entries = {
+            "filepath": list(self.dataset_filepaths.values()),
+            "#tags": list(self.dataset_filepaths.keys()),
+        }
+
+        self.analysis_name = os.path.split(working_folder)[-1]
+        self.root_folder = os.path.join(
+            working_folder, f"AnalysisResults-{analysis_name}"
+        )
+        self.root_page = self.analysis_name
+
+        self.confluence_url = confluence_url
+        self.confluence_space = confluence_space
+        self.confluence_token = confluence_token
+
+        self.always_save = always_save
+
+        if ON_CLUSTER:
+            comm = MPI.COMM_WORLD
+            self.rank = comm.Get_rank()  # Get the rank of the process
+            self.size = comm.Get_size()  # Get the total number of processes
+        else:
+            self.rank = 0
+            self.size = 1
+
+        if self.rank == 0:
+            ci = confluence.ConfluenceInterface(
+                self.confluence_url,
+                self.confluence_space,
+                base_page,
+                token=self.confluence_token,
+            )
+            try:
+                investigation_description = f"""
+                <p><strong>Analysis file location</strong>
+
+                The files created during the analysis run can be found in
+                {self.root_folder}.</p>
+                """
+                ci.create_page(self.root_page, investigation_description)
+            except confluence.ConfluenceInterfaceError:
+                pass
+        else:
+            # ensure rank 0 has created the root page
+            time.sleep(2)
+        self.ci = confluence.ConfluenceInterface(
+            self.confluence_url,
+            self.confluence_space,
+            self.root_page,
+            token=self.confluence_token,
+        )
+
+    def get_configs(
+        self,
+        report_name,
+        root_folder,
+        cell_type=None,
+        cell_name=None,
+        camera_info=None,
+    ):
+        if cell_type is None:
+            result_location = root_folder
+        elif cell_name is None:
+            result_location = os.path.join(root_folder, cell_type)
+        else:
+            result_location = os.path.join(root_folder, cell_type, cell_name)
+        os.makedirs(result_location, exist_ok=True)
+
+        reporter_config = {
+            "report_name": report_name,
+            "ConfluenceReporter": {
+                "base_url": self.confluence_url,
+                "space_key": self.confluence_space,
+                "parent_page_title": report_name,
+                "token": self.confluence_token,
+            },
+        }
+
+        if camera_info is None:
+            camera_info = {
+                "Gain": 1,
+                "Sensitivity": 0.22,  # Artemis
+                "Baseline": 100,
+                "Qe": 1,
+                "Pixelsize": 130,  # nm
+            }
+        analysis_config = {
+            "result_location": result_location,
+            "camera_info": camera_info,
+            "gpufit_installed": False,
+            "always_save": self.always_save,
+        }
+        return reporter_config, analysis_config
+
+    def prepare_analysis(self, workflow_modules):
+        """
+        Args:
+            workflow_modules:
+                list of tuple, defining modules to run
+        Returns:
+            run_wr_kwargs
+        """
+        # make sure different nodes query confluence at different times
+        time.sleep(3 * self.rank)
+
+        run_wr_kwargs = []
+        execution_item = -1
+
+        tiler = util.ParameterTiler(None, self.tile_entries)
+        all_workflow_module_sets, tags = tiler.run(workflow_modules)
+        print(all_workflow_module_sets)
+        print(tags)
+        for wkfl_mods, tag in zip(all_workflow_module_sets, tags):
+            execution_item += 1
+            if execution_item % self.size != self.rank:
+                continue
+            report_name = tag
+            text = f"""
+                Worker of rank {self.rank} working on {report_name}
+                (execution item {execution_item})"""
+            text = textwrap.fill(textwrap.dedent(text), width=70)
+            print(text)
+            try:
+                confpagid_cn = self.ci.create_page(report_name, "")
+            except confluence.ConfluenceInterfaceError:
+                confpagid_cn, _ = self.ci.get_page_properties(
+                    page_title=report_name
+                )
+            # print('confluence page id cell name', confpagid_cn)
+
+            reporter_config, analysis_config = self.get_configs(
+                report_name, self.root_folder
+            )
+
+            wr = WorkflowRunner.config_from_dicts(
+                reporter_config,
+                analysis_config,
+                wkfl_mods,
+                continue_previous_runner=True,
+            )
+            run_wr_kwargs.append(
+                {
+                    "wr": wr,
+                    "dataset_name": tag,
+                }
+            )
+        return run_wr_kwargs
+
+    def run_analysis(self, workflow_modules):
+        run_wr_kwargs = self.prepare_analysis(workflow_modules)
+
+        # print(f'rank {self.rank}, size {self.size}: running {run_awr_kwargs}')
+
+        for kwargs in run_wr_kwargs:
+            self.run_wr(**kwargs)
+
+    def run_wr(self, wr, dataset_name):
+        logger.debug(f"starting to analyse {dataset_name}")
+        wr.run()
+        logger.debug(f"finished analysing {dataset_name}")
+        plt.close("all")
 
 
 class InvestigationCoordinator:
