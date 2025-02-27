@@ -42,7 +42,7 @@ def render_scene(kwargs, locs, viewport=None):
     n_channels = len(locs)
     # render single or multi channel data
     if n_channels == 1:
-        bgra = render_single_channel(kwargs, locs)
+        bgra = render_single_channel(kwargs, locs[0])
     else:
         bgra = render_multi_channel(kwargs, locs)
 
@@ -283,8 +283,18 @@ def get_default_render_kwargs(channel_locs, image_px_size, cam_px_size):
 
 
 def plot_scene(
-    channel_locs, image_px_size, cam_px_size, fp=None, render_kwargs=None
+    channel_locs,
+    image_px_size,
+    cam_px_size,
+    fp=None,
+    render_kwargs=None,
+    x_offset=0,
+    y_offset=0,
+    title="",
 ):
+    if not isinstance(channel_locs, list):
+        channel_locs = [channel_locs]
+
     try:
         kwargs = get_default_render_kwargs(
             channel_locs, image_px_size, cam_px_size
@@ -314,14 +324,15 @@ def plot_scene(
         aspect="equal",
         origin="upper",
         extent=[
-            0,
-            bgra.shape[1] * image_px_size / 1000,
-            0,
-            bgra.shape[0] * image_px_size / 1000,
+            x_offset,
+            bgra.shape[1] * image_px_size / 1000 + x_offset,
+            y_offset,
+            bgra.shape[0] * image_px_size / 1000 + y_offset,
         ],
     )
     ax.set_xlabel("x [µm]")
     ax.set_ylabel("y [µm]")
+    ax.set_title(title)
     if fp is not None:
         fig.savefig(fp)
     return fig, ax
