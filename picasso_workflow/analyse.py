@@ -2303,8 +2303,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                     granularity : float
                     the spinna granularity
         """
-        from picasso_workflow.spinna_main import load_structures_from_dict
-
         if isinstance(parameters["structures"], str):
             with open(parameters["structures"], "r") as f:
                 structures = yaml.read_all(f)
@@ -2357,7 +2355,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             depth = z_range
             # d = 3
 
-        structures, targets = load_structures_from_dict(structures)
+        structures, targets = picasso_outpost.load_structures_from_dict(
+            structures
+        )
 
         exp_frac_targets = exp_n_targets / np.sum(exp_n_targets)
         n_sim_targets = {
@@ -2389,12 +2389,15 @@ class AutoPicasso(util.AbstractModuleCollection):
             "apply_mask": mask_dict is not None,
             "nn_plotted": parameters["n_nearest_neighbors"],
             "result_dir": results["folder"],
+            "n_simulated": n_sim_targets,
         }
 
-        result_dir, fp_figs = picasso_outpost.spinna_sgl_temp(spinna_pars)
+        spinna_results, fp_figs = picasso_outpost.single_spinna_run(
+            spinna_pars
+        )
         plt.close("all")
         results["fp_figs"] = fp_figs
-        results["result_dir"] = result_dir
+        results["spinna_results"] = spinna_results
 
         return parameters, results
 
@@ -2536,8 +2539,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["success"] = False
         else:
             # kick off SPINNA analysis
-            print("starting spinna")
-            result_dir, fp_summary, fp_fig = picasso_outpost.spinna_temp(
+            print("starting spinna batch analysis")
+            result_dir, fp_summary, fp_fig = picasso_outpost.spinna_batch(
                 cfg_fp
             )
 
@@ -3840,9 +3843,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 "apply_mask": False,
                 "nn_plotted": parameters["nn_nth"],
                 "result_dir": results["folder"],
+                "n_simulated": n_sim_targets,
             }
 
-            result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
+            result, fp_fig = picasso_outpost.single_spinna_run(
+                spinna_parameters
+            )
             plt.close("all")
             props[f"{A},{B}"] = result["Fitted proportions of structures"]
             fp_allfigs.append(fp_fig)
@@ -5786,9 +5792,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             "apply_mask": False,
             "nn_plotted": parameters["nn_nth"],
             "result_dir": results["folder"],
+            "n_simulated": n_sim_targets,
         }
 
-        result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
+        result, fp_fig = picasso_outpost.single_spinna_run(spinna_parameters)
         plt.close("all")
 
         # rename figures with random code
