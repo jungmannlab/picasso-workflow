@@ -6,7 +6,7 @@ Initial Date: March 7, 2024
 Description: This is the picasso interface of picasso-workflow
 """
 from picasso import lib, io, localize, gausslq, postprocess, clusterer
-from picasso import aim, gmm
+from picasso import aim, g5m
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import os
@@ -1408,15 +1408,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                         Minimum number of localizations per component. Used to
                         filter out components with too few localizations that
                         likely  represent background.
-                    min_sigma : float
-                        Minimum standard deviation of the Gaussian components
-                        in nanometers. Useful for
-                        avoiding overfitting within a single localization
-                        cloud.
-                    max_sigma : float
-                        Maximum standard deviation of the Gaussian components
-                        in nanometers. Useful for
-                        avoiding fitting extra components fitting background.
                 and optional keys:
                     save_locs : bool
                         whether to save the locs into the results folder
@@ -1441,35 +1432,45 @@ class AutoPicasso(util.AbstractModuleCollection):
                         progress bar. If None, the progress bar displayed
                         directly to the console. If 'silent', no progress
                         is displayed
+                    sigma_bounds : float (not recommended)
+                        Minimum standard deviation of the Gaussian components
+                        in nanometers. Useful for avoiding overfitting within
+                        a single localization cloud. Now using individual
+                        loc precision, so min_sigma is not recommended.
+                    loc_prec_handle : Literal["local", "global", "abs"]
+                        default: local
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        required_args = ["min_locs", "min_sigma", "max_sigma"]
+        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        required_args = ["min_locs"]
         optional_args = [
-            ("max_rounds_without_best_bic", 3),
-            ("bootstrap_check", None),
+            ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
+            ("bootstrap_check", False),
             ("calibration", None),
-            ("pixelsize", None),
-            ("asynch", None),
+            ("pixelsize", pixelsize),
+            ("asynch", True),
             ("callback_parent", "silent"),
+            ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
+            ("loc_prec_handle", "local"),
         ]
         try:
             kwargs = {k: parameters[k] for k in required_args}
         except KeyError as e:
             logger.error(
                 f"""All of the following arguments are required for
-                picasso.gmm.gmm_search: {required_args}"""
+                picasso.g5m.run_g5m: {required_args}"""
             )
             raise e
-        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
         # sigma values are given in nm in parameters but px in gmm
-        kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
-        kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
+        if "min_sigma" in kwargs.keys():
+            kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
+            kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
         for oa, default in optional_args:
             kwargs[oa] = parameters.get(oa, default)
 
-        center_locs, clustered_locs, gmm_info = gmm.gmm_search(
+        center_locs, clustered_locs, gmm_info = g5m.run_g5m(
             self.locs, self.info, **kwargs
         )
 

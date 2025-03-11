@@ -127,7 +127,10 @@ class PathParser:
         """
         src_dict = io.load_info(src_loc)[0]
         if dest_machine not in self.drive_paths.keys():
-            raise ValueError(f"Machine {dest_machine} not defined in .env!")
+            raise ValueError(
+                f"Machine {dest_machine} not defined in .env! \
+                ({self.drive_paths.keys()})"
+            )
 
         # find current machine key
         if dest_machine is None:
