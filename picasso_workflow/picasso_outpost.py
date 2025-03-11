@@ -13,6 +13,7 @@ import numpy as np
 
 # from numpy.lib.recfunctions import stack_arrays
 import pandas as pd
+import numba as nb
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 from matplotlib.colors import LogNorm
@@ -27,6 +28,7 @@ from scipy.spatial import KDTree
 from scipy.special import gamma as _gamma
 from scipy.special import factorial as _factorial
 from scipy.optimize import minimize
+from sklearn.cluster import OPTICS
 from scipy import stats
 import itertools
 
@@ -1523,6 +1525,54 @@ def _plot_interaction_graph(
 ########################################################################
 
 
+def prep_pick_similar_kwargs(locs, info, diameter):
+    d = diameter
+
+    maxheight = info[0]["Height"]
+    maxwidth = info[0]["Width"]
+    r = d / 2
+    d2 = d**2
+
+    # extract n_locs and rmsd from current picks
+    (locs_temp, r, _, _, block_starts, block_ends, K, L) = (
+        postprocess.get_index_blocks(locs, info, r)
+    )
+
+    # x, y coordinates of found regions:
+    x_similar = np.array([])
+    y_similar = np.array([])
+
+    # preparations for grid search
+    x_range = np.arange(d / 2, maxwidth, np.sqrt(3) * d / 2)
+    y_range_base = np.arange(d / 2, maxheight - d / 2, d)
+    y_range_shift = y_range_base + d / 2
+
+    locs_x = locs_temp.x
+    locs_y = locs_temp.y
+    locs_xy = np.stack((locs_x, locs_y))
+    x_r = np.uint64(x_range / r)
+    y_r1 = np.uint64(y_range_shift / r)
+    y_r2 = np.uint64(y_range_base / r)
+    kwargs = {
+        "x": x_range,
+        "y_shift": y_range_shift,
+        "y_base": y_range_base,
+        "x_r": x_r,
+        "y_r1": y_r1,
+        "y_r2": y_r2,
+        "locs_xy": locs_xy,
+        "block_starts": block_starts,
+        "block_ends": block_ends,
+        "K": K,
+        "L": L,
+        "x_similar": x_similar,
+        "y_similar": y_similar,
+        "r": r,
+        "d2": d2,
+    }
+    return kwargs
+
+
 def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=0.4):
     """
     Searches picks similar to Gold clusters.
@@ -1545,18 +1595,7 @@ def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=0.4):
     NotImplementedError
         If pick shape is rectangle
     """
-    d = diameter
-
     maxframe = info[0]["Frames"]
-    maxheight = info[0]["Height"]
-    maxwidth = info[0]["Width"]
-    r = d / 2
-    d2 = d**2
-
-    # extract n_locs and rmsd from current picks
-    (locs_temp, r, _, _, block_starts, block_ends, K, L) = (
-        postprocess.get_index_blocks(locs, info, r)
-    )
 
     # calculate min and max n_locs and rmsd for picking similar
     mean_n_locs = maxframe
@@ -1567,46 +1606,14 @@ def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=0.4):
     min_rmsd = mean_rmsd - std_range * std_rmsd
     max_rmsd = mean_rmsd + std_range * std_rmsd
 
-    # x, y coordinates of found regions:
-    x_similar = np.array([])
-    y_similar = np.array([])
+    kwargs = prep_pick_similar_kwargs(locs, info, diameter)
+    kwargs["min_n_locs"] = min_n_locs
+    kwargs["max_n_locs"] = max_n_locs
+    kwargs["min_rmsd"] = min_rmsd
+    kwargs["max_rmsd"] = max_rmsd
 
-    # preparations for grid search
-    x_range = np.arange(d / 2, maxwidth, np.sqrt(3) * d / 2)
-    y_range_base = np.arange(d / 2, maxheight - d / 2, d)
-    y_range_shift = y_range_base + d / 2
-
-    locs_x = locs_temp.x
-    locs_y = locs_temp.y
-    locs_xy = np.stack((locs_x, locs_y))
-    x_r = np.uint64(x_range / r)
-    y_r1 = np.uint64(y_range_shift / r)
-    y_r2 = np.uint64(y_range_base / r)
-    # print(locs_xy)
-    # print("min_n_locs, max_n_locs, min_rmsd, max_rmsd")
-    # print(min_n_locs, max_n_locs, min_rmsd, max_rmsd)
     # pick similar
-    x_similar, y_similar = postprocess.pick_similar(
-        x_range,
-        y_range_shift,
-        y_range_base,
-        min_n_locs,
-        max_n_locs,
-        min_rmsd,
-        max_rmsd,
-        x_r,
-        y_r1,
-        y_r2,
-        locs_xy,
-        block_starts,
-        block_ends,
-        K,
-        L,
-        x_similar,
-        y_similar,
-        r,
-        d2,
-    )
+    x_similar, y_similar = postprocess.pick_similar(**kwargs)
     # add picks
     similar = list(zip(x_similar, y_similar))
     return similar
@@ -2010,6 +2017,193 @@ def shifts_from_picked_coordinate(locs, coordinate):
 ########################################################################
 # End Labeling Efficiency Workflow Modules
 ########################################################################
+
+########################################################################
+# Start pick similar analysis
+# this is basically picasso.postprocess.pick_similar, but instead
+# of filtering for rmsd, it returns rmsd and n_locs
+########################################################################
+
+
+def cluster_picksim(rmsds, nlocs, nframes, xi=0.05, min_cluster_size=0.05):
+    # find different clusters
+    X = np.stack([rmsds, nlocs / nframes]).T
+    clustering = OPTICS(
+        min_samples=int(nframes * min_cluster_size / 5),
+        xi=xi,
+        min_cluster_size=min_cluster_size,
+    )
+    clustering.fit(X)
+
+    return clustering.labels_
+
+
+def picksim_kwargs_for_clusters(rmsds, nlocs, labels, std_range=1):
+    # find median nlocs and rmsd of the cluster groups, and
+    # set min and max parameters for picking similar
+    cluster_grouplabels = np.unique(labels)
+    cluster_picksim_kwargs = []
+    for grouplabel in cluster_grouplabels:
+        if grouplabel == -1:
+            continue
+        group_idcs = labels == grouplabel
+        median_nlocs = np.median(nlocs[group_idcs])
+        median_rmsd = np.median(rmsds[group_idcs])
+        std_nlocs = np.std(nlocs[group_idcs])
+        std_rmsd = np.std(rmsds[group_idcs])
+        cluster_picksim_kwargs.append(
+            {
+                "min_n_locs": median_nlocs - std_range * std_nlocs,
+                "max_n_locs": median_nlocs + std_range * std_nlocs,
+                "min_rmsd": median_rmsd - std_range * std_rmsd,
+                "max_rmsd": median_rmsd + std_range * std_rmsd,
+            }
+        )
+    return cluster_picksim_kwargs
+
+
+def find_structures(
+    locs,
+    info,
+    diameter,
+    min_n_locs_per_frame=0.01,
+    xi=0.05,
+    min_cluster_size=0.05,
+):
+    nframes = info[0]["Frames"]
+    min_n_locs = int(nframes * min_n_locs_per_frame)
+    # get rmsd and nlocs
+    x_similar, y_similar, rmsds, nlocs = get_pick_similar_vals(
+        locs, info, diameter, min_n_locs
+    )
+    # cluster based on rmsd/nlocs
+    labels = cluster_picksim(rmsds, nlocs, nframes, xi, min_cluster_size)
+    # the clusters found might be too widespread. therefore,
+    # pick by their median +/- std
+    cluster_picksim_kwargs = picksim_kwargs_for_clusters(rmsds, nlocs, labels)
+
+    newlabels = -1 * np.ones_like(labels)
+    cluster_picks = []
+    for clustergroup, pick_kwargs in enumerate(cluster_picksim_kwargs):
+        pick_idcs = (
+            (nlocs >= pick_kwargs["min_n_locs"])
+            & (nlocs < pick_kwargs["max_n_locs"])
+            & (rmsds >= pick_kwargs["min_rmsd"])
+            & (rmsds < pick_kwargs["max_rmsd"])
+        )
+        newlabels[pick_idcs] = clustergroup
+        x_picked = x_similar[pick_idcs]
+        y_picked = y_similar[pick_idcs]
+        cluster_picks.append(list(zip(x_picked, y_picked)))
+    return cluster_picks, nlocs, rmsds, labels, newlabels
+
+
+def get_pick_similar_vals(locs, info, diameter, min_n_locs=1):
+    """
+    Usage:
+    x_similar, y_similar, rmsds, nlocs = get_pick_similar_vals(
+        locs, info, diameter=1.5, min_n_locs=100)
+    plt.hexbin(rmsds, nlocs)
+    plt.show()
+    """
+    kwargs = prep_pick_similar_kwargs(locs, info, diameter)
+    kwargs["rmsds"] = np.array([])
+    kwargs["nlocs"] = np.array([])
+    kwargs["min_n_locs"] = min_n_locs
+    x_similar, y_similar, rmsds, nlocs = pick_similar_analysis(**kwargs)
+    return x_similar, y_similar, rmsds, nlocs
+
+
+@nb.jit(nopython=True, nogil=True, cache=True)
+def pick_similar_analysis(
+    x,
+    y_shift,
+    y_base,
+    x_r,
+    y_r1,
+    y_r2,
+    locs_xy,
+    block_starts,
+    block_ends,
+    K,
+    L,
+    x_similar,
+    y_similar,
+    rmsds,
+    nlocs,
+    r,
+    d2,
+    min_n_locs=1,
+):
+    for i, x_grid in enumerate(x):
+        x_range = x_r[i]
+        # y_grid is shifted for odd columns
+        if i % 2:
+            y = y_shift
+            y_r = y_r1
+        else:
+            y = y_base
+            y_r = y_r2
+        for j, y_grid in enumerate(y):
+            y_range = y_r[j]
+            n_block_locs = postprocess._n_block_locs_at(
+                x_range, y_range, K, L, block_starts, block_ends
+            )
+            if n_block_locs >= min_n_locs:
+                block_locs_xy = postprocess._get_block_locs_at(
+                    x_range,
+                    y_range,
+                    locs_xy,
+                    block_starts,
+                    block_ends,
+                    K,
+                    L,
+                )
+                picked_locs_xy = postprocess._locs_at(
+                    x_grid, y_grid, block_locs_xy, r
+                )
+                if picked_locs_xy.shape[1] > 1:
+                    # Move to COM peak
+                    x_test_old = x_grid
+                    y_test_old = y_grid
+                    x_test = np.mean(picked_locs_xy[0])
+                    y_test = np.mean(picked_locs_xy[1])
+                    count = 0
+                    while (
+                        np.abs(x_test - x_test_old) > 1e-3
+                        or np.abs(y_test - y_test_old) > 1e-3
+                    ):
+                        count += 1
+                        # skip the locs if the loop is too long
+                        if count > 500:
+                            break
+                        x_test_old = x_test
+                        y_test_old = y_test
+                        picked_locs_xy = postprocess._locs_at(
+                            x_test, y_test, block_locs_xy, r
+                        )
+                        if picked_locs_xy.shape[1] > 1:
+                            x_test = np.mean(picked_locs_xy[0])
+                            y_test = np.mean(picked_locs_xy[1])
+                        else:
+                            break
+                    if np.all(
+                        (x_similar - x_test) ** 2 + (y_similar - y_test) ** 2
+                        > d2
+                    ):
+                        # now, instead of filtering, record and return rmsd
+                        # and n_locs values
+                        if min_n_locs <= picked_locs_xy.shape[1]:
+                            x_similar = np.append(x_similar, x_test)
+                            y_similar = np.append(y_similar, y_test)
+                            rmsds = np.append(
+                                rmsds, postprocess._rmsd_at_com(picked_locs_xy)
+                            )
+                            nlocs = np.append(nlocs, picked_locs_xy.shape[1])
+    return x_similar, y_similar, rmsds, nlocs
+
+
+#####
 
 
 def plot_1dhist(locs, field, fig, ax):

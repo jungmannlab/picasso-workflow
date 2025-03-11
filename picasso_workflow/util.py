@@ -77,6 +77,11 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def render(self):
+        """Renders localizations."""
+        pass
+
+    @abc.abstractmethod
     def undrift_rcc(self):
         """Undrifts localized data using redundant cross correlation."""
         pass
@@ -269,6 +274,11 @@ class AbstractModuleCollection(abc.ABC):
         kinetics. The metrics used are number of locs and rms deviation
         from mean frame
         """
+        pass
+
+    @abc.abstractmethod
+    def find_structures(self):
+        """pick similar on clusters in nlocs/rmsd space"""
         pass
 
     @abc.abstractmethod

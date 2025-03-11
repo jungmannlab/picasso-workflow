@@ -13,8 +13,8 @@ import os
 import platform
 import psutil
 import time
-from concurrent import futures as _futures
-from tqdm import tqdm
+
+# from tqdm import tqdm
 import numpy as np
 import pandas as pd
 from scipy.spatial import distance, KDTree
@@ -723,10 +723,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             if parameters["fit_parallel"]:
                 # theta = gausslq.fit_spots_parallel(spots, asynch=False)
                 fs = gausslq.fit_spots_parallel(spots, asynch=True)
-                n_tasks = len(fs)
-                with tqdm(total=n_tasks, unit="task") as progress_bar:
-                    for f in _futures.as_completed(fs):
-                        progress_bar.update()
+                # n_tasks = len(fs)
+                # with tqdm(total=n_tasks, unit="task") as progress_bar:
+                #     for f in _futures.as_completed(fs):
+                #         progress_bar.update()
                 theta = gausslq.fits_from_futures(fs)
                 em = self.analysis_config["camera_info"]["Gain"] > 1
                 self.locs = gausslq.locs_from_fits(
@@ -735,7 +735,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             else:
                 theta = np.empty((len(spots), 6), dtype=np.float32)
                 theta.fill(np.nan)
-                for i in tqdm(range(len(spots))):
+                # for i in tqdm(range(len(spots))):
+                for i in range(len(spots)):
                     theta[i] = gausslq.fit_spot(spots[i])
 
                 self.locs = gausslq.locs_from_fits(
@@ -879,6 +880,90 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
         results["labeled filepaths"] = fps_out
         results["success"] = True
+        return parameters, results
+
+    @module_decorator
+    def render(self, i, parameters, results):
+        """Renders localizations on the whole field of view, and on
+        a zoom in around the center of mass of localizations.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    ctrmass_fov_nm : Field of view of the zoom in rendering
+                        around the center of mass in nm
+                optional items:
+                    fullfov_pixelsize : The rendered pixel size [nm] of the
+                        full FOV rendering
+                    ctrmass_pixelsize : The rendered pixel size [nm] of the
+                        zoom in rendering around the center of mass
+                    ctrmass_blur_method : Blur method
+                    ctrmass_min_blur_width : min blur with
+                    ctrmass_ang : angle
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+                    labeled filepath : dict
+                        keys : labels
+                        values : filepaths
+        """
+        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        rcode = generate_random_code(6)
+
+        if self.channel_locs is not None:
+            render_locs = self.channel_locs
+            x_mean = np.mean([np.mean(lcs["x"]) for lcs in self.channel_locs])
+            y_mean = np.mean([np.mean(lcs["y"]) for lcs in self.channel_locs])
+        else:
+            render_locs = self.locs
+            x_mean = np.mean(self.locs["x"])
+            y_mean = np.mean(self.locs["y"])
+
+        # render whole field of view
+        fullfov_pixelsize = parameters.get("fullfov_pixelsize", pixelsize)
+        results["fp_scene_fullfov"] = os.path.join(
+            results["folder"], f"locs_fullfov_{rcode}.png"
+        )
+        render.plot_scene(
+            render_locs,
+            fullfov_pixelsize,
+            pixelsize,
+            fp=results["fp_scene_fullfov"],
+        )
+
+        # render zoom into the center of mass
+        ctrmass_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
+        fov_half = parameters.get("ctrmass_fov_nm") / 2
+        x_min = x_mean - fov_half / pixelsize
+        x_max = x_mean + fov_half / pixelsize
+        y_min = y_mean - fov_half / pixelsize
+        y_max = y_mean + fov_half / pixelsize
+
+        render_kwargs = {
+            "oversampling": pixelsize / ctrmass_pixelsize,
+            "viewport": [(y_min, x_min), (y_max, x_max)],
+            "blur_method": parameters.get("ctrmass_blur_method"),
+            "min_blur_width": parameters.get("ctrmass_min_blur_width", 0),
+            "ang": parameters.get("ctrmass_ang"),
+        }
+        results["fp_scene_ctrmass"] = os.path.join(
+            results["folder"], f"locs_ctrmass_{rcode}.png"
+        )
+        render.plot_scene(
+            render_locs,
+            ctrmass_pixelsize,
+            pixelsize,
+            fp=results["fp_scene_ctrmass"],
+            render_kwargs=render_kwargs,
+            x_offset=x_min * pixelsize / 1000,
+            y_offset=y_min * pixelsize / 1000,
+        )
         return parameters, results
 
     @module_decorator
@@ -1963,6 +2048,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         rcode = generate_random_code(6)
         if parameters.get("filepaths"):
             self.channel_locs = []
@@ -1987,7 +2073,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["folder"], f"locs_before_{rcode}.png"
         )
         render.plot_scene(
-            self.channel_locs, 100, 130, fp=results["fp_scene_locs_before"]
+            self.channel_locs,
+            pixelsize,
+            pixelsize,
+            fp=results["fp_scene_locs_before"],
         )
         if fiducial_locs is not None:
             results["fp_scene_fids_before"] = os.path.join(
@@ -1999,8 +2088,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             }
             render.plot_scene(
                 fiducial_locs,
-                130,
-                130,
+                pixelsize,
+                pixelsize,
                 fp=results["fp_scene_fids_before"],
                 render_kwargs=fid_render_kwargs,
             )
@@ -2211,8 +2300,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                         max of histogram
                     n_nearest_neighbors : int
                         number of nearest neighbors to evaluate
-                    res_factor : float
-                    the spinna res_factor
+                    granularity : float
+                    the spinna granularity
         """
         from picasso_workflow.spinna_main import load_structures_from_dict
 
@@ -2275,8 +2364,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             tgt: exp_frac_targets[i] * parameters["n_simulate"]
             for i, tgt in enumerate(self.channel_tags)
         }
+        # N_structures = spinna.generate_N_structures(
         N_structures = picasso_outpost.generate_N_structures(
-            structures, n_sim_targets, parameters["res_factor"]
+            structures, n_sim_targets, parameters["granularity"]
         )
 
         spinna_pars = {
@@ -4103,6 +4193,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         # # get map
         # with open(parameters["fp_channel_map"], "r") as f:
         #     channel_map = yaml.safe_load(f)
@@ -4112,7 +4203,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["folder"], f"locs_before_{rcode}.png"
         )
         render.plot_scene(
-            self.channel_locs, 100, 130, fp=results["fp_scene_locs_before"]
+            self.channel_locs,
+            pixelsize,
+            pixelsize,
+            fp=results["fp_scene_locs_before"],
         )
         fp_combined_locs = parameters.get("fp_combined_locs", None)
         if fp_combined_locs:
@@ -4124,8 +4218,6 @@ class AutoPicasso(util.AbstractModuleCollection):
             mols = [combined_locs]
         else:
             mols = [locs for locs in self.channel_locs]
-
-        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
 
         # mol_coords = [
         #     outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
@@ -4160,7 +4252,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 results["folder"], f"locs_after_{rcode}.png"
             )
             render.plot_scene(
-                self.channel_locs, 100, 130, fp=results["fp_scene_locs_after"]
+                self.channel_locs,
+                pixelsize,
+                pixelsize,
+                fp=results["fp_scene_locs_after"],
             )
         area = cell_mask.area
 
@@ -5068,6 +5163,171 @@ class AutoPicasso(util.AbstractModuleCollection):
             logger.debug("removing gold from attribute locs.")
 
         # logger.debug(f"# locs kept as attribute: {len(self.locs)}")
+
+        return parameters, results
+
+    @module_decorator
+    def find_structures(self, i, parameters, results):
+        """pick similar on clusters in nlocs/rmsd space.
+        This may be useful for automated picking of origamis, and may
+        help for defining parameters for finding gold
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    diameter : float
+                        the pick similar diameter for identifying gold
+                and optional keys:
+                    min_n_locs_per_frame : float
+                        the percentage of frames with events in the pick
+                        region below which there is noise. default: 0.01
+                    n_plot_structures : int
+                        the number of structures to plot
+                    display_pixelsize : float
+                        the pixelsize for display in nm, default: 1
+                    xi : float
+                        the xi parameter for clustering. default 0.05
+                    min_cluster_size : float
+                        the minimun cluster size (fract). default .05
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        logger.debug(f"# locs: {len(self.locs)}")
+        # search for xy positions that look like gold ('pick similar')
+        diameter = parameters["diameter"]
+        kwargs = {"diameter": diameter}
+        for prop in ["min_n_locs_per_frame", "xi", "min_cluster_size"]:
+            if val := parameters.get(prop):
+                kwargs[prop] = val
+        (cluster_picks, nlocs, rmsds, labels, newlabels) = (
+            picasso_outpost.find_structures(self.locs, self.info, **kwargs)
+        )
+
+        results["n_clusters"] = len(cluster_picks)
+        results["n_picks"] = [len(picks) for picks in cluster_picks]
+
+        # show clustering results
+        fig, ax = plt.subplots()
+        colors = ["k", "g", "r", "b", "y", "c"]
+        for lbl, color in zip(range(-1, 1 + np.max(labels)), colors):
+            if lbl < 0:
+                alpha = 0.1
+            else:
+                alpha = 0.3
+            ax.scatter(
+                nlocs[labels == lbl],
+                rmsds[labels == lbl],
+                color=color,
+                alpha=alpha,
+                label=f"cluster {lbl:02d}",
+            )
+        ax.set_xlabel("# localizations in pick")
+        ax.set_ylabel("root mean square distance in pick")
+        ax.set_title("Raw Clustering of picks")
+        ax.legend()
+        rcode = generate_random_code(6)
+        results["fp_rawcluster"] = os.path.join(
+            results["folder"], f"rawcluster-{rcode}.png"
+        )
+        fig.set_size_inches((9, 9))
+        fig.savefig(results["fp_rawcluster"])
+
+        fig, ax = plt.subplots()
+        for lbl, color in zip(range(-1, 1 + np.max(newlabels)), colors):
+            if lbl < 0:
+                alpha = 0.1
+            else:
+                alpha = 0.3
+            ax.scatter(
+                nlocs[newlabels == lbl],
+                rmsds[newlabels == lbl],
+                color=color,
+                alpha=alpha,
+                label=f"cluster {lbl:02d}",
+            )
+        ax.set_xlabel("# localizations in pick")
+        ax.set_ylabel("root mean square distance in pick")
+        ax.set_title("Pick-similar Clustering of picks")
+        ax.legend()
+        results["fp_picksimcluster"] = os.path.join(
+            results["folder"], f"picksimcluster-{rcode}.png"
+        )
+        fig.set_size_inches((9, 9))
+        fig.savefig(results["fp_picksimcluster"])
+
+        # save the pick locs
+        fp_locs = []
+        fp_renderings = []
+        for cluster_id, picks in enumerate(cluster_picks):
+            # all xy coords found for this cluster of structure
+            if len(picks) > 2:
+                cluster_locs = picasso_outpost.picked_locs(
+                    self.locs,
+                    self.info,
+                    picks,
+                    pick_diameter=diameter,
+                    return_nonpicked=False,
+                )
+
+            # save gold locs
+            fp = os.path.join(
+                results["folder"], f"structure_cluster_{cluster_id:02d}.hdf5"
+            )
+            # fp_gold = os.path.join(results["folder"], "gold.pkl")
+            fp_locs.append(fp)
+            cluster_info = self.info
+            cluster_info.append(
+                {
+                    "Generated by": "picasso-workflow.analyse.find_structures",
+                    "data": f"strucutre {cluster_id:02d}",
+                }
+            )
+            io.save_locs(fp, cluster_locs, cluster_info)
+
+            # plot representative structures
+            n_plot = parameters.get("n_plot_structures")
+            if n_plot is None:
+                continue
+            fp_renderings_cluster = []
+            pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+            pixelsize_display = parameters.get("display_pixelsize", 1)
+            for idx, pick_i in enumerate(
+                np.random.choice(len(picks), size=n_plot, replace=False)
+            ):
+                x_min = picks[pick_i][0] - diameter / 2
+                y_min = picks[pick_i][1] - diameter / 2
+                render_kwargs = {
+                    "oversampling": pixelsize / pixelsize_display,
+                    "viewport": [
+                        (y_min, x_min),
+                        (
+                            picks[pick_i][1] + diameter / 2,
+                            picks[pick_i][0] + diameter / 2,
+                        ),
+                    ],
+                }
+                fp_renderings_cluster.append(
+                    os.path.join(
+                        results["folder"],
+                        f"render_structure_{idx}_{pick_i}-{rcode}.png",
+                    )
+                )
+                render.plot_scene(
+                    cluster_locs,
+                    pixelsize_display,
+                    pixelsize,
+                    fp=fp_renderings_cluster[-1],
+                    render_kwargs=render_kwargs,
+                    x_offset=x_min * pixelsize / 1000,
+                    y_offset=y_min * pixelsize / 1000,
+                    title=f"pick {pick_i}",
+                )
+            fp_renderings.append(fp_renderings_cluster)
+
+        results["fp_cluster_locs"] = fp_locs
+        results["fp_renderings"] = fp_renderings
 
         return parameters, results
 
