@@ -337,9 +337,15 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_load_datasets_to_aggregate")
         )
 
+    @patch("picasso_workflow.outpost_modules.render.plot_scene")
     @patch("picasso_workflow.analyse.picasso_outpost.align_channels")
-    def align_channels(self, mock_align_channels):
-        mock_align_channels.return_value = [[3], [2]], np.zeros((3, 4, 5))
+    def align_channels(self, mock_align_channels, mock_plot_scene):
+        mock_align_channels.return_value = (
+            [[3], [2]],
+            np.zeros((3, 4, 5)),
+            False,
+            "RCC",
+        )
         self.ap.channel_info = []
 
         parameters = {"fig_filename": "shiftplot.png"}
@@ -431,6 +437,7 @@ class TestAnalyseModules(unittest.TestCase):
             ("y", "f4"),
             ("lpx", "f4"),
             ("lpy", "f4"),
+            ("group", "u4"),
         ]
         self.ap.locs = np.rec.array(
             [
@@ -442,7 +449,12 @@ class TestAnalyseModules(unittest.TestCase):
         mock_dbscan.return_value = self.ap.locs
         mock_fcc.return_value = self.ap.locs
 
-        parameters = {"radius": 5, "min_density": 0.3}
+        parameters = {
+            "radius": 5,
+            "min_density": 0.3,
+            "min_samples": 3,
+            "continue_with_centers": True,
+        }
         parameters, results = self.ap.dbscan(0, parameters)
         # logger.debug(f'parameters: {parameters}')
         logger.debug(f"results: {results}")
@@ -510,7 +522,7 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_smlm_clusterer"))
 
-    @patch("picasso_workflow.analyse.gmm.gmm_search")
+    @patch("picasso_workflow.analyse.g5m.run_g5m")
     def gaussian_mixture_cluster(self, mock_gmms):
         self.ap.info = [{"Width": 1000, "Height": 1000}]
         locs_dtype = [
@@ -520,6 +532,7 @@ class TestAnalyseModules(unittest.TestCase):
             ("y", "f4"),
             ("lpx", "f4"),
             ("lpy", "f4"),
+            ("n", "u4"),
         ]
         self.ap.locs = np.rec.array(
             [
@@ -591,7 +604,7 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_sgl_temp")
+    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
     def spinna(self, mock_sptmp):
         mock_sptmp.return_value = (0, 1)
         info = [{"Width": 1000, "Height": 1000}]
@@ -625,7 +638,8 @@ class TestAnalyseModules(unittest.TestCase):
             "sim_repeats": 5,
             "fit_NND_bin": 5,
             "fit_NND_maxdist": 300,
-            "res_factor": 10,
+            # "res_factor": 10,
+            "granularity": 30,
             "structures": [
                 {
                     "Molecular targets": ["CD86"],
@@ -695,6 +709,24 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_dummy_module"))
 
+    def random_val(self):
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_random_val"))
+
+    def render(self):
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_render"))
+
+    def find_structures(self):
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_find_structures"))
+
+    def pairwise_module_executor(self):
+        return
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_pairwise_module_executor")
+        )
+
     def ripleysk(self):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
@@ -706,6 +738,12 @@ class TestAnalyseModules(unittest.TestCase):
     def ripleysk_average(self):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
+
+    def ripleysk_average2(self):
+        return
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_ripleysk_average2")
+        )
 
     def protein_interactions(self):
         return
@@ -839,7 +877,7 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_sgl_temp")
+    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
     def labeling_efficiency_analysis(self, mock_spinna_sgl):
         parameters = {
             "target_name": "CD86",
@@ -855,7 +893,15 @@ class TestAnalyseModules(unittest.TestCase):
         spinna_result = {
             "Fitted proportions of structures": np.array([0.4, 0.15, 0.35])
         }
-        mock_spinna_sgl.return_value = (spinna_result, "/path/to/fig")
+        mock_spinna_sgl.return_value = (
+            spinna_result,
+            [
+                "/path/to/figAA.png",
+                "/path/to/figAB.png",
+                "/path/to/figBA.png",
+                "/path/to/figBB.png",
+            ],
+        )
         self.ap.channel_tags = ["GFP", "CD86"]
         self.ap.channel_locs = [None, None]
         locs_dtype = [

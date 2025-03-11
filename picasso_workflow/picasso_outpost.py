@@ -568,8 +568,6 @@ def load_structures_from_dict(structure_dict):
     targets : list of strs
         List of all unique molecular targets in the structures.
     """
-    from picasso_workflow.spinna import SingleStructure
-
     if "Structure title" not in structure_dict[0]:
         raise TypeError(
             "Incorrect file. Please choose a file that was created"
@@ -579,7 +577,7 @@ def load_structures_from_dict(structure_dict):
     structures = []
     targets = []
     for m_info in structure_dict:
-        structure = SingleStructure(m_info["Structure title"])
+        structure = spinna.Structure(m_info["Structure title"])
         for target in m_info["Molecular targets"]:
             x = m_info[f"{target}_x"]
             y = m_info[f"{target}_y"]
@@ -592,9 +590,7 @@ def load_structures_from_dict(structure_dict):
 
 
 def generate_N_structures(structures, N_total, res_factor, save=""):
-    from picasso_workflow.spinna import generate_N_structures
-
-    return generate_N_structures(
+    return spinna.generate_N_structures(
         structures,
         N_total,
         res_factor,

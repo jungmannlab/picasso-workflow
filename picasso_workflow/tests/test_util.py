@@ -57,7 +57,18 @@ class TestUtil(unittest.TestCase):
         ]
         di_exp = [
             ("a", {"1": 1, "2": 2, "3": 3}),
-            ("b", {"z": 42, "y": 84, "x": [0, 1, 2]}),
+            (
+                "b",
+                {
+                    "z": 42,
+                    "y": 84,
+                    "x": [0, 1, 2],
+                    "x_originalnocmd": (
+                        "get_prior_result",
+                        "results, load, sample_movie, sample_frame_idx",
+                    ),
+                },
+            ),
         ]
         di_out = pce.run(di)
         # logger.debug(f'dictionary expected: {di_exp}')
@@ -85,7 +96,18 @@ class TestUtil(unittest.TestCase):
         ]
         di_exp = [
             ("load", {"1": 1, "2": 2, "3": 3}),
-            ("identify", {"z": 42, "y": 84, "x": [0, 1, 2]}),
+            (
+                "identify",
+                {
+                    "z": 42,
+                    "y": 84,
+                    "x": [0, 1, 2],
+                    "x_originalnocmd": (
+                        "get_previous_module_result",
+                        "sample_movie, sample_frame_idx",
+                    ),
+                },
+            ),
         ]
         di_out = pce.run(di)
         # logger.debug(f'dictionary expected: {di_exp}')
@@ -109,7 +131,16 @@ class TestUtil(unittest.TestCase):
         ]
         di_exp = [
             ("nena", {}),
-            ("double", {"dbl": 13.4}),
+            (
+                "double",
+                {
+                    "dbl": 13.4,
+                    "dbl_originalnocmd": (
+                        "get_previous_module_result *2+3",
+                        "nena",
+                    ),
+                },
+            ),
         ]
         di_out = pce.run(di)
         # logger.debug(f'dictionary expected: {di_exp}')
@@ -125,7 +156,15 @@ class TestUtil(unittest.TestCase):
         ]
         di_exp = [
             ("a", {"1": 1, "2": 2, "3": 3}),
-            ("b", {"z": 42, "y": 84, "x": "value2"}),
+            (
+                "b",
+                {
+                    "z": 42,
+                    "y": 84,
+                    "x": "value2",
+                    "x_originalnocmd": ("map", "key2"),
+                },
+            ),
         ]
         di_out = pce.run(di)
         # logger.debug(f'dictionary expected: {di_exp}')
@@ -145,11 +184,23 @@ class TestUtil(unittest.TestCase):
         ]
         res_exp = [
             [
-                ("load", {"filename": "a.tiff"}),
+                (
+                    "load",
+                    {
+                        "filename": "a.tiff",
+                        "filename_originalnocmd": ("map", "file_name"),
+                    },
+                ),
                 ("localize", {"min_ng": 20000}),
             ],
             [
-                ("load", {"filename": "b.tiff"}),
+                (
+                    "load",
+                    {
+                        "filename": "b.tiff",
+                        "filename_originalnocmd": ("map", "file_name"),
+                    },
+                ),
                 ("localize", {"min_ng": 20000}),
             ],
         ]

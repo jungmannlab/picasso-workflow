@@ -199,9 +199,9 @@ class AbstractModuleCollection(abc.ABC):
     def ripleysk(self):
         pass
 
-    @abc.abstractmethod
-    def ripleysk_rafal(self):
-        pass
+    # @abc.abstractmethod
+    # def ripleysk_rafal(self):
+    #     pass
 
     @abc.abstractmethod
     def ripleysk2(self):

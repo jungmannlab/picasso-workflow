@@ -399,12 +399,14 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     def dbscan(self):
-        parameters = {"filepath": "myfile.czi"}
+        parameters = {
+            "filepath": "myfile.czi",
+            "radius": 5,
+            "min_samples": 3,
+        }
         results = {
             "start time": "now",
             "duration": 4.12,
-            "radius": 5,
-            "min_samples": 3,
         }
         self.cr.dbscan(0, parameters, results)
 
@@ -624,6 +626,7 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         parameters = {
             "ripleys_threshold": 1.2,
             "atype": "Ripleys",
+            "metric": "RK",
         }
         results = {
             "start time": "now",
@@ -656,6 +659,95 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "ripleys_significant": [("a", "b")],
         }
         self.cr.ripleysk_average(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def ripleysk_average2(self):
+        parameters = {
+            "ripleys_threshold": 1.2,
+            "report_names": ["a", "b", "c"],
+            "fp_workflows": ["/a", "/b", "/c"],
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "output_folders": ["/d"],
+            "fp_ripleys_significant": "/e",
+            "ripleys_significant": [("a", "b")],
+        }
+        self.cr.ripleysk_average2(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def random_val(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.random_val(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def render(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.render(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def find_structures(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "n_clusters": 2,
+            "n_picks": [412, 501],
+        }
+        self.cr.find_structures(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def pairwise_module_executor(self):
+        parameters = {"module_name": "mymodule"}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.pairwise_module_executor(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
