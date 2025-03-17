@@ -22,6 +22,7 @@ import pathlib
 from functools import reduce
 import textwrap
 import platform
+import re
 
 if ON_CLUSTER:
     from mpi4py import MPI
@@ -189,7 +190,8 @@ def find_dnapaint_raw(working_folder):
     datasets = {}
     for root, dirs, files in os.walk(working_folder):
         for file in files:
-            if "_MMStack_Pos0.ome.tif" in file:
+            match = re.search(r"_MMStack_Pos(\d+).ome.tif", file)
+            if match is not None:
                 key = os.path.split(root)[-1]
                 datasets[key] = os.path.join(root, file)
     dest_file = os.path.join(working_folder, "src_loc.yaml")
