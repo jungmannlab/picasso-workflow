@@ -19,9 +19,19 @@ import matplotlib.lines as mlines
 from matplotlib.colors import LogNorm
 import yaml
 import os
+from datetime import datetime
 from aicsimageio import AICSImage
 
-from picasso import io, localize, render, imageprocess, postprocess, lib
+from picasso import (
+    io,
+    localize,
+    render,
+    imageprocess,
+    postprocess,
+    lib,
+    spinna,
+)
+from picasso.__main__ import _spinna_batch_analysis as spinna_batch_analysis
 from picasso_workflow import util
 
 from scipy.spatial import KDTree
@@ -356,11 +366,9 @@ def normalize_spot(spot, maxval=255, dtype=np.uint8):
     return sp.astype(dtype)
 
 
-def spinna_temp(parameters_filename):
-    """While SPINNA is under development (and the paper being written)
-    it is not integrated in the regular picasso package. Here, the
-    corresponding module is being loaded.
-    This function runs a spinna batch analysis from file.
+def spinna_batch(parameters_filename):
+    """This function runs a spinna batch analysis from file,
+    as run via command line in picasso.__main__.
 
     Returns:
         result_dir : str
@@ -370,47 +378,219 @@ def spinna_temp(parameters_filename):
         fp_fig : list of str
             filepaths of the NND figures
     """
-    from picasso_workflow.spinna_main import _spinna_batch_analysis
-
-    result_dir, fp_summary, fp_fig = _spinna_batch_analysis(
-        parameters_filename
-    )
+    result_dir, fp_summary, fp_fig = spinna_batch_analysis(parameters_filename)
     print("result_dir", result_dir)
     print("fp_summary", fp_summary)
     print("fp_fig", fp_fig)
     return result_dir, fp_summary, fp_fig
 
 
-def spinna_sgl_temp(parameters):
-    """While SPINNA is under development (and the paper being written)
-    it is not integrated in the regular picasso package. Here, the
-    corresponding module is being loaded.
-    This function directly runs one spinna simulation.
+def single_spinna_run(
+    structures,
+    label_unc,
+    le,
+    mask_dict,
+    width,
+    height,
+    depth,
+    random_rot_mode,
+    exp_data,
+    sim_repeats,
+    fit_NND_bin,
+    fit_NND_maxdist,
+    N_structures,
+    save_filename,
+    asynch,
+    targets,
+    apply_mask,
+    nn_plotted,
+    result_dir,
+    n_simulated,
+):
+    """This function directly runs one spinna simulation.
+    The implementation is taken from spinna batch analysis
+    (picasso.__main__._spinna_batch_analysis), and adapted for one run,
+    with parameters directly given.
 
     Args:
         parameters : dict with keys:
             structures, label_unc, le, mask_dict, width, height, depth,
-            random_rot_mode, exp_data, sim_repeats, fit_NND_bin, fit_NND_maxdist,
-            N_structures, save_filename, asynch, targets, apply_mask, nn_plotted,
-            result_dir
+            random_rot_mode, exp_data, sim_repeats, fit_NND_bin,
+            fit_NND_maxdist, N_structures, save_filename, asynch, targets,
+            apply_mask, nn_plotted, result_dir
     Returns:
-        result_dir : str
-            folder containing the results
-        fp_summary : str
-            the filepath of the summary csv file
+        spinna_result : dict
+            dictionary containing the results of the spinna run
         fp_fig : list of str
             filepaths of the NND figures
     """
-    from picasso_workflow.spinna_main import single_spinna_run
+    mixer = spinna.StructureMixer(
+        structures=structures,
+        label_unc=label_unc,
+        le=le,
+        mask_dict=mask_dict,
+        width=width,
+        height=height,
+        depth=depth,
+        random_rot_mode=random_rot_mode,
+    )
 
-    result_dir, fp_fig = single_spinna_run(**parameters)
-    return result_dir, fp_fig
+    # set up and run fitting
+    opt_props, score = spinna.SPINNA(
+        mixer=mixer,
+        gt_coords=exp_data,
+        N_sim=sim_repeats,
+    ).fit_stoichiometry(
+        N_structures, save=f"{save_filename}_fit_scores.csv", asynch=asynch
+    )
+
+    # save the results
+    results = {}
+    results["Date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    results["File location of structures"] = save_filename
+    results["Molecular targets"] = targets
+    results["Labelling efficiency (%)"] = [
+        le[target] * 100 for target in targets
+    ]
+    results["Label uncertainty (nm)"] = list(label_unc.values())
+    results["Rotation mode"] = random_rot_mode
+    results["AICc fitting score"] = score
+    results["Fitted structures names"] = list(N_structures.keys())
+    if isinstance(opt_props, tuple):
+        props_mean, props_std = opt_props
+        results["Modified Kolmogorov-Smirnov score +/- s.d."] = score
+        results["Fitted proportions of structures"] = ", ".join(
+            [
+                f"{props_mean[i]:.2f} +/- {props_std[i]:.2f}%"
+                for i in range(len(props_mean))
+            ]
+        )
+    else:
+        results["Modified Kolmogorov-Smirnov score"] = score
+        results["Fitted proportions of structures"] = opt_props
+    results["NND bin size (nm)"] = fit_NND_bin
+    results["NND max distance (nm)"] = fit_NND_maxdist
+
+    # relative proportions of structures for each target
+    if len(targets) > 1:
+        for target in targets:
+            rel_props = mixer.convert_props_for_target(
+                opt_props,
+                target,
+                n_simulated,
+            )
+            idx_valid = np.where(rel_props != np.inf)[0]
+            value = ", ".join(
+                [
+                    f"{structures[i].title}: {rel_props[i]:.2f}%"
+                    for i in idx_valid
+                ]
+            )
+            results[f"Relative proportions of {target} in"] = value
+
+    # save .txt with summary of the results
+    with open(f"{save_filename}_fit_summary.txt", "w") as f:
+        for key, value in results.items():
+            f.write(f"{key}: {value}\n")
+    # print(f"Results saved to {save_filename}_fit_summary.txt")
+
+    # plot and save the NND plots
+    nn_counts = {}
+    for i, t1 in enumerate(targets):
+        for t2 in targets[i:]:
+            nn_counts[f"{t1}-{t2}"] = nn_plotted
+    mixer.nn_counts = nn_counts
+    # dist_sim = spinna.get_NN_dist_repeated(
+    # # dist_sim = get_NN_dist_repeated(
+    #     opt_N_str, sim_repeats, mixer,
+    #     duplicate=True
+    # )
+    n_total = sum(n_simulated.values())
+    dist_sim = spinna.get_NN_dist_simulated(
+        mixer.convert_props_to_counts(opt_props, n_total),
+        sim_repeats,
+        mixer,
+        duplicate=True,
+    )
+    fp_fig = []
+    for i, (t1, t2, _) in enumerate(mixer.get_neighbor_idx(duplicate=True)):
+        # fig, ax = plot_NN(
+        fig, ax = spinna.plot_NN(
+            dist=dist_sim[i],
+            mode="plot",
+            show_legend=False,
+            return_fig=True,
+            figsize=(5.5, 4),
+            alpha=1.0,
+            binsize=fit_NND_bin,
+            xlim=[0, fit_NND_maxdist],
+            title=f"Nearest Neighbors Distances: {t1} -> {t2}",
+        )
+        exp1 = exp_data[t1]
+        exp2 = exp_data[t2]
+        # fig, ax = plot_NN(
+        fig, ax = spinna.plot_NN(
+            data1=exp1,
+            data2=exp2,
+            n_neighbors=nn_plotted,
+            show_legend=False,
+            fig=fig,
+            ax=ax,
+            mode="hist",
+            return_fig=True,
+            binsize=fit_NND_bin,
+            xlim=[0, fit_NND_maxdist],
+            title=f"Nearest Neighbors Distances: {t1} -> {t2}",
+            savefig=[
+                f"{save_filename}_NND_{t1}_{t2}.{_}" for _ in ["png", "svg"]
+            ],
+        )
+        fp_fig.append(
+            os.path.join(result_dir, f"{save_filename}_NND_{t1}_{t2}.png")
+        )
+
+    return results, fp_fig
+
+
+def load_structures_from_dict(structure_dict):
+    """Loads structures (SingleStructure's) from dict with format as
+    those saved in .yaml files.
+
+    Parameters
+    ----------
+    structure_dict : list of dict
+        structure description as dict.
+
+    Returns
+    -------
+    structures : list of SingleStructure's
+        List of structures loaded from the file.
+    targets : list of strs
+        List of all unique molecular targets in the structures.
+    """
+    if "Structure title" not in structure_dict[0]:
+        raise TypeError(
+            "Incorrect file. Please choose a file that was created"
+            " that was created with Picasso SPINNA."
+        )
+    # continue if the correct file is loaded
+    structures = []
+    targets = []
+    for m_info in structure_dict:
+        structure = spinna.Structure(m_info["Structure title"])
+        for target in m_info["Molecular targets"]:
+            x = m_info[f"{target}_x"]
+            y = m_info[f"{target}_y"]
+            z = m_info[f"{target}_z"]
+            structure.define_coordinates(target, x, y, z)
+            if target not in targets:
+                targets.append(target)
+        structures.append(structure)
+    return structures, targets
 
 
 def generate_N_structures(structures, N_total, res_factor, save=""):
-    from picasso_workflow.spinna import generate_N_structures
-
-    return generate_N_structures(
+    return spinna.generate_N_structures(
         structures,
         N_total,
         res_factor,

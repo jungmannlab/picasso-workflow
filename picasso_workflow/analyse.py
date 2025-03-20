@@ -145,6 +145,77 @@ class AutoPicasso(util.AbstractModuleCollection):
         self.results_folder = os.path.normpath(results_folder)
         self.analysis_config = analysis_config
 
+    @property
+    def camera_info(self):
+        if camera_info := self.analysis_config.get("camera_info"):
+            return camera_info
+        else:
+            try:
+                infofirst = self.info[0]
+            except IndexError:
+                infofirst = self.channel_info[0][0]
+            except Exception:
+                raise AttributeError(
+                    "Cannot load pixelsize from info. Load data first."
+                )
+            try:
+                cam_name = infofirst["Camera"]
+            except KeyError:
+                logger.debug(
+                    "cannot find camera entry. Probably this is a simulation."
+                )
+                return {"Pixelsize": self.channel_info[0][1]["Pixelsize"]}
+            if cam_config := pCONFIG.get("Cameras", {}).get(cam_name):
+                # # find quantum efficiency
+                # filter_name = cam_config.get("Channel Device", {}).get(
+                #     "Name")
+                # filter_used = self.info.get(filter_name)
+                # emission_wavelength = cam_config.get(
+                #     "Channel Device", {}).get(
+                #     "Emission Wavelengths", {}).get(filter_used)
+                # qe = cam_config.get("Quantum Efficiency", {}).get(
+                #     emission_wavelength, 1)
+
+                # find camera sensitivity
+                sensitivity = cam_config.get("Sensitivity")
+                # sensitivity starts being a dict, and ends as a value
+                cat_vals = ""
+                for category in cam_config.get("Sensitivity Categories"):
+                    category_value = infofirst["Micro-Manager Metadata"].get(
+                        f"{cam_name}-{category}"
+                    )
+                    cat_vals += f"{category}: {category_value}; "
+                    sensitivity = sensitivity.get(category_value, {})
+                if isinstance(sensitivity, dict):
+                    raise PicassoConfigError(
+                        f"""Could not find sensitivity value for camera
+                        {cam_name} with category values {cat_vals} in picasso
+                        CONFIG."""
+                    )
+
+                camera_info = {
+                    "Baseline": cam_config["Baseline"],
+                    "Gain": cam_config.get("Gain", 1),
+                    "Sensitivity": sensitivity,
+                    "Qe": 1,  # relevant are detected, not incident photons
+                    "Pixelsize": cam_config["Pixelsize"],
+                }
+                self.analysis_config["camera_info"] = camera_info
+                return camera_info
+            else:
+                raise PicassoConfigError(
+                    f"Cannot load camera {cam_name} from picasso CONFIG."
+                )
+                raise AttributeError(
+                    f"Cannot find camera '{cam_name}' in info."
+                )
+
+    @property
+    def pixelsize(self):
+        camera_info = self.camera_info
+        pixelsize = camera_info["Pixelsize"]
+        return pixelsize
+
     @module_decorator
     def dummy_module(self, i, parameters, results):
         """A module that does nothing, for quickly removing
@@ -563,7 +634,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.movie,
             sample_identifications,
             box_size,
-            self.analysis_config["camera_info"],
+            self.camera_info,
         )
         ng_start = np.min(sample_identifications["net_gradient"])
         ng_end = np.max(sample_identifications["net_gradient"])
@@ -707,12 +778,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             results : dict
                 the analysis results
         """
-        em = self.analysis_config["camera_info"]["Gain"] > 1
+        em = self.camera_info["Gain"] > 1
         spots = localize.get_spots(
             self.movie,
             self.identifications,
             parameters["box_size"],
-            self.analysis_config["camera_info"],
+            self.camera_info,
         )
         if self.analysis_config["gpufit_installed"]:
             theta = gausslq.fit_spots_gpufit(spots)
@@ -728,7 +799,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 #     for f in _futures.as_completed(fs):
                 #         progress_bar.update()
                 theta = gausslq.fits_from_futures(fs)
-                em = self.analysis_config["camera_info"]["Gain"] > 1
+                em = self.camera_info["Gain"] > 1
                 self.locs = gausslq.locs_from_fits(
                     self.identifications, theta, parameters["box_size"], em
                 )
@@ -760,9 +831,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # "Min. Net Gradient": min_net_gradient,
             # "Convergence Criterion": convergence,
             # "Max. Iterations": max_iterations,
-            "Pixelsize": float(
-                self.analysis_config["camera_info"].get("Pixelsize")
-            ),
+            "Pixelsize": float(self.pixelsize),
             "Fit method": "gausslq",
             "Wrapped by": "picasso-workflow : localize",
             # "parameters": parameters,
@@ -913,7 +982,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         keys : labels
                         values : filepaths
         """
-        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        pixelsize = self.pixelsize
         rcode = generate_random_code(6)
 
         if self.channel_locs is not None:
@@ -1000,7 +1069,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             results : dict
                 the analysis results
         """
-        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        pixelsize = self.pixelsize
         progress = parameters.get("progress", None)
 
         # dirty debug: picasso.aim.aim expects the existence of info[1]["Pixelsize"]
@@ -1065,7 +1134,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             results : dict
                 the analysis results
         """
-        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        pixelsize = self.pixelsize
 
         seg_init = parameters["segmentation"]
         for i in range(parameters.get("max_iter_segmentations", 3)):
@@ -1205,7 +1274,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @module_decorator
     def summarize_dataset(self, i, parameters, results):
-        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        pixelsize = self.pixelsize
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
                 try:
@@ -1335,7 +1404,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        pixelsize = self.pixelsize
         radius = parameters["radius"] / pixelsize
         min_samples = parameters["min_samples"]
         # label locs according to clusters
@@ -1396,7 +1465,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         min_cluster = parameters["min_cluster"]
         min_samples = parameters["min_samples"]
-        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        pixelsize = self.pixelsize
 
         # label locs according to clusters
         self.locs = clusterer.hdbscan(
@@ -1447,7 +1516,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         parameters["basic_fa"] = basic_fa
         radius_z = parameters.get("radius_z", None)
         parameters["radius_z"] = radius_z
-        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        pixelsize = self.pixelsize
 
         if radius_z is not None:  # 3D
             params = [radius, radius_z, min_locs, 0, basic_fa, 0]
@@ -1528,7 +1597,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        pixelsize = self.pixelsize
         required_args = ["min_locs"]
         optional_args = [
             ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
@@ -1625,7 +1694,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             locs[parameters["dims"]].tolist()
         )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
         # convert all dimensions to nanometers
-        pixelsize = self.analysis_config["camera_info"]["Pixelsize"]
+        pixelsize = self.pixelsize
         for i, dim in enumerate(parameters["dims"]):
             if dim in ["x", "y"]:
                 points[:, i] = points[:, i] * pixelsize
@@ -1823,8 +1892,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         # plot results
         fig, ax = plt.subplots()
         colors = cm.get_cmap("viridis", k_max).colors
-        bin_max = np.quantile(nneighbors[:, -1], 0.99)
-        bins = np.linspace(0, bin_max, num=50)
+        bin_max = np.quantile(nneighbors[:, -1], 0.95)
+        median_1stNN = np.median(nneighbors[:, 0])
+        # sample bins such that there are 5 bins from 0 to middle of 1stNN
+        nbins = int(5 * bin_max / median_1stNN)
+        bins = np.linspace(0, bin_max, num=nbins)
         nnhist_obs = np.zeros((len(bins), k_max))
         nnhist_an = np.zeros_like(nnhist_obs)
         for i in range(nnhist_an.shape[1]):
@@ -2048,7 +2120,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+        pixelsize = self.pixelsize
         rcode = generate_random_code(6)
         if parameters.get("filepaths"):
             self.channel_locs = []
@@ -2303,11 +2375,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     granularity : float
                     the spinna granularity
         """
-        from picasso_workflow.spinna_main import load_structures_from_dict
-
         if isinstance(parameters["structures"], str):
-            with open(parameters["structures"], "r") as f:
-                structures = yaml.read_all(f)
+            structures = io.load_info(parameters["structures"])
         else:
             structures = parameters["structures"]
 
@@ -2326,7 +2395,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             mask_dict = None
 
         # locs, but as np.ndarray
-        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+        pixelsize = self.pixelsize
         exp_data = {}
         exp_n_targets = np.zeros(len(self.channel_tags))
         for i, target in enumerate(self.channel_tags):
@@ -2343,6 +2412,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ).T
 
         data_2d = "z" not in self.channel_locs[0].dtype.names
+        if not data_2d:
+            if self.locs is not None:
+                z_range = int(self.locs["z"].max() - self.locs["z"].min())
+            else:
+                z_maxs = [int(locs["z"].max()) for locs in self.channel_locs]
+                z_mins = [int(locs["z"].min()) for locs in self.channel_locs]
+                z_range = max(z_maxs) - min(z_mins)
+            if z_range <= 0:
+                data_2d = True
         if data_2d:
             area = parameters["n_simulate"] / sum(parameters["density"])
             width = np.sqrt(area)
@@ -2350,14 +2428,21 @@ class AutoPicasso(util.AbstractModuleCollection):
             depth = None
             # d = 2
         else:
-            z_range = int(self.locs["z"].max() - self.locs["z"].min())
+            if self.locs is not None:
+                z_range = int(self.locs["z"].max() - self.locs["z"].min())
+            else:
+                z_maxs = [int(locs["z"].max()) for locs in self.channel_locs]
+                z_mins = [int(locs["z"].min()) for locs in self.channel_locs]
+                z_range = max(z_maxs) - min(z_mins)
             volume = parameters["n_simulate"] / sum(parameters["density"])
             width = np.sqrt(volume / z_range)
             height = np.sqrt(volume / z_range)
             depth = z_range
             # d = 3
 
-        structures, targets = load_structures_from_dict(structures)
+        structures, targets = picasso_outpost.load_structures_from_dict(
+            structures
+        )
 
         exp_frac_targets = exp_n_targets / np.sum(exp_n_targets)
         n_sim_targets = {
@@ -2389,12 +2474,15 @@ class AutoPicasso(util.AbstractModuleCollection):
             "apply_mask": mask_dict is not None,
             "nn_plotted": parameters["n_nearest_neighbors"],
             "result_dir": results["folder"],
+            "n_simulated": n_sim_targets,
         }
 
-        result_dir, fp_figs = picasso_outpost.spinna_sgl_temp(spinna_pars)
+        spinna_results, fp_figs = picasso_outpost.single_spinna_run(
+            **spinna_pars
+        )
         plt.close("all")
         results["fp_figs"] = fp_figs
-        results["result_dir"] = result_dir
+        results["spinna_results"] = spinna_results
 
         return parameters, results
 
@@ -2510,7 +2598,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 spinna_config[f"n_simulated_{tag}"] = [
                     parameters["proposed_n_simulate"]
                 ]
-            spinna_config["res_factor"] = [100]
+            spinna_config["granularity"] = [100]
             spinna_config["save_filename"] = ["spinna_results"]
             spinna_config["nn_plotted"] = [parameters["proposed_nn_plotted"]]
 
@@ -2518,10 +2606,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             expected_1stNN_peak = (
                 2 / (2 * d * np.pi * parameters["proposed_density"])
             ) ** (1 / d)
-            spinna_config["fit_NND_bin"] = [expected_1stNN_peak / 10]
+            spinna_config["NND_bin"] = [expected_1stNN_peak / 10]
             spinna_config["density"] = parameters["proposed_density"]
             # max dist: a few times the first NN distance peak
-            spinna_config["fit_NND_maxdist"] = [20 * expected_1stNN_peak]
+            spinna_config["NND_maxdist"] = [20 * expected_1stNN_peak]
+            spinna_config["sim_repeats"] = [2]
 
             # save config to file
             pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
@@ -2536,8 +2625,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["success"] = False
         else:
             # kick off SPINNA analysis
-            print("starting spinna")
-            result_dir, fp_summary, fp_fig = picasso_outpost.spinna_temp(
+            print("starting spinna batch analysis")
+            result_dir, fp_summary, fp_fig = picasso_outpost.spinna_batch(
                 cfg_fp
             )
 
@@ -2653,7 +2742,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 nRandomControls=nRandomControls,
                 channel_locs=self.channel_locs,
                 combined_locs=combined_locs,
-                pixelsize=self.analysis_config["camera_info"].get("Pixelsize"),
+                pixelsize=self.pixelsize,
                 atype=parameters["atype"],
             )
         )
@@ -2684,206 +2773,206 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @module_decorator
-    def ripleysk_rafal(self, i, parameters, results):
-        """Exactly along Rafal's code"""
-        from picasso_workflow.outpost_modules.ripley_dcatlas_analysis import (
-            analyze as analyze_whole_cell,
-        )
-        from picasso_workflow.outpost_modules.ripley_dcatlas_analysis import (
-            postprocess_ripley_matrix,
-        )
+    # @module_decorator
+    # def ripleysk_rafal(self, i, parameters, results):
+    #     """Exactly along Rafal's code"""
+    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis import (
+    #         analyze as analyze_whole_cell,
+    #     )
+    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis import (
+    #         postprocess_ripley_matrix,
+    #     )
 
-        rcode = generate_random_code(6)
+    #     rcode = generate_random_code(6)
 
-        R_MAX = 200  # nm, maximum radius for Ripley's K analysis
-        RADII = np.concatenate(
-            (np.arange(4, 80, 2), np.arange(80, R_MAX + 1, 12))
-        )
-        VMIN, VMAX = [
-            -2000,
-            2000,
-        ]  # boundaries for plotting final ripley matrices (as described in methods)
+    #     R_MAX = 200  # nm, maximum radius for Ripley's K analysis
+    #     RADII = np.concatenate(
+    #         (np.arange(4, 80, 2), np.arange(80, R_MAX + 1, 12))
+    #     )
+    #     VMIN, VMAX = [
+    #         -2000,
+    #         2000,
+    #     ]  # boundaries for plotting final ripley matrices (as described in methods)
 
-        # first: binary
-        ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
-            self.channel_locs, RADII, binary=True
-        )
-        postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
-        path_save_integral_raw = os.path.join(
-            results["folder"],
-            f"raw_ripley_integral_binary-{rcode}.npy",
-        )
-        path_save_integral_postprocessed = os.path.join(
-            results["folder"],
-            f"postprocessed_ripley_integral_binary-{rcode}.npy",
-        )
-        np.save(path_save_integral_raw, ripley_matrix)
-        # save in excel format
-        df_raw = pd.DataFrame(
-            ripley_matrix, index=self.channel_tags, columns=self.channel_tags
-        )
-        df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
-        df_pp = pd.DataFrame(
-            postprocessed,
-            index=self.channel_tags,
-            columns=self.channel_tags,
-        )
-        df_pp.to_excel(
-            path_save_integral_postprocessed.replace(".npy", ".xlsx")
-        )
+    #     # first: binary
+    #     ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
+    #         self.channel_locs, RADII, binary=True
+    #     )
+    #     postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
+    #     path_save_integral_raw = os.path.join(
+    #         results["folder"],
+    #         f"raw_ripley_integral_binary-{rcode}.npy",
+    #     )
+    #     path_save_integral_postprocessed = os.path.join(
+    #         results["folder"],
+    #         f"postprocessed_ripley_integral_binary-{rcode}.npy",
+    #     )
+    #     np.save(path_save_integral_raw, ripley_matrix)
+    #     # save in excel format
+    #     df_raw = pd.DataFrame(
+    #         ripley_matrix, index=self.channel_tags, columns=self.channel_tags
+    #     )
+    #     df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
+    #     df_pp = pd.DataFrame(
+    #         postprocessed,
+    #         index=self.channel_tags,
+    #         columns=self.channel_tags,
+    #     )
+    #     df_pp.to_excel(
+    #         path_save_integral_postprocessed.replace(".npy", ".xlsx")
+    #     )
 
-        def plot_and_save(matrix, savepath, vmin, vmax):
-            plt.figure()
-            plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
-            plt.xticks(range(6), self.channel_tags)
-            plt.yticks(range(6), self.channel_tags)
-            plt.colorbar()
-            plt.savefig(savepath, dpi=150)
-            plt.close()
+    #     def plot_and_save(matrix, savepath, vmin, vmax):
+    #         plt.figure()
+    #         plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
+    #         plt.xticks(range(6), self.channel_tags)
+    #         plt.yticks(range(6), self.channel_tags)
+    #         plt.colorbar()
+    #         plt.savefig(savepath, dpi=150)
+    #         plt.close()
 
-        results["ripley_matrix_raw_binary"] = ripley_matrix
-        results["mask area_binary"] = area
-        results["fp_fig_mask_binary"] = os.path.join(
-            results["folder"], f"mask_binary-{rcode}.png"
-        )
-        fig, ax = plt.subplots()
-        ax.set_box_aspect(1)
-        ax.set_title("mask")
-        cmap = "hot"
-        ax.imshow(
-            mask,
-            extent=[
-                0,
-                mask.shape[0] * 10 / 1000,  # 10 nm mask pixel size (upsample)
-                0,
-                mask.shape[1] * 10 / 1000,
-            ],
-            cmap=cmap,
-            origin="lower",
-        )
-        ax.set_xlabel("x [µm]")
-        ax.set_ylabel("y [µm]")
-        fig.savefig(results["fp_fig_mask_binary"])
+    #     results["ripley_matrix_raw_binary"] = ripley_matrix
+    #     results["mask area_binary"] = area
+    #     results["fp_fig_mask_binary"] = os.path.join(
+    #         results["folder"], f"mask_binary-{rcode}.png"
+    #     )
+    #     fig, ax = plt.subplots()
+    #     ax.set_box_aspect(1)
+    #     ax.set_title("mask")
+    #     cmap = "hot"
+    #     ax.imshow(
+    #         mask,
+    #         extent=[
+    #             0,
+    #             mask.shape[0] * 10 / 1000,  # 10 nm mask pixel size (upsample)
+    #             0,
+    #             mask.shape[1] * 10 / 1000,
+    #         ],
+    #         cmap=cmap,
+    #         origin="lower",
+    #     )
+    #     ax.set_xlabel("x [µm]")
+    #     ax.set_ylabel("y [µm]")
+    #     fig.savefig(results["fp_fig_mask_binary"])
 
-        results["fp_fig_unnormalized_binary"] = os.path.join(
-            results["folder"], f"unnormalized_binary-{rcode}.png"
-        )
-        fig_u.savefig(results["fp_fig_unnormalized_binary"])
-        results["fp_fig_normalized_binary"] = os.path.join(
-            results["folder"], f"normalized_binary-{rcode}.png"
-        )
-        fig_n.savefig(results["fp_fig_normalized_binary"])
+    #     results["fp_fig_unnormalized_binary"] = os.path.join(
+    #         results["folder"], f"unnormalized_binary-{rcode}.png"
+    #     )
+    #     fig_u.savefig(results["fp_fig_unnormalized_binary"])
+    #     results["fp_fig_normalized_binary"] = os.path.join(
+    #         results["folder"], f"normalized_binary-{rcode}.png"
+    #     )
+    #     fig_n.savefig(results["fp_fig_normalized_binary"])
 
-        results["fp_fig_raw_binary"] = path_save_integral_raw.replace(
-            ".npy", ".png"
-        )
-        plot_and_save(
-            matrix=ripley_matrix,
-            savepath=results["fp_fig_raw_binary"],
-            vmin=-np.max(np.abs(ripley_matrix)),
-            vmax=np.max(np.abs(ripley_matrix)),
-        )
-        results["fp_fig_postprocessed_binary"] = (
-            path_save_integral_postprocessed.replace(".npy", ".png")
-        )
-        plot_and_save(
-            matrix=postprocessed,
-            savepath=results["fp_fig_postprocessed_binary"],
-            vmin=VMIN,
-            vmax=VMAX,
-        )
+    #     results["fp_fig_raw_binary"] = path_save_integral_raw.replace(
+    #         ".npy", ".png"
+    #     )
+    #     plot_and_save(
+    #         matrix=ripley_matrix,
+    #         savepath=results["fp_fig_raw_binary"],
+    #         vmin=-np.max(np.abs(ripley_matrix)),
+    #         vmax=np.max(np.abs(ripley_matrix)),
+    #     )
+    #     results["fp_fig_postprocessed_binary"] = (
+    #         path_save_integral_postprocessed.replace(".npy", ".png")
+    #     )
+    #     plot_and_save(
+    #         matrix=postprocessed,
+    #         savepath=results["fp_fig_postprocessed_binary"],
+    #         vmin=VMIN,
+    #         vmax=VMAX,
+    #     )
 
-        # second: density
-        ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
-            self.channel_locs, RADII, binary=False
-        )
-        postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
-        path_save_integral_raw = os.path.join(
-            results["folder"],
-            f"raw_ripley_integral_density-{rcode}.npy",
-        )
-        path_save_integral_postprocessed = os.path.join(
-            results["folder"],
-            f"postprocessed_ripley_integral_density-{rcode}.npy",
-        )
-        np.save(path_save_integral_raw, ripley_matrix)
-        # save in excel format
-        df_raw = pd.DataFrame(
-            ripley_matrix, index=self.channel_tags, columns=self.channel_tags
-        )
-        df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
-        df_pp = pd.DataFrame(
-            postprocessed,
-            index=self.channel_tags,
-            columns=self.channel_tags,
-        )
-        df_pp.to_excel(
-            path_save_integral_postprocessed.replace(".npy", ".xlsx")
-        )
+    #     # second: density
+    #     ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
+    #         self.channel_locs, RADII, binary=False
+    #     )
+    #     postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
+    #     path_save_integral_raw = os.path.join(
+    #         results["folder"],
+    #         f"raw_ripley_integral_density-{rcode}.npy",
+    #     )
+    #     path_save_integral_postprocessed = os.path.join(
+    #         results["folder"],
+    #         f"postprocessed_ripley_integral_density-{rcode}.npy",
+    #     )
+    #     np.save(path_save_integral_raw, ripley_matrix)
+    #     # save in excel format
+    #     df_raw = pd.DataFrame(
+    #         ripley_matrix, index=self.channel_tags, columns=self.channel_tags
+    #     )
+    #     df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
+    #     df_pp = pd.DataFrame(
+    #         postprocessed,
+    #         index=self.channel_tags,
+    #         columns=self.channel_tags,
+    #     )
+    #     df_pp.to_excel(
+    #         path_save_integral_postprocessed.replace(".npy", ".xlsx")
+    #     )
 
-        def plot_and_save(matrix, savepath, vmin, vmax):
-            plt.figure()
-            plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
-            plt.xticks(range(6), self.channel_tags)
-            plt.yticks(range(6), self.channel_tags)
-            plt.colorbar()
-            plt.savefig(savepath, dpi=150)
-            plt.close()
+    #     def plot_and_save(matrix, savepath, vmin, vmax):
+    #         plt.figure()
+    #         plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
+    #         plt.xticks(range(6), self.channel_tags)
+    #         plt.yticks(range(6), self.channel_tags)
+    #         plt.colorbar()
+    #         plt.savefig(savepath, dpi=150)
+    #         plt.close()
 
-        results["ripley_matrix_raw_density"] = ripley_matrix
-        results["mask area_density"] = area
-        results["fp_fig_mask_density"] = os.path.join(
-            results["folder"], f"mask_density-{rcode}.png"
-        )
-        fig, ax = plt.subplots()
-        ax.set_box_aspect(1)
-        ax.set_title("mask")
-        cmap = "hot"
-        ax.imshow(
-            mask,
-            extent=[
-                0,
-                mask.shape[0] / 1000,
-                0,
-                mask.shape[1] / 1000,
-            ],
-            cmap=cmap,
-            origin="lower",
-        )
-        ax.set_xlabel("x [µm]")
-        ax.set_ylabel("y [µm]")
-        fig.savefig(results["fp_fig_mask_density"])
+    #     results["ripley_matrix_raw_density"] = ripley_matrix
+    #     results["mask area_density"] = area
+    #     results["fp_fig_mask_density"] = os.path.join(
+    #         results["folder"], f"mask_density-{rcode}.png"
+    #     )
+    #     fig, ax = plt.subplots()
+    #     ax.set_box_aspect(1)
+    #     ax.set_title("mask")
+    #     cmap = "hot"
+    #     ax.imshow(
+    #         mask,
+    #         extent=[
+    #             0,
+    #             mask.shape[0] / 1000,
+    #             0,
+    #             mask.shape[1] / 1000,
+    #         ],
+    #         cmap=cmap,
+    #         origin="lower",
+    #     )
+    #     ax.set_xlabel("x [µm]")
+    #     ax.set_ylabel("y [µm]")
+    #     fig.savefig(results["fp_fig_mask_density"])
 
-        results["fp_fig_unnormalized_density"] = os.path.join(
-            results["folder"], f"unnormalized_density-{rcode}.png"
-        )
-        fig_u.savefig(results["fp_fig_unnormalized_density"])
-        results["fp_fig_normalized_density"] = os.path.join(
-            results["folder"], f"normalized_density-{rcode}.png"
-        )
-        fig_n.savefig(results["fp_fig_normalized_density"])
+    #     results["fp_fig_unnormalized_density"] = os.path.join(
+    #         results["folder"], f"unnormalized_density-{rcode}.png"
+    #     )
+    #     fig_u.savefig(results["fp_fig_unnormalized_density"])
+    #     results["fp_fig_normalized_density"] = os.path.join(
+    #         results["folder"], f"normalized_density-{rcode}.png"
+    #     )
+    #     fig_n.savefig(results["fp_fig_normalized_density"])
 
-        results["fp_fig_raw_density"] = path_save_integral_raw.replace(
-            ".npy", ".png"
-        )
-        plot_and_save(
-            matrix=ripley_matrix,
-            savepath=results["fp_fig_raw_density"],
-            vmin=-np.max(np.abs(ripley_matrix)),
-            vmax=np.max(np.abs(ripley_matrix)),
-        )
-        results["fp_fig_postprocessed_density"] = (
-            path_save_integral_postprocessed.replace(".npy", ".png")
-        )
-        plot_and_save(
-            matrix=postprocessed,
-            savepath=results["fp_fig_postprocessed_density"],
-            vmin=VMIN,
-            vmax=VMAX,
-        )
+    #     results["fp_fig_raw_density"] = path_save_integral_raw.replace(
+    #         ".npy", ".png"
+    #     )
+    #     plot_and_save(
+    #         matrix=ripley_matrix,
+    #         savepath=results["fp_fig_raw_density"],
+    #         vmin=-np.max(np.abs(ripley_matrix)),
+    #         vmax=np.max(np.abs(ripley_matrix)),
+    #     )
+    #     results["fp_fig_postprocessed_density"] = (
+    #         path_save_integral_postprocessed.replace(".npy", ".png")
+    #     )
+    #     plot_and_save(
+    #         matrix=postprocessed,
+    #         savepath=results["fp_fig_postprocessed_density"],
+    #         vmin=VMIN,
+    #         vmax=VMAX,
+    #     )
 
-        return parameters, results
+    #     return parameters, results
 
     @module_decorator
     def ripleysk2(self, i, parameters, results):
@@ -2984,7 +3073,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             mask_pixel_size = 1
         # mask_pixel_size = parameters.get("mask_pixel_size")
 
-        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+        pixelsize = self.pixelsize
 
         if parameters.get("edge_correction"):
             # make the mask smaller by the maximum radius, and apply
@@ -3632,14 +3721,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                     pairs that are able to interact
                     if str: filepath to a yaml file with list of tuples
         """
-        from picasso_workflow.spinna_main import load_structures_from_dict
-
         logger.debug("Molecular interactions")
 
         # # homo-analysis (proportions of 1- or 2-mers of the same kind)
         # props = {}
         dimensionality = 2
-        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+        pixelsize = self.pixelsize
         if isinstance(parameters["density"], list):
             density = {
                 tag: parameters["density"][cid]
@@ -3804,7 +3891,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 compound_density = density_gt[A]
                 area = parameters["n_simulate"] / (density_gt[A] * 1e6)
                 n_sim_targets = {A: int(parameters["n_simulate"])}
-            structures, targets = load_structures_from_dict(structures)
+            structures, targets = picasso_outpost.load_structures_from_dict(
+                structures
+            )
 
             N_structures = picasso_outpost.generate_N_structures(
                 structures, n_sim_targets, parameters["res_factor"]
@@ -3840,9 +3929,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 "apply_mask": False,
                 "nn_plotted": parameters["nn_nth"],
                 "result_dir": results["folder"],
+                "n_simulated": n_sim_targets,
             }
 
-            result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
+            result, fp_fig = picasso_outpost.single_spinna_run(
+                spinna_parameters
+            )
             plt.close("all")
             props[f"{A},{B}"] = result["Fitted proportions of structures"]
             fp_allfigs.append(fp_fig)
@@ -4076,7 +4168,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         combined_locs, combined_info = io.load_locs(fp_combined_locs)
         # self.channel_locs = [combined_locs]
         multi_filename = "multi_ID.hdf5"
-        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+        pixelsize = self.pixelsize
         mask_dict = mask.gen_mask(
             combined_locs["x"],
             combined_locs["y"],
@@ -4193,7 +4285,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+        pixelsize = self.pixelsize
         # # get map
         # with open(parameters["fp_channel_map"], "r") as f:
         #     channel_map = yaml.safe_load(f)
@@ -4334,7 +4426,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         with open(parameters["fp_channel_map"], "r") as f:
             channel_map = yaml.safe_load(f)
 
-        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+        pixelsize = self.pixelsize
         epsilon_nm = parameters["epsilon_nm"]
         df_mask = pd.read_hdf(parameters["fp_merge_mask"], key="locs")
         fp_out_base = os.path.join(results["folder"], "dbscan.hdf5")
@@ -4478,7 +4570,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # from picasso_workflow.dbscan_molint import dbscan
 
-        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+        pixelsize = self.pixelsize
         epsilon_nm = parameters["epsilon_nm"]
 
         # get map
@@ -5291,7 +5383,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             if n_plot is None:
                 continue
             fp_renderings_cluster = []
-            pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+            pixelsize = self.pixelsize
             pixelsize_display = parameters.get("display_pixelsize", 1)
             for idx, pick_i in enumerate(
                 np.random.choice(len(picks), size=n_plot, replace=False)
@@ -5348,7 +5440,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+        pixelsize = self.pixelsize
         picked_locs, info = io.load_locs(parameters["fp_picked_locs"])
         # with open(parameters["fp_picked_locs"], "rb") as f:
         #     result = pickle.load(f)
@@ -5674,14 +5766,12 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         channel_map = {tag: i for i, tag in enumerate(self.channel_tags)}
 
-        from picasso_workflow.spinna_main import load_structures_from_dict
-
         logger.debug("Labeling Efficiency determination using SPINNA")
 
         # # homo-analysis (proportions of 1- or 2-mers of the same kind)
         # props = {}
         dimensionality = 2
-        pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
+        pixelsize = self.pixelsize
         if isinstance(parameters["density"], list):
             density = {
                 tag: parameters["density"][cid]
@@ -5750,7 +5840,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             for tag in [target, reference]
         }
 
-        structures, targets = load_structures_from_dict(structures)
+        structures, targets = picasso_outpost.load_structures_from_dict(
+            structures
+        )
 
         N_structures = picasso_outpost.generate_N_structures(
             structures, n_sim_targets, parameters["res_factor"]
@@ -5786,9 +5878,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             "apply_mask": False,
             "nn_plotted": parameters["nn_nth"],
             "result_dir": results["folder"],
+            "n_simulated": n_sim_targets,
         }
 
-        result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
+        result, fp_fig = picasso_outpost.single_spinna_run(**spinna_parameters)
         plt.close("all")
 
         # rename figures with random code
@@ -5797,7 +5890,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         for fp in fp_fig:
             fparts = os.path.splitext(fp)
             fp_out = f"{fparts[0]}_{rcode}{fparts[1]}"
-            os.rename(fp, fp_out)
+            try:
+                os.rename(fp, fp_out)
+            except FileNotFoundError:
+                pass
             fp_fig_out.append(fp_out)
         results["fp_fig"] = fp_fig_out
         props = result["Fitted proportions of structures"]  # given in percent

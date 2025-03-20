@@ -54,8 +54,10 @@ class TestPicassoOutpost(unittest.TestCase):
         )
         info_c = [{"Width": 10, "Height": 10}]
 
-        shift, cum_shift = picasso_outpost.align_channels(
-            [locs_a, locs_b, locs_c], [info_a, info_b, info_c]
+        (shift, cum_shift, use_fiducials, method) = (
+            picasso_outpost.align_channels(
+                [locs_a, locs_b, locs_c], [info_a, info_b, info_c]
+            )
         )
         logger.debug(f"shift: {shift}")
 

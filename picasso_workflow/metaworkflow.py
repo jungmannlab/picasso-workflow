@@ -22,6 +22,9 @@ import pathlib
 from functools import reduce
 import textwrap
 import platform
+import re
+import abc
+
 
 if ON_CLUSTER:
     from mpi4py import MPI
@@ -189,22 +192,29 @@ def find_dnapaint_raw(working_folder):
     datasets = {}
     for root, dirs, files in os.walk(working_folder):
         for file in files:
-            if "_MMStack_Pos0.ome.tif" in file:
+            match = re.search(r"_MMStack_Pos(\d+).ome.tif", file)
+            if match is not None:
                 key = os.path.split(root)[-1]
                 datasets[key] = os.path.join(root, file)
+                continue
+            match = re.search(r"_NDTiffStack.tif", file)
+            if match is not None:
+                key = os.path.split(root)[-1]
+                datasets[key] = os.path.join(root, file)
+                continue
     dest_file = os.path.join(working_folder, "src_loc.yaml")
     io.save_info(dest_file, [datasets])
     return datasets, dest_file
 
 
-class SingleWorkflowCoordinator:
-    """A class to coordinate the analysis of a single measurement, e.g.
-    one Exchange round.
+class AbstractWorkflowCoordinator(abc.ABC):
+    """Abstract Base Class for coordination of an analysis.
+    This wraps the WorkflowRunner and AggregationWorkflowRunner
+    from picasso_workflow.workflow for convenient usability.
     """
 
     def __init__(
         self,
-        src_loc,
         analysis_name,
         working_folder,
         confluence_url,
@@ -214,13 +224,6 @@ class SingleWorkflowCoordinator:
         dest_machine=None,
         always_save=False,
     ):
-        self.dataset_filepaths = io.load_info(src_loc)[0]
-        self.tile_entries = {
-            "filepath": list(self.dataset_filepaths.values()),
-            "#tags": list(self.dataset_filepaths.keys()),
-        }
-
-        self.analysis_name = os.path.split(working_folder)[-1]
         self.root_folder = os.path.join(
             working_folder, f"AnalysisResults-{analysis_name}"
         )
@@ -267,6 +270,19 @@ class SingleWorkflowCoordinator:
             token=self.confluence_token,
         )
 
+    @classmethod
+    def hash_hex(cls, s, length=6):
+        """Hashes a string and digests it to a hex string of a given length.
+        Args:
+            s : str
+                string to hash
+            length : int (even)
+                length to digest to
+        Returns:
+            string of len length
+        """
+        return hashlib.shake_128(s.encode("utf-8")).hexdigest(int(length / 2))
+
     def get_configs(
         self,
         report_name,
@@ -293,14 +309,14 @@ class SingleWorkflowCoordinator:
             },
         }
 
-        if camera_info is None:
-            camera_info = {
-                "Gain": 1,
-                "Sensitivity": 0.22,  # Artemis
-                "Baseline": 100,
-                "Qe": 1,
-                "Pixelsize": 130,  # nm
-            }
+        # if camera_info is None:
+        #     camera_info = {
+        #         "Gain": 1,
+        #         "Sensitivity": 0.22,  # Artemis
+        #         "Baseline": 100,
+        #         "Qe": 1,
+        #         "Pixelsize": 130,  # nm
+        #     }
         analysis_config = {
             "result_location": result_location,
             "camera_info": camera_info,
@@ -308,6 +324,42 @@ class SingleWorkflowCoordinator:
             "always_save": self.always_save,
         }
         return reporter_config, analysis_config
+
+
+class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
+    """A class to coordinate the analysis of a single measurement, e.g.
+    one Exchange round.
+    """
+
+    def __init__(
+        self,
+        src_loc_file,
+        analysis_name,
+        working_folder,
+        confluence_url,
+        confluence_space,
+        confluence_token,
+        base_page,
+        dest_machine=None,
+        always_save=False,
+    ):
+        self.dataset_filepaths = io.load_info(src_loc_file)[0]
+        self.tile_entries = {
+            "filepath": list(self.dataset_filepaths.values()),
+            "#tags": list(self.dataset_filepaths.keys()),
+        }
+        self.analysis_name = os.path.split(working_folder)[-1]
+
+        super().__init__(
+            analysis_name,
+            working_folder,
+            confluence_url,
+            confluence_space,
+            confluence_token,
+            base_page,
+            dest_machine,
+            always_save,
+        )
 
     def prepare_analysis(self, workflow_modules):
         """
@@ -378,7 +430,96 @@ class SingleWorkflowCoordinator:
         plt.close("all")
 
 
-class InvestigationCoordinator:
+class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
+    """A class to coordinate the analysis of a measurement of one FOV with multiple
+    targets, e.g. labeling efficiency of one cell.
+    """
+
+    def __init__(
+        self,
+        src_loc_file,
+        analysis_name,
+        working_folder,
+        confluence_url,
+        confluence_space,
+        confluence_token,
+        base_page,
+        dest_machine="hpcl8001",
+        investigation_description="",
+        always_save=False,
+    ):
+        self.dataset_filepaths = io.load_info(src_loc_file)[0]
+
+        self.analysis_name = analysis_name
+
+        super().__init__(
+            analysis_name,
+            working_folder,
+            confluence_url,
+            confluence_space,
+            confluence_token,
+            base_page,
+            dest_machine,
+            always_save,
+        )
+
+    def prepare_analysis(self, workflow_modules_multi):
+        """
+        Args:
+            workflow_modules_multi : dict of
+                single_dataset_tileparameters
+                single_dataset_modules:
+                    list of tuple, defining modules to run in the first stage
+                    of evaluation of the individual rounds
+                aggregation_modules:
+                    list of tuple, defining modules to run in the second strage
+                    of the evaluation, across the varous rounds
+        Returns:
+            run_wr_kwargs
+        """
+        # make sure different nodes query confluence at different times
+        if self.rank > 0:
+            return []
+
+        run_awr_kwargs = []
+
+        report_name = self.analysis_name
+
+        reporter_config, analysis_config = self.get_configs(
+            report_name, self.root_folder
+        )
+
+        awr = AggregationWorkflowRunner.config_from_dicts(
+            reporter_config,
+            analysis_config,
+            workflow_modules_multi,
+            continue_previous_runner=True,
+            single_workflow_parallel=False,
+        )
+        run_awr_kwargs.append(
+            {
+                "awr": awr,
+                "report_name": report_name,
+            }
+        )
+        return run_awr_kwargs
+
+    def run_analysis(self, workflow_modules_multi):
+        run_awr_kwargs = self.prepare_analysis(workflow_modules_multi)
+
+        # print(f'rank {self.rank}, size {self.size}: running {run_awr_kwargs}')
+
+        for kwargs in run_awr_kwargs:
+            self.run_awr(**kwargs)
+
+    def run_awr(self, awr, report_name):
+        logger.debug(f"starting to analyse {report_name}")
+        awr.run()
+        logger.debug(f"finished analysing {report_name}")
+        plt.close("all")
+
+
+class InvestigationCoordinator(AbstractWorkflowCoordinator):
     """A class to coordinate the analysis of a measurement series, i.e.
     multiple conditions / cell types, cells, target molecules.
     """
@@ -407,64 +548,17 @@ class InvestigationCoordinator:
         self.receptors = receptors
 
         self.analysis_name = analysis_name
-        self.root_folder = os.path.join(
-            working_folder, f"InvestigationResults-{analysis_name}"
+
+        super().__init__(
+            analysis_name,
+            working_folder,
+            confluence_url,
+            confluence_space,
+            confluence_token,
+            base_page,
+            dest_machine,
+            always_save,
         )
-        self.root_page = analysis_name
-
-        self.confluence_url = confluence_url
-        self.confluence_space = confluence_space
-        self.confluence_token = confluence_token
-
-        self.always_save = always_save
-
-        if ON_CLUSTER:
-            comm = MPI.COMM_WORLD
-            self.rank = comm.Get_rank()  # Get the rank of the process
-            self.size = comm.Get_size()  # Get the total number of processes
-        else:
-            self.rank = 0
-            self.size = 1
-
-        if self.rank == 0:
-            ci = confluence.ConfluenceInterface(
-                self.confluence_url,
-                self.confluence_space,
-                base_page,
-                token=self.confluence_token,
-            )
-            try:
-                investigation_description += f"""
-                <p><strong>Analysis file location</strong>
-
-                The files created during the analysis run can be found in
-                {self.root_folder}.</p>
-                """
-                ci.create_page(self.root_page, investigation_description)
-            except confluence.ConfluenceInterfaceError:
-                pass
-        else:
-            # ensure rank 0 has created the root page
-            time.sleep(2)
-        self.ci = confluence.ConfluenceInterface(
-            self.confluence_url,
-            self.confluence_space,
-            self.root_page,
-            token=self.confluence_token,
-        )
-
-    @classmethod
-    def hash_hex(cls, s, length=6):
-        """Hashes a string and digests it to a hex string of a given length.
-        Args:
-            s : str
-                string to hash
-            length : int (even)
-                length to digest to
-        Returns:
-            string of len length
-        """
-        return hashlib.shake_128(s.encode("utf-8")).hexdigest(int(length / 2))
 
     def prepare_sglcell_analysis(self, get_workflow_modules):
         """
@@ -652,46 +746,6 @@ class InvestigationCoordinator:
                 }
             )
         return run_awr_kwargs
-
-    def get_configs(
-        self,
-        report_name,
-        root_folder,
-        cell_type,
-        cell_name=None,
-        camera_info=None,
-    ):
-        if cell_name is None:
-            result_location = os.path.join(root_folder, cell_type)
-        else:
-            result_location = os.path.join(root_folder, cell_type, cell_name)
-        os.makedirs(result_location, exist_ok=True)
-
-        reporter_config = {
-            "report_name": report_name,
-            "ConfluenceReporter": {
-                "base_url": self.confluence_url,
-                "space_key": self.confluence_space,
-                "parent_page_title": report_name,
-                "token": self.confluence_token,
-            },
-        }
-
-        if camera_info is None:
-            camera_info = {
-                "Gain": 1,
-                "Sensitivity": 0.22,  # Artemis
-                "Baseline": 100,
-                "Qe": 1,
-                "Pixelsize": 130,  # nm
-            }
-        analysis_config = {
-            "result_location": result_location,
-            "camera_info": camera_info,
-            "gpufit_installed": False,
-            "always_save": self.always_save,
-        }
-        return reporter_config, analysis_config
 
     def run_awr(self, awr, cell_type, cell_name, queue, lock, fp_dfa2):
         logger.debug(f"starting to analyse {cell_type}, {cell_name}")
