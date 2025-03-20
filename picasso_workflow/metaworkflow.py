@@ -196,6 +196,12 @@ def find_dnapaint_raw(working_folder):
             if match is not None:
                 key = os.path.split(root)[-1]
                 datasets[key] = os.path.join(root, file)
+                continue
+            match = re.search(r"_NDTiffStack.tif", file)
+            if match is not None:
+                key = os.path.split(root)[-1]
+                datasets[key] = os.path.join(root, file)
+                continue
     dest_file = os.path.join(working_folder, "src_loc.yaml")
     io.save_info(dest_file, [datasets])
     return datasets, dest_file
@@ -320,7 +326,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
         return reporter_config, analysis_config
 
 
-class SingleWorkflowCoordinator:
+class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
     """A class to coordinate the analysis of a single measurement, e.g.
     one Exchange round.
     """
@@ -424,7 +430,7 @@ class SingleWorkflowCoordinator:
         plt.close("all")
 
 
-class AggregationWorkflowCoordinator:
+class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
     """A class to coordinate the analysis of a measurement of one FOV with multiple
     targets, e.g. labeling efficiency of one cell.
     """
@@ -513,7 +519,7 @@ class AggregationWorkflowCoordinator:
         plt.close("all")
 
 
-class InvestigationCoordinator:
+class InvestigationCoordinator(AbstractWorkflowCoordinator):
     """A class to coordinate the analysis of a measurement series, i.e.
     multiple conditions / cell types, cells, target molecules.
     """

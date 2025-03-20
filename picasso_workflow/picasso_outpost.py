@@ -558,7 +558,7 @@ def load_structures_from_dict(structure_dict):
 
     Parameters
     ----------
-    structure_dict : dict
+    structure_dict : list of dict
         structure description as dict.
 
     Returns

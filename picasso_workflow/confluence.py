@@ -991,41 +991,53 @@ class ConfluenceReporter(AbstractModuleCollection):
                     os.path.split(fp)[1],
                 )
 
-    def spinna(self, i, parameters, results):
+    @module_decorator
+    def spinna(self, i, parameters, results, parameter_text, result_text):
         """ """
         logger.debug("Reporting spinna_manual.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: SPINNA</strong></p>
-        <ul><li>file present: {results.get('success')}</li>
+        Summary:
+        <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>Labeling Efficiency: {parameters["labeling_efficiency"]} %</li>
-        <li>Labeling Uncertainty: {parameters["labeling_uncertainty"]} nm</li>
         <li># simulated structures: {parameters["n_simulate"]}</li>
+        <li># simulation repeats: {parameters["sim_repeats"]}</li>
         <li>Nearest Neighbors to evaluate: {parameters["n_nearest_neighbors"]}
         </li>
-        <li>Using Mask: {parameters.get("fp_mask_dict") is not None}</li>
-        <li>Density: {parameters["density"]} [1/nm^d]</li>
-        <li>Random Rotation Mode: {parameters["random_rot_mode"]}</li>
-        <li># simulation repeats: {parameters["sim_repeats"]}</li>
-        <li>Histogram Bin Size: {parameters["fit_NND_bin"]}</li>
-        <li>Histogram Max value: {parameters["fit_NND_maxdist"]}</li>
+        </ul>
+        {parameter_text}
+        {result_text}
         """
-        if fp_figs := results.get("fp_figs"):
-            for fp_fig in fp_figs:
+        fig_fps = results.get("fp_figs", [])
+        titles = ["" for i in range(len(fig_fps))]
+
+        if len(fig_fps) > 0:
+            fn_figs = []
+            for fp in fig_fps:
                 try:
-                    self.ci.upload_attachment(self.report_page_id, fp_fig)
+                    self.ci.upload_attachment(self.report_page_id, fp)
                 except ConfluenceInterfaceError:
                     pass
-                _, fp_fig = os.path.split(fp_fig)
-                text += (
-                    "<ul><ac:image><ri:attachment "
-                    + f'ri:filename="{fp_fig}" />'
-                    + "</ac:image></ul>"
-                )
-        text += """</ul>
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+        text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(
@@ -2288,7 +2300,10 @@ class ConfluenceReporter(AbstractModuleCollection):
         """This is just for debugging"""
         pass
 
-    def labeling_efficiency_analysis(self, i, parameters, results):
+    @module_decorator
+    def labeling_efficiency_analysis(
+        self, i, parameters, results, parameter_text, result_text
+    ):
         """Analyse for labeling efficiency.
         Args:
             i : int
@@ -2304,24 +2319,42 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Labeling Efficiency Evaluation</strong></p>
+        Summary:
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         <li>Labeling efficiency: {results["labeling_efficiency"]}</li>
-        </ul>"""
-        if fp_figs := results.get("fp_fig"):
-            for fp_fig in fp_figs:
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+        fig_fps = results.get("fp_fig")
+        titles = ["" for i in range(len(fig_fps))]
+
+        if len(fig_fps) > 1:
+            fn_figs = []
+            for fp in fig_fps:
                 try:
-                    self.ci.upload_attachment(self.report_page_id, fp_fig)
+                    self.ci.upload_attachment(self.report_page_id, fp)
                 except ConfluenceInterfaceError:
                     pass
-                _, fp_fig = os.path.split(fp_fig)
-                text += (
-                    "<ul><ac:image><ri:attachment "
-                    + f'ri:filename="{fp_fig}" />'
-                    + "</ac:image></ul>"
-                )
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """

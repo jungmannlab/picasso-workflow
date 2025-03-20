@@ -152,13 +152,19 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             try:
                 infofirst = self.info[0]
-            except (KeyError, AttributeError):
+            except IndexError:
                 infofirst = self.channel_info[0][0]
             except Exception:
                 raise AttributeError(
                     "Cannot load pixelsize from info. Load data first."
                 )
-            cam_name = infofirst["Camera"]
+            try:
+                cam_name = infofirst["Camera"]
+            except KeyError:
+                logger.debug(
+                    "cannot find camera entry. Probably this is a simulation."
+                )
+                return {"Pixelsize": self.channel_info[0][1]["Pixelsize"]}
             if cam_config := pCONFIG.get("Cameras", {}).get(cam_name):
                 # # find quantum efficiency
                 # filter_name = cam_config.get("Channel Device", {}).get(
@@ -175,7 +181,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # sensitivity starts being a dict, and ends as a value
                 cat_vals = ""
                 for category in cam_config.get("Sensitivity Categories"):
-                    category_value = infofirst.get(f"{cam_name}-{category}")
+                    category_value = infofirst["Micro-Manager Metadata"].get(
+                        f"{cam_name}-{category}"
+                    )
                     cat_vals += f"{category}: {category_value}; "
                     sensitivity = sensitivity.get(category_value, {})
                 if isinstance(sensitivity, dict):
@@ -1884,8 +1892,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         # plot results
         fig, ax = plt.subplots()
         colors = cm.get_cmap("viridis", k_max).colors
-        bin_max = np.quantile(nneighbors[:, -1], 0.99)
-        bins = np.linspace(0, bin_max, num=50)
+        bin_max = np.quantile(nneighbors[:, -1], 0.95)
+        median_1stNN = np.median(nneighbors[:, 0])
+        # sample bins such that there are 5 bins from 0 to middle of 1stNN
+        nbins = int(5 * bin_max / median_1stNN)
+        bins = np.linspace(0, bin_max, num=nbins)
         nnhist_obs = np.zeros((len(bins), k_max))
         nnhist_an = np.zeros_like(nnhist_obs)
         for i in range(nnhist_an.shape[1]):
@@ -2365,8 +2376,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     the spinna granularity
         """
         if isinstance(parameters["structures"], str):
-            with open(parameters["structures"], "r") as f:
-                structures = yaml.read_all(f)
+            structures = io.load_info(parameters["structures"])
         else:
             structures = parameters["structures"]
 
@@ -2402,6 +2412,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ).T
 
         data_2d = "z" not in self.channel_locs[0].dtype.names
+        if not data_2d:
+            if self.locs is not None:
+                z_range = int(self.locs["z"].max() - self.locs["z"].min())
+            else:
+                z_maxs = [int(locs["z"].max()) for locs in self.channel_locs]
+                z_mins = [int(locs["z"].min()) for locs in self.channel_locs]
+                z_range = max(z_maxs) - min(z_mins)
+            if z_range <= 0:
+                data_2d = True
         if data_2d:
             area = parameters["n_simulate"] / sum(parameters["density"])
             width = np.sqrt(area)
@@ -2409,7 +2428,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             depth = None
             # d = 2
         else:
-            z_range = int(self.locs["z"].max() - self.locs["z"].min())
+            if self.locs is not None:
+                z_range = int(self.locs["z"].max() - self.locs["z"].min())
+            else:
+                z_maxs = [int(locs["z"].max()) for locs in self.channel_locs]
+                z_mins = [int(locs["z"].min()) for locs in self.channel_locs]
+                z_range = max(z_maxs) - min(z_mins)
             volume = parameters["n_simulate"] / sum(parameters["density"])
             width = np.sqrt(volume / z_range)
             height = np.sqrt(volume / z_range)
@@ -2454,7 +2478,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         }
 
         spinna_results, fp_figs = picasso_outpost.single_spinna_run(
-            spinna_pars
+            **spinna_pars
         )
         plt.close("all")
         results["fp_figs"] = fp_figs
@@ -5857,7 +5881,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             "n_simulated": n_sim_targets,
         }
 
-        result, fp_fig = picasso_outpost.single_spinna_run(spinna_parameters)
+        result, fp_fig = picasso_outpost.single_spinna_run(**spinna_parameters)
         plt.close("all")
 
         # rename figures with random code
