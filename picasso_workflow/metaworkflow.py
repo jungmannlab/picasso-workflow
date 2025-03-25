@@ -448,7 +448,9 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         investigation_description="",
         always_save=False,
     ):
-        self.dataset_filepaths = io.load_info(src_loc_file)[0]
+        # src_loc_file is a picasso-info like yaml file, representing a list of
+        # dicts, with keys "#tags" and #filepath
+        self.dataset_filepaths = io.load_info(src_loc_file)
 
         self.analysis_name = analysis_name
 
@@ -463,7 +465,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             always_save,
         )
 
-    def prepare_analysis(self, workflow_modules_multi):
+    def prepare_analysis(self, workflow_modules_sgl, workflow_modules_agg):
         """
         Args:
             workflow_modules_multi : dict of
@@ -478,36 +480,63 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             run_wr_kwargs
         """
         # make sure different nodes query confluence at different times
-        if self.rank > 0:
-            return []
+        time.sleep(3 * self.rank)
 
         run_awr_kwargs = []
 
-        report_name = self.analysis_name
+        execution_item = -1
+        for datasets in self.dataset_filepaths:
+            execution_item += 1
+            if execution_item % self.size != self.rank:
+                continue
 
-        reporter_config, analysis_config = self.get_configs(
-            report_name, self.root_folder
-        )
+            if rname := datasets.get("report_name"):
+                report_name = rname
+                # create the corresponding confluence page
+                try:
+                    ci = confluence.ConfluenceInterface(
+                        self.confluence_url,
+                        self.confluence_space,
+                        self.root_page,
+                        token=self.confluence_token,
+                    )
+                    ci.create_page(report_name, "")
+                except Exception:
+                    pass
+            else:
+                report_name = self.analysis_name
 
-        awr = AggregationWorkflowRunner.config_from_dicts(
-            reporter_config,
-            analysis_config,
-            workflow_modules_multi,
-            continue_previous_runner=True,
-            single_workflow_parallel=False,
-        )
-        run_awr_kwargs.append(
-            {
-                "awr": awr,
-                "report_name": report_name,
+            reporter_config, analysis_config = self.get_configs(
+                report_name, self.root_folder
+            )
+
+            workflow_modules_multi = {
+                "single_dataset_tileparameters": datasets,
+                "single_dataset_modules": workflow_modules_sgl,
+                "aggregation_modules": workflow_modules_agg,
             }
-        )
+
+            awr = AggregationWorkflowRunner.config_from_dicts(
+                reporter_config,
+                analysis_config,
+                workflow_modules_multi,
+                continue_previous_runner=True,
+                single_workflow_parallel=False,
+            )
+            run_awr_kwargs.append(
+                {
+                    "awr": awr,
+                    "report_name": report_name,
+                }
+            )
         return run_awr_kwargs
 
-    def run_analysis(self, workflow_modules_multi):
-        run_awr_kwargs = self.prepare_analysis(workflow_modules_multi)
+    def run_analysis(self, workflow_modules_sgl, workflow_modules_agg):
+        run_awr_kwargs = self.prepare_analysis(
+            workflow_modules_sgl, workflow_modules_agg
+        )
 
-        # print(f'rank {self.rank}, size {self.size}: running {run_awr_kwargs}')
+        print(f"rank {self.rank}, size {self.size}: running {run_awr_kwargs}")
 
         for kwargs in run_awr_kwargs:
             self.run_awr(**kwargs)
