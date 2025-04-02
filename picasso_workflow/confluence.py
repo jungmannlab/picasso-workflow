@@ -502,11 +502,14 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def summarize_dataset(self, i, parameters, results):
-        logger.debug("Reporting dataset description.")
+    @module_decorator
+    def summarize_dataset(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        logger.debug("Reporting summarize dataset.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: Descriptive Statistics</strong></p>"""
+        <p><strong>Module {i:02d}: Summarize Dataset</strong></p>"""
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
                 meth_res = results["nena"]
@@ -514,7 +517,6 @@ class ConfluenceReporter(AbstractModuleCollection):
                     <p>NeNa</p>
                     <ul>
                     <li>NeNa value: {str(meth_res.get('NeNa'))}</li>
-                    <li>Best Fit Values: {str(meth_res.get('res'))}</li>
                     <li>Chi Square: {str(meth_res.get('chisqr'))}</li>
                     </ul>"""
                 if fp_nena := meth_res.get("filepath_plot"):
@@ -525,6 +527,17 @@ class ConfluenceReporter(AbstractModuleCollection):
                         + f'ri:filename="{fn_nena}" />'
                         + "</ac:image></ul>"
                     )
+            elif meth.lower() == "median-loc-precision":
+                text += f"""
+                    <p>Median Localization Precision</p>
+                    <ul>
+                    <li>med loc prec [px]:
+                        {str(meth_res.get('median_lp-px'))}</li>
+                    <li>med loc prec [nm]:
+                        {str(meth_res.get('median_lp-nm'))}</li>
+                    </ul>"""
+        text += parameter_text
+        text += result_text
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -1660,6 +1673,76 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    @module_decorator
+    def refine_mask_by_density(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        """Create a density mask"""
+        logger.debug("Reporting refine_mask_by_density.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Refine Mask by Density</strong></p>
+        Summary:
+        <ul>
+        <li>Area: {results["area_um^2"]} µm^2</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+        fig_fps = []
+        titles = []
+        if fp_fig := results.get("fp_density_hist_before"):
+            fig_fps.append(fp_fig)
+            titles.append("Density histogram before selection")
+        if fp_fig := results.get("fp_fig_mask_density"):
+            fig_fps.append(fp_fig)
+            titles.append("Density Mask after selection")
+        if fp_fig := results.get("fp_fig_mask_binary"):
+            fig_fps.append(fp_fig)
+            titles.append("Binary Mask after selection")
+        if fp_fig := results.get("fp_density_hist_after"):
+            fig_fps.append(fp_fig)
+            titles.append("Density histogram after selection")
+        if fp_fig := results.get("fp_scene_locs_before"):
+            fig_fps.append(fp_fig)
+            titles.append("Localizations before applying the mask")
+        if fp_fig := results.get("fp_scene_locs_after"):
+            fig_fps.append(fp_fig)
+            titles.append("Localizations after applying the mask")
+
+        if len(fig_fps) > 1:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
     def dbscan_molint(self, i, parameters, results):
         """TO BE CLEANED UP
         dbscan implementation for molecular interactions workflow
@@ -2142,12 +2225,16 @@ class ConfluenceReporter(AbstractModuleCollection):
 
         if isinstance(parameters["field"], str):
             fields = [parameters["field"]]
-            minvals = [parameters["minval"]]
-            maxvals = [parameters["maxval"]]
+            minvals = [parameters.get("minval")]
+            maxvals = [parameters.get("maxval")]
         else:
             fields = parameters["field"]
-            minvals = parameters["minval"]
-            maxvals = parameters["maxval"]
+            minvals = parameters.get("minval")
+            if minvals is None:
+                minvals = [None] * len(fields)
+            maxvals = parameters.get("maxval")
+            if maxvals is None:
+                maxvals = [None] * len(fields)
         txtfilt = ""
         for field, minval, maxval in zip(fields, minvals, maxvals):
             txtfilt += f"<li>{field}: {minval} - {maxval}</li>"

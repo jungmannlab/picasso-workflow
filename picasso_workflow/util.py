@@ -234,6 +234,11 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def refine_mask_by_density(self):
+        """refine a mask by a given density range"""
+        pass
+
+    @abc.abstractmethod
     def dbscan_molint(self):
         """TO BE CLEANED UP
         dbscan implementation for molecular interactions workflow
@@ -475,15 +480,26 @@ class ParameterCommandExecutor(DictSimpleTyper):
             $map
                 use self.map dictionary to map values, e.g.
                 ("$$map", "filepath")
+            $sum
+                sum up values, e.g.
+                ("$sum", ($get_prior_result, ...), ($get_prior_result, ...))
+                or
+                ("$sum", ("$$get_prior_result, all_results,
+                          single_dataset, $$all, 03_nneighbor, density_rdf")
+            $product
+                analog to sum
+            $min, $max
+                analog to sum
         The commands can be combined with numeric operations:
             ('$get_previous_module_result *2', 'nena')
             The arithmetic expression must not contain any spaces.
         """
         if (
-            len(t) == 2
+            len(t) > 1
             and isinstance(t[0], str)
             and t[0][: len(self.command_sign)] == self.command_sign
         ):
+            originals = []
             # this is a parameter command
             if " " in t[0]:
                 cmd = t[0].split(" ")[0]
@@ -502,6 +518,86 @@ class ParameterCommandExecutor(DictSimpleTyper):
             elif cmd == f"{self.command_sign}map":
                 res = self.map[t[1]]
                 logger.debug(f"Mapping {t[1]}: {res}")
+            elif cmd == f"{self.command_sign}sum":
+                logger.debug(f"summing up {t[1:]}.")
+                components = []
+                for arg in t[1:]:
+                    if isinstance(arg, dict) and "parsed" in arg.keys():
+                        components.append(arg["parsed"])
+                    elif (
+                        isinstance(arg, (tuple, list))
+                        and len(arg) > 1
+                        and isinstance(arg[0], str)
+                        and arg[0][: len(self.command_sign)]
+                        == self.command_sign
+                    ):
+                        sub_res = self.scan_tuple(arg)
+                        components.append(sub_res["parsed"])
+                        originals.append(sub_res["original"])
+                    else:
+                        components.append(arg)
+                res = self.sum(components)
+                logger.debug(f"Previous module result is {res}.")
+            elif cmd == f"{self.command_sign}product":
+                logger.debug(f"multiplying {t[1:]}.")
+                components = []
+                for arg in t[1:]:
+                    if isinstance(arg, dict) and "parsed" in arg.keys():
+                        components.append(arg["parsed"])
+                    elif (
+                        isinstance(arg, (tuple, list))
+                        and len(arg) > 1
+                        and isinstance(arg[0], str)
+                        and arg[0][: len(self.command_sign)]
+                        == self.command_sign
+                    ):
+                        sub_res = self.scan_tuple(arg)
+                        components.append(sub_res["parsed"])
+                        originals.append(sub_res["original"])
+                    else:
+                        components.append(arg)
+                res = self.product(components)
+                logger.debug(f"Previous module result is {res}.")
+            elif cmd == f"{self.command_sign}min":
+                logger.debug(f"min of {t[1:]}.")
+                components = []
+                for arg in t[1:]:
+                    if isinstance(arg, dict) and "parsed" in arg.keys():
+                        components.append(arg["parsed"])
+                    elif (
+                        isinstance(arg, (tuple, list))
+                        and len(arg) > 1
+                        and isinstance(arg[0], str)
+                        and arg[0][: len(self.command_sign)]
+                        == self.command_sign
+                    ):
+                        sub_res = self.scan_tuple(arg)
+                        components.append(sub_res["parsed"])
+                        originals.append(sub_res["original"])
+                    else:
+                        components.append(arg)
+                res = self.min(components)
+                logger.debug(f"Previous module result is {res}.")
+            elif cmd == f"{self.command_sign}max":
+                logger.debug(f"max of {t[1:]}.")
+                components = []
+                for arg in t[1:]:
+                    if isinstance(arg, dict) and "parsed" in arg.keys():
+                        components.append(arg["parsed"])
+                    elif (
+                        isinstance(arg, (tuple, list))
+                        and len(arg) > 1
+                        and isinstance(arg[0], str)
+                        and arg[0][: len(self.command_sign)]
+                        == self.command_sign
+                    ):
+                        sub_res = self.scan_tuple(arg)
+                        components.append(sub_res["parsed"])
+                        originals.append(sub_res["original"])
+                    else:
+                        components.append(arg)
+                res = self.max(components)
+                logger.debug(f"Previous module result is {res}.")
             else:
                 msg = (
                     "Found undefined command for current command "
@@ -521,7 +617,10 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 res = eval(str(res) + aritexp)
             # to deactivate, leave out ocmmand sign
             t_out = tuple([t[0][len(self.command_sign) :], t[1]])
-            return {"parsed": res, "original": t_out}
+            total_result = {"parsed": res, "original": t_out}
+            if originals:
+                total_result["originals"] = originals
+            return total_result
         else:
             # it's just a normal tuple
             tout = []
@@ -616,6 +715,58 @@ class ParameterCommandExecutor(DictSimpleTyper):
                     raise e
         # logger.debug(f'From {root_att}, extracting "{att_name}": {att}')
         return att
+
+    def sum(self, *args):
+        """sum up components that may be given as iterables, or separate
+        arguments.
+        """
+        components = []
+        for arg in args:
+            if isinstance(arg, (list, tuple)):
+                for ar in arg:
+                    components.append(ar)
+            else:
+                components.append(arg)
+        return np.sum(components)
+
+    def product(self, *args):
+        """Multiply components that may be given as iterables, or separate
+        arguments.
+        """
+        components = []
+        for arg in args:
+            if isinstance(arg, (list, tuple)):
+                for ar in arg:
+                    components.append(ar)
+            else:
+                components.append(arg)
+        return np.product(components)
+
+    def max(self, *args):
+        """Take the maximum of components that may be given as iterables,
+        or separate arguments.
+        """
+        components = []
+        for arg in args:
+            if isinstance(arg, (list, tuple)):
+                for ar in arg:
+                    components.append(ar)
+            else:
+                components.append(arg)
+        return np.max(components)
+
+    def min(self, *args):
+        """Take the minimum of components that may be given as iterables,
+        or separate arguments.
+        """
+        components = []
+        for arg in args:
+            if isinstance(arg, (list, tuple)):
+                for ar in arg:
+                    components.append(ar)
+            else:
+                components.append(arg)
+        return np.min(components)
 
 
 def is_valid_expression(expression):

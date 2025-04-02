@@ -91,8 +91,10 @@ class CellMask:
         y_min = np.floor(combined_coords[:, 1].min())
         y_max = np.ceil(combined_coords[:, 1].max())
         instance._offset = x_min, y_min
-        bins_x = np.arange(x_min, x_max, step=binsize, dtype=np.float64)
-        bins_y = np.arange(y_min, y_max, step=binsize, dtype=np.float64)
+        combined_coords[:, 0] -= x_min
+        combined_coords[:, 1] -= y_min
+        bins_x = np.arange(0, x_max - x_min, step=binsize, dtype=np.float64)
+        bins_y = np.arange(0, y_max - y_min, step=binsize, dtype=np.float64)
         mask = np.histogram2d(
             combined_coords[:, 0], combined_coords[:, 1], bins=[bins_x, bins_y]
         )[0]
@@ -144,6 +146,21 @@ class CellMask:
         self._density_mask[~self._binary_mask] = 0
         self._density_mask /= self._density_mask.sum()
 
+    @property
+    def mean_density(self):
+        """Returns the mean density in the mask in spots/nm^2"""
+        total_spots = np.sum(self._initial_density[self._binary_mask])
+        n_pixels = np.sum(self._binary_mask)
+        pixel_area = self._upsample**2
+        return total_spots / n_pixels / pixel_area
+
+    @property
+    def densities(self):
+        """Returns the densites of mask pixels (#spots/nm^2)"""
+        total_spots = np.sum(self._initial_density[self._binary_mask])
+        pixel_area = self._upsample**2
+        return self.density_mask * total_spots / pixel_area
+
     def picassolocs_to_maskbins(self, locs):
         """Convert picasso localizations to bin locations in the mask
         Args:
@@ -181,6 +198,8 @@ class CellMask:
             "blursize": self._blursize,
             "threshold": self._threshold,
             "upsample": self._upsample,
+            "offset": self._offset,
+            "pixelsize": self._pixelsize,
         }
         with open(fp, "wb") as f:
             pickle.dump(save_dict, f)
@@ -197,6 +216,8 @@ class CellMask:
         instance._blursize = save_dict["blursize"]
         instance._threshold = save_dict["threshold"]
         instance._upsample = save_dict["upsample"]
+        instance._offset = save_dict["offset"]
+        instance._pixelsize = save_dict["pixelsize"]
         return instance
 
     @property
@@ -218,16 +239,22 @@ class CellMask:
         area = area / 1e6  # convert from nm^2 to um^2
         return area
 
-    def filter_mask(self, fill_holes=True):
-        """Select the largest connected area in the mask, and fill
+    def filter_mask(self, nth_largest=0, fill_holes=True):
+        """Select the nth-largest connected area in the mask, and fill
         potential holes in this area.
+        Args:
+            nth_largest : int
+                select the nth largest cell:
+                0 - largest cell; 1 - scond to largest; etc
+            fill_holes : bool
+                whether to fill holes in the mask
         """
         binary_mask = self.binary_mask
         # print('binary mask shape in', binary_mask.shape)
         labeled_array, num_features = label(binary_mask)
         sizes = np.bincount(labeled_array.ravel())
         try:
-            largest_component_index = sizes[1:].argmax() + 1
+            largest_component_index = sizes[1:].argmax() + 1 - nth_largest
         except ValueError:
             largest_component_index = 1
         largest_component_mask = (
@@ -301,18 +328,17 @@ class CellMask:
             cmap = "hot"
             title = "density mask"
         ax.set_title(title)
+        x_min = self._offset[0] / 1000
+        x_max = (x_min + self._upsample * mask_plot.shape[0]) / 1000
+        y_min = self._offset[1] / 1000
+        y_max = (y_min + self._upsample * mask_plot.shape[1]) / 1000
         ax.imshow(
-            np.rot90(mask_plot),
-            extent=[
-                0,
-                self._upsample * mask_plot.shape[0] / 1000,
-                0,
-                self._upsample * mask_plot.shape[1] / 1000,
-            ],
+            mask_plot.T,  # np.rot90(mask_plot),
+            extent=[x_min, x_max, y_min, y_max],
             cmap=cmap,
             origin="lower",
+            aspect="equal",
         )
-
         ax.set_xlabel("x [µm]")
         ax.set_ylabel("y [µm]")
         # ax.set_xticks()
@@ -443,7 +469,7 @@ class CellMask:
 def picassolocs_to_coords(mols, pixelsize):
     """Converts the Picasso-format np.rec.array to a 2D numpy array with
     spatial coordinates in nm."""
-    return np.array([mols["x"], mols["y"]]).T * pixelsize
+    return np.array([mols["x"].copy(), mols["y"].copy()]).T * pixelsize
 
 
 def otsu(image):

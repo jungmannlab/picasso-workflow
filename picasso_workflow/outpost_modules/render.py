@@ -38,11 +38,15 @@ def render_scene(kwargs, locs, viewport=None):
 
     if viewport is not None:
         kwargs["viewport"] = viewport
+    n_group_colors = kwargs.get("n_group_colors", 8)
+    cmap = kwargs.get("cmap", "magma")
 
     n_channels = len(locs)
     # render single or multi channel data
     if n_channels == 1:
-        bgra = render_single_channel(kwargs, locs[0])
+        bgra = render_single_channel(
+            kwargs, locs[0], n_group_colors=n_group_colors, cmap=cmap
+        )
     else:
         bgra = render_multi_channel(kwargs, locs)
 
@@ -52,7 +56,7 @@ def render_scene(kwargs, locs, viewport=None):
     return bgra
 
 
-def render_single_channel(kwargs, locs, n_group_colors=8, cmap="gist_rainbow"):
+def render_single_channel(kwargs, locs, n_group_colors=8, cmap="magma"):
     """
     Renders single channel localizations.
 
@@ -83,7 +87,7 @@ def render_single_channel(kwargs, locs, n_group_colors=8, cmap="gist_rainbow"):
     n_locs, image = render.render(locs, **kwargs)
 
     # adjust contrast and convert to 8 bits
-    image = scale_contrast(image)
+    image = scale_contrast([image])[0]
     image = to_8bit(image)
 
     # paint locs using the colormap of choice (Display Settings
@@ -292,6 +296,13 @@ def plot_scene(
     y_offset=0,
     title="",
 ):
+    """Plot a scene in the locs
+    Args:
+        render_kwargs : dict, default None
+           optional keys:
+            oversampling, viewport, blur_method, min_blur_width, ang,
+            n_group_colors, cmap
+    """
     if not isinstance(channel_locs, list):
         channel_locs = [channel_locs]
 
@@ -315,6 +326,9 @@ def plot_scene(
     if render_kwargs is not None:
         for k, v in render_kwargs.items():
             kwargs[k] = v
+    x_offset += kwargs["viewport"][0][1] * image_px_size
+    y_offset += kwargs["viewport"][0][0] * image_px_size
+    logger.debug(f"rendering locs with offset {(x_offset, y_offset)} nm")
 
     bgra = render_scene(kwargs, channel_locs)
 
@@ -322,12 +336,12 @@ def plot_scene(
     ax.imshow(
         bgra,
         aspect="equal",
-        origin="upper",
+        origin="lower",
         extent=[
-            x_offset,
-            bgra.shape[1] * image_px_size / 1000 + x_offset,
-            y_offset,
-            bgra.shape[0] * image_px_size / 1000 + y_offset,
+            x_offset / 1000,
+            (bgra.shape[1] * image_px_size + x_offset) / 1000,
+            y_offset / 1000,
+            (bgra.shape[0] * image_px_size + y_offset) / 1000,
         ],
     )
     ax.set_xlabel("x [µm]")
