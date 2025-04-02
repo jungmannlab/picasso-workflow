@@ -516,8 +516,8 @@ class ConfluenceReporter(AbstractModuleCollection):
                 text += f"""
                     <p>NeNa</p>
                     <ul>
-                    <li>NeNa value: {str(meth_res.get('NeNa'))}</li>
-                    <li>Chi Square: {str(meth_res.get('chisqr'))}</li>
+                    <li>NeNa value: {str(meth_res.get('NeNa'))} nm</li>
+                    <li>Chi Square: {meth_res.get('chisqr'):.1f}</li>
                     </ul>"""
                 if fp_nena := meth_res.get("filepath_plot"):
                     self.ci.upload_attachment(self.report_page_id, fp_nena)
@@ -533,9 +533,9 @@ class ConfluenceReporter(AbstractModuleCollection):
                     <p>Median Localization Precision</p>
                     <ul>
                     <li>med loc prec [px]:
-                        {str(meth_res.get('median_lp-px'))}</li>
+                        {meth_res.get('median_lp-px'):.4f}</li>
                     <li>med loc prec [nm]:
-                        {str(meth_res.get('median_lp-nm'))}</li>
+                        {meth_res.get('median_lp-nm'):.2f}</li>
                     </ul>"""
         text += parameter_text
         text += result_text
@@ -638,7 +638,10 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def smlm_clusterer(self, i, parameters, results):
+    @module_decorator
+    def smlm_clusterer(
+        self, i, parameters, results, parameter_text, result_text
+    ):
         logger.debug("Reporting smlm_clusterer.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -646,11 +649,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>radius: {parameters.get('radius')}</li>
+        <li>radius: {parameters.get('radius'):.2f} nm</li>
         <li>min_locs: {parameters.get('min_locs')}</li>
         <li>basic_fa: {parameters.get('basic_fa')}</li>
         <li>radius_z: {parameters.get('radius_z')}</li>
-        </ul>"""
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
 
         text += """
         <b>TODO: generate plot for reporting</b>
