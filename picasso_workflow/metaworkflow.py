@@ -150,6 +150,7 @@ class PathParser:
                 break
 
         logger.debug(f"found src machine: {src_machine}")
+        logger.debug(f"dest machine: {dest_machine}")
 
         drive_map = {}
         for src_p, dest_p in zip(
@@ -563,7 +564,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         confluence_space,
         confluence_token,
         base_page,
-        dest_machine="hpcl8001",
+        dest_machine="hpcl8",
         investigation_description="",
         always_save=False,
     ):

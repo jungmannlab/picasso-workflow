@@ -528,6 +528,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                         + "</ac:image></ul>"
                     )
             elif meth.lower() == "median-loc-precision":
+                meth_res = results["median-loc-precision"]
                 text += f"""
                     <p>Median Localization Precision</p>
                     <ul>

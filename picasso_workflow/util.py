@@ -536,8 +536,9 @@ class ParameterCommandExecutor(DictSimpleTyper):
                         originals.append(sub_res["original"])
                     else:
                         components.append(arg)
+                logger.debug(f"summing up {components}.")
                 res = self.sum(components)
-                logger.debug(f"Previous module result is {res}.")
+                logger.debug(f"Sum result is {res}.")
             elif cmd == f"{self.command_sign}product":
                 logger.debug(f"multiplying {t[1:]}.")
                 components = []
@@ -556,8 +557,9 @@ class ParameterCommandExecutor(DictSimpleTyper):
                         originals.append(sub_res["original"])
                     else:
                         components.append(arg)
+                logger.debug(f"multiplying {components}.")
                 res = self.product(components)
-                logger.debug(f"Previous module result is {res}.")
+                logger.debug(f"Product result is {res}.")
             elif cmd == f"{self.command_sign}min":
                 logger.debug(f"min of {t[1:]}.")
                 components = []
@@ -576,8 +578,9 @@ class ParameterCommandExecutor(DictSimpleTyper):
                         originals.append(sub_res["original"])
                     else:
                         components.append(arg)
+                logger.debug(f"min of {components}.")
                 res = self.min(components)
-                logger.debug(f"Previous module result is {res}.")
+                logger.debug(f"Min result is {res}.")
             elif cmd == f"{self.command_sign}max":
                 logger.debug(f"max of {t[1:]}.")
                 components = []
@@ -596,8 +599,9 @@ class ParameterCommandExecutor(DictSimpleTyper):
                         originals.append(sub_res["original"])
                     else:
                         components.append(arg)
+                logger.debug(f"max of {components}.")
                 res = self.max(components)
-                logger.debug(f"Previous module result is {res}.")
+                logger.debug(f"Max result is {res}.")
             else:
                 msg = (
                     "Found undefined command for current command "
