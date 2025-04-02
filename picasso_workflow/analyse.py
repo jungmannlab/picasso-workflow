@@ -1524,7 +1524,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters: dict
                 with required keys:
                     radius : float
-                        the smlm radius, in px
+                        the smlm radius, in nm
                     min_locs : float
                         the smlm min_locs
                 and optional keys:
@@ -1538,11 +1538,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
-        radius = parameters["radius"]
+        pixelsize = self.pixelsize
+        radius = parameters["radius"] / pixelsize
         min_locs = parameters["min_locs"]
         basic_fa = parameters.get("basic_fa", False)
         parameters["basic_fa"] = basic_fa
-        radius_z = parameters.get("radius_z", None)
+        radius_z = parameters.get("radius_z", None) / pixelsize
+        # make sure pxsiz is ok here
         parameters["radius_z"] = radius_z
         pixelsize = self.pixelsize
 
