@@ -1543,8 +1543,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         min_locs = parameters["min_locs"]
         basic_fa = parameters.get("basic_fa", False)
         parameters["basic_fa"] = basic_fa
-        radius_z = parameters.get("radius_z", None) / pixelsize
+        radius_z = parameters.get("radius_z", None)
         # make sure pxsiz is ok here
+        if radius_z is not None:
+            radius_z = radius_z / pixelsize
         parameters["radius_z"] = radius_z
         pixelsize = self.pixelsize
 
