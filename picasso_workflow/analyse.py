@@ -2044,13 +2044,14 @@ class AutoPicasso(util.AbstractModuleCollection):
         # sample bins such that there are 5 bins from 0 to middle of 1stNN
         nbins = int(5 * bin_max / median_1stNN)
         bins = np.linspace(0, bin_max, num=nbins)
+        rvals = np.linspace(0, bin_max, num=3 * nbins)
         nnhist_obs = np.zeros((len(bins), k_max))
         nnhist_an = np.zeros_like(nnhist_obs)
         for i in range(nnhist_an.shape[1]):
             k = i + 1
             # nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
             nnhist_an = picasso_outpost.nndistribution_from_csr(
-                bins, k, rho_mle, d=parameters["dimensionality"]
+                rvals, k, rho_mle, d=parameters["dimensionality"]
             )
             if i == 0:
                 lbl = f"rho_init {1E6*rho_init:.1f} um^2"
@@ -2067,7 +2068,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 label=lbl,
             )
             ax.plot(
-                bins,  # + (bins[1] - bins[0]) / 2,
+                rvals,  # + (bins[1] - bins[0]) / 2,
                 nnhist_an * 1,  # no idea why we need this factor
                 color=colors[i],
                 linestyle="--",
