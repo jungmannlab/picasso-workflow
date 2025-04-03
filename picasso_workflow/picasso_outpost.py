@@ -684,7 +684,7 @@ def nndist_loglikelihood_csr(nndist_observed, rho, kmin=1, min_dist=0):
         k = i + kmin
         # print(f"evaluating csr of {len(dist)} spots at k={k}, with rho={rho}")
         # assert False
-        prob = nndistribution_from_csr(dist, k, rho, min_dist)
+        prob = nndistribution_from_csr(dist, k, rho, d=2, min_dist=min_dist)
         log_like += np.sum(np.log(prob))
     return log_like
 
@@ -721,6 +721,7 @@ def nndistribution_from_csr(r, k, rho, d=2, min_dist=0):
     lam = rho * np.pi ** (d / 2) / _gamma(d / 2 + 1)
     factor = d / _factorial(k - 1) * lam**k * r ** (d * k - 1)
     dist = factor * np.exp(-lam * r**d)
+    dist[dist <= 0] = 1e-200  # np.finfo().eps
     # try:
     #     renorm_factor = np.sum(dist) / np.sum(dist[r >= min_dist])
     # except ZeroDivisionError:

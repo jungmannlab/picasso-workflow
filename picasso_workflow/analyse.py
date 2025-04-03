@@ -4597,8 +4597,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         pixelsize = self.pixelsize
-        min_density = parameters["min_density"]
-        max_density = parameters["max_density"]
         nth_largest = parameters.get("nth_largest", 0)
         mask = outpost_modules.mask.CellMask.load(parameters["fp_mask"])
         densities = mask.densities
@@ -4607,6 +4605,23 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig, ax = plt.subplots()
         densities_to_plot = densities.copy().ravel()
         densities_to_plot = densities_to_plot[densities_to_plot > 0]
+
+        if (
+            "min_density" in parameters.keys()
+            and "max_density" in parameters.keys()
+        ):
+            min_density = parameters["min_density"]
+            max_density = parameters["max_density"]
+        elif std_cutoff := parameters["density_std_cutoff"]:
+            median_density = np.median(densities_to_plot)
+            min_density = median_density - std_cutoff * np.sqrt(median_density)
+            max_density = median_density + std_cutoff * np.sqrt(median_density)
+        else:
+            raise KeyError(
+                "Either 'min_density' and 'max_density or "
+                + "'density_std_cutoff' need to be given."
+            )
+
         n, bins, patches = ax.hist(
             densities_to_plot * 1e6,
             bins=nbins,
