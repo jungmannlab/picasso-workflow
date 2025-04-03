@@ -1791,6 +1791,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         density_results = []
         nn_fps = []
+        fp_figs = []
         for tag, locs in zip(tags, locs_list):
             fig, ax = plt.subplots(nrows=2)
             points = np.array(
@@ -1886,18 +1887,21 @@ class AutoPicasso(util.AbstractModuleCollection):
             ax[1].set_ylabel("Frequency")
             ax[1].set_title(f"{tag} Nearest Neighbor Histogram")
             rcode = generate_random_code(6)
-            results["fp_fig"] = os.path.join(
+            fp_fig = os.path.join(
                 results["folder"], f"{tag}_nndist_{rcode}.png"
             )
+            fp_figs.append(fp_fig)
             plt.tight_layout()
-            fig.savefig(results["fp_fig"])
+            fig.savefig(fp_fig)
 
         if len(tags) == 1:
             results["density_rdf"] = density_results[0]
             results["nneighbors"] = nn_fps[0]
+            results["fp_fig"] = fp_figs[0]
         else:
             results["density_rdf"] = density_results
             results["nneighbors"] = nn_fps
+            results["fp_fig"] = fp_figs
 
         return parameters, results
 

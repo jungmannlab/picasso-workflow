@@ -753,6 +753,36 @@ class ConfluenceReporter(AbstractModuleCollection):
                 + "</ac:image></ul>"
             )
 
+            if isinstance(fp_fig, str):
+                fig_fps = [fp_fig]
+                titles = ["locs"]
+            elif isinstance(fp_fig, list):
+                fig_fps = fp_fig
+                titles = [""] * len(fp_fig)
+
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
