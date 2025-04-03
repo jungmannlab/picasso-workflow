@@ -6229,7 +6229,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         N_structures = picasso_outpost.generate_N_structures(
-            structures, n_sim_targets, parameters["res_factor"]
+            structures, n_sim_targets, parameters["granularity"]
         )
 
         # bin size: more than Nyquist subsampling
@@ -6251,8 +6251,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             "random_rot_mode": "2D",
             "exp_data": exp_data,
             "sim_repeats": parameters["sim_repeats"],
-            "fit_NND_bin": fit_NND_bin,
-            "fit_NND_maxdist": fit_NND_maxdist,
+            "NND_bin": fit_NND_bin,
+            "NND_maxdist": fit_NND_maxdist,
             "N_structures": N_structures,
             "save_filename": os.path.join(
                 results["folder"], f"interaction-{target}-{reference}"
