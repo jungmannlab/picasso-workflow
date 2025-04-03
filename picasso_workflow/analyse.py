@@ -4608,6 +4608,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize = self.pixelsize
         nth_largest = parameters.get("nth_largest", 0)
         mask = outpost_modules.mask.CellMask.load(parameters["fp_mask"])
+        mask_pixel_area = mask._upsample**2
         densities = mask.densities
 
         nbins = parameters.get("nbins", 20)
@@ -4622,9 +4623,24 @@ class AutoPicasso(util.AbstractModuleCollection):
             min_density = parameters["min_density"]
             max_density = parameters["max_density"]
         elif std_cutoff := parameters["density_std_cutoff"]:
-            median_density = np.median(densities_to_plot)
-            min_density = median_density - std_cutoff * np.sqrt(median_density)
-            max_density = median_density + std_cutoff * np.sqrt(median_density)
+            median_nlocs = np.median(densities_to_plot) * mask_pixel_area
+            min_nlocs = median_nlocs - std_cutoff * np.sqrt(median_nlocs)
+            max_nlocs = median_nlocs + std_cutoff * np.sqrt(median_nlocs)
+            median_density = median_nlocs / mask_pixel_area
+            min_density = min_nlocs / mask_pixel_area
+            max_density = max_nlocs / mask_pixel_area
+            logger.debug(
+                f"median nlocs {median_nlocs}, poisson std\
+                {np.sqrt(median_nlocs)}"
+            )
+            logger.debug(f"min nlocs {min_nlocs}, max nlocs {max_nlocs}")
+            logger.debug(
+                f"median density {median_density}, poisson std \
+                {np.sqrt(median_density)}"
+            )
+            logger.debug(
+                f"min density {min_density}, max density {max_density}"
+            )
         else:
             raise KeyError(
                 "Either 'min_density' and 'max_density or "
@@ -4728,7 +4744,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         xlim = ax.get_xlim()
         x_density = np.linspace(xlim[0], xlim[1], 50) * 1e-6
         x_nlocs = x_density * mask_pixel_area
-        mean_n_locs = np.mean(densities_to_plot) * mask_pixel_area
+        mean_n_locs = np.median(densities_to_plot) * mask_pixel_area
         nbins = len(densities_to_plot)
         std_n_locs = np.sqrt(mean_n_locs)
         if mean_n_locs > 30:
