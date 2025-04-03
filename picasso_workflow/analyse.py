@@ -1783,16 +1783,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         if self.locs is not None:
             locs_list = [self.locs]
             tags = ["locs"]
+            sgl_stage = True
         elif self.channel_locs is not None:
             locs_list = self.channel_locs
             tags = self.channel_tags
+            sgl_stage = False
         else:
             raise KeyError("No locs loaded")
 
         density_results = []
         nn_fps = []
         fp_figs = []
-        for tag, locs in zip(tags, locs_list):
+        for i, (tag, locs) in enumerate(zip(tags, locs_list)):
             fig, ax = plt.subplots(nrows=2)
             points = np.array(
                 locs[parameters["dims"]].tolist()
@@ -1810,10 +1812,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 logger.debug("found all distances")
                 if parameters.get("add_column", False):
                     print(alldist.shape)
-                    self.locs = lib.append_to_rec(
-                        self.locs, alldist[:, 1], "NNdist"
-                    )
-                    print(self.locs.dtype)
+                    if sgl_stage:
+                        self.locs = lib.append_to_rec(
+                            locs, alldist[:, 1], "NNdist"
+                        )
+                        print(locs.dtype)
+                    else:
+                        self.channel_locs[i] = lib.append_to_rec(
+                            locs, alldist[:, 1], "NNdist"
+                        )
+                        print(locs.dtype)
                 alldist = np.sort(alldist, axis=1)
                 logger.debug("sorted all distances")
             else:
@@ -1822,10 +1830,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 alldist, indices = tree.query(points, k=k)
                 if parameters.get("add_column", False):
                     print(alldist.shape)
-                    self.locs = lib.append_to_rec(
-                        self.locs, alldist[:, 1], "NNdist"
-                    )
-                    print(self.locs.dtype)
+                    if sgl_stage:
+                        self.locs = lib.append_to_rec(
+                            locs, alldist[:, 1], "NNdist"
+                        )
+                        print(locs.dtype)
+                    else:
+                        self.channel_locs[i] = lib.append_to_rec(
+                            locs, alldist[:, 1], "NNdist"
+                        )
+                        print(locs.dtype)
                 alldist = np.sort(alldist, axis=1)
 
             # calculate bins
