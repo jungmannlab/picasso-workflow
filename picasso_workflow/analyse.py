@@ -1781,111 +1781,123 @@ class AutoPicasso(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         if self.locs is not None:
-            locs = self.locs
+            locs_list = [self.locs]
+            tags = ["locs"]
         elif self.channel_locs is not None:
-            locs = self.channel_locs[0]
+            locs_list = self.channel_locs
+            tags = self.channel_tags
         else:
             raise KeyError("No locs loaded")
 
-        fig, ax = plt.subplots(nrows=2)
-        points = np.array(
-            locs[parameters["dims"]].tolist()
-        )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
-        # convert all dimensions to nanometers
-        pixelsize = self.pixelsize
-        for i, dim in enumerate(parameters["dims"]):
-            if dim in ["x", "y"]:
-                points[:, i] = points[:, i] * pixelsize
+        density_results = []
+        nn_fps = []
+        for tag, locs in zip(tags, locs_list):
+            fig, ax = plt.subplots(nrows=2)
+            points = np.array(
+                locs[parameters["dims"]].tolist()
+            )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
+            # convert all dimensions to nanometers
+            pixelsize = self.pixelsize
+            for i, dim in enumerate(parameters["dims"]):
+                if dim in ["x", "y"]:
+                    points[:, i] = points[:, i] * pixelsize
 
-        # print(points)
-        # print(points.shape)
-        if len(locs) < 10000:
-            alldist = distance.cdist(points, points)
-            logger.debug("found all distances")
-            if parameters.get("add_column", False):
-                print(alldist.shape)
-                self.locs = lib.append_to_rec(
-                    self.locs, alldist[:, 1], "NNdist"
-                )
-                print(self.locs.dtype)
-            alldist = np.sort(alldist, axis=1)
-            logger.debug("sorted all distances")
-        else:
-            k = max([parameters["nth_NN"] + 3, parameters["nth_rdf"] + 3])
-            tree = KDTree(points)
-            alldist, indices = tree.query(points, k=k)
-            if parameters.get("add_column", False):
-                print(alldist.shape)
-                self.locs = lib.append_to_rec(
-                    self.locs, alldist[:, 1], "NNdist"
-                )
-                print(self.locs.dtype)
-            alldist = np.sort(alldist, axis=1)
+            # print(points)
+            # print(points.shape)
+            if len(locs) < 10000:
+                alldist = distance.cdist(points, points)
+                logger.debug("found all distances")
+                if parameters.get("add_column", False):
+                    print(alldist.shape)
+                    self.locs = lib.append_to_rec(
+                        self.locs, alldist[:, 1], "NNdist"
+                    )
+                    print(self.locs.dtype)
+                alldist = np.sort(alldist, axis=1)
+                logger.debug("sorted all distances")
+            else:
+                k = max([parameters["nth_NN"] + 3, parameters["nth_rdf"] + 3])
+                tree = KDTree(points)
+                alldist, indices = tree.query(points, k=k)
+                if parameters.get("add_column", False):
+                    print(alldist.shape)
+                    self.locs = lib.append_to_rec(
+                        self.locs, alldist[:, 1], "NNdist"
+                    )
+                    print(self.locs.dtype)
+                alldist = np.sort(alldist, axis=1)
 
-        # calculate bins
-        NN_median = np.median(alldist[:, 1])
-        deltar = NN_median / parameters.get("subsample_1stNN", 20)
-        rmax_NN = np.quantile(alldist[:, parameters["nth_NN"]], 0.95)
-        rmax_rdf = np.quantile(alldist[:, parameters["nth_rdf"]], 0.95)
+            # calculate bins
+            NN_median = np.median(alldist[:, 1])
+            deltar = NN_median / parameters.get("subsample_1stNN", 20)
+            rmax_NN = np.quantile(alldist[:, parameters["nth_NN"]], 0.95)
+            rmax_rdf = np.quantile(alldist[:, parameters["nth_rdf"]], 0.95)
 
-        logger.debug("calculated radial distribution function")
-        # print(alldist)
-        # print(alldist.shape)
-        # out_path = os.path.join(results["folder"], "nneighbors_all.txt")
-        # np.savetxt(out_path, np.sort(alldist, axis=1), newline="\r\n")
-        # alldist[alldist == 0] = float("inf")
-        # nneighbors = np.sort(alldist, axis=1)[:, : parameters["nth"]]
-        nneighbors = alldist[:, 1 : parameters["nth_NN"] + 1]
-        out_path = os.path.join(results["folder"], "nneighbors.txt")
-        np.savetxt(out_path, nneighbors, newline="\r\n")
-        results["nneighbors"] = out_path
+            logger.debug("calculated radial distribution function")
+            # print(alldist)
+            # print(alldist.shape)
+            # out_path = os.path.join(results["folder"], "nneighbors_all.txt")
+            # np.savetxt(out_path, np.sort(alldist, axis=1), newline="\r\n")
+            # alldist[alldist == 0] = float("inf")
+            # nneighbors = np.sort(alldist, axis=1)[:, : parameters["nth"]]
+            nneighbors = alldist[:, 1 : parameters["nth_NN"] + 1]
+            out_path = os.path.join(results["folder"], f"{tag}_nneighbors.txt")
+            np.savetxt(out_path, nneighbors, newline="\r\n")
+            nn_fps.append(out_path)
 
-        # logger.debug("calculated bin parameters")
-        # # as alldist can be large, reduce it here already, so memory can be
-        # # freed
-        nspots = alldist.shape[0]
-        # alldist = alldist[:, np.min(alldist, axis=1) <= (rmax_rdf + deltar)]
-        # logger.debug("cropped 2d alldist")
-        # alldist = np.sort(alldist.flatten())
-        # logger.debug("flattened alldist")
-        # # distarray = alldist.flatten()
-        # # logger.debug('flattened distarray')
-        # alldist = alldist[alldist <= (rmax_rdf + deltar)]
-        # logger.debug("prepared alldist")
-        _, _, density = self._calc_radial_distribution_function(
-            # alldist,
-            points,
-            deltar,
-            rmax_rdf,
-            nspots,
-            d=len(parameters["dims"]),
-            ax=ax[0],
-        )
-        results["density_rdf"] = density
-
-        # plot results
-        colors = cm.get_cmap("viridis", nneighbors.shape[1]).colors
-        bins = np.arange(0, rmax_NN, step=deltar)
-        nnhist_obs = np.zeros((len(bins), nneighbors.shape[1]))
-        for i in range(nnhist_obs.shape[1]):
-            k = i + 1
-            _ = ax[1].hist(
-                nneighbors[:, i],
-                bins=bins,
-                color=colors[i],
-                alpha=0.2,
-                label=f"k={k}",
+            # logger.debug("calculated bin parameters")
+            # # as alldist can be large, reduce it here already, so memory can be
+            # # freed
+            nspots = alldist.shape[0]
+            # alldist = alldist[:, np.min(alldist, axis=1) <= (rmax_rdf + deltar)]
+            # logger.debug("cropped 2d alldist")
+            # alldist = np.sort(alldist.flatten())
+            # logger.debug("flattened alldist")
+            # # distarray = alldist.flatten()
+            # # logger.debug('flattened distarray')
+            # alldist = alldist[alldist <= (rmax_rdf + deltar)]
+            # logger.debug("prepared alldist")
+            _, _, density = self._calc_radial_distribution_function(
+                # alldist,
+                points,
+                deltar,
+                rmax_rdf,
+                nspots,
+                d=len(parameters["dims"]),
+                ax=ax[0],
             )
-        ax[1].legend()
-        ax[1].set_xlabel("Distance [nm]")
-        ax[1].set_ylabel("Frequency")
-        ax[1].set_title("Nearest Neighbor Histogram")
-        rcode = generate_random_code(6)
-        results["fp_fig"] = os.path.join(
-            results["folder"], f"nndist_{rcode}.png"
-        )
-        plt.tight_layout()
-        fig.savefig(results["fp_fig"])
+            density_results.append(density)
+
+            # plot results
+            colors = cm.get_cmap("viridis", nneighbors.shape[1]).colors
+            bins = np.arange(0, rmax_NN, step=deltar)
+            nnhist_obs = np.zeros((len(bins), nneighbors.shape[1]))
+            for i in range(nnhist_obs.shape[1]):
+                k = i + 1
+                _ = ax[1].hist(
+                    nneighbors[:, i],
+                    bins=bins,
+                    color=colors[i],
+                    alpha=0.2,
+                    label=f"k={k}",
+                )
+            ax[1].legend()
+            ax[1].set_xlabel("Distance [nm]")
+            ax[1].set_ylabel("Frequency")
+            ax[1].set_title(f"{tag} Nearest Neighbor Histogram")
+            rcode = generate_random_code(6)
+            results["fp_fig"] = os.path.join(
+                results["folder"], f"{tag}_nndist_{rcode}.png"
+            )
+            plt.tight_layout()
+            fig.savefig(results["fp_fig"])
+
+        if len(tags) == 1:
+            results["density_rdf"] = density_results[0]
+            results["nneighbors"] = nn_fps[0]
+        else:
+            results["density_rdf"] = density_results
+            results["nneighbors"] = nn_fps
 
         return parameters, results
 
@@ -6327,8 +6339,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # LE(A) = 2 * prop(AB) / (prop(B) + 2 * prop(AB))
         # LE(B) = 2 * prop(AB) / (prop(A) + 2 * prop(AB))
-        le_target = 2 * prop_tr / (prop_r + 2 * prop_tr)
-        le_reference = 2 * prop_tr / (prop_t + 2 * prop_tr)
+        le_target = prop_tr / (prop_r + prop_tr)
+        le_reference = prop_tr / (prop_t + prop_tr)
 
         results["labeling_efficiency"] = {
             parameters["target_name"]: le_target,
