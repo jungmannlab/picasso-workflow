@@ -4773,7 +4773,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         mask_pixel_area = mask._upsample**2
         xlim = ax.get_xlim()
-        x_density = np.linspace(xlim[0], xlim[1], 50) * 1e-6
+        x_density = np.linspace(xlim[0], xlim[1], 100) * 1e-6
         x_nlocs = x_density * mask_pixel_area
         mean_n_locs = np.median(densities_to_plot) * mask_pixel_area
         nbins = len(densities_to_plot)
