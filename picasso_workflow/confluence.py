@@ -760,7 +760,8 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def fit_csr(self, i, parameters, results):
+    @module_decorator
+    def fit_csr(self, i, parameters, results, parameter_text, result_text):
         logger.debug("Reporting fit_csr.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -783,7 +784,10 @@ class ConfluenceReporter(AbstractModuleCollection):
               {parameters['nneighbors'].shape[1]} neighbors</li>"""
         text += f"""<li>Density fitted:
          {results['density']} nm^(-{parameters['dimensionality']})</li>
-        </ul>"""
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
         if fp_fig := results.get("fp_fig"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fig)

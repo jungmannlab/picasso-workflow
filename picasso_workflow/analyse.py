@@ -1997,16 +1997,24 @@ class AutoPicasso(util.AbstractModuleCollection):
         # nspots = nneighbors.shape[0]
         d = parameters["dimensionality"]
         min_dist = parameters.get("min_dist", 0)
+        kwargs = {
+            "nn_dists": nneighbors.T[kmin - 1 :, :],
+            "kmin": kmin,
+            "rho_bound_factor": 10,
+        }
+        d = parameters.get("dimensionality", 2)
+        kwargs["d"] = d
         rho_init = 2 / (2 * d * np.pi * np.median(nneighbors[:, 0]) ** d)
+        kwargs["rho_init"] = rho_init
+        if min_dist := parameters.get("min_dist"):
+            kwargs["min_dist"] = min_dist
+        if max_dist := parameters.get("max_dist"):
+            kwargs["max_dist"] = max_dist
+        if bkg_fraction := parameters.get("bkg_fraction"):
+            kwargs["bkg_fraction"] = bkg_fraction
+
         rho_mle, fitresult = (
-            picasso_outpost.estimate_density_from_neighbordists(
-                nneighbors.T[kmin - 1 :, :],
-                rho_init,
-                kmin=kmin,
-                rho_bound_factor=10,
-                d=2,
-                min_dist=min_dist,
-            )
+            picasso_outpost.estimate_density_from_neighbordists(**kwargs)
         )
         # print(fitresult)
         logger.debug(str(fitresult))
