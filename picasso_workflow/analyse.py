@@ -2004,6 +2004,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 rho_init,
                 kmin=kmin,
                 rho_bound_factor=10,
+                d=2,
                 min_dist=min_dist,
             )
         )

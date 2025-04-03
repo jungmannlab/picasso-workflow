@@ -604,7 +604,14 @@ def generate_N_structures(structures, N_total, res_factor, save=""):
 
 
 def estimate_density_from_neighbordists(
-    nn_dists, rho_init, kmin=1, rho_bound_factor=10, min_dist=0
+    nn_dists,
+    rho_init,
+    kmin=1,
+    rho_bound_factor=10,
+    d=2,
+    min_dist=0,
+    max_dist=np.inf,
+    bkg_fraction=0,
 ):
     """For one point with k nearest neighbor distances (all assumed from
     a CSR distribution), do a maximum likelihood estimation for the
@@ -614,6 +621,11 @@ def estimate_density_from_neighbordists(
             the k nearest neighbor distances (of N spots)
         rho_init : float
             the initial estimation of density
+        min_dist, max_dist : float
+            ignore nn distances outside this range
+        bkg_fraction : float
+            the fraction of nn distances that are background, i.e. randomly
+            distributed over all distances, independent on spot density
     Returns:
         mle_rho : float
             the maximum likelihood estimate for the local density
@@ -625,7 +637,7 @@ def estimate_density_from_neighbordists(
     mle_rho = minimize(
         minimization_loglike,
         x0=[rho_init],
-        args=(nn_dists, kmin, min_dist),
+        args=(nn_dists, d, kmin, min_dist, max_dist, bkg_fraction),
         bounds=bounds,
         # tol=1e-8, options={'maxiter': 1e5}, method='Powell'
         # options={'maxiter': 1e5}, method='L-BFGS-B'
@@ -649,7 +661,15 @@ def estimate_density_from_neighbordists(
     return mle_rho.x[0], mle_rho
 
 
-def minimization_loglike(rho, nndist_observed, kmin=1, min_dist=0):
+def minimization_loglike(
+    rho,
+    nndist_observed,
+    d=2,
+    kmin=1,
+    min_dist=0,
+    max_dist=np.inf,
+    bkg_fraction=0,
+):
     """The minimization function for nndist loglikelihood fun
     based on k-th nearest neighbor CSR distributions
     Args:
@@ -662,10 +682,20 @@ def minimization_loglike(rho, nndist_observed, kmin=1, min_dist=0):
             the log likelihood of finding the observed neighbor distances
             in the model of CSR and given rho
     """
-    return -nndist_loglikelihood_csr(nndist_observed, rho[0], kmin, min_dist)
+    return -nndist_loglikelihood_csr(
+        nndist_observed, rho[0], d, kmin, min_dist, max_dist, bkg_fraction
+    )
 
 
-def nndist_loglikelihood_csr(nndist_observed, rho, kmin=1, min_dist=0):
+def nndist_loglikelihood_csr(
+    nndist_observed,
+    rho,
+    d=2,
+    kmin=1,
+    min_dist=0,
+    max_dist=np.inf,
+    bkg_fraction=0,
+):
     """get the Log-Likelihood of observed nearest neighbors assuming
     a CSR distribution with density rho.
     Args:
@@ -684,12 +714,15 @@ def nndist_loglikelihood_csr(nndist_observed, rho, kmin=1, min_dist=0):
         k = i + kmin
         # print(f"evaluating csr of {len(dist)} spots at k={k}, with rho={rho}")
         # assert False
-        prob = nndistribution_from_csr(dist, k, rho, d=2, min_dist=min_dist)
+        dist_consider = dist[(dist >= min_dist) & (dist <= max_dist)]
+        prob = nndistribution_from_csr(
+            dist_consider, k, rho, d=d, bkg_fraction=bkg_fraction
+        )
         log_like += np.sum(np.log(prob))
     return log_like
 
 
-def nndistribution_from_csr(r, k, rho, d=2, min_dist=0):
+def nndistribution_from_csr(r, k, rho, d=2, bkg_fraction=0):
     """The CSR Nearest Neighbor distribution of finding the k-th nearest
     neighbor at r. with the spatial randomness covering d dimensions
     Args:
@@ -721,6 +754,8 @@ def nndistribution_from_csr(r, k, rho, d=2, min_dist=0):
     lam = rho * np.pi ** (d / 2) / _gamma(d / 2 + 1)
     factor = d / _factorial(k - 1) * lam**k * r ** (d * k - 1)
     dist = factor * np.exp(-lam * r**d)
+    # add am even background of observed nn distances, at all distances
+    dist += (bkg_fraction / (np.max(r) - np.min(r))) / (1 + bkg_fraction)
     dist[dist <= 0] = 1e-200  # np.finfo().eps
     # try:
     #     renorm_factor = np.sum(dist) / np.sum(dist[r >= min_dist])
