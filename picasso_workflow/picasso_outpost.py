@@ -396,8 +396,8 @@ def single_spinna_run(
     random_rot_mode,
     exp_data,
     sim_repeats,
-    fit_NND_bin,
-    fit_NND_maxdist,
+    NND_bin,
+    NND_maxdist,
     N_structures,
     save_filename,
     asynch,
@@ -468,8 +468,8 @@ def single_spinna_run(
     else:
         results["Modified Kolmogorov-Smirnov score"] = score
         results["Fitted proportions of structures"] = opt_props
-    results["NND bin size (nm)"] = fit_NND_bin
-    results["NND max distance (nm)"] = fit_NND_maxdist
+    results["NND bin size (nm)"] = NND_bin
+    results["NND max distance (nm)"] = NND_maxdist
 
     # relative proportions of structures for each target
     if len(targets) > 1:
@@ -522,8 +522,8 @@ def single_spinna_run(
             return_fig=True,
             figsize=(5.5, 4),
             alpha=1.0,
-            binsize=fit_NND_bin,
-            xlim=[0, fit_NND_maxdist],
+            binsize=NND_bin,
+            xlim=[0, NND_maxdist],
             title=f"Nearest Neighbors Distances: {t1} -> {t2}",
         )
         exp1 = exp_data[t1]
@@ -538,8 +538,8 @@ def single_spinna_run(
             ax=ax,
             mode="hist",
             return_fig=True,
-            binsize=fit_NND_bin,
-            xlim=[0, fit_NND_maxdist],
+            binsize=NND_bin,
+            xlim=[0, NND_maxdist],
             title=f"Nearest Neighbors Distances: {t1} -> {t2}",
             savefig=[
                 f"{save_filename}_NND_{t1}_{t2}.{_}" for _ in ["png", "svg"]
