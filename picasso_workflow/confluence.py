@@ -716,6 +716,13 @@ class ConfluenceReporter(AbstractModuleCollection):
     def nneighbor(self, i, parameters, results, parameter_text, result_text):
         logger.debug("Reporting nneighbor.")
         d = len(parameters["dims"])
+        density_rdf = results["density_rdf"]
+        if isinstance(density_rdf, list):
+            density_text = "; ".join(
+                [f"{dens * 1e3**d:.02f} µm^{-d}" for dens in density_rdf]
+            )
+        else:
+            density_text = f"{density_rdf * 1e3**d:.02f} µm^{-d}"
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Nearest Neighbor analysis</strong></p>
@@ -735,7 +742,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Displayed RDF up to nearest neighbor #: {parameters['nth_rdf']}
         </li>
         <li>Saved numpy txt file as: {results["nneighbors"]}</li>
-        <li>Density from RDF: {results['density_rdf'] * 1e3**d:.02f} µm^{-d}
+        <li>Density from RDF: {density_text}
         </li>
         </ul>
         {parameter_text}

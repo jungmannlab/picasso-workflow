@@ -4789,11 +4789,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 x_nlocs, mu=int(np.round(mean_n_locs))
             )
         poisson_densities = (
-            poisson_densities
-            / mask_pixel_area
-            * nbins
-            * 1e6
-            * (bins[1] - bins[0])
+            poisson_densities / np.max(poisson_densities) * 0.9 * ylim[1]
         )
         ax.plot(
             x_density * 1e6,
