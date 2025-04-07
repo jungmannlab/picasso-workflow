@@ -601,6 +601,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         investigation_description="",
         always_save=False,
         iterations=1,
+        underscores=[1, 0, 0, 0],
     ):
         """
         Args:
@@ -609,7 +610,10 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                 with an iterator (e.g. to select different cells)
         """
         self.dataset_filepaths = PathParser().parse_source(
-            src_loc, receptors, dest_machine
+            src_loc,
+            receptors,
+            dest_machine,
+            underscores=underscores,
         )
 
         self.cells = {
