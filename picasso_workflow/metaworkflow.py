@@ -118,7 +118,9 @@ class PathParser:
         is_posix = num_fwd > num_bwd
         return is_posix
 
-    def parse_source(self, src_loc, receptors, dest_machine=None):
+    def parse_source(
+        self, src_loc, receptors, dest_machine=None, underscores=[1, 0, 0]
+    ):
         """
         Args:
             src_loc : string
@@ -127,6 +129,11 @@ class PathParser:
                     (A_B_C_D: cell type/condition defined by A_B,
                      C: cell/img position ID, D: imaging target)
                 values: paths to data
+            receptors : list of str or int
+                The targets to analyse, if they are the same in all datasets
+                Or the number of targets to analyse, if their identities differ
+            underscores : list of int
+                the number of underscores in the different levels.
         """
         src_dict = io.load_info(src_loc)[0]
         if dest_machine not in self.drive_paths.keys():
@@ -166,24 +173,50 @@ class PathParser:
         # * lvl2 key: cell#
         # * values: list of receptors, according to list order above
         filepaths = {}
+        targets = {}
         for k, v in src_dict.items():
             k_items = k.split("_")
-            k1 = f"{k_items[0]}_{k_items[1]}"
-            k2 = k_items[2]
-            rcp = k_items[3]
-            rcp_idx = receptors.index(rcp)
-            if k1 not in filepaths.keys():
-                filepaths[k1] = {}
-            if k2 not in filepaths[k1].keys():
-                filepaths[k1][k2] = [None] * len(receptors)
+            if len(k_items) != sum(underscores) + len(underscores):
+                raise KeyError(
+                    f"Dataset id {k} not valid for the number of underscores "
+                    + f"in levels of {underscores}, separated by underscores."
+                )
+            k_lvls = []
+            jcurr = 0
+            if isinstance(receptors, list):
+                n_targets = len(receptors)
+            else:
+                n_targets = receptors
+            for i, nunder in enumerate(underscores):
+                k_lvls[i] = "_".join(k_items[jcurr : 1 + nunder])
+                jcurr += 1 + nunder
+            dict_query = filepaths
+            dict_query2 = targets
+            for i, k_lvl in enumerate(k_lvls[:-2]):
+                if k_lvl not in dict_query.keys():
+                    dict_query[k_lvl] = {}
+                    dict_query2[k_lvl] = {}
+                dict_query = dict_query[k_lvl]
+                dict_query2 = dict_query2[k_lvl]
+            # second to last, pre-target level:
+            if k_lvls[-2] not in dict_query.keys():
+                dict_query[k_lvls[-1]] = [None] * n_targets
+                dict_query2[k_lvls[-1]] = [None] * n_targets
+
+            if isinstance(receptors, list):
+                rcp_idx = receptors.index(k_lvls[-1])
+                dict_query2[k_lvls[-2]][rcp_idx] = receptors[rcp_idx]
+            else:
+                rcp_idx = sum([v is not None for v in dict_query[k_lvls[-2]]])
+                dict_query2[k_lvls[-2]][rcp_idx] = k_lvls[-1]
             # check whether input path is windows or posix style
             is_posix = self.check_path_style(v)
             if is_posix:
-                filepaths[k1][k2][rcp_idx] = self.posix_path_to_curr_os(
+                dict_query[rcp_idx] = self.posix_path_to_curr_os(
                     v, drive_map=drive_map
                 )
             else:
-                filepaths[k1][k2][rcp_idx] = self.windows_path_to_curr_os(
+                dict_query[rcp_idx] = self.windows_path_to_curr_os(
                     v, drive_map=drive_map
                 )
         return filepaths
@@ -567,7 +600,14 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         dest_machine="hpcl8",
         investigation_description="",
         always_save=False,
+        iterations=1,
     ):
+        """
+        Args:
+            iterations : int
+                potentially call the workflow on the same data multple times
+                with an iterator (e.g. to select different cells)
+        """
         self.dataset_filepaths = PathParser().parse_source(
             src_loc, receptors, dest_machine
         )
@@ -638,64 +678,71 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             )
 
             for cell_name, fps in type_dict.items():
-                execution_item += 1
-                if execution_item % self.size != self.rank:
-                    continue
-                report_name = f"{cell_name}-{analysis_cell_hash}"
-                text = f"""
-                    Worker of rank {self.rank} working on {report_name}
-                    (execution item {execution_item})"""
-                text = textwrap.fill(textwrap.dedent(text), width=70)
-                print(text)
-                try:
-                    confpagid_cn = self.ci.create_page(
-                        report_name, "", parent_id=confpagid_ct
-                    )
-                except confluence.ConfluenceInterfaceError:
-                    confpagid_cn, _ = self.ci.get_page_properties(
-                        page_title=report_name
-                    )
-                # print('confluence page id cell name', confpagid_cn)
+                receptors = list(fps.keys())
+                for i in range(self.iterations):
+                    execution_item += 1
+                    if execution_item % self.size != self.rank:
+                        continue
+                    report_name = f"{cell_name}-{analysis_cell_hash}"
+                    if self.iterations > 1:
+                        cell_name += f"-it{i}"
+                    report_name = f"{cell_name}-{analysis_cell_hash}"
+                    text = f"""
+                        Worker of rank {self.rank} working on {report_name}
+                        (execution item {execution_item})"""
+                    text = textwrap.fill(textwrap.dedent(text), width=70)
+                    print(text)
+                    try:
+                        confpagid_cn = self.ci.create_page(
+                            report_name, "", parent_id=confpagid_ct
+                        )
+                    except confluence.ConfluenceInterfaceError:
+                        confpagid_cn, _ = self.ci.get_page_properties(
+                            page_title=report_name
+                        )
+                    # print('confluence page id cell name', confpagid_cn)
 
-                reporter_config, analysis_config = self.get_configs(
-                    report_name, self.root_folder, cell_type, cell_name
-                )
-                datasets = {"#tags": self.receptors, "filepath": fps}
-                workflow_modules_multi = get_workflow_modules(
-                    cell_type, report_name, datasets
-                )
-                # analyse if the cell has not been analysed yet
-                n_modules = len(workflow_modules_multi["aggregation_modules"])
-                n_success = df.loc[
-                    (df["cell_type"] == cell_type)
-                    & (df["cell_name"] == cell_name),
-                    "success",
-                ].sum()
-                if n_modules == n_success:
-                    # logger.debug(
-                    #     f"""skipping {cell_type}, {cell_name}
-                    #     because it was analysed already."""
-                    # )
-                    # continue
-                    pass
+                    reporter_config, analysis_config = self.get_configs(
+                        report_name, self.root_folder, cell_type, cell_name
+                    )
+                    datasets = {"#tags": receptors, "filepath": fps}
+                    workflow_modules_multi = get_workflow_modules(
+                        cell_type, report_name, datasets, i=i
+                    )
+                    # analyse if the cell has not been analysed yet
+                    n_modules = len(
+                        workflow_modules_multi["aggregation_modules"]
+                    )
+                    n_success = df.loc[
+                        (df["cell_type"] == cell_type)
+                        & (df["cell_name"] == cell_name),
+                        "success",
+                    ].sum()
+                    if n_modules == n_success:
+                        # logger.debug(
+                        #     f"""skipping {cell_type}, {cell_name}
+                        #     because it was analysed already."""
+                        # )
+                        # continue
+                        pass
 
-                awr = AggregationWorkflowRunner.config_from_dicts(
-                    reporter_config,
-                    analysis_config,
-                    workflow_modules_multi,
-                    continue_previous_runner=True,
-                    single_workflow_parallel=False,
-                )
-                run_awr_kwargs.append(
-                    {
-                        "awr": awr,
-                        "cell_type": cell_type,
-                        "cell_name": cell_name,
-                        "queue": queue,
-                        "lock": lock,
-                        "fp_dfa2": fp_dfa2,
-                    }
-                )
+                    awr = AggregationWorkflowRunner.config_from_dicts(
+                        reporter_config,
+                        analysis_config,
+                        workflow_modules_multi,
+                        continue_previous_runner=True,
+                        single_workflow_parallel=False,
+                    )
+                    run_awr_kwargs.append(
+                        {
+                            "awr": awr,
+                            "cell_type": cell_type,
+                            "cell_name": cell_name,
+                            "queue": queue,
+                            "lock": lock,
+                            "fp_dfa2": fp_dfa2,
+                        }
+                    )
         return run_awr_kwargs
 
     def prepare_mergecell_analysis(self, get_mergecell_workflow_modules):
@@ -859,22 +906,37 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         ]
         return fp_figs
 
-    def add_to_summary_page(self, summary_page_title, dataset, fp_figs):
+    def add_to_summary_page(
+        self, summary_page_title, dataset, data_list, data_types="img"
+    ):
         """
-        fp_figs : len 4
+        Args:
+            data_list : list
+                list of data to enter into the summary table
+            data_types : str or list of str
+                the data types to enter.
+                "img": image (file path). Image is uploaded and displayed
+                any other: values are directly entered
+                if str, all values are the same type
         """
         pagid, pagtit = self.ci.get_page_properties(summary_page_title)
 
+        if isinstance(data_types, str):
+            data_types = [data_types] * len(data_list)
+
         fn_figs = []
-        for fp_fig in fp_figs:
-            # rcode = generate_random_code(6)
-            rt, fn_fig = os.path.split(fp_fig)
-            # fn_fig = f"{dataset}_{rcode}_{fn_fig}"
-            # fp_figu = os.path.join(rt, fn_fig)
-            # shutil.copy(fp_fig, fp_figu)
-            fp_figu = fp_fig
-            self.ci.upload_attachment(pagid, fp_figu)
-            fn_figs.append(fn_fig)
+        for fp_fig, type in zip(data_list, data_types):
+            if type == "img":
+                # rcode = generate_random_code(6)
+                rt, fn_fig = os.path.split(fp_fig)
+                # fn_fig = f"{dataset}_{rcode}_{fn_fig}"
+                # fp_figu = os.path.join(rt, fn_fig)
+                # shutil.copy(fp_fig, fp_figu)
+                fp_figu = fp_fig
+                self.ci.upload_attachment(pagid, fp_figu)
+                fn_figs.append(fn_fig)
+            else:
+                fn_figs.append(fp_fig)
 
         text = self.ci.get_page_body(summary_page_title)
         text, postfix = text.split("</table>")
@@ -884,21 +946,42 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                   <b>{dataset}</b>
             </td>
             """
-        for fnf in fn_figs:
-            text += f"""
-            <td>
-                  <ac:image ac:height="350">
-                  <ri:attachment ri:filename="{fnf}" />
-                  </ac:image>
-            </td>
-            """
+        for fnf, type in zip(fn_figs, data_types):
+            if type == "img":
+                text += f"""
+                <td>
+                      <ac:image ac:height="350">
+                      <ri:attachment ri:filename="{fnf}" />
+                      </ac:image>
+                </td>
+                """
+            else:
+                text += f"{fnf}"
         text += "</tr>"
         text += "</table>" + postfix
         self.ci.update_page_content(
             summary_page_title, pagid, text, replace=True
         )
 
-    def run_sglcell_analysis(self, get_sglcell_workflow_modules):
+    def run_sglcell_analysis(
+        self,
+        get_sglcell_workflow_modules,
+        summary_page_title=None,
+        summary_columns=None,
+        figloc=None,
+        data_types="img",
+    ):
+        try:
+            summary_page_title = f"{summary_page_title} - {self.analysis_name}"
+            if self.rank == 0:
+                summary_page_title = self.initialize_summary_pages(
+                    self.ci,
+                    summary_page_title,
+                    summary_columns,
+                )
+        except Exception:
+            pass
+
         run_awr_kwargs = self.prepare_sglcell_analysis(
             get_sglcell_workflow_modules
         )
@@ -908,12 +991,21 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         for kwargs in run_awr_kwargs:
             self.run_awr(**kwargs)
 
+            fp_figs = self.extract_fpfig_from_results(kwargs["awr"], figloc)
+            self.add_to_summary_page(
+                summary_page_title,
+                kwargs["cell_type"],
+                data_list=fp_figs,
+                data_types=data_types,
+            )
+
     def run_mergecell_analysis(
         self,
         get_mergecell_workflow_modules,
         summary_page_title,
         summary_columns,
         figloc,
+        data_types="img",
     ):
         summary_page_title = f"{summary_page_title} - {self.analysis_name}"
         if self.rank == 0:
@@ -936,5 +1028,6 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             self.add_to_summary_page(
                 summary_page_title,
                 kwargs["cell_type"],
-                fp_figs,
+                data_list=fp_figs,
+                data_types=data_types,
             )

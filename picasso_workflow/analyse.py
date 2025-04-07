@@ -6362,7 +6362,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         }
         # results for compatibility with pairwise analysis
         results["labeling_efficiency_target"] = le_target
-        results["labeling_efficiency_reference"] = le_target
+        results["labeling_efficiency_reference"] = le_reference
         results["fp_fig_AA"] = fp_fig_out[0]
         results["fp_fig_AB"] = fp_fig_out[1]
         results["fp_fig_BA"] = fp_fig_out[2]
