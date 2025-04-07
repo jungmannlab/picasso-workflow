@@ -329,9 +329,9 @@ class CellMask:
             title = "density mask"
         ax.set_title(title)
         x_min = self._offset[0] / 1000
-        x_max = (x_min + self._upsample * mask_plot.shape[0]) / 1000
+        x_max = x_min + self._upsample * mask_plot.shape[0] / 1000
         y_min = self._offset[1] / 1000
-        y_max = (y_min + self._upsample * mask_plot.shape[1]) / 1000
+        y_max = y_min + self._upsample * mask_plot.shape[1] / 1000
         ax.imshow(
             mask_plot.T,  # np.rot90(mask_plot),
             extent=[x_min, x_max, y_min, y_max],
