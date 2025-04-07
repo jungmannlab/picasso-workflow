@@ -4734,8 +4734,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             mask.filter_mask(nth_largest=0, fill_holes=False)
             mask.dilate(smoothe_nm)
 
-        area = np.sum(mask._binary_mask) / (mask._upsample) ** 2
-        results["area_um^2"] = area * 1e-6
+        results["area_um^2"] = mask.area
         results["fp_mask"] = os.path.join(results["folder"], "mask.pkl")
         mask.save(results["fp_mask"])
 
