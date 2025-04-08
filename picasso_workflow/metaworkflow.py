@@ -266,6 +266,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
         confluence_space,
         confluence_token,
         base_page,
+        investigation_description="",
         dest_machine=None,
         always_save=False,
     ):
@@ -296,12 +297,13 @@ class AbstractWorkflowCoordinator(abc.ABC):
                 token=self.confluence_token,
             )
             try:
-                investigation_description = f"""
-                <p><strong>Analysis file location</strong>
+                if investigation_description == "":
+                    investigation_description = f"""
+                    <p><strong>Analysis file location</strong>
 
-                The files created during the analysis run can be found in
-                {self.root_folder}.</p>
-                """
+                    The files created during the analysis run can be found in
+                    {self.root_folder}.</p>
+                    """
                 ci.create_page(self.root_page, investigation_description)
             except confluence.ConfluenceInterfaceError:
                 pass
@@ -642,6 +644,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             confluence_space,
             confluence_token,
             base_page,
+            investigation_description,
             dest_machine,
             always_save,
         )

@@ -141,8 +141,9 @@ def profile_resource_usage(method):
             parameters, results = mem_usage[1]
 
         except Exception as e:
-            print(f"Profiling error: {e}")
-            return None, profiling_results  # Return None for results on error
+            raise e
+            # print(f"Profiling error: {e}")
+            # return None, profiling_results  # Return None for results on error
 
         results["peak_memory_gb"] = profiling_results["peak_memory_gb"]
         try:
