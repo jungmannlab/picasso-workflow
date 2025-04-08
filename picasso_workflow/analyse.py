@@ -135,6 +135,13 @@ def profile_resource_usage(method):
             profiling_results["peak_cpu_cores"] = min(
                 wrapper.cpu_usage * total_cores, total_cores
             )
+            profiling_results["peak_cpu_usage"] = wrapper.cpu_usage
+            pcpuc = profiling_results["peak_cpu_cores"]
+            logger.debug(
+                f"profiled cpu usage: {wrapper.cpu_usage}, "
+                + f"total cores: {total_cores}, "
+                + f"peak_cpu_cores: {pcpuc}"
+            )
 
             # Get the results from the memory_measure function
             # Second element is the actual results
@@ -147,13 +154,16 @@ def profile_resource_usage(method):
 
         results["peak_memory_gb"] = profiling_results["peak_memory_gb"]
         try:
-            locs_size = get_memory_of(self.locs) / 1024**3  # in GiB
-            results["peak_memory_per_locs"] = (
+            locs_size = len(self.locs)
+            channel_locs_size = sum([len(locs) for locs in self.channel_locs])
+            locs_size = max([locs_size, channel_locs_size])
+            results["peak_memory_gb_per_loc"] = (
                 profiling_results["peak_memory_gb"] / locs_size
             )
         except Exception:
             results["peak_memory_per_locs"] = 0
         results["peak_cpu_cores"] = profiling_results["peak_cpu_cores"]
+        results["peak_cpu_usage"] = profiling_results["peak_cpu_usage"]
 
         return parameters, results
 

@@ -255,6 +255,13 @@ class CellMask:
         sizes = np.bincount(labeled_array.ravel())
         try:
             largest_component_index = sizes[1:].argmax() + 1 - nth_largest
+            logger.debug(
+                f"filtering {nth_largest} largest cell (starting 0)"
+                + f"largest component_index: {largest_component_index}"
+                + "labeled arr uniques"
+                + f": {np.unique(labeled_array, return_counts=True)}"
+                + f"sizes uniques: {np.unique(sizes, return_counts=True)}"
+            )
         except ValueError:
             largest_component_index = 1
         largest_component_mask = (
