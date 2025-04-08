@@ -188,27 +188,38 @@ class PathParser:
             else:
                 n_targets = receptors
             for i, nunder in enumerate(underscores):
-                k_lvls[i] = "_".join(k_items[jcurr : 1 + nunder])
+                k_lvls.append("_".join(k_items[jcurr : jcurr + 1 + nunder]))
                 jcurr += 1 + nunder
             dict_query = filepaths
             dict_query2 = targets
-            for i, k_lvl in enumerate(k_lvls[:-2]):
+            for i, k_lvl in enumerate(k_lvls[:-1]):
                 if k_lvl not in dict_query.keys():
-                    dict_query[k_lvl] = {}
-                    dict_query2[k_lvl] = {}
+                    if i < len(k_lvls) - 2:
+                        dict_query[k_lvl] = {}
+                        dict_query2[k_lvl] = {}
+                    else:
+                        dict_query[k_lvl] = [None] * n_targets
+                        dict_query2[k_lvl] = [None] * n_targets
                 dict_query = dict_query[k_lvl]
                 dict_query2 = dict_query2[k_lvl]
+            logger.debug(f"created filepaths {filepaths}")
+            logger.debug(f"created tags {targets}")
             # second to last, pre-target level:
-            if k_lvls[-2] not in dict_query.keys():
-                dict_query[k_lvls[-1]] = [None] * n_targets
-                dict_query2[k_lvls[-1]] = [None] * n_targets
+            # if k_lvls[-2] not in dict_query.keys():
+            #     dict_query[k_lvls[-1]] = [None] * n_targets
+            #     dict_query2[k_lvls[-1]] = [None] * n_targets
+            # logger.debug(f'created filepaths {filepaths}')
+            # logger.debug(f"created tags {targets}")
+            # logger.debug(f"dict_query is {dict_query}")
+            # logger.debug(f"dict_query2 is {dict_query2}")
 
             if isinstance(receptors, list):
                 rcp_idx = receptors.index(k_lvls[-1])
-                dict_query2[k_lvls[-2]][rcp_idx] = receptors[rcp_idx]
+                dict_query2[rcp_idx] = receptors[rcp_idx]
             else:
-                rcp_idx = sum([v is not None for v in dict_query[k_lvls[-2]]])
-                dict_query2[k_lvls[-2]][rcp_idx] = k_lvls[-1]
+                rcp_idx = sum([v is not None for v in dict_query2])
+                dict_query2[rcp_idx] = k_lvls[-1]
+            logger.debug(f"created tags {targets}")
             # check whether input path is windows or posix style
             is_posix = self.check_path_style(v)
             if is_posix:
@@ -219,7 +230,7 @@ class PathParser:
                 dict_query[rcp_idx] = self.windows_path_to_curr_os(
                     v, drive_map=drive_map
                 )
-        return filepaths
+        return filepaths, targets
 
 
 def find_dnapaint_raw(working_folder):
@@ -609,7 +620,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                 potentially call the workflow on the same data multple times
                 with an iterator (e.g. to select different cells)
         """
-        self.dataset_filepaths = PathParser().parse_source(
+        self.dataset_filepaths, self.tags = PathParser().parse_source(
             src_loc,
             receptors,
             dest_machine,
@@ -620,6 +631,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             k: list(v.keys()) for k, v in self.dataset_filepaths.items()
         }
         self.receptors = receptors
+        self.iterations = iterations
 
         self.analysis_name = analysis_name
 
@@ -682,15 +694,16 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             )
 
             for cell_name, fps in type_dict.items():
-                receptors = list(fps.keys())
+                receptors = self.tags[cell_type][cell_name]
                 for i in range(self.iterations):
                     execution_item += 1
                     if execution_item % self.size != self.rank:
                         continue
-                    report_name = f"{cell_name}-{analysis_cell_hash}"
                     if self.iterations > 1:
-                        cell_name += f"-it{i}"
-                    report_name = f"{cell_name}-{analysis_cell_hash}"
+                        cell_name_i = f"{cell_name}-it{i}"
+                    else:
+                        cell_name_i = cell_name
+                    report_name = f"{cell_name_i}-{analysis_cell_hash}"
                     text = f"""
                         Worker of rank {self.rank} working on {report_name}
                         (execution item {execution_item})"""
@@ -707,7 +720,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                     # print('confluence page id cell name', confpagid_cn)
 
                     reporter_config, analysis_config = self.get_configs(
-                        report_name, self.root_folder, cell_type, cell_name
+                        report_name, self.root_folder, cell_type, cell_name_i
                     )
                     datasets = {"#tags": receptors, "filepath": fps}
                     workflow_modules_multi = get_workflow_modules(
@@ -719,7 +732,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                     )
                     n_success = df.loc[
                         (df["cell_type"] == cell_type)
-                        & (df["cell_name"] == cell_name),
+                        & (df["cell_name"] == cell_name_i),
                         "success",
                     ].sum()
                     if n_modules == n_success:
@@ -741,7 +754,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                         {
                             "awr": awr,
                             "cell_type": cell_type,
-                            "cell_name": cell_name,
+                            "cell_name": cell_name_i,
                             "queue": queue,
                             "lock": lock,
                             "fp_dfa2": fp_dfa2,
@@ -911,26 +924,52 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         return fp_figs
 
     def add_to_summary_page(
-        self, summary_page_title, dataset, data_list, data_types="img"
+        self,
+        summary_page_title,
+        dataset,
+        data_list,
+        data_types="img",
     ):
         """
         Args:
             data_list : list
                 list of data to enter into the summary table
-            data_types : str or list of str
+            data_types : str or list of str of list of dict
                 the data types to enter.
                 "img": image (file path). Image is uploaded and displayed
                 any other: values are directly entered
                 if str, all values are the same type
+            data_fmt : dict, optional
+                for each data_type, formatting options can be given.
+                default values are
         """
         pagid, pagtit = self.ci.get_page_properties(summary_page_title)
 
+        data_fmt_default = {
+            "img": {"height": 350},
+            "float": {"precision": 6, "unit": ""},
+            "str": {},
+        }
+        # add default values to data_fmt
         if isinstance(data_types, str):
             data_types = [data_types] * len(data_list)
+        for i, entry in enumerate(data_types):
+            if isinstance(entry, str):
+                data_types[i] = {"type": entry}
+                for def_k, def_v in data_fmt_default[entry].items():
+                    data_types[i][def_k] = def_v
+            elif isinstance(entry, dict):
+                # key "type" is required
+                tp = entry["type"]
+                if tp not in data_fmt_default.keys():
+                    continue
+                for def_k, def_v in data_fmt_default[tp].items():
+                    if def_k not in entry.keys():
+                        data_types[i][def_k] = def_v
 
         fn_figs = []
-        for fp_fig, type in zip(data_list, data_types):
-            if type == "img":
+        for fp_fig, data_def in zip(data_list, data_types):
+            if data_def["type"] == "img":
                 # rcode = generate_random_code(6)
                 rt, fn_fig = os.path.split(fp_fig)
                 # fn_fig = f"{dataset}_{rcode}_{fn_fig}"
@@ -950,17 +989,23 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                   <b>{dataset}</b>
             </td>
             """
-        for fnf, type in zip(fn_figs, data_types):
-            if type == "img":
+        for fnf, data_def in zip(fn_figs, data_types):
+            if data_def["type"] == "img":
+                image_height = data_def["height"]
                 text += f"""
                 <td>
-                      <ac:image ac:height="350">
+                      <ac:image ac:height="{image_height}">
                       <ri:attachment ri:filename="{fnf}" />
                       </ac:image>
                 </td>
                 """
+            elif data_def["type"] == "float":
+                precision = data_def["precision"]
+                unit = data_def["unit"]
+                value = f"{fnf:.{precision}f} {unit}"
+                text += f"<td>{value}</td>"
             else:
-                text += f"{fnf}"
+                text += f"<td>{fnf}</td>"
         text += "</tr>"
         text += "</table>" + postfix
         self.ci.update_page_content(
@@ -973,7 +1018,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         summary_page_title=None,
         summary_columns=None,
         figloc=None,
-        data_types="img",
+        data_types={"type": "img"},
     ):
         try:
             summary_page_title = f"{summary_page_title} - {self.analysis_name}"

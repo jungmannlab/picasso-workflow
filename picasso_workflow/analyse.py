@@ -10,9 +10,12 @@ from picasso import aim, g5m
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import os
+import sys
 import platform
 import psutil
 import time
+from memory_profiler import memory_usage
+from functools import wraps
 
 # from tqdm import tqdm
 import numpy as np
@@ -51,6 +54,110 @@ def create_unique_filename(folder, fn, len_code=6):
     rcode = generate_random_code(len_code)
     fparts = os.path.split(fn)
     return os.path.join(folder, f"{fparts[0]}_{rcode}{fparts[1]}")
+
+
+def get_memory_of(obj):
+    """
+    Recursively calculate the memory usage of an object, including its
+    contents.
+    Returns:
+        size : int
+            size in bytes
+    """
+    seen_ids = set()
+
+    def inner(o):
+        if id(o) in seen_ids:
+            return 0
+        seen_ids.add(id(o))
+        size = sys.getsizeof(o)
+
+        if isinstance(o, dict):
+            size += sum(inner(k) + inner(v) for k, v in o.items())
+        elif isinstance(o, (list, tuple, set, frozenset)):
+            size += sum(inner(i) for i in o)
+
+        return size
+
+    return inner(obj)
+
+
+def profile_resource_usage(method):
+    """
+    Decorator that profiles peak memory and CPU usage of a function.
+    Returns results in a dictionary with values in GB and core count.
+    Compatible with Linux, MacOS, and Windows.
+
+    Intended to be used "outside" the module_wrapper, e.g.
+
+    @profile_resource_usage
+    @module_decorator
+    def undrift(self, i, parameters, results):
+        pass
+    """
+
+    @wraps(method)
+    def wrapper(self, i, parameters, calling_module_dir=None, suffix=""):
+        profiling_results = {"peak_memory_gb": 0.0, "peak_cpu_cores": 0.0}
+
+        # Memory profiling function
+        def memory_measure(self, i, parameters, calling_module_dir, suffix):
+            start_cpu = time.process_time()
+            start_real = time.time()
+            # Call the actual function
+            results = method(self, i, parameters, calling_module_dir, suffix)
+            cpu_time = time.process_time() - start_cpu
+            real_time = time.time() - start_real
+            # Store CPU usage for access in wrapper
+            wrapper.cpu_usage = cpu_time / max(real_time, 0.001)
+            return results
+
+        try:
+            # Measure memory usage
+            mem_usage = memory_usage(
+                proc=(
+                    memory_measure,
+                    [self, i, parameters, calling_module_dir, suffix],
+                ),
+                interval=0.5,
+                timeout=None,
+                max_usage=True,
+                retval=True,
+            )
+
+            # Extract memory results
+            peak_memory = mem_usage[0]  # First element is peak memory
+            # Convert MiB to GiB
+            profiling_results["peak_memory_gb"] = peak_memory / 1024.0
+
+            # Calculate peak CPU usage in terms of cores
+            total_cores = psutil.cpu_count(logical=True)  # total logical cores
+            profiling_results["peak_cpu_cores"] = min(
+                wrapper.cpu_usage * total_cores, total_cores
+            )
+
+            # Get the results from the memory_measure function
+            # Second element is the actual results
+            parameters, results = mem_usage[1]
+
+        except Exception as e:
+            print(f"Profiling error: {e}")
+            return None, profiling_results  # Return None for results on error
+
+        results["peak_memory_gb"] = profiling_results["peak_memory_gb"]
+        try:
+            locs_size = get_memory_of(self.locs) / 1024**3  # in GiB
+            results["peak_memory_per_locs"] = (
+                profiling_results["peak_memory_gb"] / locs_size
+            )
+        except Exception:
+            results["peak_memory_per_locs"] = 0
+        results["peak_cpu_cores"] = profiling_results["peak_cpu_cores"]
+
+        return parameters, results
+
+    wrapper.cpu_usage = 0.0  # Initialize CPU usage storage
+    return wrapper
 
 
 def module_decorator(method):
@@ -235,6 +342,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize = camera_info["Pixelsize"]
         return pixelsize
 
+    @profile_resource_usage
     @module_decorator
     def dummy_module(self, i, parameters, results):
         """A module that does nothing, for quickly removing
@@ -257,6 +365,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     # Single dataset modules
     ##########################################################################
 
+    @profile_resource_usage
     @module_decorator
     def analysis_documentation(self, i, parameters, results):
         """This module documents where and how analysis is being performed
@@ -303,6 +412,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["GPU memory [GB]"] = 0
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def convert_zeiss_movie(self, i, parameters, results):
         """Converts a DNA-PAINT movie into .raw, as supported by picasso.
@@ -336,6 +446,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["filename_raw"] = filename_raw
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def load_dataset_movie(self, i, parameters, results):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
@@ -455,6 +566,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["filename"] = filename
         return results
 
+    @profile_resource_usage
     @module_decorator
     def load_dataset_localizations(self, i, parameters, results):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
@@ -677,6 +789,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
         return canvas, ng_start, ng_end
 
+    @profile_resource_usage
     @module_decorator
     def identify(self, i, parameters, results):
         """Identifies localizations in a loaded dataset.
@@ -769,6 +882,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         plt.close(fig)
         return results
 
+    @profile_resource_usage
     @module_decorator
     def localize(self, i, parameters, results):
         """Localizes Spots previously identified.
@@ -915,6 +1029,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         plt.close(fig)
         return results
 
+    @profile_resource_usage
     @module_decorator
     def export_brightfield(self, i, parameters, results):
         """Opens a single-plane tiff image and saves it to png with
@@ -970,6 +1085,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["success"] = True
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def render(self, i, parameters, results):
         """Renders localizations on the whole field of view, and on
@@ -1054,6 +1170,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def undrift_aim(self, i, parameters, results):
         """Unrift localized data using the AIM algorithm
@@ -1125,6 +1242,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def undrift_rcc(self, i, parameters, results):
         """Undrifts localized data using redundant cross correlation.
@@ -1254,6 +1372,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig.savefig(filename)
         plt.close(fig)
 
+    @profile_resource_usage
     @module_decorator
     def manual(self, i, parameters, results):
         """Handles a manual step: if the files required are not
@@ -1291,6 +1410,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # raise ManualInputLackingError(f'{filepath} missing.')
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def summarize_dataset(self, i, parameters, results):
         pixelsize = self.pixelsize
@@ -1382,6 +1502,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     #         self._save_locs(os.path.join(results["folder"], "locs.hdf5"))
     #     return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def density(self, i, parameters, results):
         """ACalculate local localization density
@@ -1410,6 +1531,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         self.info.append(density_info)
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def dbscan(self, i, parameters, results):
         """Perform dbscan clustering. After this module, the standard
@@ -1471,6 +1593,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def hdbscan(self, i, parameters, results):
         """Perform hdbscan clustering. After this module, the standard
@@ -1514,6 +1637,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def smlm_clusterer(self, i, parameters, results):
         """Perform smlm clustering. After this module, the standard
@@ -1640,6 +1764,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def gaussian_mixture_cluster(self, i, parameters, results):
         """Perform clustering using gaussian mixture modelsAfter this module,
@@ -1751,6 +1876,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def nneighbor(self, i, parameters, results):
         """Perform nearest neighbor calculation
@@ -1988,6 +2114,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         ax.set_title("Radial Distribution Function")
         return rs, rdf, density
 
+    @profile_resource_usage
     @module_decorator
     def fit_csr(self, i, parameters, results):
         """Fit a Completely Spatially Random Distribution to
@@ -2168,6 +2295,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #     return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def save_single_dataset(self, i, parameters, results):
         """Saves the locs and info of a single dataset; makes loading
@@ -2213,6 +2341,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     # Aggregation workflow modules
     ##########################################################################
 
+    @profile_resource_usage
     @module_decorator
     def load_datasets_to_aggregate(self, i, parameters, results):
         """Loads the results of single-dataset workflows
@@ -2254,6 +2383,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["tags"] = parameters["tags"]
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def align_channels(self, i, parameters, results):
         """Aligns multiple channels to each other (part of an aggregation
@@ -2436,6 +2566,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def combine_channels(self, i, parameters, results):
         """Combines multiple channels into one dataset. This is relevant
@@ -2488,6 +2619,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def save_datasets_aggregated(self, i, parameters, results):
         """save data of multiple single-dataset workflows from one
@@ -2518,6 +2650,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             allfps.append(filepath)
         return allfps
 
+    @profile_resource_usage
     @module_decorator
     def spinna(self, i, parameters, results):
         """Direct implementation of spinna batch analysis.
@@ -2678,6 +2811,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def spinna_manual(self, i, parameters, results):
         """Direct implementation of spinna batch analysis.
@@ -2871,6 +3005,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 spinna_structs.append(struct)
         return spinna_structs
 
+    @profile_resource_usage
     @module_decorator
     def ripleysk(self, i, parameters, results):
         """Perforn Ripley's K analysis between the channels using
@@ -3166,6 +3301,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #     return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def ripleysk2(self, i, parameters, results):
         """Perforn Ripley's K analysis between the channels using
@@ -3453,6 +3589,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     )
         return significant_pairs
 
+    @profile_resource_usage
     @module_decorator
     def ripleysk_average(self, i, parameters, results):
         """Average the results of multiple Ripley's K Analyses, analyse
@@ -3606,6 +3743,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def ripleysk_average2(self, i, parameters, results):
         """Average the results of multiple Ripley's K Analyses, analyse
@@ -3872,6 +4010,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def protein_interactions(self, i, parameters, results):
         """Perform interaction analysis on those dataset pairs that showed
@@ -4238,6 +4377,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig.savefig(fp_imap)
         return fp_imap
 
+    @profile_resource_usage
     @module_decorator
     def protein_interactions_average(self, i, parameters, results):
         """Average the results of multiple "protein_interactions" analyses.
@@ -4311,6 +4451,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def create_mask(self, i, parameters, results):
         """
@@ -4423,6 +4564,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def create_mask2(self, i, parameters, results):
         """
@@ -4601,6 +4743,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def refine_mask_by_density(self, i, parameters, results):
         """
@@ -4830,6 +4973,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def dbscan_molint(self, i, parameters, results):
         """TO BE CLEANED UP
@@ -4975,6 +5119,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return loaded_data, channel_tags
 
+    @profile_resource_usage
     @module_decorator
     def CSR_sim_in_mask(self, i, parameters, results):
         """TO BE CLEANED UP
@@ -5065,6 +5210,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def plot_densities(self, i, parameters, results):
         """Aggregate densities and cell areas of multiple datasets and
@@ -5196,6 +5342,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def find_cluster_motifs(self, i, parameters, results):
         """Analyses the binary barcode results of _do_dbscan_molint.
@@ -5525,6 +5672,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def interaction_graph(self, i, parameters, results):
         """Plot the interaction graph, displaying the different targets
@@ -5609,6 +5757,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig.savefig(results["fp_fig"])
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def find_gold(self, i, parameters, results):
         """Find localizations stemming from gold beads based on blinking
@@ -5699,6 +5848,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def find_structures(self, i, parameters, results):
         """pick similar on clusters in nlocs/rmsd space.
@@ -5864,6 +6014,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def undrift_from_picked(self, i, parameters, results):
         """Performs undrift from piced locs.
@@ -5918,6 +6069,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # self._save_locs(fp_locs)
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def filter_locs(self, i, parameters, results):
         """Filter localizations to lie within a min-max range of a metric.
@@ -6009,6 +6161,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return fig, ax
 
+    @profile_resource_usage
     @module_decorator
     def link_locs(self, i, parameters, results):
         """Link localizations.
@@ -6042,6 +6195,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def pairwise_module_executor(self, i, parameters, results):
         """Calls another module (as a sub-module) for all pairs in the
@@ -6145,6 +6299,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def random_val(self, i, parameters, results):
         """For debugging and testing the pairwise module"""
@@ -6162,6 +6317,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
     @module_decorator
     def labeling_efficiency_analysis(self, i, parameters, results):
         """Analyse for labeling efficiency.

@@ -117,8 +117,12 @@ class AggregationWorkflowRunner:
             if postfix is not None:
                 report_name = report_name + "_" + postfix
                 runner_folder = os.path.join(folder, report_name)
-                instance = cls.load(runner_folder)
-                return instance
+                try:
+                    instance = cls.load(runner_folder)
+                    return instance
+                except FileNotFoundError:
+                    logger.debug(f"Could not load runner from {runner_folder}")
+                    pass
         if (
             sgltilepars := aggregation_workflow.get(
                 "single_dataset_tileparameters"
