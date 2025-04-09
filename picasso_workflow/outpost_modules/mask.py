@@ -252,15 +252,18 @@ class CellMask:
         binary_mask = self.binary_mask
         # print('binary mask shape in', binary_mask.shape)
         labeled_array, num_features = label(binary_mask)
-        sizes = np.bincount(labeled_array.ravel())
+        labeled_nobkg = labeled_array.ravel()
+        labeled_nobkg = labeled_nobkg[labeled_nobkg > 0]
+        feature, counts = np.unique(labeled_nobkg, return_counts=True)
+        # sizes = np.bincount(labeled_nobkg)
         try:
-            largest_component_index = sizes[1:].argmax() + 1 - nth_largest
+            largest_component_index = feature[counts.argsort()[-nth_largest]]
             logger.debug(
                 f"filtering {nth_largest} largest cell (starting 0)"
                 + f"largest component_index: {largest_component_index}"
-                + "labeled arr uniques"
-                + f": {np.unique(labeled_array, return_counts=True)}"
-                + f"sizes uniques: {np.unique(sizes, return_counts=True)}"
+                + "features"
+                + f": {feature}"
+                + f"sizes uniques: {counts}"
             )
         except ValueError:
             largest_component_index = 1
