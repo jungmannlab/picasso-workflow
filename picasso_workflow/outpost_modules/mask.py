@@ -257,7 +257,9 @@ class CellMask:
         feature, counts = np.unique(labeled_nobkg, return_counts=True)
         # sizes = np.bincount(labeled_nobkg)
         try:
-            largest_component_index = feature[counts.argsort()[-nth_largest]]
+            largest_component_index = feature[
+                counts.argsort()[-1 - nth_largest]
+            ]
             logger.debug(
                 f"filtering {nth_largest} largest cell (starting 0)"
                 + f"largest component_index: {largest_component_index}"

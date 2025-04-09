@@ -1046,7 +1046,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             fp_figs = self.extract_fpfig_from_results(kwargs["awr"], figloc)
             self.add_to_summary_page(
                 summary_page_title,
-                kwargs["cell_type"],
+                kwargs["cell_type"] + "-" + kwargs["cell_name"],
                 data_list=fp_figs,
                 data_types=data_types,
             )
