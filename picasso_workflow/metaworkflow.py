@@ -269,6 +269,8 @@ class AbstractWorkflowCoordinator(abc.ABC):
         investigation_description="",
         dest_machine=None,
         always_save=False,
+        profile_space=None,
+        profile_basepage=None,
     ):
         self.root_folder = os.path.join(
             working_folder, f"AnalysisResults-{analysis_name}"
@@ -316,6 +318,17 @@ class AbstractWorkflowCoordinator(abc.ABC):
             self.root_page,
             token=self.confluence_token,
         )
+
+        if profile_space is not None:
+            self.profiler = PerformanceProfiler(
+                self.confluence_url,
+                profile_space,
+                profile_basepage,
+                self.confluence_token,
+            )
+            self.profiler.init_profile_page()
+        else:
+            self.profiler = None
 
     @classmethod
     def hash_hex(cls, s, length=6):
@@ -389,6 +402,8 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         base_page,
         dest_machine=None,
         always_save=False,
+        profile_space=None,
+        profile_basepage=None,
     ):
         self.dataset_filepaths = io.load_info(src_loc_file)[0]
         self.tile_entries = {
@@ -406,6 +421,8 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             base_page,
             dest_machine,
             always_save,
+            profile_space,
+            profile_basepage,
         )
 
     def prepare_analysis(self, workflow_modules):
@@ -470,6 +487,9 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         for kwargs in run_wr_kwargs:
             self.run_wr(**kwargs)
 
+            if self.profiler is not None:
+                self.profiler.append_profile_page(kwargs["wr"]["all_results"])
+
     def run_wr(self, wr, dataset_name):
         logger.debug(f"starting to analyse {dataset_name}")
         wr.run()
@@ -494,6 +514,8 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         dest_machine="hpcl8001",
         investigation_description="",
         always_save=False,
+        profile_space=None,
+        profile_basepage=None,
     ):
         # src_loc_file is a picasso-info like yaml file, representing a list of
         # dicts, with keys "#tags" and #filepath
@@ -510,6 +532,8 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             base_page,
             dest_machine,
             always_save,
+            profile_space,
+            profile_basepage,
         )
 
     def prepare_analysis(self, workflow_modules_sgl, workflow_modules_agg):
@@ -588,6 +612,9 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         for kwargs in run_awr_kwargs:
             self.run_awr(**kwargs)
 
+            if self.profiler is not None:
+                self.profiler.append_profile_page(kwargs["awr"]["all_results"])
+
     def run_awr(self, awr, report_name):
         logger.debug(f"starting to analyse {report_name}")
         awr.run()
@@ -615,6 +642,8 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         always_save=False,
         iterations=1,
         underscores=[1, 0, 0, 0],
+        profile_space=None,
+        profile_basepage=None,
     ):
         """
         Args:
@@ -647,6 +676,8 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             investigation_description,
             dest_machine,
             always_save,
+            profile_space,
+            profile_basepage,
         )
 
     def prepare_sglcell_analysis(self, get_workflow_modules):
@@ -1051,6 +1082,8 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                 data_list=fp_figs,
                 data_types=data_types,
             )
+            if self.profiler is not None:
+                self.profiler.append_profile_page(kwargs["awr"]["all_results"])
 
     def run_mergecell_analysis(
         self,
@@ -1084,3 +1117,73 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                 data_list=fp_figs,
                 data_types=data_types,
             )
+            if self.profiler is not None:
+                self.profiler.append_profile_page(kwargs["awr"]["all_results"])
+
+
+class PerformanceProfiler:
+    def __init__(
+        self, confluence_url, confluence_space, base_page, confluence_token
+    ):
+        self.ci = confluence.ConfluenceInterface(
+            confluence_url,
+            confluence_space,
+            base_page,
+            token=confluence_token,
+        )
+
+    def init_profile_page(
+        self,
+        page_title="Cluster Performance Profiling",
+    ):
+        self.page_title = page_title
+        self.gen_columns = ["cluster", "module", "Confluence page"]
+        self.data_columns = [
+            "end time",
+            "peak_cpu_cores",
+            "peak_cpu_usage",
+            "peak_memory_gb",
+            "peak_memory_per_locs",
+            "nlocs",
+            "duration",
+        ]
+        # rcode = generate_random_code(6)
+        # summary_page_title = f"{summary_page_title}-{rcode}"
+        text = f"<b>{page_title}</b>"
+        text += "<table>"
+        text += "<tr>"
+        for col in self.gen_columns + self.data_columns:
+            text += f"<td><b>{col}</b></td>"
+        text += "</tr>"
+        text += "</table>"
+        try:
+            self.ci.create_page(page_title, text)
+        except confluence.ConfluenceInterfaceError:
+            # pagid, pagtit = ci.get_page_properties(page_title)
+            # ci.delete_page(pagid)
+            # ci.create_page(page_title, text)
+            pass
+        return page_title
+
+    def append_profile_page(self, all_results):
+        pagid, pagtit = self.ci.get_page_properties(self.page_title)
+
+        entry_rows = []
+        for stage_key, stage in all_results.items():
+            for module, results in stage.items():
+                row = [platform.node(), module, ""]
+                for col in self.data_columns:
+                    row.append(results[col])
+                entry_rows.append(row)
+
+        text = self.ci.get_page_body(self.page_title)
+        text, postfix = text.split("</table>")
+        for row in entry_rows:
+            text += "<tr>"
+            for data in row:
+                text += "<td>"
+                text += f"{data}"
+                text += "</td>"
+            text += "</tr>"
+        text += "</table>" + postfix
+        self.ci.update_page_content(self.page_title, pagid, text, replace=True)

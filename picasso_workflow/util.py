@@ -297,6 +297,14 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def filter_transient_binding(self, i, parameters, results):
+        """Filter molecule positions (after clustering or Gaussian Mixture)
+        for those who show transient binding. Specifically, the mean frame
+        should not be at extreme positions
+        """
+        pass
+
+    @abc.abstractmethod
     def link_locs(self):
         """Link localizations."""
         pass

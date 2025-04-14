@@ -353,6 +353,26 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize = camera_info["Pixelsize"]
         return pixelsize
 
+    @property
+    def frames(self):
+        try:
+            for infopart in self.info:
+                frames = infopart.get("Frames")
+                if frames is not None:
+                    return frames
+        except Exception:
+            pass
+        try:
+            for sgl_info in self.channel_info:
+                for infopart in sgl_info:
+                    frames = infopart.get("Frames")
+                    if frames is not None:
+                        return frames
+        except Exception:
+            pass
+
+        raise KeyError("Could not determine #Frames.")
+
     @profile_resource_usage
     @module_decorator
     def dummy_module(self, i, parameters, results):
@@ -1716,6 +1736,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 results["folder"], "cluster_smlm_locs.hdf5"
             )
             self._save_locs(filepath)
+            results["fp_clustered_locs"] = filepath
 
             self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
             logger.warning(
@@ -1726,6 +1747,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 results["folder"], "cluster_smlm_centers.hdf5"
             )
             self._save_locs(filepath)
+            results["fp_cluster_centers"] = filepath
         else:
             logger.debug("smlm clustering channel_locs")
             new_channel_locs = []
@@ -6142,6 +6164,86 @@ class AutoPicasso(util.AbstractModuleCollection):
         # fp_locs = os.path.join(results["folder"], "locs.hdf5")
         # results["fp_locs"] = fp_locs
         # self._save_locs(fp_locs)
+
+        return parameters, results
+
+    @profile_resource_usage
+    @module_decorator
+    def filter_transient_binding(self, i, parameters, results):
+        """Filter molecule positions (after clustering or Gaussian Mixture)
+        for those who show transient binding. Specifically, the mean frame
+        should not be at extreme positions
+        (default, 0.1 > mean frame / nframes > 0.9), and std of frames
+        (default: 0.3 > std frame).
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+                    meanframe_cutoff : float (0-1, default .1)
+                        filter out positions at more extreme temporal positions
+                    stdframe_cutoff : float
+                        filter out positions with lower std
+                    fp_locs : str
+                        the filepath to the underlying localizations
+                        (self.locs are centers). If given, these are filtered as
+                        well and saved with the same filename in the current results
+                        folder
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        results["nlocs_before"] = len(self.locs)
+
+        nframes = self.frames
+        fields = ["frame", "std_frame"]
+        all_xmin = [
+            parameters.get("meanframe_cutoff", 0.1) * nframes,
+            parameters.get("stdframe_cutoff", 0.33),
+        ]
+        all_xmax = [
+            (1 - parameters.get("meanframe_cutoff", 0.1)) * nframes,
+            None,
+        ]
+        results["fields_filtered"] = fields
+        results["all_xmin"] = all_xmin
+        results["all_xmax"] = all_xmax
+        # plot heatmaps before filtering
+        fig, ax = self.plot_heatmaps(fields)
+        results["fp_fig_before"] = os.path.join(
+            results["folder"], f"hist_before_{i:02d}.png"
+        )
+        fig.savefig(results["fp_fig_before"])
+
+        # filter
+        for field, xmin, xmax in zip(fields, all_xmin, all_xmax):
+            # self.locs = self.locs[
+            #     (self.locs[field] >= xmin) & (self.locs[field] <= xmax)
+            # ]
+            if xmin is not None:
+                self.locs = self.locs[self.locs[field] >= xmin]
+            if xmax is not None:
+                self.locs = self.locs[self.locs[field] <= xmax]
+
+        results["nlocs_after"] = len(self.locs)
+        # plot heatmaps after filtering
+        fig, ax = self.plot_heatmaps(fields)
+        results["fp_fig_after"] = os.path.join(
+            results["folder"], f"hist_after_{i:02d}.png"
+        )
+        fig.savefig(results["fp_fig_after"])
+
+        # Load Locs
+        if fp_locs := parameters.get("fp_locs"):
+            groups_kept = self.locs["group"]
+            locs, info = io.load_locs(fp_locs)
+            mask = np.isin(locs["group"], groups_kept)
+            locs = locs[mask]
+            results["fp_locs"] = os.path.join(
+                results["folder"], os.path.split(fp_locs)[1]
+            )
+            io.save_locs(locs, results["fp_locs"])
 
         return parameters, results
 
