@@ -950,7 +950,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
 
         data_fmt_default = {
             "img": {"height": 350},
-            "float": {"precision": 6, "unit": ""},
+            "float": {"precision": 6, "unit": "", "factor": 1},
             "str": {},
         }
         # add default values to data_fmt
@@ -1005,7 +1005,8 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             elif data_def["type"] == "float":
                 precision = data_def["precision"]
                 unit = data_def["unit"]
-                value = f"{fnf:.{precision}f} {unit}"
+                factor = data_def["factor"]
+                value = f"{factor * fnf:.{precision}f} {unit}"
                 text += f"<td>{value}</td>"
             else:
                 text += f"<td>{fnf}</td>"
