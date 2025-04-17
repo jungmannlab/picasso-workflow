@@ -164,11 +164,13 @@ def profile_resource_usage(method):
             results["peak_memory_per_locs"] = 0
         results["peak_cpu_cores"] = profiling_results["peak_cpu_cores"]
         results["peak_cpu_usage"] = profiling_results["peak_cpu_usage"]
-        results["nlocs"] = (
-            len(self.locs)
-            if self.locs is not None
-            else sum([len(locs) for locs in self.channel_locs])
-        )
+        if self.channel_locs is not None:
+            nlocs = sum([len(locs) for locs in self.channel_locs])
+        elif self.locs is not None:
+            nlocs = len(self.locs)
+        else:
+            nlocs = 0
+        results["nlocs"] = nlocs
 
         return parameters, results
 
