@@ -1169,18 +1169,15 @@ class PerformanceProfiler:
         pagid, pagtit = self.ci.get_page_properties(self.page_title)
 
         entry_rows = []
-        logger.debug(f"all results are {all_results}")
         for stage_key, stage in all_results.items():
-            logger.debug(f"stage of {stage_key} is {stage}")
-            if isinstance(stage, list):
-                logger.warning(f"stage {stage_key} is a list!")
-                continue
-            for module, results in stage.items():
-                logger.debug(f"results of {module} are {results}")
-                row = [platform.node(), module, ""]
-                for col in self.data_columns:
-                    row.append(results[col])
-                entry_rows.append(row)
+            if not isinstance(stage, list):
+                stage = [stage]
+            for stage_item in stage:
+                for module, results in stage_item.items():
+                    row = [platform.node(), module, ""]
+                    for col in self.data_columns:
+                        row.append(results[col])
+                    entry_rows.append(row)
 
         text = self.ci.get_page_body(self.page_title)
         text, postfix = text.split("</table>")
