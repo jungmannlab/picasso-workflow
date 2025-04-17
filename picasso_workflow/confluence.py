@@ -2286,7 +2286,8 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def filter_locs(self, i, parameters, results):
+    @module_decorator
+    def filter_locs(self, i, parameters, results, parameter_text, result_text):
         """Filter localizations to lie within a min-max range of a metric.
         Args:
             i : int
@@ -2328,7 +2329,9 @@ class ConfluenceReporter(AbstractModuleCollection):
          / results["nlocs_before"] * 100:.1f}%)
         </li>
         <li>Fields filtered:<ul>{txtfilt}</ul></li>
-        </ul>"""
+        </ul>
+        {parameter_text}
+        {result_text}"""
 
         if fp_fig := results.get("fp_fig_before"):
             text += "<ul><table>"
@@ -2364,7 +2367,10 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def filter_transient_binding(self, i, parameters, results):
+    @module_decorator
+    def filter_transient_binding(
+        self, i, parameters, results, parameter_text, result_text
+    ):
         """Filter molecule positions (after clustering or Gaussian Mixture)
         for those who show transient binding. Specifically, the mean frame
         should not be at extreme positions
@@ -2391,7 +2397,10 @@ class ConfluenceReporter(AbstractModuleCollection):
          / results["nlocs_before"] * 100:.1f}%)
         </li>
         <li>Fields filtered:<ul>{txtfilt}</ul></li>
-        </ul>"""
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
 
         if fp_fig := results.get("fp_fig_before"):
             text += "<ul><table>"

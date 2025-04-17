@@ -2226,6 +2226,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         kwargs["fit_bkg"] = parameters.get("fit_bkg", False)
 
         densities = []
+        bkgs = []
         results["fp_fig"] = []
         for tag, nneighbors in zip(tags, nneighbor_list):
             kwargs["nn_dists"] = nneighbors.T[kmin - 1 :, :]
@@ -2235,6 +2236,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             # print(fitresult)
             logger.debug(str(fitresult))
             densities.append(rho_mle)
+            if len(fitresult.x) > 1:
+                bkgs.append(fitresult.x)
+            else:
+                bkgs.append(parameters.get("bkg_fraction"), 0)
 
             # plot results
             fig, ax = plt.subplots()
@@ -2295,6 +2300,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             fig.savefig(fp_fig)
             results["fp_fig"].append(fp_fig)
         results["density"] = densities
+        results["bkg_fraction"] = bkgs
 
         if sgl_stage:
             results["density"] = results["density"][0]
