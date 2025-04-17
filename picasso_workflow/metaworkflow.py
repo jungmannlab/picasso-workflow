@@ -1142,6 +1142,7 @@ class PerformanceProfiler:
             "end time",
             "peak_cpu_cores",
             "peak_cpu_usage",
+            "mean_cpu_usage",
             "peak_memory_gb",
             "peak_memory_per_locs",
             "nlocs",

@@ -104,12 +104,15 @@ def profile_resource_usage(method):
         def memory_measure(self, i, parameters, calling_module_dir, suffix):
             start_cpu = time.process_time()
             start_real = time.time()
+            _ = psutil.cpu_percent()
             # Call the actual function
             results = method(self, i, parameters, calling_module_dir, suffix)
             cpu_time = time.process_time() - start_cpu
             real_time = time.time() - start_real
+            cpu_percent_end = psutil.cpu_percent()
             # Store CPU usage for access in wrapper
             wrapper.cpu_usage = cpu_time / max(real_time, 0.001)
+            wrapper.mean_cpu_percent = cpu_percent_end
             return results
 
         try:
@@ -136,6 +139,7 @@ def profile_resource_usage(method):
                 wrapper.cpu_usage * total_cores, total_cores
             )
             profiling_results["peak_cpu_usage"] = wrapper.cpu_usage
+            profiling_results["mean_cpu_usage"] = wrapper.mean_cpu_percent
             pcpuc = profiling_results["peak_cpu_cores"]
             logger.debug(
                 f"profiled cpu usage: {wrapper.cpu_usage}, "
@@ -154,10 +158,14 @@ def profile_resource_usage(method):
 
         results["peak_memory_gb"] = profiling_results["peak_memory_gb"]
         try:
-            locs_size = len(self.locs)
-            channel_locs_size = sum([len(locs) for locs in self.channel_locs])
-            locs_size = max([locs_size, channel_locs_size])
-            results["peak_memory_gb_per_loc"] = (
+            if self.locs is not None:
+                locs_size = len(self.locs)
+            else:
+                channel_locs_size = sum(
+                    [len(locs) for locs in self.channel_locs]
+                )
+                locs_size = max([locs_size, channel_locs_size])
+            results["peak_memory_gb_per_locs"] = (
                 profiling_results["peak_memory_gb"] / locs_size
             )
         except Exception:
