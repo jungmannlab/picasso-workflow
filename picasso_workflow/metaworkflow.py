@@ -1177,7 +1177,7 @@ class PerformanceProfiler:
                 for module, results in stage_item.items():
                     row = [platform.node(), module, ""]
                     for col in self.data_columns:
-                        row.append(results[col])
+                        row.append(results.get(col, 0))
                     entry_rows.append(row)
 
         text = self.ci.get_page_body(self.page_title)
