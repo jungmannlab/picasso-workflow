@@ -2247,7 +2247,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             if len(fitresult.x) > 1:
                 bkgs.append(fitresult.x)
             else:
-                bkgs.append(parameters.get("bkg_fraction"), 0)
+                bkgs.append(parameters.get("bkg_fraction", 0))
 
             # plot results
             fig, ax = plt.subplots()
