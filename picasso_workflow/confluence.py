@@ -815,13 +815,24 @@ class ConfluenceReporter(AbstractModuleCollection):
         if isinstance(parameters["nneighbors"], str):
             text += f"""<li>Experimental Nearest neighbor distances loaded
              from: {parameters['nneighbors']}</li>"""
+        elif isinstance(parameters["nneighbors"], list):
+            text += f"""<li>Experimental Nearest neighbor distances loaded
+             from: {parameters['nneighbors']}</li>"""
         else:
             text += f"""<li>Experimental Nearest neighbor distances:
              {parameters['nneighbors'].shape[0]} spots,
               {parameters['nneighbors'].shape[1]} neighbors</li>"""
-        text += f"""<li>Density fitted:
-         {results['density']} nm^(-{parameters['dimensionality']})</li>
-        </ul>
+        d = parameters["dimensionality"]
+        if isinstance(results["density"], list):
+            text += "<li>Density fitted:"
+            for density in results["density"]:
+                text += f"{density * 1e6} µm^(-{d}), "
+            text += "</li>"
+        else:
+            text += f"""<li>Density fitted:
+             {results['density'] * 1e6} µm^(-{d})</li>
+            """
+        text += """</ul>
         {parameter_text}
         {result_text}
         """

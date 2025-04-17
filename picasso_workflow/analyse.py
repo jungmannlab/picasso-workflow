@@ -2177,9 +2177,23 @@ class AutoPicasso(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         if isinstance(parameters["nneighbors"], str):
-            nneighbors = np.loadtxt(parameters["nneighbors"])
+            nneighbor_list = [np.loadtxt(parameters["nneighbors"])]
+            tags = ["locs"]
+            sgl_stage = True
+        elif isinstance(parameters["nneighbors"], list):
+            if isinstance(parameters["nneighbors"][0], str):
+                nneighbor_list = [
+                    np.loadtxt(fp) for fp in parameters["nneighbors"]
+                ]
+            else:
+                nneighbor_list = [parameters["nneighbors"]]
+            tags = self.channel_tags
+            sgl_stage = False
         else:
-            nneighbors = parameters["nneighbors"]
+            nneighbor_list = [parameters["nneighbors"]]
+            tags = ["locs"]
+            sgl_stage = True
+        nneighbors = nneighbor_list[0]
         # print(nneighbors.shape)
         # return
         kmin = parameters.get("kmin", 1)
@@ -2188,7 +2202,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         d = parameters["dimensionality"]
         min_dist = parameters.get("min_dist", 0)
         kwargs = {
-            "nn_dists": nneighbors.T[kmin - 1 :, :],
+            # "nn_dists": nneighbors.T[kmin - 1 :, :],
             "kmin": kmin,
             "rho_bound_factor": 10,
         }
@@ -2204,67 +2218,77 @@ class AutoPicasso(util.AbstractModuleCollection):
             kwargs["bkg_fraction"] = bkg_fraction
         kwargs["fit_bkg"] = parameters.get("fit_bkg", False)
 
-        rho_mle, fitresult = (
-            picasso_outpost.estimate_density_from_neighbordists(**kwargs)
-        )
-        # print(fitresult)
-        logger.debug(str(fitresult))
-        results["density"] = rho_mle
+        densities = []
+        results["fp_fig"] = []
+        for tag, nneighbors in zip(tags, nneighbor_list):
+            kwargs["nn_dists"] = nneighbors.T[kmin - 1 :, :]
+            rho_mle, fitresult = (
+                picasso_outpost.estimate_density_from_neighbordists(**kwargs)
+            )
+            # print(fitresult)
+            logger.debug(str(fitresult))
+            densities.append(rho_mle)
 
-        # plot results
-        fig, ax = plt.subplots()
-        colors = cm.get_cmap("viridis", k_max).colors
-        bin_max = np.quantile(nneighbors[:, -1], 0.95)
-        median_1stNN = np.median(nneighbors[:, 0])
-        # sample bins such that there are 5 bins from 0 to middle of 1stNN
-        nbins = int(5 * bin_max / median_1stNN)
-        bins = np.linspace(0, bin_max, num=nbins)
-        rvals = np.linspace(0, bin_max, num=3 * nbins)
-        nnhist_obs = np.zeros((len(bins), k_max))
-        nnhist_an = np.zeros_like(nnhist_obs)
-        for i in range(nnhist_an.shape[1]):
-            k = i + 1
-            # nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
-            nnhist_an = picasso_outpost.nndistribution_from_csr(
-                rvals,
-                k,
-                rho_mle,
-                d=parameters["dimensionality"],
-                min_dist=kwargs.get("min_dist", 0),
-                max_dist=kwargs.get("max_dist", np.inf),
-                renormalize=False,
-            )
-            if i == 0:
-                lbl = f"rho_init {1E6*rho_init:.1f} um^2"
-                lblf = f"rho_fit {1E6*rho_mle:.1f} um^2"
-            else:
-                lbl = f"observed k={k}"
-                lblf = f"fitted k={k}"
-            _ = ax.hist(
-                nneighbors[:, i],
-                bins=bins,
-                density=True,
-                color=colors[i],
-                alpha=0.2,
-                label=lbl,
-            )
-            if k < kmin:
-                linestyle = ":"
-            else:
-                linestyle = "--"
-            ax.plot(
-                rvals,  # + (bins[1] - bins[0]) / 2,
-                nnhist_an,
-                color=colors[i],
-                linestyle=linestyle,
-                label=lblf,
-            )
-        ax.legend()
-        ax.set_xlabel("Distance [nm]")
-        ax.set_ylabel("probability density")
-        ax.set_title("Nearest Neighbor Distribution")
-        results["fp_fig"] = os.path.join(results["folder"], "nndist_fit.png")
-        fig.savefig(results["fp_fig"])
+            # plot results
+            fig, ax = plt.subplots()
+            colors = cm.get_cmap("viridis", k_max).colors
+            bin_max = np.quantile(nneighbors[:, -1], 0.95)
+            median_1stNN = np.median(nneighbors[:, 0])
+            # sample bins such that there are 5 bins from 0 to middle of 1stNN
+            nbins = int(5 * bin_max / median_1stNN)
+            bins = np.linspace(0, bin_max, num=nbins)
+            rvals = np.linspace(0, bin_max, num=3 * nbins)
+            nnhist_obs = np.zeros((len(bins), k_max))
+            nnhist_an = np.zeros_like(nnhist_obs)
+            for i in range(nnhist_an.shape[1]):
+                k = i + 1
+                # nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
+                nnhist_an = picasso_outpost.nndistribution_from_csr(
+                    rvals,
+                    k,
+                    rho_mle,
+                    d=parameters["dimensionality"],
+                    min_dist=kwargs.get("min_dist", 0),
+                    max_dist=kwargs.get("max_dist", np.inf),
+                    renormalize=False,
+                )
+                if i == 0:
+                    lbl = f"rho_init {1E6*rho_init:.1f} um^2"
+                    lblf = f"rho_fit {1E6*rho_mle:.1f} um^2"
+                else:
+                    lbl = f"observed k={k}"
+                    lblf = f"fitted k={k}"
+                _ = ax.hist(
+                    nneighbors[:, i],
+                    bins=bins,
+                    density=True,
+                    color=colors[i],
+                    alpha=0.2,
+                    label=lbl,
+                )
+                if k < kmin:
+                    linestyle = ":"
+                else:
+                    linestyle = "--"
+                ax.plot(
+                    rvals,  # + (bins[1] - bins[0]) / 2,
+                    nnhist_an,
+                    color=colors[i],
+                    linestyle=linestyle,
+                    label=lblf,
+                )
+            ax.legend()
+            ax.set_xlabel("Distance [nm]")
+            ax.set_ylabel("probability density")
+            ax.set_title(f"Nearest Neighbor Distribution {tag}")
+            fp_fig = os.path.join(results["folder"], f"{tag}_nndist_fit.png")
+            fig.savefig(fp_fig)
+            results["fp_fig"].append(fp_fig)
+        results["density"] = densities
+
+        if sgl_stage:
+            results["density"] = results["density"][0]
+            results["fp_fig"] = results["fp_fig"][0]
 
         return parameters, results
 

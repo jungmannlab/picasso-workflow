@@ -488,7 +488,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             self.run_wr(**kwargs)
 
             if self.profiler is not None:
-                self.profiler.append_profile_page(kwargs["wr"]["all_results"])
+                self.profiler.append_profile_page(kwargs["wr"].all_results)
 
     def run_wr(self, wr, dataset_name):
         logger.debug(f"starting to analyse {dataset_name}")
@@ -613,7 +613,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             self.run_awr(**kwargs)
 
             if self.profiler is not None:
-                self.profiler.append_profile_page(kwargs["awr"]["all_results"])
+                self.profiler.append_profile_page(kwargs["awr"].all_results)
 
     def run_awr(self, awr, report_name):
         logger.debug(f"starting to analyse {report_name}")
@@ -1083,7 +1083,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                 data_types=data_types,
             )
             if self.profiler is not None:
-                self.profiler.append_profile_page(kwargs["awr"]["all_results"])
+                self.profiler.append_profile_page(kwargs["awr"].all_results)
 
     def run_mergecell_analysis(
         self,
@@ -1118,7 +1118,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                 data_types=data_types,
             )
             if self.profiler is not None:
-                self.profiler.append_profile_page(kwargs["awr"]["all_results"])
+                self.profiler.append_profile_page(kwargs["awr"].all_results)
 
 
 class PerformanceProfiler:
