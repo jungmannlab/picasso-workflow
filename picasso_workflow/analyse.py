@@ -164,6 +164,11 @@ def profile_resource_usage(method):
             results["peak_memory_per_locs"] = 0
         results["peak_cpu_cores"] = profiling_results["peak_cpu_cores"]
         results["peak_cpu_usage"] = profiling_results["peak_cpu_usage"]
+        results["nlocs"] = (
+            len(self.locs)
+            if self.locs is not None
+            else sum([len(locs) for locs in self.channel_locs])
+        )
 
         return parameters, results
 
@@ -2254,10 +2259,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 if i == 0:
                     lbl = f"rho_init {1E6*rho_init:.1f} um^2"
-                    lblf = f"rho_fit {1E6*rho_mle:.1f} um^2"
                 else:
                     lbl = f"observed k={k}"
-                    lblf = f"fitted k={k}"
                 _ = ax.hist(
                     nneighbors[:, i],
                     bins=bins,
@@ -2268,8 +2271,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 if k < kmin:
                     linestyle = ":"
+                    lblf = f"k={k} not fitted"
+                elif k == kmin:
+                    linestyle = "--"
+                    lblf = f"fit {1E6*rho_mle:.1f} µm^2"
                 else:
                     linestyle = "--"
+                    lblf = f"fit k={k}"
                 ax.plot(
                     rvals,  # + (bins[1] - bins[0]) / 2,
                     nnhist_an,
@@ -6235,7 +6243,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fields = ["frame", "std_frame"]
         all_xmin = [
             parameters.get("meanframe_cutoff", 0.1) * nframes,
-            parameters.get("stdframe_cutoff", 0.16),
+            parameters.get("stdframe_cutoff", 0.16) * nframes,
         ]
         all_xmax = [
             (1 - parameters.get("meanframe_cutoff", 0.1)) * nframes,

@@ -809,19 +809,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         maximum likelihood esitmator.
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
-        <li>Dimensionality of analytical CSR:
-         {parameters['dimensionality']}</li>"""
-        if isinstance(parameters["nneighbors"], str):
-            text += f"""<li>Experimental Nearest neighbor distances loaded
-             from: {parameters['nneighbors']}</li>"""
-        elif isinstance(parameters["nneighbors"], list):
-            text += f"""<li>Experimental Nearest neighbor distances loaded
-             from: {parameters['nneighbors']}</li>"""
-        else:
-            text += f"""<li>Experimental Nearest neighbor distances:
-             {parameters['nneighbors'].shape[0]} spots,
-              {parameters['nneighbors'].shape[1]} neighbors</li>"""
+        {(results["duration"] % 60):.02f} s</li>"""
         d = parameters["dimensionality"]
         if isinstance(results["density"], list):
             text += "<li>Density fitted:"
@@ -832,7 +820,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             text += f"""<li>Density fitted:
              {results['density'] * 1e6} µm^(-{d})</li>
             """
-        text += """</ul>
+        text += f"""</ul>
         {parameter_text}
         {result_text}
         """
@@ -2334,7 +2322,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>Locs filtered from:{results["nlocs_before"]} to
+        <li>Locs filtered from: {results["nlocs_before"]} to
         {results["nlocs_after"]} (down
         {(results["nlocs_before"] - results["nlocs_after"])
          / results["nlocs_before"] * 100:.1f}%)
@@ -2391,12 +2379,13 @@ class ConfluenceReporter(AbstractModuleCollection):
             txtfilt += f"<li>{field}: {minval} - {maxval}</li>"
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: Filter localizations</strong></p>
+        <p><strong>Module {i:02d}:
+        Filter localizations for transient binding</strong></p>
         <ul>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>Locs filtered from:{results["nlocs_before"]} to
+        <li>Locs filtered from: {results["nlocs_before"]} to
         {results["nlocs_after"]} (down
         {(results["nlocs_before"] - results["nlocs_after"])
          / results["nlocs_before"] * 100:.1f}%)
