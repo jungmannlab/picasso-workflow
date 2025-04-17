@@ -6254,7 +6254,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["fp_locs"] = os.path.join(
                 results["folder"], os.path.split(fp_locs)[1]
             )
-            io.save_locs(locs, results["fp_locs"], info)
+            io.save_locs(results["fp_locs"], locs, info)
 
         return parameters, results
 
