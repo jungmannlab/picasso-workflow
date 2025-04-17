@@ -612,6 +612,7 @@ def estimate_density_from_neighbordists(
     min_dist=0,
     max_dist=np.inf,
     bkg_fraction=0,
+    fit_bkg=False,
 ):
     """For one point with k nearest neighbor distances (all assumed from
     a CSR distribution), do a maximum likelihood estimation for the
@@ -626,6 +627,8 @@ def estimate_density_from_neighbordists(
         bkg_fraction : float
             the fraction of nn distances that are background, i.e. randomly
             distributed over all distances, independent on spot density
+        fit_bkg : bool
+            whether to take bkg_fraction as granted, or as an input fit value
     Returns:
         mle_rho : float
             the maximum likelihood estimate for the local density
@@ -634,9 +637,13 @@ def estimate_density_from_neighbordists(
     bounds = [
         (rho_init / rho_bound_factor, rho_init * rho_bound_factor)
     ]  # rho must be positive
+    if fit_bkg:
+        x0 = [rho_init, bkg_fraction]
+    else:
+        x0 = [rho_init]
     mle_rho = minimize(
         minimization_loglike,
-        x0=[rho_init],
+        x0=x0,
         args=(nn_dists, d, kmin, min_dist, max_dist, bkg_fraction),
         bounds=bounds,
         # tol=1e-8, options={'maxiter': 1e5}, method='Powell'
@@ -662,7 +669,7 @@ def estimate_density_from_neighbordists(
 
 
 def minimization_loglike(
-    rho,
+    parameters,
     nndist_observed,
     d=2,
     kmin=1,
@@ -673,17 +680,22 @@ def minimization_loglike(
     """The minimization function for nndist loglikelihood fun
     based on k-th nearest neighbor CSR distributions
     Args:
-        rho : list, len 1
-            the estimated density
+        parameters : list, len 1 or 2
+            the estimated density, and potentially bkg_fraciton
         nndist_observed : array, len k - or 2D array: (N, k)
             the k nearest neighbor distances (of N spots)
+        bkg_fraction : the background fraction. ignored if there
+            is a second entry of parameters
     Returns:
         loglike : float
             the log likelihood of finding the observed neighbor distances
             in the model of CSR and given rho
     """
+    rho = parameters[0]
+    if len(parameters) == 2:
+        bkg_fraction = parameters[1]
     return -nndist_loglikelihood_csr(
-        nndist_observed, rho[0], d, kmin, min_dist, max_dist, bkg_fraction
+        nndist_observed, rho, d, kmin, min_dist, max_dist, bkg_fraction
     )
 
 
@@ -716,13 +728,28 @@ def nndist_loglikelihood_csr(
         # assert False
         dist_consider = dist[(dist >= min_dist) & (dist <= max_dist)]
         prob = nndistribution_from_csr(
-            dist_consider, k, rho, d=d, bkg_fraction=bkg_fraction
+            dist_consider,
+            k,
+            rho,
+            d=d,
+            bkg_fraction=bkg_fraction,
+            min_dist=min_dist,
+            max_dist=max_dist,
         )
         log_like += np.sum(np.log(prob))
     return log_like
 
 
-def nndistribution_from_csr(r, k, rho, d=2, bkg_fraction=0):
+def nndistribution_from_csr(
+    r,
+    k,
+    rho,
+    d=2,
+    bkg_fraction=0,
+    min_dist=0,
+    max_dist=np.inf,
+    renormalize=True,
+):
     """The CSR Nearest Neighbor distribution of finding the k-th nearest
     neighbor at r. with the spatial randomness covering d dimensions
     Args:
@@ -757,6 +784,25 @@ def nndistribution_from_csr(r, k, rho, d=2, bkg_fraction=0):
     # add am even background of observed nn distances, at all distances
     dist += (bkg_fraction / (np.max(r) - np.min(r))) / (1 + bkg_fraction)
     dist[dist <= 0] = 1e-200  # np.finfo().eps
+    # re-normalize
+    if min_dist > 0 or max_dist < np.inf:
+        r_temp = np.linspace(0, np.max(r), 300)
+        prob = nndistribution_from_csr(
+            r_temp,
+            k,
+            rho,
+            d=d,
+            bkg_fraction=bkg_fraction,
+            min_dist=0,
+            max_dist=np.inf,
+        )
+        renorm_fact = np.sum(
+            prob[(r_temp >= min_dist) & (r_temp <= max_dist)]
+        ) / np.sum(prob)
+        print(renorm_fact)
+        dist[(r < min_dist) | (r > max_dist)] = 0
+        if renormalize:
+            dist = dist / renorm_fact
     # try:
     #     renorm_factor = np.sum(dist) / np.sum(dist[r >= min_dist])
     # except ZeroDivisionError:

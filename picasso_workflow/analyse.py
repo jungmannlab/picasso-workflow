@@ -2202,6 +2202,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             kwargs["max_dist"] = max_dist
         if bkg_fraction := parameters.get("bkg_fraction"):
             kwargs["bkg_fraction"] = bkg_fraction
+        kwargs["fit_bkg"] = parameters.get("fit_bkg", False)
 
         rho_mle, fitresult = (
             picasso_outpost.estimate_density_from_neighbordists(**kwargs)
@@ -2225,7 +2226,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             k = i + 1
             # nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
             nnhist_an = picasso_outpost.nndistribution_from_csr(
-                rvals, k, rho_mle, d=parameters["dimensionality"]
+                rvals,
+                k,
+                rho_mle,
+                d=parameters["dimensionality"],
+                min_dist=kwargs.get("min_dist", 0),
+                max_dist=kwargs.get("max_dist", np.inf),
+                renormalize=False,
             )
             if i == 0:
                 lbl = f"rho_init {1E6*rho_init:.1f} um^2"
@@ -2241,11 +2248,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                 alpha=0.2,
                 label=lbl,
             )
+            if k < kmin:
+                linestyle = ":"
+            else:
+                linestyle = "--"
             ax.plot(
                 rvals,  # + (bins[1] - bins[0]) / 2,
-                nnhist_an * 1,  # no idea why we need this factor
+                nnhist_an,
                 color=colors[i],
-                linestyle="--",
+                linestyle=linestyle,
                 label=lblf,
             )
         ax.legend()
@@ -6184,12 +6195,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                     meanframe_cutoff : float (0-1, default .1)
                         filter out positions at more extreme temporal positions
                     stdframe_cutoff : float
-                        filter out positions with lower std
+                        filter out positions with lower std than .16
                     fp_locs : str
                         the filepath to the underlying localizations
-                        (self.locs are centers). If given, these are filtered as
-                        well and saved with the same filename in the current results
-                        folder
+                        (self.locs are centers). If given, these are filtered
+                        as well and saved with the same filename in the current
+                        results folder
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -6200,7 +6211,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fields = ["frame", "std_frame"]
         all_xmin = [
             parameters.get("meanframe_cutoff", 0.1) * nframes,
-            parameters.get("stdframe_cutoff", 0.33),
+            parameters.get("stdframe_cutoff", 0.16),
         ]
         all_xmax = [
             (1 - parameters.get("meanframe_cutoff", 0.1)) * nframes,
@@ -6243,7 +6254,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["fp_locs"] = os.path.join(
                 results["folder"], os.path.split(fp_locs)[1]
             )
-            io.save_locs(locs, results["fp_locs"])
+            io.save_locs(locs, results["fp_locs"], info)
 
         return parameters, results
 
