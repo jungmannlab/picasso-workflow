@@ -2246,7 +2246,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             logger.debug(str(fitresult))
             densities.append(rho_mle)
             if len(fitresult.x) > 1:
-                bkgs.append(fitresult.x)
+                bkgs.append(fitresult.x[1])
             else:
                 bkgs.append(parameters.get("bkg_fraction", 0))
 
