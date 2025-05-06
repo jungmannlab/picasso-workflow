@@ -6499,8 +6499,53 @@ class AutoPicasso(util.AbstractModuleCollection):
         labeling efficiency of 1, yielding proportions of monomers and
         dimers as seen in the data. The real labeling efficiency is then
 
-        LE(A) = prop(AB) / (prop(B) + prop(AB))
-        LE(B) = prop(AB) / (prop(A) + prop(AB))
+        Model:
+        Binders A and B bind to an engineered construct A*-anchor-B*.
+            A <-> A*-anchor-B* <-> B
+        There are four possible configurations:
+            A_only: AA*-anchor-B*
+            AB: AA*-anchor-B*B
+            B_only: A*-anchor-B*B
+            None (invisible in data): A*-anchor-B*
+        Number of total constructs with A, or B, respectively:
+            #A_tot = #A_only + #AB
+            #B_tot = #B_only + #AB
+
+        Proportions can be given in terms of #structures, or in terms
+        of #molecules, e.g.
+        with proportions given in terms of #structures
+         10 monomers, 10 dimers (20molecules in dimers) -> p_m = 50%, p_d=50%
+
+        with proportions given in terms of #molecules
+         10 monomers, 10 dimers (20molecules in dimers) -> p_m = 33%, p_d=66%
+
+        in terms of #structures
+        prop_A^S = #A_only / (#A_only + #B_only + #AB)
+        prop_B^S = #B_only / (#A_only + #B_only + #AB)
+        prop_AB^S = #AB / (#A_only + #B_only + #AB)
+        in terms of #molecules
+        prop_A^S = #A_only / (#A_only + #B_only + 2 #AB)
+        prop_B^S = #B_only / (#A_only + #B_only + 2 #AB)
+        prop_AB^S = 2 #AB / (#A_only + #B_only + 2 #AB)
+
+        #AB = #anchor * LE_A * LE_B
+        #A_tot = #anchor * LE_A
+        #B_tot = #anchor * LE_B
+        #A_only = #A_tot - #AB = #anchor * LE_A * (1 - LE_B)
+        #B_only = #B_tot - #AB = #anchor * LE_B * (1 - LE_A)
+
+        THUS, finally, the labeling efficiency can be calculated by
+
+        with proportions given in terms of #structures
+        LE_A = prop(AB) / (prop(B) + prop(AB))
+        LE_B = prop(AB) / (prop(A) + prop(AB))
+
+        with proportions given in terms of #molecules
+        LE_A = prop(AB) / (2 * prop(B) + prop(AB))
+        LE_B = prop(AB) / (2 * prop(A) + prop(AB))
+
+        SPINNA outputs propportions in terms of #molecules, so the last
+        formulae are used below.
 
         Args:
             i : int
@@ -6680,10 +6725,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         prop_r = props[1]
         prop_tr = props[2]
 
-        # LE(A) = 2 * prop(AB) / (prop(B) + 2 * prop(AB))
-        # LE(B) = 2 * prop(AB) / (prop(A) + 2 * prop(AB))
-        le_target = prop_tr / (prop_r + prop_tr)
-        le_reference = prop_tr / (prop_t + prop_tr)
+        # SPINNA outputs proportions in terms of #molecules
+        le_target = prop_tr / (2 * prop_r + prop_tr)
+        le_reference = prop_tr / (2 * prop_t + prop_tr)
 
         results["labeling_efficiency"] = {
             parameters["target_name"]: le_target,
