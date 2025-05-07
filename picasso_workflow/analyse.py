@@ -2780,6 +2780,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     density : list of float
                         density to simulate in 1/nm^d;
                         area density if 2D; volume density if 3D
+                        (required: either density or density_app)
                     random_rot_mode : '2D', or '3D'
                         Mode of molecule rotation in simulation
                     sim_repeats : int
@@ -2792,6 +2793,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                         number of nearest neighbors to evaluate
                     granularity : float
                     the spinna granularity
+                optional keys:
+                    density_app : list of float
+                        apparent density in 1/nm^2;
+                        this is the product of 'real' density & lbl efficiency
         """
         if isinstance(parameters["structures"], str):
             structures = io.load_info(parameters["structures"])
@@ -2811,6 +2816,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 mask_dict = pickle.load(f)
         else:
             mask_dict = None
+
+        if parameters.get("density") is not None:
+            density = parameters["density"]
+        else:
+            density = parameters["density_app"]
+            for i, (tgt, le) in enumerate(parameters["labeling_efficiency"]):
+                density[i] = density[i] / le
 
         # locs, but as np.ndarray
         pixelsize = self.pixelsize
@@ -2840,7 +2852,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             if z_range <= 0:
                 data_2d = True
         if data_2d:
-            area = parameters["n_simulate"] / sum(parameters["density"])
+            area = parameters["n_simulate"] / sum(density)
             width = np.sqrt(area)
             height = np.sqrt(area)
             depth = None
@@ -2852,7 +2864,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 z_maxs = [int(locs["z"].max()) for locs in self.channel_locs]
                 z_mins = [int(locs["z"].min()) for locs in self.channel_locs]
                 z_range = max(z_maxs) - min(z_mins)
-            volume = parameters["n_simulate"] / sum(parameters["density"])
+            volume = parameters["n_simulate"] / sum(density)
             width = np.sqrt(volume / z_range)
             height = np.sqrt(volume / z_range)
             depth = z_range
