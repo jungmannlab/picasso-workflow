@@ -32,7 +32,37 @@ import string
 import copy
 
 from scipy.ndimage import label
-from scipy.stats import poisson, norm
+from scipy.stats import poisson, norm, kstest
+
+try:
+    from scipy.stats import wasserstein_distance
+except ImportError:
+    # Fallback implementation if scipy version issues
+    def wasserstein_distance(u_values, v_values):
+        """Manual implementation of 1D Wasserstein distance"""
+        u_sorted = np.sort(u_values)
+        v_sorted = np.sort(v_values)
+        n = len(u_sorted)
+        m = len(v_sorted)
+
+        # Create cumulative distributions (not used in this implementation)
+        # u_cdf = np.arange(1, n + 1) / n
+        # v_cdf = np.arange(1, m + 1) / m
+
+        # Merge and compute distance
+        all_values = np.concatenate([u_sorted, v_sorted])
+        all_values = np.sort(all_values)
+
+        distance = 0
+        for i in range(len(all_values) - 1):
+            u_cum = np.searchsorted(u_sorted, all_values[i], side="right") / n
+            v_cum = np.searchsorted(v_sorted, all_values[i], side="right") / m
+            distance += abs(u_cum - v_cum) * (
+                all_values[i + 1] - all_values[i]
+            )
+
+        return distance
+
 
 from picasso_workflow import util
 from picasso_workflow import process_brightfield
@@ -2167,7 +2197,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     @module_decorator
     def fit_csr(self, i, parameters, results):
         """Fit a Completely Spatially Random Distribution to
-        nearest neighbors
+        nearest neighbors and evaluate goodness-of-fit
         Args:
             i : int
                 the index of the module
@@ -2190,7 +2220,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                         the minimum-th NN to fit. default 1
             results : dict
                 the results this function generates. This is created
-                in the decorator wrapper
+                in the decorator wrapper. Includes goodness-of-fit metrics:
+                    wasserstein_distances_per_k : list of lists
+                        Wasserstein distances for each k-th NN order
+                    mean_wasserstein_distance : list of floats
+                        Mean Wasserstein distance across all k orders
+                    ks_pvalues_per_k : list of lists
+                        Kolmogorov-Smirnov p-values for each k-th NN order
         """
         if isinstance(parameters["nneighbors"], str):
             nneighbor_list = [np.loadtxt(parameters["nneighbors"])]
@@ -2236,6 +2272,9 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         densities = []
         bkgs = []
+        wasserstein_distances = []
+        mean_wasserstein_distances = []
+        ks_pvalues = []
         results["fp_fig"] = []
         for tag, nneighbors in zip(tags, nneighbor_list):
             kwargs["nn_dists"] = nneighbors.T[kmin - 1 :, :]
@@ -2249,6 +2288,97 @@ class AutoPicasso(util.AbstractModuleCollection):
                 bkgs.append(fitresult.x[1])
             else:
                 bkgs.append(parameters.get("bkg_fraction", 0))
+
+            # Calculate goodness-of-fit using Wasserstein distance and KS tests
+            k_wasserstein_distances = []
+            k_ks_pvalues = []
+            for k_idx in range(nneighbors.shape[1]):
+                k = k_idx + 1
+                if k >= kmin:  # Only calculate for fitted k values
+                    observed_distances = nneighbors[:, k_idx]
+                    # Filter distances within bounds
+                    observed_filtered = observed_distances[
+                        (observed_distances >= kwargs.get("min_dist", 0))
+                        & (
+                            observed_distances
+                            <= kwargs.get("max_dist", np.inf)
+                        )
+                    ]
+
+                    if len(observed_filtered) > 0:
+                        # Generate theoretical CSR samples with same size
+                        n_samples = len(observed_filtered)
+                        max_dist_theory = (
+                            np.max(observed_filtered) * 1.2
+                        )  # Extend range slightly
+                        r_theory = np.linspace(
+                            kwargs.get("min_dist", 0),
+                            max_dist_theory,
+                            n_samples,
+                        )
+
+                        # Get theoretical CSR probability distribution
+                        csr_pdf = picasso_outpost.nndistribution_from_csr(
+                            r_theory,
+                            k,
+                            rho_mle,
+                            d=parameters["dimensionality"],
+                            min_dist=kwargs.get("min_dist", 0),
+                            max_dist=kwargs.get("max_dist", np.inf),
+                            bkg_fraction=bkgs[-1],
+                            renormalize=True,
+                        )
+
+                        # Convert PDF to samples by inverse transform sampling
+                        # Set seed for reproducibility
+                        np.random.seed(42 + k)
+                        cdf = np.cumsum(csr_pdf)
+                        if cdf[-1] > 0:
+                            cdf = cdf / cdf[-1]  # Normalize to [0,1]
+                        else:
+                            # Handle edge case where all probabilities are zero
+                            cdf = np.linspace(0, 1, len(cdf))
+                        uniform_samples = np.random.uniform(0, 1, n_samples)
+                        theoretical_samples = np.interp(
+                            uniform_samples, cdf, r_theory
+                        )
+
+                        # Calculate Wasserstein distance
+                        w_dist = wasserstein_distance(
+                            observed_filtered, theoretical_samples
+                        )
+                        k_wasserstein_distances.append(w_dist)
+
+                        # Calculate Kolmogorov-Smirnov test
+                        # Use CDF function from picasso_outpost
+                        def csr_cdf(x):
+                            return picasso_outpost.csr_cdf_for_ks_test(
+                                x,
+                                k,
+                                rho_mle,
+                                d=parameters["dimensionality"],
+                                min_dist=kwargs.get("min_dist", 0),
+                                max_dist=kwargs.get("max_dist", np.inf),
+                                bkg_fraction=bkgs[-1],
+                            )
+
+                        # Perform KS test
+                        ks_stat, ks_pvalue = kstest(observed_filtered, csr_cdf)
+                        k_ks_pvalues.append(ks_pvalue)
+
+                        logger.debug(
+                            f"k={k}, Wasserstein distance: {w_dist:.3f}, "
+                            f"KS p-value: {ks_pvalue:.3f}"
+                        )
+
+            wasserstein_distances.append(k_wasserstein_distances)
+            ks_pvalues.append(k_ks_pvalues)
+            if k_wasserstein_distances:
+                mean_wasserstein_distances.append(
+                    np.mean(k_wasserstein_distances)
+                )
+            else:
+                mean_wasserstein_distances.append(np.nan)
 
             # plot results
             fig, ax = plt.subplots()
@@ -2310,10 +2440,20 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["fp_fig"].append(fp_fig)
         results["density"] = densities
         results["bkg_fraction"] = bkgs
+        results["wasserstein_distances_per_k"] = wasserstein_distances
+        results["mean_wasserstein_distance"] = mean_wasserstein_distances
+        results["ks_pvalues_per_k"] = ks_pvalues
 
         if sgl_stage:
             results["density"] = results["density"][0]
             results["fp_fig"] = results["fp_fig"][0]
+            results["wasserstein_distances_per_k"] = results[
+                "wasserstein_distances_per_k"
+            ][0]
+            results["mean_wasserstein_distance"] = results[
+                "mean_wasserstein_distance"
+            ][0]
+            results["ks_pvalues_per_k"] = results["ks_pvalues_per_k"][0]
 
         return parameters, results
 

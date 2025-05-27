@@ -820,7 +820,77 @@ class ConfluenceReporter(AbstractModuleCollection):
             text += f"""<li>Density fitted:
              {results['density'] * 1e6} µm^(-{d})</li>
             """
-        text += f"""</ul>
+
+        # Add goodness-of-fit documentation
+        text += """</ul>
+        <p><strong>Goodness-of-Fit Assessment</strong></p>
+        <p>The quality of the CSR model fit is evaluated using two complementary
+        approaches:</p>
+        <ul>
+        <li><strong>Wasserstein Distance:</strong> Measures the distributional
+        difference between observed and theoretical CSR nearest neighbor distances.
+        Lower values indicate better fit (typical range: 0.01-1.0 nm).</li>
+        <li><strong>Kolmogorov-Smirnov Tests:</strong> Statistical tests for each
+        k-th nearest neighbor order. Higher p-values (> 0.05) suggest good
+        agreement with CSR, while lower p-values (< 0.05) indicate significant
+        deviation from spatial randomness.</li>
+        </ul>
+        """
+
+        # Add Wasserstein distances
+        if mean_wasserstein_dist := results.get("mean_wasserstein_distance"):
+            if isinstance(mean_wasserstein_dist, list):
+                text += (
+                    "<p><strong>Mean Wasserstein Distances:</strong></p><ul>"
+                )
+                for i_tag, dist in enumerate(mean_wasserstein_dist):
+                    tag_name = (
+                        f"Dataset {i_tag+1}"
+                        if len(mean_wasserstein_dist) > 1
+                        else "Dataset"
+                    )
+                    text += f"<li>{tag_name}: {dist:.3f} nm</li>"
+                text += "</ul>"
+            else:
+                text += (
+                    f"<p><strong>Mean Wasserstein Distance:</strong> "
+                    f"{mean_wasserstein_dist:.3f} nm</p>"
+                )
+
+        # Add KS test p-values
+        if ks_pvalues := results.get("ks_pvalues_per_k"):
+            text += (
+                "<p><strong>Kolmogorov-Smirnov Test Results "
+                "(p-values):</strong></p>"
+            )
+            if isinstance(ks_pvalues[0], list) if ks_pvalues else False:
+                # Multiple datasets
+                for i_tag, pvalues_list in enumerate(ks_pvalues):
+                    tag_name = (
+                        f"Dataset {i_tag+1}"
+                        if len(ks_pvalues) > 1
+                        else "Dataset"
+                    )
+                    text += f"<p><em>{tag_name}:</em></p><ul>"
+                    for k_idx, pvalue in enumerate(pvalues_list):
+                        k = k_idx + parameters.get("kmin", 1)
+                        text += (
+                            f"<li style='margin-left: 20px;'>k={k}: "
+                            f"p = {pvalue:.3f}</li>"
+                        )
+                    text += "</ul>"
+            else:
+                # Single dataset
+                text += "<ul>"
+                for k_idx, pvalue in enumerate(ks_pvalues):
+                    k = k_idx + parameters.get("kmin", 1)
+                    text += (
+                        f"<li style='margin-left: 20px;'>k={k}: "
+                        f"p = {pvalue:.3f}</li>"
+                    )
+                text += "</ul>"
+
+        text += f"""
         {parameter_text}
         {result_text}
         """

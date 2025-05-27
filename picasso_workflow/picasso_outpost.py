@@ -812,6 +812,65 @@ def nndistribution_from_csr(
     return dist  # / np.sum(dist)
 
 
+def csr_cdf_for_ks_test(
+    x, k, rho, d=2, min_dist=0, max_dist=np.inf, bkg_fraction=0
+):
+    """CDF of the theoretical CSR distribution for k-th nearest neighbor.
+
+    Used for Kolmogorov-Smirnov goodness-of-fit testing.
+
+    Args:
+        x : float or array-like
+            Distance values to evaluate CDF at
+        k : int
+            k-th nearest neighbor order
+        rho : float
+            Density parameter from CSR fit
+        d : int, default 2
+            Dimensionality (2D or 3D)
+        min_dist : float, default 0
+            Minimum observable distance
+        max_dist : float, default np.inf
+            Maximum observable distance
+        bkg_fraction : float, default 0
+            Background fraction parameter
+
+    Returns:
+        float or array
+            CDF values at input distances
+    """
+    x = np.atleast_1d(x)
+    cdf_values = np.zeros_like(x, dtype=float)
+
+    for i, xi in enumerate(x):
+        if xi <= min_dist:
+            cdf_values[i] = 0.0
+        elif xi >= max_dist:
+            cdf_values[i] = 1.0
+        else:
+            # Calculate CDF by integrating PDF up to xi
+            r_integrate = np.linspace(
+                min_dist, xi, num=min(1000, int(xi * 10))
+            )
+            if len(r_integrate) > 1:
+                pdf_vals = nndistribution_from_csr(
+                    r_integrate,
+                    k,
+                    rho,
+                    d=d,
+                    min_dist=min_dist,
+                    max_dist=max_dist,
+                    bkg_fraction=bkg_fraction,
+                    renormalize=True,
+                )
+                # Numerical integration using trapezoidal rule
+                cdf_values[i] = np.trapz(pdf_vals, r_integrate)
+            else:
+                cdf_values[i] = 0.0
+
+    return cdf_values if len(cdf_values) > 1 else cdf_values[0]
+
+
 ########################################################################
 # End Log likelihood CSR estimation
 ########################################################################
