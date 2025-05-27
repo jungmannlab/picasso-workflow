@@ -232,7 +232,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <p><strong>Module {i:02d}: Load localizations</strong></p>
         <ul>
         <li>Picasso Version: {results['picasso version']}</li>
-        <li>Localications Location: {parameters['filename']}</li>
+        <li>Localizations Location: {parameters['filename']}</li>
         <li>Number of localizations: {results['nlocs']}</li>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min

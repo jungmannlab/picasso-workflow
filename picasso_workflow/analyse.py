@@ -435,7 +435,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         results["picasso version"] = picassoversion
         results["picasso-workflow version"] = "N/A"
-        results["Architecutre"] = platform.machine()
+        results["Architecture"] = platform.machine()
         results["OS"] = platform.system()
         results["host"] = platform.node()
         results["processor"] = platform.processor()
