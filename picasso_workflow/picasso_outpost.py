@@ -799,7 +799,7 @@ def nndistribution_from_csr(
         renorm_fact = np.sum(
             prob[(r_temp >= min_dist) & (r_temp <= max_dist)]
         ) / np.sum(prob)
-        print(renorm_fact)
+        # print(renorm_fact)
         dist[(r < min_dist) | (r > max_dist)] = 0
         if renormalize:
             dist = dist / renorm_fact
