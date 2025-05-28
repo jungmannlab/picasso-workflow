@@ -2016,17 +2016,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                 alldist = distance.cdist(points, points)
                 logger.debug("found all distances")
                 if parameters.get("add_column", False):
-                    print(alldist.shape)
+                    # print(alldist.shape)
                     if sgl_stage:
                         self.locs = lib.append_to_rec(
                             locs, alldist[:, 1], "NNdist"
                         )
-                        print(locs.dtype)
+                        # print(locs.dtype)
                     else:
                         self.channel_locs[i] = lib.append_to_rec(
                             locs, alldist[:, 1], "NNdist"
                         )
-                        print(locs.dtype)
+                        # print(locs.dtype)
                 alldist = np.sort(alldist, axis=1)
                 logger.debug("sorted all distances")
             else:
@@ -2424,6 +2424,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 else:
                     linestyle = "--"
                     lblf = f"fit k={k}"
+                # do not plot the model cutoff
+                if kwargs.get("min_dist", 0) > 0:
+                    nnhist_an[rvals <= kwargs["min_dist"]] = np.nan
                 ax.plot(
                     rvals,  # + (bins[1] - bins[0]) / 2,
                     nnhist_an,
@@ -2431,7 +2434,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                     linestyle=linestyle,
                     label=lblf,
                 )
-            ax.legend()
+                # now, plot the histogram below cutoff in white for shading
+                if kwargs.get("min_dist", 0) > 0:
+                    x_fill = [0, kwargs["min_dist"]]
+                    y_fill = list(ax.get_ylim()) * 2
+                    ax.fill_between(
+                        y_fill, x_fill, x_fill, color="grey", alpha=0.2
+                    )
+            ax.legend(log="upper right")
             ax.set_xlabel("Distance [nm]")
             ax.set_ylabel("probability density")
             ax.set_title(f"Nearest Neighbor Distribution {tag}")

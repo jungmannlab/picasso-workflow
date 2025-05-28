@@ -379,9 +379,9 @@ def spinna_batch(parameters_filename):
             filepaths of the NND figures
     """
     result_dir, fp_summary, fp_fig = spinna_batch_analysis(parameters_filename)
-    print("result_dir", result_dir)
-    print("fp_summary", fp_summary)
-    print("fp_fig", fp_fig)
+    # print("result_dir", result_dir)
+    # print("fp_summary", fp_summary)
+    # print("fp_fig", fp_fig)
     return result_dir, fp_summary, fp_fig
 
 
@@ -998,7 +998,7 @@ def DBSCAN_analysis_pd(clusters_csv, channel_tags):
         barcode_df.loc[:, col] = clusters[col]
 
     barcodes_agg = barcode_df.groupby("barcode").describe()
-    print(barcodes_agg.columns)
+    # print(barcodes_agg.columns)
 
     barcode_map = pd.DataFrame(
         index=np.arange(2 ** len(targets)),

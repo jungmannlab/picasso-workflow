@@ -876,7 +876,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                         k = k_idx + parameters.get("kmin", 1)
                         text += (
                             f"<li style='margin-left: 20px;'>k={k}: "
-                            f"p = {pvalue:.3f}</li>"
+                            f"p = {pvalue:.2e}</li>"
                         )
                     text += "</ul>"
             else:
