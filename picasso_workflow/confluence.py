@@ -831,9 +831,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         difference between observed and theoretical CSR nearest neighbor distances.
         Lower values indicate better fit (typical range: 0.01-1.0 nm).</li>
         <li><strong>Kolmogorov-Smirnov Tests:</strong> Statistical tests for each
-        k-th nearest neighbor order. Higher p-values (> 0.05) suggest good
-        agreement with CSR, while lower p-values (< 0.05) indicate significant
-        deviation from spatial randomness.</li>
+        k-th nearest neighbor order. Higher p-values (greater 0.05) suggest good
+        agreement with CSR, while lower p-values (smaller than 0.05) indicate
+        significant deviation from spatial randomness.</li>
         </ul>
         """
 
