@@ -215,10 +215,10 @@ class PathParser:
 
             if isinstance(receptors, list):
                 rcp_idx = receptors.index(k_lvls[-1])
-                dict_query2[rcp_idx] = receptors[rcp_idx]
+                # dict_query2[rcp_idx] = receptors[rcp_idx]
             else:
                 rcp_idx = sum([v is not None for v in dict_query2])
-                dict_query2[rcp_idx] = k_lvls[-1]
+                # dict_query2[rcp_idx] = k_lvls[-1]
             logger.debug(f"created tags {targets}")
             # check whether input path is windows or posix style
             is_posix = self.check_path_style(v)
