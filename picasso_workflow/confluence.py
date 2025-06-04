@@ -101,7 +101,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <p><strong>ERROR OCCURRED</strong></p>
         During analysis of {module}, an error occurred.
         """
-        text += html.excape(str(e))
+        text += html.escape(str(e))
         text += html.escape(traceback.format_exc())
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
