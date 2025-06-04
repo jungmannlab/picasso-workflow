@@ -11,6 +11,7 @@ import os
 import pandas as pd
 from atlassian import Confluence as con
 from requests.exceptions import ConnectionError, HTTPError
+import html
 
 from picasso_workflow.util import AbstractModuleCollection
 
@@ -100,8 +101,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <p><strong>ERROR OCCURRED</strong></p>
         During analysis of {module}, an error occurred.
         """
-        text += str(e)
-        text += traceback.format_exc()
+        text += html.excape(str(e))
+        text += html.escape(traceback.format_exc())
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
