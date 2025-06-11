@@ -123,6 +123,11 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def binding_event_analysis(self):
+        """Perform clustering using the smlm clusterer"""
+        pass
+
+    @abc.abstractmethod
     def smlm_clusterer(self):
         """Perform clustering using the smlm clusterer"""
         pass

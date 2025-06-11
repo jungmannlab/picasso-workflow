@@ -640,10 +640,32 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     @module_decorator
+    def binding_event_analysis(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: binding_event_analysis</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        text += """
+        <b>TODO: show plots for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    @module_decorator
     def smlm_clusterer(
         self, i, parameters, results, parameter_text, result_text
     ):
-        logger.debug("Reporting smlm_clusterer.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: smlm_clusterer clustering</strong></p>
@@ -2636,7 +2658,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         {parameter_text}
         {result_text}
         """
-        fig_fps = results.get("fp_fig")
+        fig_fps = results.get("fp_fig", [])
         titles = ["" for i in range(len(fig_fps))]
 
         if len(fig_fps) > 1:

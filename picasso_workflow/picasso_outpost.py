@@ -736,6 +736,7 @@ def nndist_loglikelihood_csr(
             min_dist=min_dist,
             max_dist=max_dist,
         )
+        print(i, dist, prob, np.log(prob))
         log_like += np.sum(np.log(prob))
     return log_like
 
@@ -782,7 +783,8 @@ def nndistribution_from_csr(
     factor = d / _factorial(k - 1) * lam**k * r ** (d * k - 1)
     dist = factor * np.exp(-lam * r**d)
     # add am even background of observed nn distances, at all distances
-    dist += (bkg_fraction / (np.max(r) - np.min(r))) / (1 + bkg_fraction)
+    if len(r) > 1:
+        dist += (bkg_fraction / (np.max(r) - np.min(r))) / (1 + bkg_fraction)
     dist[dist <= 0] = 1e-200  # np.finfo().eps
     # re-normalize
     if min_dist > 0 or max_dist < np.inf:

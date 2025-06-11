@@ -313,7 +313,9 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
     # @unittest.skip("")
     def summarize_dataset(self):
         parameters = {"methods": {"nena": {"inputpar": "a"}}}
-        results = {"nena": {"best_vals": (3, 5, 7), "res": 1.23}}
+        results = {
+            "nena": {"best_vals": (3, 5, 7), "res": 1.23, "chisqr": 3.2}
+        }
         self.cr.summarize_dataset(0, parameters, results)
 
         # clean up
@@ -515,12 +517,28 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
-    def smlm_clusterer(self):
-        parameters = {"filepath": "myfile.czi"}
+    def binding_event_analysis(self):
+        parameters = {}
         results = {
             "start time": "now",
             "duration": 4.12,
+        }
+        self.cr.binding_event_analysis(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def smlm_clusterer(self):
+        parameters = {
+            "filepath": "myfile.czi",
             "radius": 8,
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
             "min_locs": 3,
             "basic_fa": False,
             "radius_z": 2,
@@ -807,6 +825,24 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
+    def refine_mask_by_density(self):
+        """Create a density mask"""
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "area_um^2": 421,
+        }
+        self.cr.create_mask(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
     def dbscan_molint(self):
         """TO BE CLEANED UP
         dbscan implementation for molecular interactions workflow
@@ -1011,6 +1047,26 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "fp_locs": "path/to/locs",
             "nlocs_before": 2000,
             "nlocs_after": 1700,
+        }
+        self.cr.filter_locs(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def filter_transient_binding(self):
+        parameters = {"field": "photons", "minval": 800, "maxval": 1200}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "fields_filtered": ["frame", "std_frame"],
+            "nlocs_before": 4000,
+            "nlocs_after": 3000,
+            "fp_locs": "path/to/locs",
         }
         self.cr.filter_locs(0, parameters, results)
 

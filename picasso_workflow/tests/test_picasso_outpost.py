@@ -90,6 +90,7 @@ class TestPicassoOutpost(unittest.TestCase):
         ]
         # test for one spot
         nnobs = np.array([max(pd) for pd in pdists])
+        print(nnobs, rho)
         loglike = picasso_outpost.nndist_loglikelihood_csr(nnobs, rho)
         assert loglike <= 0
 
