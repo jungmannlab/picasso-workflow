@@ -562,6 +562,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                     f"Cannot load camera {cam_name} from picasso CONFIG."
                 )
 
+        # check this is actually a DNA-PAINT analysable movie
+        if results["movie.shape"][0] < 10:
+            results["sample_movie"] = self.movie
+            raise AutoPicassoError(
+                "Movie loaded has less than 10 frames."
+                + " Unsuitable for DNA-PAINT."
+            )
+            # results["success"] = False
+
         # create sample movie
         if (samplemov_pars := parameters.get("sample_movie")) is not None:
             samplemov_pars["filename"] = os.path.join(
