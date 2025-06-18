@@ -13,6 +13,7 @@ import inspect
 import yaml
 import copy
 from concurrent.futures import ProcessPoolExecutor
+import traceback
 
 from picasso_workflow.analyse import AutoPicasso, AutoPicassoError
 from picasso_workflow.confluence import (
@@ -604,7 +605,11 @@ class WorkflowRunner:
             module_parameters = self.parameter_command_executor.run(
                 module_parameters, curr_rootidx=i
             )
-            success = self.call_module(module_name, i, module_parameters)
+            try:
+                success = self.call_module(module_name, i, module_parameters)
+            except AutoPicassoError:
+                pass
+
             self.save(self.result_folder)
             if not success:
                 break
@@ -725,20 +730,30 @@ class WorkflowRunner:
         key = f"{i:02d}_{fun_name}"
         logger.debug(f"Working on {key}")
         fun_ap = getattr(self.autopicasso, fun_name)
+        analyse_error = None
         try:
             parameters, self.results[key] = fun_ap(i, parameters)
         except AutoPicassoError as e:
             logger.error(e)
+            logger.error(traceback.format_exc())
+            analyse_error = copy.copy(e)
             self.confluencereporter.report_error(e, fun_name)
-            raise e
+            # raise e
         except Exception as e:
             logger.error(e)
+            logger.error(traceback.format_exc())
+            analyse_error = copy.copy(e)
             self.confluencereporter.report_error(e, fun_name)
-            raise e
+            # raise e
         # logger.debug(f"RESULTS: {self.results[key]}")
         fun_cr = getattr(self.confluencereporter, fun_name)
         try:
             fun_cr(i, parameters, self.results[key])
         except ConfluenceInterfaceError as e:
             logger.error(e)
+            logger.error(traceback.format_exc())
+
+        if analyse_error is not None:
+            raise analyse_error
+
         return self.results[key]["success"]
