@@ -315,20 +315,21 @@ class AutoPicasso(util.AbstractModuleCollection):
 
                 # find camera sensitivity
                 sensitivity = cam_config.get("Sensitivity")
-                # sensitivity starts being a dict, and ends as a value
-                cat_vals = ""
-                for category in cam_config.get("Sensitivity Categories"):
-                    category_value = infofirst["Micro-Manager Metadata"].get(
-                        f"{cam_name}-{category}"
-                    )
-                    cat_vals += f"{category}: {category_value}; "
-                    sensitivity = sensitivity.get(category_value, {})
                 if isinstance(sensitivity, dict):
-                    raise PicassoConfigError(
-                        f"""Could not find sensitivity value for camera
-                        {cam_name} with category values {cat_vals} in picasso
-                        CONFIG."""
-                    )
+                    # sensitivity starts being a dict, and ends as a value
+                    cat_vals = ""
+                    for category in cam_config.get("Sensitivity Categories"):
+                        category_value = infofirst[
+                            "Micro-Manager Metadata"
+                        ].get(f"{cam_name}-{category}")
+                        cat_vals += f"{category}: {category_value}; "
+                        sensitivity = sensitivity.get(category_value, {})
+                    if isinstance(sensitivity, dict):
+                        raise PicassoConfigError(
+                            f"""Could not find sensitivity value for camera
+                            {cam_name} with category values {cat_vals} in
+                            picasso CONFIG."""
+                        )
 
                 camera_info = {
                     "Baseline": cam_config["Baseline"],
