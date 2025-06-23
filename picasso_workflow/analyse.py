@@ -6121,7 +6121,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 self.locs,
                 self.info,
                 gold_picks,
-                pick_diameter=2.5,
+                pick_diameter=parameters.get("diameter", 2.5),
                 return_nonpicked=True,
             )
 
@@ -6251,7 +6251,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 """
                 Not many picks found in specified phase space."""
             )
-            dtypes = self.locs.dtype
+            dtypes = self.locs.dtype + [("group", "<i4")]
             picked_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
 
         # save gold locs
