@@ -6211,19 +6211,21 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # show clustering results
         fig, ax = plt.subplots()
-        colors = ["k", "g"]  # , "r", "b", "y", "c"]
-        for lbl, color in zip(range(-1, 1 + np.max(labels)), colors):
-            if lbl < 0:
-                alpha = 0.1
-            else:
-                alpha = 0.3
-            ax.scatter(
-                nlocs[labels == lbl],
-                rmsds[labels == lbl],
-                color=color,
-                alpha=alpha,
-                label=f"cluster {lbl:02d}",
-            )
+        # plot non-selected picks
+        ax.scatter(
+            nlocs[labels == -1],
+            rmsds[labels == -1],
+            color="k",
+            alpha=0.1,
+            label="non-selected",
+        )
+        ax.scatter(
+            nlocs[labels == 0],
+            rmsds[labels == 0],
+            color="r",
+            alpha=0.3,
+            label="selected",
+        )
         ax.set_xlabel("# localizations in pick")
         ax.set_ylabel("root mean square distance in pick")
         ax.set_title("Selection of picks")
