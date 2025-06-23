@@ -2226,6 +2226,110 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     @module_decorator
+    def find_similar(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        """pick similar on clusters in nlocs/rmsd space
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        logger.debug("Reporting find_structures.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Find Similar</strong></p>
+        Summary:
+        <ul>
+        <li># Picks found for types: {results["n_picks"]}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        fig_fps = []
+        titles = []
+        if fp_fig := results.get("fp_phasespace"):
+            fig_fps.append(fp_fig)
+            titles.append("Phase Space Selection")
+
+        if len(fig_fps) > 0:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+
+        # 2D table
+        nrows = parameters.get("n_plot_structures")
+        if nrows is not None:
+            fig_fps = results.get("fp_renderings")  # list (col) of list of fps
+            col_titles = [f"Example {i + 1}" for i in range(nrows)]
+            row_titles = [
+                f"Structure Cluster {i}" for i in range(len(fig_fps))
+            ]
+
+            if len(fig_fps) > 0:
+                fn_figs = []
+                for row_fps in fig_fps:
+                    row_fns = []
+                    for fp in row_fps:
+                        try:
+                            self.ci.upload_attachment(self.report_page_id, fp)
+                        except ConfluenceInterfaceError:
+                            pass
+                        row_fns.append(os.path.split(fp)[1])
+                    fn_figs.append(row_fns)
+
+                text += "<table><tr><td></td>"
+                for tit in col_titles:
+                    text += f"<td><b>{tit}</b></td>"
+                text += "</tr>"
+                for row_tit, row_fns in zip(row_titles, fn_figs):
+                    text += "<tr>"
+                    text += f"<td><b>{row_tit}</b></td>"
+                    for fn in row_fns:
+                        text += f"""
+                            <td>
+                                  <ac:image ac:height="350">
+                                  <ri:attachment ri:filename="{fn}" />
+                                  </ac:image>
+                            </td>"""
+                    text += "</tr>"
+                text += "</table>"
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    @module_decorator
     def find_structures(
         self, i, parameters, results, parameter_text, result_text
     ):

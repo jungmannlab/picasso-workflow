@@ -287,6 +287,11 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def find_similar(self):
+        """pick similar in nlocs/rmsd space"""
+        pass
+
+    @abc.abstractmethod
     def find_structures(self):
         """pick similar on clusters in nlocs/rmsd space"""
         pass

@@ -2350,6 +2350,61 @@ def shifts_from_picked_coordinate(locs, coordinate):
 # End Labeling Efficiency Workflow Modules
 ########################################################################
 
+
+def pick_similar(
+    locs,
+    info,
+    diameter=2,
+    min_n_locs_per_frame=0.01,
+    max_n_locs_per_frame=0.1,
+    min_rmsd=0.1,
+    max_rmsd=0.3,
+):
+    """
+    Searches picks similar to given nlocs/rmsd parameters.
+
+    Focuses on the number of locs and their root mean square
+    displacement from center of mass.
+    Instead of picking "similar" to a few manual picks, the rectangle
+    in nlocs/rmsd space is given directly here
+
+    Args:
+        diameter : float
+            the pick similar diameter
+        min_n_locs_per_frame, max_n_locs_per_frame : float
+            the boundaries for min/max nlocs per frame per pick
+        min_rmsd, max_rmsd : float
+            the boundaries for min/max rmsd per pick
+    Returns:
+        similar : list of [x, y] position pairs
+            the positions (picks) of gold beads
+
+    Raises
+    ------
+    NotImplementedError
+        If pick shape is rectangle
+    """
+    maxframe = info[0]["Frames"]
+    # min_n_locs = int(maxframe * min_n_locs_per_frame)
+    # get rmsd and nlocs
+    x_similar, y_similar, rmsds, nlocs = get_pick_similar_vals(
+        locs, info, diameter
+    )
+
+    labels = -1 * np.ones_like(x_similar)
+    pick_idcs = (
+        (nlocs >= maxframe * min_n_locs_per_frame)
+        & (nlocs < maxframe * max_n_locs_per_frame)
+        & (rmsds >= min_rmsd)
+        & (rmsds < max_rmsd)
+    )
+    labels[pick_idcs] = 0
+    x_picked = x_similar[pick_idcs]
+    y_picked = y_similar[pick_idcs]
+    picks = list(zip(x_picked, y_picked))
+    return picks, nlocs, rmsds, labels
+
+
 ########################################################################
 # Start pick similar analysis
 # this is basically picasso.postprocess.pick_similar, but instead
@@ -2402,6 +2457,7 @@ def find_structures(
     xi=0.05,
     min_cluster_size=0.05,
 ):
+    """ """
     nframes = info[0]["Frames"]
     min_n_locs = int(nframes * min_n_locs_per_frame)
     # get rmsd and nlocs
