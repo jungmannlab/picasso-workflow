@@ -2494,9 +2494,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # now, plot the histogram below cutoff in white for shading
                 if kwargs.get("min_dist", 0) > 0:
                     x_fill = [0, kwargs["min_dist"]]
-                    y_fill = list(ax.get_ylim()) * 2
+                    y_fill1 = [ax.get_ylim()[0]] * 2
+                    y_fill2 = [ax.get_ylim()[1]] * 2
                     ax.fill_between(
-                        y_fill, x_fill, x_fill, color="grey", alpha=0.2
+                        x_fill, y_fill1, y_fill2, color="grey", alpha=0.2
                     )
             ax.legend(loc="upper right")
             ax.set_xlabel("Distance [nm]")
@@ -6236,6 +6237,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         fig.set_size_inches((9, 9))
         fig.savefig(results["fp_phasespace"])
+
+        fig, ax = plt.subplots()
+        ax.hexbin(nlocs, rmsds)
+        ax.set_xlabel("# localizations in pick")
+        ax.set_ylabel("root mean square distance in pick")
+        ax.set_title("Phase Space")
+        results["fp_phasespace_hexbin"] = os.path.join(
+            results["folder"], f"phsp-hexbin-{rcode}.png"
+        )
 
         # all xy coords found for the picks
         if len(picks) > 2:

@@ -2256,6 +2256,9 @@ class ConfluenceReporter(AbstractModuleCollection):
 
         fig_fps = []
         titles = []
+        if fp_fig := results.get("fp_phasespace_hexbin"):
+            fig_fps.append(fp_fig)
+            titles.append("Phase Space")
         if fp_fig := results.get("fp_phasespace"):
             fig_fps.append(fp_fig)
             titles.append("Phase Space Selection")
