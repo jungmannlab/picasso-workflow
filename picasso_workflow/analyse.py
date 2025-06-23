@@ -6231,7 +6231,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         ax.set_title("Selection of picks")
         ax.legend()
         rcode = generate_random_code(6)
-        results["fp_rawcluster"] = os.path.join(
+        results["fp_phasespace"] = os.path.join(
             results["folder"], f"rawcluster-{rcode}.png"
         )
         fig.set_size_inches((9, 9))
