@@ -6246,6 +6246,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_phasespace_hexbin"] = os.path.join(
             results["folder"], f"phsp-hexbin-{rcode}.png"
         )
+        fig.set_size_inches((9, 9))
+        fig.savefig(results["fp_phasespace_hexbin"])
 
         # all xy coords found for the picks
         if len(picks) > 2:
