@@ -2492,7 +2492,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     label=lblf,
                 )
                 # now, plot the histogram below cutoff in white for shading
-                if kwargs.get("min_dist", 0) > 0:
+                if (kwargs.get("min_dist", 0) > 0) and (i == 0):
                     x_fill = [0, kwargs["min_dist"]]
                     y_fill1 = [ax.get_ylim()[0]] * 2
                     y_fill2 = [ax.get_ylim()[1]] * 2
@@ -6239,7 +6239,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig.savefig(results["fp_phasespace"])
 
         fig, ax = plt.subplots()
-        ax.hexbin(nlocs, rmsds)
+        extent = [
+            np.quantile(nlocs, 0.02),
+            np.quantile(nlocs, 0.98),
+            np.quantile(rmsds, 0.02),
+            np.quantile(rmsds, 0.98),
+        ]
+        ax.hexbin(nlocs, rmsds, extent=extent)
         ax.set_xlabel("# localizations in pick")
         ax.set_ylabel("root mean square distance in pick")
         ax.set_title("Phase Space")
@@ -6266,7 +6272,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             dtypes = self.locs.dtype + [("group", "<i4")]
             picked_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
 
-        # save gold locs
+        # save picked locs
         fp_locs = os.path.join(results["folder"], "picked_locs.hdf5")
         cluster_info = self.info
         cluster_info.append(
@@ -6276,6 +6282,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             }
         )
         io.save_locs(fp_locs, picked_locs, cluster_info)
+        results["fp_picked_locs"] = fp_locs
 
         # plot representative structures
         n_plot = parameters.get("n_plot_structures")
