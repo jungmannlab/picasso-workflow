@@ -6245,7 +6245,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             np.quantile(rmsds, 0.02),
             np.quantile(rmsds, 0.98),
         ]
-        ax.hexbin(nlocs, rmsds, extent=extent)
+        gridsize = extent[1] - extent[0]
+        if gridsize > 100:
+            gridsize = 50
+        ax.hexbin(nlocs, rmsds, extent=extent, gridsize=gridsize)
         ax.set_xlabel("# localizations in pick")
         ax.set_ylabel("root mean square distance in pick")
         ax.set_title("Phase Space")
@@ -6269,7 +6272,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 """
                 Not many picks found in specified phase space."""
             )
-            dtypes = self.locs.dtype + [("group", "<i4")]
+            try:
+                dtypes = self.locs.dtype + [("group", "<i4")]
+            except Exception as e:
+                print(self.locs)
+                print(self.locs.dtype)
+                raise e
             picked_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
 
         # save picked locs
