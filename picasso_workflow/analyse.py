@@ -6273,6 +6273,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Not many picks found in specified phase space."""
             )
             try:
+                dt_orig = self.locs.dtype
+                if not isinstance(dt_orig, list) and len(dt_orig) == 2:
+                    dt_orig = dt_orig[1]
                 dtypes = self.locs.dtype + [("group", "<i4")]
             except Exception as e:
                 print(self.locs)
