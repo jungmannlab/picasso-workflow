@@ -6285,6 +6285,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 print(len(self.locs.dtype))
                 print(self.locs.dtype[0])
                 print(self.locs.dtype[1])
+                print(list(self.locs.dtype))
+                print(list(self.locs.dtype) + [("group", "<i4")])
                 print(dt_orig)
                 raise e
             picked_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
