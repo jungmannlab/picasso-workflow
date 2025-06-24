@@ -6280,6 +6280,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             except Exception as e:
                 print(self.locs)
                 print(self.locs.dtype)
+                print(isinstance(self.locs.dtype, list))
+                print(len(self.locs.dtype))
+                print(dt_orig)
                 raise e
             picked_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
 
