@@ -1349,6 +1349,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the analysis results
         """
         pixelsize = self.pixelsize
+        print("undrift rcc in")
+        print(self.locs.dtype)
 
         seg_init = parameters["segmentation"]
         for i in range(parameters.get("max_iter_segmentations", 3)):
@@ -1427,6 +1429,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         #             results["folder"], pars["filename"]
         #         )
         #     self._save_locs(pars["filename"])
+
+        print("undrift rcc out")
+        print(self.locs.dtype)
 
         return parameters, results
 
@@ -6204,9 +6209,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             "min_rmsd": parameters["min_rmsd"],
             "max_rmsd": parameters["max_rmsd"],
         }
+        print(self.locs.dtype)
         (picks, nlocs, rmsds, labels) = picasso_outpost.pick_similar(
             self.locs, self.info, **kwargs
         )
+        print(self.locs.dtype)
 
         results["n_picks"] = len(picks)
 
