@@ -6275,21 +6275,35 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Not many picks found in specified phase space."""
             )
             try:
-                dt_orig = self.locs.dtype
-                if not isinstance(dt_orig, list) and len(dt_orig) == 2:
-                    dt_orig = dt_orig[1]
-                dtypes = self.locs.dtype + [("group", "<i4")]
+                # dt_orig = self.locs.dtype
+                # if not isinstance(dt_orig, list) and len(dt_orig) == 2:
+                #     dt_orig = dt_orig[1]
+                # dtypes = self.locs.dtype + [("group", "<i4")]
+                dtypes = [
+                    ("frame", "<u4"),
+                    ("x", "<f4"),
+                    ("y", "<f4"),
+                    ("photons", "<f4"),
+                    ("sx", "<f4"),
+                    ("sy", "<f4"),
+                    ("bg", "<f4"),
+                    ("lpx", "<f4"),
+                    ("lpy", "<f4"),
+                    ("ellipticity", "<f4"),
+                    ("net_gradient", "<f4"),
+                    ("group", "<i4"),
+                ]
             except Exception as e:
-                print(self.locs)
-                print(self.locs.dtype)
-                print(isinstance(self.locs.dtype, list))
-                print(isinstance(self.locs.dtype, tuple))
-                print(len(self.locs.dtype))
-                print(self.locs.dtype[0])
-                print(self.locs.dtype[1])
-                print(list(self.locs.dtype))
-                print(list(self.locs.dtype) + [("group", "<i4")])
-                print(dt_orig)
+                # print(self.locs)
+                # print(self.locs.dtype)
+                # print(isinstance(self.locs.dtype, list))
+                # print(isinstance(self.locs.dtype, tuple))
+                # print(len(self.locs.dtype))
+                # print(self.locs.dtype[0])
+                # print(self.locs.dtype[1])
+                # print(list(self.locs.dtype))
+                # print(list(self.locs.dtype) + [("group", "<i4")])
+                # print(dt_orig)
                 raise e
             picked_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
 
