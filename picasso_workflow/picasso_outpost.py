@@ -2393,7 +2393,7 @@ def pick_similar(
     )
 
     if isinstance(min_n_locs_per_frame, str):
-        if min_n_locs_per_frame == "q":
+        if min_n_locs_per_frame[0] == "q":
             min_n_locs = np.quantile(nlocs, float(min_n_locs_per_frame[1:]))
         else:
             raise AttributeError(
@@ -2402,7 +2402,7 @@ def pick_similar(
     else:
         min_n_locs = maxframe * min_n_locs_per_frame
     if isinstance(max_n_locs_per_frame, str):
-        if max_n_locs_per_frame == "q":
+        if max_n_locs_per_frame[0] == "q":
             max_n_locs = np.quantile(nlocs, float(max_n_locs_per_frame[1:]))
         else:
             raise AttributeError(
