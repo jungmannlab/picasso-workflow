@@ -1219,32 +1219,33 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         # render zoom into the center of mass
-        ctrmass_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
-        fov_half = parameters.get("ctrmass_fov_nm") / 2
-        x_min = x_mean - fov_half / pixelsize
-        x_max = x_mean + fov_half / pixelsize
-        y_min = y_mean - fov_half / pixelsize
-        y_max = y_mean + fov_half / pixelsize
+        if parameters.get("ctrmass_fov_nm"):
+            ctrmass_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
+            fov_half = parameters.get("ctrmass_fov_nm") / 2
+            x_min = x_mean - fov_half / pixelsize
+            x_max = x_mean + fov_half / pixelsize
+            y_min = y_mean - fov_half / pixelsize
+            y_max = y_mean + fov_half / pixelsize
 
-        render_kwargs = {
-            "oversampling": pixelsize / ctrmass_pixelsize,
-            "viewport": [(y_min, x_min), (y_max, x_max)],
-            "blur_method": parameters.get("ctrmass_blur_method"),
-            "min_blur_width": parameters.get("ctrmass_min_blur_width", 0),
-            "ang": parameters.get("ctrmass_ang"),
-        }
-        results["fp_scene_ctrmass"] = os.path.join(
-            results["folder"], f"locs_ctrmass_{rcode}.png"
-        )
-        render.plot_scene(
-            render_locs,
-            ctrmass_pixelsize,
-            pixelsize,
-            fp=results["fp_scene_ctrmass"],
-            render_kwargs=render_kwargs,
-            # x_offset=x_min * pixelsize,
-            # y_offset=y_min * pixelsize,
-        )
+            render_kwargs = {
+                "oversampling": pixelsize / ctrmass_pixelsize,
+                "viewport": [(y_min, x_min), (y_max, x_max)],
+                "blur_method": parameters.get("ctrmass_blur_method"),
+                "min_blur_width": parameters.get("ctrmass_min_blur_width", 0),
+                "ang": parameters.get("ctrmass_ang"),
+            }
+            results["fp_scene_ctrmass"] = os.path.join(
+                results["folder"], f"locs_ctrmass_{rcode}.png"
+            )
+            render.plot_scene(
+                render_locs,
+                ctrmass_pixelsize,
+                pixelsize,
+                fp=results["fp_scene_ctrmass"],
+                render_kwargs=render_kwargs,
+                # x_offset=x_min * pixelsize,
+                # y_offset=y_min * pixelsize,
+            )
         return parameters, results
 
     @profile_resource_usage
@@ -6204,11 +6205,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             "min_rmsd": parameters["min_rmsd"],
             "max_rmsd": parameters["max_rmsd"],
         }
-        print(self.locs.dtype)
+        # print(self.locs.dtype)
         (picks, nlocs, rmsds, labels) = picasso_outpost.pick_similar(
             self.locs, self.info, **kwargs
         )
-        print(self.locs.dtype)
+        # print(self.locs.dtype)
 
         results["n_picks"] = len(picks)
 
@@ -6247,7 +6248,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             np.quantile(rmsds, 0.02),
             np.quantile(rmsds, 0.98),
         ]
-        gridsize = extent[1] - extent[0]
+        gridsize = int(extent[1] - extent[0]) + 1
         if gridsize > 100:
             gridsize = 50
         ax.hexbin(nlocs, rmsds, extent=extent, gridsize=gridsize)
@@ -6268,6 +6269,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 picks,
                 pick_diameter=diameter,
                 return_nonpicked=False,
+            )
+            fullfov_pixelsize = 1000
+            results["fp_picked_fullfov"] = os.path.join(
+                results["folder"], f"picked_locs_fullfov_{rcode}.png"
+            )
+            render.plot_scene(
+                picked_locs,
+                fullfov_pixelsize,
+                self.pixelsize,
+                fp=results["fp_picked_fullfov"],
             )
         else:
             logger.debug(
@@ -6294,16 +6305,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                     ("group", "<i4"),
                 ]
             except Exception as e:
-                # print(self.locs)
-                # print(self.locs.dtype)
-                # print(isinstance(self.locs.dtype, list))
-                # print(isinstance(self.locs.dtype, tuple))
-                # print(len(self.locs.dtype))
-                # print(self.locs.dtype[0])
-                # print(self.locs.dtype[1])
-                # print(list(self.locs.dtype))
-                # print(list(self.locs.dtype) + [("group", "<i4")])
-                # print(dt_orig)
                 raise e
             picked_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
 

@@ -2262,6 +2262,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         if fp_fig := results.get("fp_phasespace"):
             fig_fps.append(fp_fig)
             titles.append("Phase Space Selection")
+        if fp_fig := results.get("fp_picked_fullfov"):
+            fig_fps.append(fp_fig)
+            titles.append("Picked Locs")
 
         if len(fig_fps) > 0:
             fn_figs = []

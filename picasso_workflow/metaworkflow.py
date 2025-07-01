@@ -934,9 +934,10 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         try:
             ci.create_page(summary_page_title, text)
         except confluence.ConfluenceInterfaceError:
-            pagid, pagtit = ci.get_page_properties(summary_page_title)
-            ci.delete_page(pagid)
-            ci.create_page(summary_page_title, text)
+            # pagid, pagtit = ci.get_page_properties(summary_page_title)
+            # ci.delete_page(pagid)
+            # ci.create_page(summary_page_title, text)
+            logger.debug("Could not create summary page. Probably exists")
         return summary_page_title
 
     def extract_fpfig_from_results(self, awr, figloc):
