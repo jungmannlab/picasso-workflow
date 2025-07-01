@@ -2371,8 +2371,9 @@ def pick_similar(
     Args:
         diameter : float
             the pick similar diameter
-        min_n_locs_per_frame, max_n_locs_per_frame : float
+        min_n_locs_per_frame, max_n_locs_per_frame : float or str
             the boundaries for min/max nlocs per frame per pick
+            if str: "q0.25" - 0.25-quantile
         min_rmsd, max_rmsd : float
             the boundaries for min/max rmsd per pick
     Returns:
@@ -2391,10 +2392,29 @@ def pick_similar(
         locs, info, diameter
     )
 
+    if isinstance(min_n_locs_per_frame, str):
+        if min_n_locs_per_frame == "q":
+            min_n_locs = np.quantile(nlocs, float(min_n_locs_per_frame[1:]))
+        else:
+            raise AttributeError(
+                "min_n_locs_per_frame must start with q if string"
+            )
+    else:
+        min_n_locs = maxframe * min_n_locs_per_frame
+    if isinstance(max_n_locs_per_frame, str):
+        if max_n_locs_per_frame == "q":
+            max_n_locs = np.quantile(nlocs, float(max_n_locs_per_frame[1:]))
+        else:
+            raise AttributeError(
+                "max_n_locs_per_frame must start with q if string"
+            )
+    else:
+        max_n_locs = maxframe * max_n_locs_per_frame
+
     labels = -1 * np.ones_like(x_similar)
     pick_idcs = (
-        (nlocs >= maxframe * min_n_locs_per_frame)
-        & (nlocs < maxframe * max_n_locs_per_frame)
+        (nlocs >= min_n_locs)
+        & (nlocs < max_n_locs)
         & (rmsds >= min_rmsd)
         & (rmsds < max_rmsd)
     )

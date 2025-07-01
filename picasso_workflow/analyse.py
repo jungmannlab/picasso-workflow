@@ -6307,6 +6307,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             except Exception as e:
                 raise e
             picked_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
+        results["n_picked_locs"] = len(picked_locs)
+        results["n_locs"] = len(self.locs)
 
         # save picked locs
         fp_locs = os.path.join(results["folder"], "picked_locs.hdf5")

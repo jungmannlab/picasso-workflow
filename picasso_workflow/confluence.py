@@ -2246,7 +2246,10 @@ class ConfluenceReporter(AbstractModuleCollection):
         <p><strong>Module {i:02d}: Find Similar</strong></p>
         Summary:
         <ul>
-        <li># Picks found for types: {results["n_picks"]}</li>
+        <li># Picks found: {results["n_picks"]}</li>
+        <li># Locs picked: {results["n_picked_locs"]} of total
+        {results["n_locs"]}
+        ({(100 * results["n_picked_locs"] / results["n_locs"]):.1f})</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.2f} s</li>
         </ul>
