@@ -259,7 +259,7 @@ class TestPicassoOutpost(unittest.TestCase):
 
         assert ngold_locs == len(centers) * info[0]["Frames"]
 
-    def test_07_filtered_rcc_alignment(self):
+    def test_07_rsso_alignment(self):
         """Test the new filtered_RCC alignment method"""
         # Create test data with known shift
         shift_x = 2.0

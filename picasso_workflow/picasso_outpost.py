@@ -1376,7 +1376,7 @@ def nndist_loglikelihood_csr(
             min_dist=min_dist,
             max_dist=max_dist,
         )
-        print(i, dist, prob, np.log(prob))
+        # print(i, dist, prob, np.log(prob))
         log_like += np.sum(np.log(prob))
     return log_like
 
