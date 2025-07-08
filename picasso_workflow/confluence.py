@@ -1061,6 +1061,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         if fp_fig := results.get("fp_scene_fids_after"):
             fig_fps.append(fp_fig)
             titles.append("Fiducials after alignment")
+        if fp_figs := results.get("fp_figs"):
+            fig_fps += fp_figs
+            titles += [f"Shift plot {i}" for i in range(len(fp_figs))]
 
         if len(fig_fps) > 1:
             fn_figs = []
