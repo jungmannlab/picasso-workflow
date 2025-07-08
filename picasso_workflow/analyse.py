@@ -2764,7 +2764,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 render_kwargs=fid_render_kwargs,
             )
 
-        (shifts, cum_shifts, used_fiducials, algo_used) = (
+        (shifts, cum_shifts, used_fiducials, algo_used, fp_figs) = (
             picasso_outpost.align_channels(
                 self.channel_locs,
                 self.channel_info,
@@ -2775,6 +2775,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["shifts"] = cum_shifts[:, :, -1]
         results["alignment_algorithm"] = algo_used
         results["used_fiducials"] = used_fiducials
+        results["fp_figs"] = fp_figs
 
         fp_shifts = os.path.join(results["folder"], "shifts.txt")
         np.savetxt(fp_shifts, results["shifts"])
