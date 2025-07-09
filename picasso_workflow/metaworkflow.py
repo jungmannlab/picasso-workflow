@@ -16,7 +16,7 @@ import multiprocessing
 import pandas as pd
 import logging
 import time
-import datetime
+from datetime import datetime
 import hashlib
 from picasso import io
 import pathlib
