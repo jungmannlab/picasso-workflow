@@ -2764,12 +2764,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                 render_kwargs=fid_render_kwargs,
             )
 
+        align_pars = parameters.get("align_pars", {})
+        align_pars["plot_dir"] = results["folder"]
         (shifts, cum_shifts, used_fiducials, algo_used, fp_figs) = (
             picasso_outpost.align_channels(
                 self.channel_locs,
                 self.channel_info,
                 fiducial_locs=fiducial_locs,
-                **parameters.get("align_pars", {}),
+                **align_pars,
             )
         )
         results["shifts"] = cum_shifts[:, :, -1]
