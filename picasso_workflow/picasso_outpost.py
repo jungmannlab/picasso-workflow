@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 def align_channels(
     channel_locs,
     channel_info,
+    channel_tags=None,
     max_iterations=5,
     convergence=0.001,
     fiducial_locs=None,
@@ -131,6 +132,7 @@ def align_channels(
         max_shift_param = max_shift if max_shift is not None else 10.0
         shift, fp_figs = align_by_rsso(
             channel_locs,
+            channel_tags,
             max_shift=max_shift_param,
             plot_histogram=plot_histogram,
             plot_dir=plot_dir,
@@ -301,7 +303,11 @@ def shift_from_rcc(channel_locs, channel_info):
 
 
 def align_by_rsso(
-    channel_locs, max_shift=10.0, plot_histogram=False, plot_dir=None
+    channel_locs,
+    channel_tags=None,
+    max_shift=10.0,
+    plot_histogram=False,
+    plot_dir=None,
 ):
     """
     Align channels using redundent spot shift overrepresentation (RSSO)
@@ -317,6 +323,8 @@ def align_by_rsso(
         channel_locs : list of np.rec.array
             List of localization arrays for different channels. Each array
             should have 'x' and 'y' fields.
+        channel_tags : list of str or None
+            the tags to the channels
         max_shift : float, default 10.0
             Maximum expected shift in pixels for alignment
         plot_histogram : bool, default False
@@ -345,6 +353,8 @@ def align_by_rsso(
     pairwise_shifts = {}
     fp_figs = []
     n_pairs = 0
+    if channel_tags is None:
+        channel_tags = [str(i) for i in range(n_channels)]
     for i in range(n_channels):
         for j in range(i + 1, n_channels):
             shift_x, shift_y, plot_filepath = _calculate_pairwise_shift(
@@ -353,7 +363,7 @@ def align_by_rsso(
                 max_shift,
                 plot_histogram=plot_histogram,
                 plot_dir=plot_dir,
-                channel_pair=(i, j),
+                channel_pair=(channel_tags[i], channel_tags[j]),
             )
 
             if shift_x is not None and shift_y is not None:
@@ -385,7 +395,7 @@ def align_by_rsso(
 
     # Return shifts in format compatible with existing code (y, x order)
     # and any figure file paths created during plotting
-    return (shifts_y, shifts_x), fp_figs
+    return (shifts_x, shifts_y), fp_figs
 
 
 def _calculate_pairwise_shift(
@@ -777,7 +787,7 @@ def _save_shift_histogram_plot(
         shift_y,
         "r+",
         markersize=15,
-        markeredgewidth=3,
+        markeredgewidth=1,
         label=f"Estimated shift: ({shift_x:.3f}, {shift_y:.3f}) [{method_str}]",
     )
 
@@ -804,7 +814,7 @@ def _save_shift_histogram_plot(
     total_points = np.sum(hist)
     peak_count = np.max(hist)
     textstr = (
-        f"Total points: {total_points:.0f}\n" f"Peak count: {peak_count:.0f}"
+        f"Total shifts: {total_points:.0f}\n" f"Peak count: {peak_count:.0f}"
     )
     props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
     ax.text(
@@ -826,6 +836,7 @@ def _save_shift_histogram_plot(
         filename = "shift_histogram.png"
     filepath = os.path.join(plot_dir, filename)
 
+    ax.set_aspect("equal")
     plt.tight_layout()
     plt.savefig(filepath, dpi=150, bbox_inches="tight")
     # plt.show()

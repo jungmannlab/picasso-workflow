@@ -2770,6 +2770,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             picasso_outpost.align_channels(
                 self.channel_locs,
                 self.channel_info,
+                self.channel_tags,
                 fiducial_locs=fiducial_locs,
                 **align_pars,
             )
