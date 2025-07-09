@@ -16,6 +16,7 @@ import multiprocessing
 import pandas as pd
 import logging
 import time
+import datetime
 import hashlib
 from picasso import io
 import pathlib
@@ -447,7 +448,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             execution_item += 1
             if execution_item % self.size != self.rank:
                 continue
-            report_name = tag
+            report_name = tag + datetime.now().strftime("%y%m%d-%H%M")
             text = f"""
                 Worker of rank {self.rank} working on {report_name}
                 (execution item {execution_item})"""
@@ -562,7 +563,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 continue
 
             if rname := datasets.get("report_name"):
-                report_name = rname
+                report_name = rname + datetime.now().strftime("%y%m%d-%H%M")
                 # create the corresponding confluence page
                 try:
                     ci = confluence.ConfluenceInterface(
