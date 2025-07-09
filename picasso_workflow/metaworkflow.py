@@ -216,11 +216,16 @@ class PathParser:
 
             if isinstance(receptors, list):
                 rcp_idx = receptors.index(k_lvls[-1])
-                # dict_query2[rcp_idx] = receptors[rcp_idx]
+                try:
+                    dict_query2[rcp_idx] = k_lvls[-1]
+                except Exception:
+                    pass
             else:
                 rcp_idx = sum([v is not None for v in dict_query2])
-                # dict_query2[rcp_idx] = k_lvls[-1]
-            logger.debug(f"created tags {targets}")
+                try:
+                    dict_query2[rcp_idx] = k_lvls[-1]
+                except Exception:
+                    pass
             # check whether input path is windows or posix style
             is_posix = self.check_path_style(v)
             if is_posix:
@@ -231,6 +236,8 @@ class PathParser:
                 dict_query[rcp_idx] = self.windows_path_to_curr_os(
                     v, drive_map=drive_map
                 )
+            logger.debug(f"updated filepaths {filepaths}")
+            logger.debug(f"updated tags {targets}")
         return filepaths, targets
 
 
