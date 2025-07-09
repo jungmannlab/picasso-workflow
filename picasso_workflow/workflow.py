@@ -12,6 +12,7 @@ import logging
 import inspect
 import yaml
 import copy
+import re
 from concurrent.futures import ProcessPoolExecutor
 
 from picasso_workflow.analyse import AutoPicasso, AutoPicassoError
@@ -109,10 +110,35 @@ class AggregationWorkflowRunner:
                 manual step). If no previous analysis exists in that folder,
                 create a new one.
         """
+        # check whether the report_name has a postfix-format already
+        # Check if report_name already has a postfix pattern
+        report_name = reporter_config["report_name"]
+        postfix_pattern = r"_(\d{6}-\d{4})$"
+        match = re.search(postfix_pattern, report_name)
+
+        extracted_postfix = postfix
+        if match:
+            # Extract existing postfix and validate format
+            existing_postfix = match.group(1)
+            try:
+                # datetime.strptime(existing_postfix, "%y%m%d-%H%M")
+                # Valid postfix found, separate base name from postfix
+                base_report_name = report_name[: match.start()]
+                reporter_config["report_name"] = base_report_name
+                extracted_postfix = existing_postfix
+            except ValueError:
+                # Invalid postfix format, treat as part of the name
+                pass
+
         if continue_previous_runner:
             folder = analysis_config["result_location"]
             report_name = reporter_config["report_name"]
-            postfix = cls._check_previous_runner(folder, report_name)
+            # Use extracted postfix if available, otherwise
+            # check for previous runner
+            if extracted_postfix is not None:
+                postfix = extracted_postfix
+            else:
+                postfix = cls._check_previous_runner(folder, report_name)
             logger.debug(f"Found postfix: {postfix}")
             if postfix is not None:
                 report_name = report_name + "_" + postfix
@@ -123,6 +149,11 @@ class AggregationWorkflowRunner:
                 except FileNotFoundError:
                     logger.debug(f"Could not load runner from {runner_folder}")
                     pass
+
+        # If we have an extracted postfix but aren't continuing, use it
+        if extracted_postfix is not None and not continue_previous_runner:
+            postfix = extracted_postfix
+
         if (
             sgltilepars := aggregation_workflow.get(
                 "single_dataset_tileparameters"
