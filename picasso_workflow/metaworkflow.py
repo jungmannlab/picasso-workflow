@@ -448,7 +448,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             execution_item += 1
             if execution_item % self.size != self.rank:
                 continue
-            report_name = tag + datetime.now().strftime("%y%m%d-%H%M")
+            report_name = tag + "_" + datetime.now().strftime("%y%m%d-%H%M")
             text = f"""
                 Worker of rank {self.rank} working on {report_name}
                 (execution item {execution_item})"""
@@ -471,6 +471,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
                 analysis_config,
                 wkfl_mods,
                 continue_previous_runner=True,
+                postfix="",
             )
             run_wr_kwargs.append(
                 {
@@ -563,7 +564,9 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 continue
 
             if rname := datasets.get("report_name"):
-                report_name = rname + datetime.now().strftime("%y%m%d-%H%M")
+                report_name = (
+                    rname + "_" + datetime.now().strftime("%y%m%d-%H%M")
+                )
                 # create the corresponding confluence page
                 try:
                     ci = confluence.ConfluenceInterface(
@@ -594,6 +597,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 workflow_modules_multi,
                 continue_previous_runner=True,
                 single_workflow_parallel=False,
+                postfix="",
             )
             run_awr_kwargs.append(
                 {
