@@ -7162,6 +7162,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             "nn_plotted": parameters["nn_nth"],
             "result_dir": results["folder"],
             "n_simulated": n_sim_targets,
+            "bootstrap": parameters.get("bootstrap"),
         }
 
         result, fp_fig = picasso_outpost.single_spinna_run(**spinna_parameters)
