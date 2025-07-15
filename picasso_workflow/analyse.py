@@ -2494,7 +2494,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 # now, plot the histogram below cutoff in white for shading
                 if (kwargs.get("min_dist", 0) > 0) and (i == 0):
-                    x_fill = [0, kwargs["min_dist"]]
+                    x_fill = [ax.get_xlim()[0], kwargs["min_dist"]]
                     y_fill1 = [ax.get_ylim()[0]] * 2
                     y_fill2 = [ax.get_ylim()[1]] * 2
                     ax.fill_between(
