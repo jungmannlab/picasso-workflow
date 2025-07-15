@@ -1057,6 +1057,7 @@ def single_spinna_run(
     nn_plotted,
     result_dir,
     n_simulated,
+    bootstrap=False,
 ):
     """This function directly runs one spinna simulation.
     The implementation is taken from spinna batch analysis
@@ -1092,7 +1093,10 @@ def single_spinna_run(
         gt_coords=exp_data,
         N_sim=sim_repeats,
     ).fit_stoichiometry(
-        N_structures, save=f"{save_filename}_fit_scores.csv", asynch=asynch
+        N_structures,
+        save=f"{save_filename}_fit_scores.csv",
+        asynch=asynch,
+        bootstrap=bootstrap,
     )
 
     # save the results
@@ -1116,9 +1120,13 @@ def single_spinna_run(
                 for i in range(len(props_mean))
             ]
         )
+        results["props"] = props_mean
+        results["props_std"] = props_std
     else:
         results["Modified Kolmogorov-Smirnov score"] = score
         results["Fitted proportions of structures"] = opt_props
+        results["props"] = opt_props
+        results["props_std"] = [0] * len(opt_props)
     results["NND bin size (nm)"] = NND_bin
     results["NND max distance (nm)"] = NND_maxdist
 

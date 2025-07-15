@@ -7148,22 +7148,46 @@ class AutoPicasso(util.AbstractModuleCollection):
                 pass
             fp_fig_out.append(fp_out)
         results["fp_fig"] = fp_fig_out
-        props = result["Fitted proportions of structures"]  # given in percent
+        props = result["props"]  # given in percent
         prop_t = props[0]
         prop_r = props[1]
         prop_tr = props[2]
+        std_t = result["props_std"][0]
+        std_r = result["props_std"][1]
+        std_tr = result["props_std"][2]
 
         # SPINNA outputs proportions in terms of #molecules
         le_target = prop_tr / (2 * prop_r + prop_tr)
         le_reference = prop_tr / (2 * prop_t + prop_tr)
 
+        # error propagation for std
+        def le_std(prop_sglo, prop_dbl, std_sglo, std_dbl):
+            """Calculate the standard deviation of le,
+            by error propagation: sum of derivatives
+            with respect to both variables multiplied by their std
+            """
+            deriv_sglo = -2 * prop_dbl / (2 * prop_sglo + prop_dbl) ** (-2)
+            deriv_dbl = (2 * prop_sglo + prop_dbl) ** (-1) - prop_dbl * (
+                2 * prop_sglo + prop_dbl
+            ) ** (-2)
+            return deriv_sglo * std_sglo + deriv_dbl * std_dbl
+
+        le_target_std = le_std(prop_r, prop_tr, std_r, std_tr)
+        le_reference_std = le_std(prop_t, prop_tr, std_t, std_tr)
+
         results["labeling_efficiency"] = {
             parameters["target_name"]: le_target,
             parameters["reference_name"]: le_reference,
         }
+        results["labeling_efficiency_std"] = {
+            parameters["target_name"]: le_target_std,
+            parameters["reference_name"]: le_reference_std,
+        }
         # results for compatibility with pairwise analysis
         results["labeling_efficiency_target"] = le_target
         results["labeling_efficiency_reference"] = le_reference
+        results["labeling_efficiency_std_target"] = le_target_std
+        results["labeling_efficiency_std_reference"] = le_reference_std
         results["fp_fig_AA"] = fp_fig_out[0]
         results["fp_fig_AB"] = fp_fig_out[1]
         results["fp_fig_BA"] = fp_fig_out[2]

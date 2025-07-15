@@ -2760,6 +2760,14 @@ class ConfluenceReporter(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+
+        def show_dict_percentages(d):
+            txt_out = "<ul>"
+            for k, v in d.items():
+                txt_out += f"<li>{k}: {100 * v:.2f} %</li>"
+            txt_out += "</ul>"
+            return txt_out
+
         logger.debug("Reporting labeling_efficiency_analysis.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2769,7 +2777,10 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>Labeling efficiency: {results["labeling_efficiency"]}</li>
+        <li>Labeling efficiency:
+            {show_dict_percentages(results["labeling_efficiency"])}</li>
+        <li>Labeling efficiency std:
+            {show_dict_percentages(results["labeling_efficiency_std"])}</li>
         </ul>
         {parameter_text}
         {result_text}
