@@ -6,7 +6,7 @@ Initial Date: March 7, 2024
 Description: This is the picasso interface of picasso-workflow
 """
 from picasso import lib, io, localize, gausslq, postprocess, clusterer
-from picasso import aim, g5m
+from picasso import aim, g5m, spinna
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import os
@@ -2494,12 +2494,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 # now, plot the histogram below cutoff in white for shading
                 if (kwargs.get("min_dist", 0) > 0) and (i == 0):
-                    x_fill = [ax.get_xlim()[0], kwargs["min_dist"]]
+                    xlim = ax.get_xlim()
+                    x_fill = [xlim[0], kwargs["min_dist"]]
                     y_fill1 = [ax.get_ylim()[0]] * 2
                     y_fill2 = [ax.get_ylim()[1]] * 2
                     ax.fill_between(
                         x_fill, y_fill1, y_fill2, color="grey", alpha=0.2
                     )
+                    ax.set_xlim(xlim)
             ax.legend(loc="upper right")
             ax.set_xlabel("Distance [nm]")
             ax.set_ylabel("probability density")
@@ -6918,6 +6920,29 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    def create_le_structures(self, target, reference, pair_distance):
+        # target monomer
+        structures = self._create_spinna_structure(
+            [target], [[1]], pair_distance
+        )
+        # reference monomer
+        structures += self._create_spinna_structure(
+            [reference], [[1]], pair_distance
+        )
+        # heterodimer
+        struct = {
+            "Molecular targets": [target, reference],
+            "Structure title": f"{target}-{reference}-heterodimer",
+            f"{target}_x": [-pair_distance / 2],
+            f"{target}_y": [0],
+            f"{target}_z": [0],
+            f"{reference}_x": [pair_distance / 2],
+            f"{reference}_y": [0],
+            f"{reference}_z": [0],
+        }
+        structures.append(struct)
+        return structures
+
     @profile_resource_usage
     @module_decorator
     def labeling_efficiency_analysis(self, i, parameters, results):
@@ -6993,7 +7018,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     density : dict, channel tag to float
                         density to simulate [nm^2 or nm^3];
                         area density if 2D; volume density if 3D
-                    res_factor : float
+                    granularity : float
                         the spinna res_factor
                     sim_repeats : int
                         number of simulation repeats, for noise reduction
@@ -7060,26 +7085,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                     (locs.x * pixelsize, locs.y * pixelsize)
                 ).T
                 # dim = 2
-        # target monomer
-        structures = self._create_spinna_structure(
-            [target], [[1]], pair_distance
-        )
-        # reference monomer
-        structures += self._create_spinna_structure(
-            [reference], [[1]], pair_distance
-        )
-        # heterodimer
-        struct = {
-            "Molecular targets": [target, reference],
-            "Structure title": f"{target}-{reference}-heterodimer",
-            f"{target}_x": [-pair_distance / 2],
-            f"{target}_y": [0],
-            f"{target}_z": [0],
-            f"{reference}_x": [pair_distance / 2],
-            f"{reference}_y": [0],
-            f"{reference}_z": [0],
-        }
-        structures.append(struct)
 
         compound_density = density_gt[target] / 1 + density_gt[reference] / 1
         # area = parameters["n_simulate"] / (compound_density / 1e6)
@@ -7091,6 +7096,32 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             for tag in [target, reference]
         }
+
+        if isinstance(pair_distance, list):
+            all_test_structures = []
+            for test_distance in pair_distance:
+                structures = self.create_le_structures(
+                    target, reference, test_distance
+                )
+                (structures, targets) = (
+                    picasso_outpost.load_structures_from_dict(structures)
+                )
+                all_test_structures.append(structures)
+                (best_score, best_idx, label_unc, best_mixer, best_props) = (
+                    spinna.compare_models(
+                        models=all_test_structures,
+                        exp_data=exp_data,
+                        granularity=parameters["granularity"],
+                        label_unc=parameters["labeling_uncertainty"],
+                        le=labeling_efficiency,
+                    )
+                )
+                pair_distance = pair_distance[best_idx]
+                structures = all_test_structures[best_idx]
+        else:
+            structures = self.create_le_structures(
+                target, reference, pair_distance
+            )
 
         structures, targets = picasso_outpost.load_structures_from_dict(
             structures
