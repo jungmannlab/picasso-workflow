@@ -7107,7 +7107,21 @@ class AutoPicasso(util.AbstractModuleCollection):
                     picasso_outpost.load_structures_from_dict(structures)
                 )
                 all_test_structures.append(structures)
-            print(structures)
+                logger.debug(f"pair distance: {test_distance}")
+                targets = []
+                for structure in structures:
+                    for target in structure.targets:
+                        if target not in targets:
+                            targets.append(target)
+
+                # number of molecular targets in each structure; each row gives one
+                # target species and each column gives one structure
+                n_t = len(targets)
+                n_s = len(structures)
+                logger.debug(f"{n_s} structures: {str(structures)}")
+                logger.debug(f"{n_t} targets: {str(targets)}")
+
+            logger.debug(str(all_test_structures))
             label_unc = {
                 k: v if isinstance(v, list) else [v]
                 for k, v in parameters["labeling_uncertainty"].items()
