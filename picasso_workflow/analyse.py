@@ -7107,22 +7107,23 @@ class AutoPicasso(util.AbstractModuleCollection):
                     picasso_outpost.load_structures_from_dict(structures)
                 )
                 all_test_structures.append(structures)
-                label_unc = {
-                    k: v if isinstance(v, list) else [v]
-                    for k, v in parameters["labeling_uncertainty"].items()
-                }
-                (best_score, best_idx, label_unc, best_mixer, best_props) = (
-                    spinna.compare_models(
-                        models=all_test_structures,
-                        exp_data=exp_data,
-                        granularity=parameters["granularity"],
-                        label_unc=parameters["labeling_uncertainty"],
-                        le=labeling_efficiency,
-                    )
+            print(structures)
+            label_unc = {
+                k: v if isinstance(v, list) else [v]
+                for k, v in parameters["labeling_uncertainty"].items()
+            }
+            (best_score, best_idx, label_unc, best_mixer, best_props) = (
+                spinna.compare_models(
+                    models=all_test_structures,
+                    exp_data=exp_data,
+                    granularity=parameters["granularity"],
+                    label_unc=parameters["labeling_uncertainty"],
+                    le=labeling_efficiency,
                 )
-                pair_distance = pair_distance[best_idx]
-                structures = all_test_structures[best_idx]
-                labeling_uncertainty = label_unc
+            )
+            pair_distance = pair_distance[best_idx]
+            structures = all_test_structures[best_idx]
+            labeling_uncertainty = label_unc
         else:
             structures = self.create_le_structures(
                 target, reference, pair_distance
