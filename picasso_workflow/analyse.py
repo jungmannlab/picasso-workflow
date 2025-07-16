@@ -7108,18 +7108,18 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 all_test_structures.append(structures)
                 logger.debug(f"pair distance: {test_distance}")
-                targets = []
+                tgts = []
                 for structure in structures:
-                    for target in structure.targets:
-                        if target not in targets:
-                            targets.append(target)
+                    for tgt in structure.targets:
+                        if tgt not in tgts:
+                            tgts.append(tgt)
 
                 # number of molecular targets in each structure; each row gives one
                 # target species and each column gives one structure
-                n_t = len(targets)
+                n_t = len(tgts)
                 n_s = len(structures)
                 logger.debug(f"{n_s} structures: {str(structures)}")
-                logger.debug(f"{n_t} targets: {str(targets)}")
+                logger.debug(f"{n_t} targets: {str(tgts)}")
 
             logger.debug(str(all_test_structures))
             label_unc = {
