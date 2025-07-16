@@ -514,11 +514,19 @@ class ConfluenceReporter(AbstractModuleCollection):
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
                 meth_res = results["nena"]
+                if meth_res.get("NeNa") is not None:
+                    nenastr = f"{meth_res.get('NeNa'):.2f} nm"
+                else:
+                    nenastr = "None"
+                if meth_res.get("chisqr") is not None:
+                    chisqstr = f"{meth_res.get('chisqr'):.1f}"
+                else:
+                    chisqstr = "None"
                 text += f"""
                     <p>NeNa</p>
                     <ul>
-                    <li>NeNa value: {str(meth_res.get('NeNa'))} nm</li>
-                    <li>Chi Square: {meth_res.get('chisqr'):.1f}</li>
+                    <li>NeNa value: {nenastr}</li>
+                    <li>Chi Square: {chisqstr}</li>
                     </ul>"""
                 if fp_nena := meth_res.get("filepath_plot"):
                     self.ci.upload_attachment(self.report_page_id, fp_nena)
@@ -530,13 +538,19 @@ class ConfluenceReporter(AbstractModuleCollection):
                     )
             elif meth.lower() == "median-loc-precision":
                 meth_res = results["median-loc-precision"]
+                if meth_res.get("median_lp-px") is not None:
+                    lppxstr = f"{meth_res.get('median_lp-px'):.4f} px"
+                else:
+                    lppxstr = "None"
+                if meth_res.get("median_lp-nm") is not None:
+                    lpnmstr = f"{meth_res.get('median_lp-nm'):.2f} nm"
+                else:
+                    lpnmstr = "None"
                 text += f"""
                     <p>Median Localization Precision</p>
                     <ul>
-                    <li>med loc prec [px]:
-                        {meth_res.get('median_lp-px'):.4f}</li>
-                    <li>med loc prec [nm]:
-                        {meth_res.get('median_lp-nm'):.2f}</li>
+                    <li>med loc prec [px]: {lppxstr}</li>
+                    <li>med loc prec [nm]: {lpnmstr}</li>
                     </ul>"""
         text += parameter_text
         text += result_text
