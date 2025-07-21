@@ -7055,9 +7055,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         height = max([locs["y"].max() for locs in self.channel_locs]) - min(
             [locs["y"].min() for locs in self.channel_locs]
         )
-        depth = max([locs["z"].max() for locs in self.channel_locs]) - min(
-            [locs["z"].min() for locs in self.channel_locs]
-        )
+        try:
+            depth = max([locs["z"].max() for locs in self.channel_locs]) - min(
+                [locs["z"].min() for locs in self.channel_locs]
+            )
+        except ValueError:
+            depth = None
+
         if isinstance(parameters["density"], list):
             density = {
                 tag: parameters["density"][cid]
