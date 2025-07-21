@@ -7049,6 +7049,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         # props = {}
         dimensionality = 2
         pixelsize = self.pixelsize
+        width = max([locs["x"].max() for locs in self.channel_locs]) - min(
+            [locs["x"].min() for locs in self.channel_locs]
+        )
+        height = max([locs["y"].max() for locs in self.channel_locs]) - min(
+            [locs["y"].min() for locs in self.channel_locs]
+        )
+        depth = max([locs["z"].max() for locs in self.channel_locs]) - min(
+            [locs["z"].min() for locs in self.channel_locs]
+        )
         if isinstance(parameters["density"], list):
             density = {
                 tag: parameters["density"][cid]
@@ -7133,6 +7142,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     granularity=parameters["granularity"],
                     label_unc=parameters["labeling_uncertainty"],
                     le=labeling_efficiency,
+                    width=width,
+                    height=height,
+                    depth=depth,
                 )
             )
             pair_distance = pair_distance[best_idx]
