@@ -515,7 +515,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             if meth.lower() == "nena":
                 meth_res = results["nena"]
                 if meth_res.get("NeNa") is not None:
-                    nenastr = f"{meth_res.get('NeNa'):.2f} nm"
+                    nenastr = meth_res.get("NeNa")
                 else:
                     nenastr = "None"
                 if meth_res.get("chisqr") is not None:
