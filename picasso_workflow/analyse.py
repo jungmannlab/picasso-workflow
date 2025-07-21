@@ -7116,7 +7116,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 structures = self.create_le_structures(
                     target, reference, test_distance
                 )
-                print(structures)
                 (structures, targets) = (
                     picasso_outpost.load_structures_from_dict(structures)
                 )
@@ -7164,9 +7163,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 for k, v in parameters["labeling_uncertainty"].items()
             }
 
-        structures, targets = picasso_outpost.load_structures_from_dict(
-            structures
-        )
+            structures, targets = picasso_outpost.load_structures_from_dict(
+                structures
+            )
 
         N_structures = picasso_outpost.generate_N_structures(
             structures, n_sim_targets, parameters["granularity"]
