@@ -1227,7 +1227,7 @@ def load_structures_from_dict(structure_dict):
     targets : list of strs
         List of all unique molecular targets in the structures.
     """
-    if "Structure title" not in structure_dict[0]:
+    if "Structure title" not in structure_dict[0].keys():
         raise TypeError(
             "Incorrect file. Please choose a file that was created"
             " that was created with Picasso SPINNA."

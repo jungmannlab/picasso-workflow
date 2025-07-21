@@ -7116,6 +7116,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 structures = self.create_le_structures(
                     target, reference, test_distance
                 )
+                print(structures)
                 (structures, targets) = (
                     picasso_outpost.load_structures_from_dict(structures)
                 )
