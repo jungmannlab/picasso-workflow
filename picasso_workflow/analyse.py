@@ -7154,6 +7154,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             pair_distance = pair_distance[best_idx]
             structures = all_test_structures[best_idx]
             labeling_uncertainty = label_unc
+            results["best_pair_distance"] = pair_distance
         else:
             structures = self.create_le_structures(
                 target, reference, pair_distance
@@ -7227,6 +7228,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         std_t = result["props_std"][0]
         std_r = result["props_std"][1]
         std_tr = result["props_std"][2]
+        results["spinna_props_std"] = result["props_std"]
+        results["spinna_props_std"] = result["props_std"]
 
         # SPINNA outputs proportions in terms of #molecules
         le_target = prop_tr / (2 * prop_r + prop_tr)
@@ -7238,11 +7241,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             by error propagation: sum of derivatives
             with respect to both variables multiplied by their std
             """
-            deriv_sglo = -2 * prop_dbl / (2 * prop_sglo + prop_dbl) ** (-2)
-            deriv_dbl = (2 * prop_sglo + prop_dbl) ** (-1) - prop_dbl * (
+            deriv_sglo = -2 * prop_dbl / ((2 * prop_sglo + prop_dbl) ** 2)
+            deriv_dbl = (2 * prop_sglo + prop_dbl) ** (-1) - prop_dbl / (
                 2 * prop_sglo + prop_dbl
-            ) ** (-2)
-            return deriv_sglo * std_sglo + deriv_dbl * std_dbl
+            ) ** 2
+            return np.abs(deriv_sglo * std_sglo) + np.abs(deriv_dbl * std_dbl)
 
         le_target_std = le_std(prop_r, prop_tr, std_r, std_tr)
         le_reference_std = le_std(prop_t, prop_tr, std_t, std_tr)
