@@ -1177,6 +1177,8 @@ def single_spinna_run(
     n_total = sum(n_simulated.values())
     if isinstance(opt_props, tuple):
         opt_prop_vals = opt_props[0]
+    else:
+        opt_prop_vals = opt_props
     dist_sim = spinna.get_NN_dist_simulated(
         mixer.convert_props_to_counts(opt_prop_vals, n_total),
         sim_repeats,
