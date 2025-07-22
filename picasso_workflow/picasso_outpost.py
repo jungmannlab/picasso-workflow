@@ -1133,11 +1133,21 @@ def single_spinna_run(
     # relative proportions of structures for each target
     if len(targets) > 1:
         for target in targets:
-            rel_props = mixer.convert_props_for_target(
-                opt_props,
-                target,
-                n_simulated,
-            )
+            if isinstance(opt_props, tuple):
+                rel_props = mixer.convert_props_for_target(
+                    opt_props[0],
+                    target,
+                    n_simulated,
+                )
+                # rel_props_sd = mixer.convert_props_for_target(
+                #     opt_props[1], target, n_simulated,
+                # )
+            else:
+                rel_props = mixer.convert_props_for_target(
+                    opt_props,
+                    target,
+                    n_simulated,
+                )
             idx_valid = np.where(rel_props != np.inf)[0]
             value = ", ".join(
                 [
@@ -1165,8 +1175,10 @@ def single_spinna_run(
     #     duplicate=True
     # )
     n_total = sum(n_simulated.values())
+    if isinstance(opt_props, tuple):
+        opt_prop_vals = opt_props[0]
     dist_sim = spinna.get_NN_dist_simulated(
-        mixer.convert_props_to_counts(opt_props, n_total),
+        mixer.convert_props_to_counts(opt_prop_vals, n_total),
         sim_repeats,
         mixer,
         duplicate=True,
