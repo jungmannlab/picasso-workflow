@@ -1981,6 +1981,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         for oa, default in optional_args:
             kwargs[oa] = parameters.get(oa, default)
 
+        results["g5m_args"] = str(kwargs)
+
         center_locs, clustered_locs, gmm_info = g5m.run_g5m(
             self.locs, self.info, **kwargs
         )
