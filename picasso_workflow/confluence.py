@@ -892,19 +892,26 @@ class ConfluenceReporter(AbstractModuleCollection):
             """
 
         # Add goodness-of-fit documentation
+        # text += """</ul>
+        # <p><strong>Goodness-of-Fit Assessment</strong></p>
+        # <p>The quality of the CSR model fit is evaluated using two complementary
+        # approaches:</p>
+        # <ul>
+        # <li><strong>Wasserstein Distance:</strong> Measures the distributional
+        # difference between observed and theoretical CSR nearest neighbor distances.
+        # Lower values indicate better fit (typical range: 0.01-1.0 nm).</li>
+        # <li><strong>Kolmogorov-Smirnov Tests:</strong> Statistical tests for each
+        # k-th nearest neighbor order. Higher p-values (greater 0.05) suggest good
+        # agreement with CSR, while lower p-values (smaller than 0.05) indicate
+        # significant deviation from spatial randomness.</li>
+        # </ul>
+        # """
         text += """</ul>
         <p><strong>Goodness-of-Fit Assessment</strong></p>
-        <p>The quality of the CSR model fit is evaluated using two complementary
-        approaches:</p>
-        <ul>
-        <li><strong>Wasserstein Distance:</strong> Measures the distributional
+        <p>The quality of the CSR model fit is evaluated using
+        <strong>Wasserstein Distance:</strong> Measures the distributional
         difference between observed and theoretical CSR nearest neighbor distances.
-        Lower values indicate better fit (typical range: 0.01-1.0 nm).</li>
-        <li><strong>Kolmogorov-Smirnov Tests:</strong> Statistical tests for each
-        k-th nearest neighbor order. Higher p-values (greater 0.05) suggest good
-        agreement with CSR, while lower p-values (smaller than 0.05) indicate
-        significant deviation from spatial randomness.</li>
-        </ul>
+        Lower values indicate better fit (typical range: 0.01-1.0 nm).
         """
 
         # Add Wasserstein distances
@@ -927,38 +934,38 @@ class ConfluenceReporter(AbstractModuleCollection):
                     f"{mean_wasserstein_dist:.3f} nm</p>"
                 )
 
-        # Add KS test p-values
-        if ks_pvalues := results.get("ks_pvalues_per_k"):
-            text += (
-                "<p><strong>Kolmogorov-Smirnov Test Results "
-                "(p-values):</strong></p>"
-            )
-            if isinstance(ks_pvalues[0], list) if ks_pvalues else False:
-                # Multiple datasets
-                for i_tag, pvalues_list in enumerate(ks_pvalues):
-                    tag_name = (
-                        f"Dataset {i_tag+1}"
-                        if len(ks_pvalues) > 1
-                        else "Dataset"
-                    )
-                    text += f"<p><em>{tag_name}:</em></p><ul>"
-                    for k_idx, pvalue in enumerate(pvalues_list):
-                        k = k_idx + parameters.get("kmin", 1)
-                        text += (
-                            f"<li style='margin-left: 20px;'>k={k}: "
-                            f"p = {pvalue:.2e}</li>"
-                        )
-                    text += "</ul>"
-            else:
-                # Single dataset
-                text += "<ul>"
-                for k_idx, pvalue in enumerate(ks_pvalues):
-                    k = k_idx + parameters.get("kmin", 1)
-                    text += (
-                        f"<li style='margin-left: 20px;'>k={k}: "
-                        f"p = {pvalue:.3f}</li>"
-                    )
-                text += "</ul>"
+        # # Add KS test p-values
+        # if ks_pvalues := results.get("ks_pvalues_per_k"):
+        #     text += (
+        #         "<p><strong>Kolmogorov-Smirnov Test Results "
+        #         "(p-values):</strong></p>"
+        #     )
+        #     if isinstance(ks_pvalues[0], list) if ks_pvalues else False:
+        #         # Multiple datasets
+        #         for i_tag, pvalues_list in enumerate(ks_pvalues):
+        #             tag_name = (
+        #                 f"Dataset {i_tag+1}"
+        #                 if len(ks_pvalues) > 1
+        #                 else "Dataset"
+        #             )
+        #             text += f"<p><em>{tag_name}:</em></p><ul>"
+        #             for k_idx, pvalue in enumerate(pvalues_list):
+        #                 k = k_idx + parameters.get("kmin", 1)
+        #                 text += (
+        #                     f"<li style='margin-left: 20px;'>k={k}: "
+        #                     f"p = {pvalue:.2e}</li>"
+        #                 )
+        #             text += "</ul>"
+        #     else:
+        #         # Single dataset
+        #         text += "<ul>"
+        #         for k_idx, pvalue in enumerate(ks_pvalues):
+        #             k = k_idx + parameters.get("kmin", 1)
+        #             text += (
+        #                 f"<li style='margin-left: 20px;'>k={k}: "
+        #                 f"p = {pvalue:.3f}</li>"
+        #             )
+        #         text += "</ul>"
 
         text += f"""
         {parameter_text}
