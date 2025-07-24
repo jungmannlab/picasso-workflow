@@ -2006,6 +2006,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         fig.savefig(results["fp_fig_clustersizes"])
 
+        # test for subclustering
+        results["fp_fig_subclustering"] = os.path.join(
+            results["folder"], "subcluster_test.png"
+        )
+        g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
+
         results["n_locs_in"] = len(self.locs)
         results["n_locs_clustered"] = len(clustered_locs)
         results["n_centers"] = len(center_locs)
