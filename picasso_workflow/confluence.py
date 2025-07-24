@@ -896,7 +896,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         # """
         text += """</ul>
         <p><strong>Goodness-of-Fit Assessment</strong></p>
-        <p>The quality of the CSR model fit is evaluated using
+        The quality of the CSR model fit is evaluated using
         <strong>Wasserstein Distance:</strong> Measures the distributional
         difference between observed and theoretical CSR nearest neighbor distances.
         Lower values indicate better fit (typical range: 0.01-1.0 nm).
