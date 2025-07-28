@@ -123,6 +123,11 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def binding_event_analysis(self):
+        """Perform clustering using the smlm clusterer"""
+        pass
+
+    @abc.abstractmethod
     def smlm_clusterer(self):
         """Perform clustering using the smlm clusterer"""
         pass
@@ -279,6 +284,11 @@ class AbstractModuleCollection(abc.ABC):
         kinetics. The metrics used are number of locs and rms deviation
         from mean frame
         """
+        pass
+
+    @abc.abstractmethod
+    def find_similar(self):
+        """pick similar in nlocs/rmsd space"""
         pass
 
     @abc.abstractmethod

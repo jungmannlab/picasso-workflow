@@ -11,6 +11,7 @@ import os
 import pandas as pd
 from atlassian import Confluence as con
 from requests.exceptions import ConnectionError, HTTPError
+import html
 
 from picasso_workflow.util import AbstractModuleCollection
 
@@ -100,8 +101,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <p><strong>ERROR OCCURRED</strong></p>
         During analysis of {module}, an error occurred.
         """
-        text += str(e)
-        text += traceback.format_exc()
+        text += html.escape(str(e))
+        text += html.escape(traceback.format_exc())
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -232,7 +233,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <p><strong>Module {i:02d}: Load localizations</strong></p>
         <ul>
         <li>Picasso Version: {results['picasso version']}</li>
-        <li>Localications Location: {parameters['filename']}</li>
+        <li>Localizations Location: {parameters['filename']}</li>
         <li>Number of localizations: {results['nlocs']}</li>
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
@@ -513,11 +514,19 @@ class ConfluenceReporter(AbstractModuleCollection):
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
                 meth_res = results["nena"]
+                if meth_res.get("NeNa") is not None:
+                    nenastr = meth_res.get("NeNa")
+                else:
+                    nenastr = "None"
+                if meth_res.get("chisqr") is not None:
+                    chisqstr = f"{meth_res.get('chisqr'):.1f}"
+                else:
+                    chisqstr = "None"
                 text += f"""
                     <p>NeNa</p>
                     <ul>
-                    <li>NeNa value: {str(meth_res.get('NeNa'))} nm</li>
-                    <li>Chi Square: {meth_res.get('chisqr'):.1f}</li>
+                    <li>NeNa value: {nenastr}</li>
+                    <li>Chi Square: {chisqstr}</li>
                     </ul>"""
                 if fp_nena := meth_res.get("filepath_plot"):
                     self.ci.upload_attachment(self.report_page_id, fp_nena)
@@ -529,13 +538,19 @@ class ConfluenceReporter(AbstractModuleCollection):
                     )
             elif meth.lower() == "median-loc-precision":
                 meth_res = results["median-loc-precision"]
+                if meth_res.get("median_lp-px") is not None:
+                    lppxstr = f"{meth_res.get('median_lp-px'):.4f} px"
+                else:
+                    lppxstr = "None"
+                if meth_res.get("median_lp-nm") is not None:
+                    lpnmstr = f"{meth_res.get('median_lp-nm'):.2f} nm"
+                else:
+                    lpnmstr = "None"
                 text += f"""
                     <p>Median Localization Precision</p>
                     <ul>
-                    <li>med loc prec [px]:
-                        {meth_res.get('median_lp-px'):.4f}</li>
-                    <li>med loc prec [nm]:
-                        {meth_res.get('median_lp-nm'):.2f}</li>
+                    <li>med loc prec [px]: {lppxstr}</li>
+                    <li>med loc prec [nm]: {lpnmstr}</li>
                     </ul>"""
         text += parameter_text
         text += result_text
@@ -639,10 +654,32 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     @module_decorator
+    def binding_event_analysis(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: binding_event_analysis</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        text += """
+        <b>TODO: show plots for reporting</b>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    @module_decorator
     def smlm_clusterer(
         self, i, parameters, results, parameter_text, result_text
     ):
-        logger.debug("Reporting smlm_clusterer.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: smlm_clusterer clustering</strong></p>
@@ -693,17 +730,38 @@ class ConfluenceReporter(AbstractModuleCollection):
         {result_text}
         """
 
+        fig_fps = []
+        titles = []
         if fp_fig := results.get("fp_fig_clustersizes"):
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
-            _, fp_fig = os.path.split(fp_fig)
-            text += (
-                "<ul><ac:image><ri:attachment "
-                + f'ri:filename="{fp_fig}" />'
-                + "</ac:image></ul>"
-            )
+            fig_fps.append(fp_fig)
+            titles.append("Cluster Size Distribution")
+        if fp_fig := results.get("fp_fig_subclustering"):
+            fig_fps.append(fp_fig)
+            titles.append("Subcluster-test: sparse vs dense regions")
+
+        if len(fig_fps) > 1:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -820,7 +878,84 @@ class ConfluenceReporter(AbstractModuleCollection):
             text += f"""<li>Density fitted:
              {results['density'] * 1e6} µm^(-{d})</li>
             """
-        text += f"""</ul>
+
+        # Add goodness-of-fit documentation
+        # text += """</ul>
+        # <p><strong>Goodness-of-Fit Assessment</strong></p>
+        # <p>The quality of the CSR model fit is evaluated using two complementary
+        # approaches:</p>
+        # <ul>
+        # <li><strong>Wasserstein Distance:</strong> Measures the distributional
+        # difference between observed and theoretical CSR nearest neighbor distances.
+        # Lower values indicate better fit (typical range: 0.01-1.0 nm).</li>
+        # <li><strong>Kolmogorov-Smirnov Tests:</strong> Statistical tests for each
+        # k-th nearest neighbor order. Higher p-values (greater 0.05) suggest good
+        # agreement with CSR, while lower p-values (smaller than 0.05) indicate
+        # significant deviation from spatial randomness.</li>
+        # </ul>
+        # """
+        text += """</ul>
+        <p><strong>Goodness-of-Fit Assessment</strong></p>
+        The quality of the CSR model fit is evaluated using
+        <strong>Wasserstein Distance:</strong> Measures the distributional
+        difference between observed and theoretical CSR nearest neighbor distances.
+        Lower values indicate better fit (typical range: 0.01-1.0 nm).
+        """
+
+        # Add Wasserstein distances
+        if mean_wasserstein_dist := results.get("mean_wasserstein_distance"):
+            if isinstance(mean_wasserstein_dist, list):
+                text += (
+                    "<p><strong>Mean Wasserstein Distances:</strong></p><ul>"
+                )
+                for i_tag, dist in enumerate(mean_wasserstein_dist):
+                    tag_name = (
+                        f"Dataset {i_tag+1}"
+                        if len(mean_wasserstein_dist) > 1
+                        else "Dataset"
+                    )
+                    text += f"<li>{tag_name}: {dist:.3f} nm</li>"
+                text += "</ul>"
+            else:
+                text += (
+                    f"<p><strong>Mean Wasserstein Distance:</strong> "
+                    f"{mean_wasserstein_dist:.3f} nm</p>"
+                )
+
+        # # Add KS test p-values
+        # if ks_pvalues := results.get("ks_pvalues_per_k"):
+        #     text += (
+        #         "<p><strong>Kolmogorov-Smirnov Test Results "
+        #         "(p-values):</strong></p>"
+        #     )
+        #     if isinstance(ks_pvalues[0], list) if ks_pvalues else False:
+        #         # Multiple datasets
+        #         for i_tag, pvalues_list in enumerate(ks_pvalues):
+        #             tag_name = (
+        #                 f"Dataset {i_tag+1}"
+        #                 if len(ks_pvalues) > 1
+        #                 else "Dataset"
+        #             )
+        #             text += f"<p><em>{tag_name}:</em></p><ul>"
+        #             for k_idx, pvalue in enumerate(pvalues_list):
+        #                 k = k_idx + parameters.get("kmin", 1)
+        #                 text += (
+        #                     f"<li style='margin-left: 20px;'>k={k}: "
+        #                     f"p = {pvalue:.2e}</li>"
+        #                 )
+        #             text += "</ul>"
+        #     else:
+        #         # Single dataset
+        #         text += "<ul>"
+        #         for k_idx, pvalue in enumerate(ks_pvalues):
+        #             k = k_idx + parameters.get("kmin", 1)
+        #             text += (
+        #                 f"<li style='margin-left: 20px;'>k={k}: "
+        #                 f"p = {pvalue:.3f}</li>"
+        #             )
+        #         text += "</ul>"
+
+        text += f"""
         {parameter_text}
         {result_text}
         """
@@ -968,6 +1103,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         if fp_fig := results.get("fp_scene_fids_after"):
             fig_fps.append(fp_fig)
             titles.append("Fiducials after alignment")
+        if fp_figs := results.get("fp_figs"):
+            fig_fps += fp_figs
+            titles += [f"Shift plot {i}" for i in range(len(fp_figs))]
 
         if len(fig_fps) > 1:
             fn_figs = []
@@ -2133,6 +2271,119 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     @module_decorator
+    def find_similar(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        """pick similar on clusters in nlocs/rmsd space
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        logger.debug("Reporting find_structures.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Find Similar</strong></p>
+        Summary:
+        <ul>
+        <li># Picks found: {results["n_picks"]}</li>
+        <li># Locs picked: {results["n_picked_locs"]} of total
+        {results["n_locs"]}
+        ({(100 * results["n_picked_locs"] / results["n_locs"]):.1f} %)</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        fig_fps = []
+        titles = []
+        if fp_fig := results.get("fp_phasespace_hexbin"):
+            fig_fps.append(fp_fig)
+            titles.append("Phase Space")
+        if fp_fig := results.get("fp_phasespace"):
+            fig_fps.append(fp_fig)
+            titles.append("Phase Space Selection")
+        if fp_fig := results.get("fp_picked_fullfov"):
+            fig_fps.append(fp_fig)
+            titles.append("Picked Locs")
+
+        if len(fig_fps) > 0:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+
+        # 2D table
+        nrows = parameters.get("n_plot_structures")
+        if nrows is not None:
+            fig_fps = results.get("fp_renderings")  # list (col) of list of fps
+            col_titles = [f"Example {i + 1}" for i in range(nrows)]
+            row_titles = [
+                f"Structure Cluster {i}" for i in range(len(fig_fps))
+            ]
+
+            if len(fig_fps) > 0:
+                fn_figs = []
+                for row_fps in fig_fps:
+                    row_fns = []
+                    for fp in row_fps:
+                        try:
+                            self.ci.upload_attachment(self.report_page_id, fp)
+                        except ConfluenceInterfaceError:
+                            pass
+                        row_fns.append(os.path.split(fp)[1])
+                    fn_figs.append(row_fns)
+
+                text += "<table><tr><td></td>"
+                for tit in col_titles:
+                    text += f"<td><b>{tit}</b></td>"
+                text += "</tr>"
+                for row_tit, row_fns in zip(row_titles, fn_figs):
+                    text += "<tr>"
+                    text += f"<td><b>{row_tit}</b></td>"
+                    for fn in row_fns:
+                        text += f"""
+                            <td>
+                                  <ac:image ac:height="350">
+                                  <ri:attachment ri:filename="{fn}" />
+                                  </ac:image>
+                            </td>"""
+                    text += "</tr>"
+                text += "</table>"
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    @module_decorator
     def find_structures(
         self, i, parameters, results, parameter_text, result_text
     ):
@@ -2551,6 +2802,14 @@ class ConfluenceReporter(AbstractModuleCollection):
                 the results this function generates. This is created
                 in the decorator wrapper
         """
+
+        def show_dict_percentages(d):
+            txt_out = "<ul>"
+            for k, v in d.items():
+                txt_out += f"<li>{k}: {100 * v:.2f} %</li>"
+            txt_out += "</ul>"
+            return txt_out
+
         logger.debug("Reporting labeling_efficiency_analysis.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2560,12 +2819,15 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>Labeling efficiency: {results["labeling_efficiency"]}</li>
+        <li>Labeling efficiency:
+            {show_dict_percentages(results["labeling_efficiency"])}</li>
+        <li>Labeling efficiency std:
+            {show_dict_percentages(results["labeling_efficiency_std"])}</li>
         </ul>
         {parameter_text}
         {result_text}
         """
-        fig_fps = results.get("fp_fig")
+        fig_fps = results.get("fp_fig", [])
         titles = ["" for i in range(len(fig_fps))]
 
         if len(fig_fps) > 1:

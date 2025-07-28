@@ -218,7 +218,7 @@ class TestAnalyseModules(unittest.TestCase):
         nspots = 5
         mock_undrift_aim.return_value = (
             np.random.rand(2, len(self.ap.movie)),
-            [{"name": "info"}],
+            [{"name": "info"}, {"Pixelsize": 130}],
             np.rec.array(
                 [
                     tuple(np.random.rand(len(self.locs_dtype)))
@@ -492,6 +492,13 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_hdbscan"))
 
+    def binding_event_analysis(self):
+        # parameters, results = self.ap.binding_event_analysis(0, parameters)
+
+        # shutil.rmtree(os.path.join(
+        #     self.results_folder, "00_binding_event_analysis"))
+        pass
+
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.cluster")
     def smlm_clusterer(self, mock_clusterer, mock_fcc):
@@ -761,6 +768,13 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_create_mask2"))
 
+    def refine_mask_by_density(self):
+        """Create a density mask"""
+        return
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_refine_mask_by_density")
+        )
+
     def dbscan_molint(self):
         """TO BE CLEANED UP
         dbscan implementation for molecular interactions workflow
@@ -868,6 +882,34 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_filter_locs"))
 
+    def filter_transient_binding(self):
+        parameters = {}
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("sx", "f4"),
+            ("sy", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+            ("std_frame", "u4"),
+        ]
+        self.ap.locs = np.rec.array(
+            [
+                tuple([i] + list(1000 * np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.info = [{"Frames": 1000}]
+
+        parameters, results = self.ap.filter_transient_binding(0, parameters)
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_filter_transient_binding")
+        )
+
     @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
     @patch("picasso_workflow.analyse.postprocess.link", MagicMock)
     def link_locs(self):
@@ -885,7 +927,7 @@ class TestAnalyseModules(unittest.TestCase):
             "pair_distance": 10,
             "density": {"CD86": 92.4, "GFP": 83.5},
             "n_simulate": 10000,
-            "res_factor": 5,
+            "granularity": 5,
             "labeling_uncertainty": 5,
             "sim_repeats": 2,
             # "nn_nth": 2,

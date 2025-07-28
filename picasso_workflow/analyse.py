@@ -6,7 +6,7 @@ Initial Date: March 7, 2024
 Description: This is the picasso interface of picasso-workflow
 """
 from picasso import lib, io, localize, gausslq, postprocess, clusterer
-from picasso import aim, g5m
+from picasso import aim, g5m, spinna
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import os
@@ -32,7 +32,37 @@ import string
 import copy
 
 from scipy.ndimage import label
-from scipy.stats import poisson, norm
+from scipy.stats import poisson, norm, kstest
+
+try:
+    from scipy.stats import wasserstein_distance
+except ImportError:
+    # Fallback implementation if scipy version issues
+    def wasserstein_distance(u_values, v_values):
+        """Manual implementation of 1D Wasserstein distance"""
+        u_sorted = np.sort(u_values)
+        v_sorted = np.sort(v_values)
+        n = len(u_sorted)
+        m = len(v_sorted)
+
+        # Create cumulative distributions (not used in this implementation)
+        # u_cdf = np.arange(1, n + 1) / n
+        # v_cdf = np.arange(1, m + 1) / m
+
+        # Merge and compute distance
+        all_values = np.concatenate([u_sorted, v_sorted])
+        all_values = np.sort(all_values)
+
+        distance = 0
+        for i in range(len(all_values) - 1):
+            u_cum = np.searchsorted(u_sorted, all_values[i], side="right") / n
+            v_cum = np.searchsorted(v_sorted, all_values[i], side="right") / m
+            distance += abs(u_cum - v_cum) * (
+                all_values[i + 1] - all_values[i]
+            )
+
+        return distance
+
 
 from picasso_workflow import util
 from picasso_workflow import process_brightfield
@@ -436,7 +466,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         results["picasso version"] = picassoversion
         results["picasso-workflow version"] = "N/A"
-        results["Architecutre"] = platform.machine()
+        results["Architecture"] = platform.machine()
         results["OS"] = platform.system()
         results["host"] = platform.node()
         results["processor"] = platform.processor()
@@ -1199,32 +1229,33 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         # render zoom into the center of mass
-        ctrmass_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
-        fov_half = parameters.get("ctrmass_fov_nm") / 2
-        x_min = x_mean - fov_half / pixelsize
-        x_max = x_mean + fov_half / pixelsize
-        y_min = y_mean - fov_half / pixelsize
-        y_max = y_mean + fov_half / pixelsize
+        if parameters.get("ctrmass_fov_nm"):
+            ctrmass_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
+            fov_half = parameters.get("ctrmass_fov_nm") / 2
+            x_min = x_mean - fov_half / pixelsize
+            x_max = x_mean + fov_half / pixelsize
+            y_min = y_mean - fov_half / pixelsize
+            y_max = y_mean + fov_half / pixelsize
 
-        render_kwargs = {
-            "oversampling": pixelsize / ctrmass_pixelsize,
-            "viewport": [(y_min, x_min), (y_max, x_max)],
-            "blur_method": parameters.get("ctrmass_blur_method"),
-            "min_blur_width": parameters.get("ctrmass_min_blur_width", 0),
-            "ang": parameters.get("ctrmass_ang"),
-        }
-        results["fp_scene_ctrmass"] = os.path.join(
-            results["folder"], f"locs_ctrmass_{rcode}.png"
-        )
-        render.plot_scene(
-            render_locs,
-            ctrmass_pixelsize,
-            pixelsize,
-            fp=results["fp_scene_ctrmass"],
-            render_kwargs=render_kwargs,
-            # x_offset=x_min * pixelsize,
-            # y_offset=y_min * pixelsize,
-        )
+            render_kwargs = {
+                "oversampling": pixelsize / ctrmass_pixelsize,
+                "viewport": [(y_min, x_min), (y_max, x_max)],
+                "blur_method": parameters.get("ctrmass_blur_method"),
+                "min_blur_width": parameters.get("ctrmass_min_blur_width", 0),
+                "ang": parameters.get("ctrmass_ang"),
+            }
+            results["fp_scene_ctrmass"] = os.path.join(
+                results["folder"], f"locs_ctrmass_{rcode}.png"
+            )
+            render.plot_scene(
+                render_locs,
+                ctrmass_pixelsize,
+                pixelsize,
+                fp=results["fp_scene_ctrmass"],
+                render_kwargs=render_kwargs,
+                # x_offset=x_min * pixelsize,
+                # y_offset=y_min * pixelsize,
+            )
         return parameters, results
 
     @profile_resource_usage
@@ -1478,7 +1509,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     fp_plot = os.path.join(results["folder"], "nena.png")
                     self._plot_nena(res, fp_plot, pixelsize)
                     all_best_vals = {
-                        "a": res.best_values["a"],
+                        "delta_a": res.best_values["delta_a"],
                         "s": res.best_values["s"],
                         "ac": res.best_values["ac"],
                         "dc": res.best_values["dc"],
@@ -1696,6 +1727,63 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @profile_resource_usage
     @module_decorator
+    def binding_event_analysis(self, i, parameters, results):
+        """Evaluate binding events according to Philipp Steen's methods
+
+        Steen, P.R., Unterauer, E.M., Masullo, L.A. et al.
+        The DNA-PAINT palette: a comprehensive performance analysis
+        of fluorescent dyes.
+        Nat Methods (2024).
+        https://doi.org/10.1038/s41592-024-02374-8
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_locs : str
+                        file path to input locs
+                    n_frames
+        """
+        folder_in, file_in = os.path.split(parameters["fp_locs"])
+        file_nameonly, _ = os.path.splitext(file_in)
+        Meas = outpost_modules.binding_event_analysis.Measurement(
+            in_path=parameters["fp_locs"],
+            save_path=results["folder"],
+            saving_path=file_nameonly,
+            total_n_frames=self.frames,
+        )
+        Meas.Begin()
+        Meas.FileSaver()
+
+        Plotter = outpost_modules.binding_event_plotting.Plotting(
+            table_g=Meas.table_g,
+            table_k=Meas.table_k,
+            show=False,
+            save=True,
+            saving_name=file_nameonly,
+            total_n_frames=self.frames,
+        )
+        _, fp = Plotter.Plot_photons()
+        results["fig_photons"] = fp
+        _, fp = Plotter.Plot_bg()
+        results["fig_bg"] = fp
+        _, fp = Plotter.Plot_sbr()
+        results["fig_sbr"] = fp
+        _, fp = Plotter.Plot_tb()
+        results["fig_tb"] = fp
+        _, fp = Plotter.plot_td()
+        results["fig_td"] = fp
+        _, fp = Plotter.plot_r()
+        results["fig_r"] = fp
+        _, fp = Plotter.Plot_locs()
+        results["fig_locs"] = fp
+        config = Plotter.saveAllResults()
+        for k, v in config.items():
+            results[k] = v
+
+    @profile_resource_usage
+    @module_decorator
     def smlm_clusterer(self, i, parameters, results):
         """Perform smlm clustering. After this module, the standard
         locs will be the cluster centers.
@@ -1745,9 +1833,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 kwargs["radius_z"] = radius_z
 
             # label locs according to clusters
-            logger.debug(
-                f"starting clusterer on self.locs with kwargs {kwargs}"
-            )
+            # logger.debug(
+            #     f"starting clusterer on self.locs with kwargs {kwargs}"
+            # )
             self.locs = clusterer.cluster(**kwargs)
             smlm_cluster_info = {
                 "Generated by": "Picasso SMLM clusterer",
@@ -1903,6 +1991,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         for oa, default in optional_args:
             kwargs[oa] = parameters.get(oa, default)
 
+        results["g5m_args"] = str(kwargs)
+
         center_locs, clustered_locs, gmm_info = g5m.run_g5m(
             self.locs, self.info, **kwargs
         )
@@ -1925,6 +2015,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["folder"], "fig_gmm_clustersize.png"
         )
         fig.savefig(results["fp_fig_clustersizes"])
+
+        # test for subclustering
+        results["fp_fig_subclustering"] = os.path.join(
+            results["folder"], "subcluster_test.png"
+        )
+        g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
 
         results["n_locs_in"] = len(self.locs)
         results["n_locs_clustered"] = len(clustered_locs)
@@ -1996,17 +2092,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                 alldist = distance.cdist(points, points)
                 logger.debug("found all distances")
                 if parameters.get("add_column", False):
-                    print(alldist.shape)
+                    # print(alldist.shape)
                     if sgl_stage:
                         self.locs = lib.append_to_rec(
                             locs, alldist[:, 1], "NNdist"
                         )
-                        print(locs.dtype)
+                        # print(locs.dtype)
                     else:
                         self.channel_locs[i] = lib.append_to_rec(
                             locs, alldist[:, 1], "NNdist"
                         )
-                        print(locs.dtype)
+                        # print(locs.dtype)
                 alldist = np.sort(alldist, axis=1)
                 logger.debug("sorted all distances")
             else:
@@ -2177,7 +2273,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     @module_decorator
     def fit_csr(self, i, parameters, results):
         """Fit a Completely Spatially Random Distribution to
-        nearest neighbors
+        nearest neighbors and evaluate goodness-of-fit
         Args:
             i : int
                 the index of the module
@@ -2200,7 +2296,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                         the minimum-th NN to fit. default 1
             results : dict
                 the results this function generates. This is created
-                in the decorator wrapper
+                in the decorator wrapper. Includes goodness-of-fit metrics:
+                    wasserstein_distances_per_k : list of lists
+                        Wasserstein distances for each k-th NN order
+                    mean_wasserstein_distance : list of floats
+                        Mean Wasserstein distance across all k orders
+                    ks_pvalues_per_k : list of lists
+                        Kolmogorov-Smirnov p-values for each k-th NN order
         """
         if isinstance(parameters["nneighbors"], str):
             nneighbor_list = [np.loadtxt(parameters["nneighbors"])]
@@ -2246,6 +2348,9 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         densities = []
         bkgs = []
+        wasserstein_distances = []
+        mean_wasserstein_distances = []
+        ks_pvalues = []
         results["fp_fig"] = []
         for tag, nneighbors in zip(tags, nneighbor_list):
             kwargs["nn_dists"] = nneighbors.T[kmin - 1 :, :]
@@ -2259,6 +2364,97 @@ class AutoPicasso(util.AbstractModuleCollection):
                 bkgs.append(fitresult.x[1])
             else:
                 bkgs.append(parameters.get("bkg_fraction", 0))
+
+            # Calculate goodness-of-fit using Wasserstein distance and KS tests
+            k_wasserstein_distances = []
+            k_ks_pvalues = []
+            for k_idx in range(nneighbors.shape[1]):
+                k = k_idx + 1
+                if k >= kmin:  # Only calculate for fitted k values
+                    observed_distances = nneighbors[:, k_idx]
+                    # Filter distances within bounds
+                    observed_filtered = observed_distances[
+                        (observed_distances >= kwargs.get("min_dist", 0))
+                        & (
+                            observed_distances
+                            <= kwargs.get("max_dist", np.inf)
+                        )
+                    ]
+
+                    if len(observed_filtered) > 0:
+                        # Generate theoretical CSR samples with same size
+                        n_samples = len(observed_filtered)
+                        max_dist_theory = (
+                            np.max(observed_filtered) * 1.2
+                        )  # Extend range slightly
+                        r_theory = np.linspace(
+                            kwargs.get("min_dist", 0),
+                            max_dist_theory,
+                            n_samples,
+                        )
+
+                        # Get theoretical CSR probability distribution
+                        csr_pdf = picasso_outpost.nndistribution_from_csr(
+                            r_theory,
+                            k,
+                            rho_mle,
+                            d=parameters["dimensionality"],
+                            min_dist=kwargs.get("min_dist", 0),
+                            max_dist=kwargs.get("max_dist", np.inf),
+                            bkg_fraction=bkgs[-1],
+                            renormalize=True,
+                        )
+
+                        # Convert PDF to samples by inverse transform sampling
+                        # Set seed for reproducibility
+                        np.random.seed(42 + k)
+                        cdf = np.cumsum(csr_pdf)
+                        if cdf[-1] > 0:
+                            cdf = cdf / cdf[-1]  # Normalize to [0,1]
+                        else:
+                            # Handle edge case where all probabilities are zero
+                            cdf = np.linspace(0, 1, len(cdf))
+                        uniform_samples = np.random.uniform(0, 1, n_samples)
+                        theoretical_samples = np.interp(
+                            uniform_samples, cdf, r_theory
+                        )
+
+                        # Calculate Wasserstein distance
+                        w_dist = wasserstein_distance(
+                            observed_filtered, theoretical_samples
+                        )
+                        k_wasserstein_distances.append(w_dist)
+
+                        # Calculate Kolmogorov-Smirnov test
+                        # Use CDF function from picasso_outpost
+                        def csr_cdf(x):
+                            return picasso_outpost.csr_cdf_for_ks_test(
+                                x,
+                                k,
+                                rho_mle,
+                                d=parameters["dimensionality"],
+                                min_dist=kwargs.get("min_dist", 0),
+                                max_dist=kwargs.get("max_dist", np.inf),
+                                bkg_fraction=bkgs[-1],
+                            )
+
+                        # Perform KS test
+                        ks_stat, ks_pvalue = kstest(observed_filtered, csr_cdf)
+                        k_ks_pvalues.append(ks_pvalue)
+
+                        logger.debug(
+                            f"k={k}, Wasserstein distance: {w_dist:.3f}, "
+                            f"KS p-value: {ks_pvalue:.3f}"
+                        )
+
+            wasserstein_distances.append(k_wasserstein_distances)
+            ks_pvalues.append(k_ks_pvalues)
+            if k_wasserstein_distances:
+                mean_wasserstein_distances.append(
+                    np.mean(k_wasserstein_distances)
+                )
+            else:
+                mean_wasserstein_distances.append(np.nan)
 
             # plot results
             fig, ax = plt.subplots()
@@ -2304,6 +2500,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 else:
                     linestyle = "--"
                     lblf = f"fit k={k}"
+                # do not plot the model cutoff
+                if kwargs.get("min_dist", 0) > 0:
+                    nnhist_an[rvals <= kwargs["min_dist"]] = np.nan
                 ax.plot(
                     rvals,  # + (bins[1] - bins[0]) / 2,
                     nnhist_an,
@@ -2311,7 +2510,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                     linestyle=linestyle,
                     label=lblf,
                 )
-            ax.legend()
+                # now, plot the histogram below cutoff in white for shading
+                if (kwargs.get("min_dist", 0) > 0) and (i == 0):
+                    xlim = ax.get_xlim()
+                    x_fill = [xlim[0], kwargs["min_dist"]]
+                    y_fill1 = [ax.get_ylim()[0]] * 2
+                    y_fill2 = [ax.get_ylim()[1]] * 2
+                    ax.fill_between(
+                        x_fill, y_fill1, y_fill2, color="grey", alpha=0.2
+                    )
+                    ax.set_xlim(xlim)
+            ax.legend(loc="upper right")
             ax.set_xlabel("Distance [nm]")
             ax.set_ylabel("probability density")
             ax.set_title(f"Nearest Neighbor Distribution {tag}")
@@ -2320,10 +2529,20 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["fp_fig"].append(fp_fig)
         results["density"] = densities
         results["bkg_fraction"] = bkgs
+        results["wasserstein_distances_per_k"] = wasserstein_distances
+        results["mean_wasserstein_distance"] = mean_wasserstein_distances
+        results["ks_pvalues_per_k"] = ks_pvalues
 
         if sgl_stage:
             results["density"] = results["density"][0]
             results["fp_fig"] = results["fp_fig"][0]
+            results["wasserstein_distances_per_k"] = results[
+                "wasserstein_distances_per_k"
+            ][0]
+            results["mean_wasserstein_distance"] = results[
+                "mean_wasserstein_distance"
+            ][0]
+            results["ks_pvalues_per_k"] = results["ks_pvalues_per_k"][0]
 
         return parameters, results
 
@@ -2565,17 +2784,21 @@ class AutoPicasso(util.AbstractModuleCollection):
                 render_kwargs=fid_render_kwargs,
             )
 
-        (shifts, cum_shifts, used_fiducials, algo_used) = (
+        align_pars = parameters.get("align_pars", {})
+        align_pars["plot_dir"] = results["folder"]
+        (shifts, cum_shifts, used_fiducials, algo_used, fp_figs) = (
             picasso_outpost.align_channels(
                 self.channel_locs,
                 self.channel_info,
+                self.channel_tags,
                 fiducial_locs=fiducial_locs,
-                **parameters.get("align_pars", {}),
+                **align_pars,
             )
         )
         results["shifts"] = cum_shifts[:, :, -1]
         results["alignment_algorithm"] = algo_used
         results["used_fiducials"] = used_fiducials
+        results["fp_figs"] = fp_figs
 
         fp_shifts = os.path.join(results["folder"], "shifts.txt")
         np.savetxt(fp_shifts, results["shifts"])
@@ -2905,8 +3128,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             "random_rot_mode": parameters["random_rot_mode"],
             "exp_data": exp_data,
             "sim_repeats": parameters["sim_repeats"],
-            "fit_NND_bin": parameters["fit_NND_bin"],
-            "fit_NND_maxdist": parameters["fit_NND_maxdist"],
+            "NND_bin": parameters["fit_NND_bin"],
+            "NND_maxdist": parameters["fit_NND_maxdist"],
             "N_structures": N_structures,
             "save_filename": os.path.join(results["folder"], "spinna-run"),
             "asynch": True,
@@ -5924,7 +6147,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 self.locs,
                 self.info,
                 gold_picks,
-                pick_diameter=2.5,
+                pick_diameter=parameters.get("diameter", 2.5),
                 return_nonpicked=True,
             )
 
@@ -5960,6 +6183,209 @@ class AutoPicasso(util.AbstractModuleCollection):
             logger.debug("removing gold from attribute locs.")
 
         # logger.debug(f"# locs kept as attribute: {len(self.locs)}")
+
+        return parameters, results
+
+    @profile_resource_usage
+    @module_decorator
+    def find_similar(self, i, parameters, results):
+        """pick similar in nlocs/rmsd space (with specified limits in
+        that space).
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    diameter : float
+                        the pick similar diameter for identifying gold
+                and optional keys:
+                    min_n_locs_per_frame : float, range 0-1
+                        the min percentage of frames with events in the pick
+                        region to pick. default: 0.01
+                    max_n_locs_per_frame : float, range 0-1
+                        the max percentage of frames with events in the pick
+                        region to pick. default: 0.01
+                    min_rmsd : float
+                        the minimum root mean square distance from pick center
+                        to pick
+                    max_rmsd : float
+                        the maximum root mean square distance from pick center
+                        to pick
+                    n_plot_structures : int
+                        the number of structures to plot
+                    display_pixelsize : float
+                        the pixelsize for display in nm, default: 1
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        logger.debug(f"# locs: {len(self.locs)}")
+        # search for xy positions that look like gold ('pick similar')
+        diameter = parameters["diameter"]
+        kwargs = {
+            "diameter": diameter,
+            "min_n_locs_per_frame": parameters["min_n_locs_per_frame"],
+            "max_n_locs_per_frame": parameters["max_n_locs_per_frame"],
+            "min_rmsd": parameters["min_rmsd"],
+            "max_rmsd": parameters["max_rmsd"],
+        }
+        # print(self.locs.dtype)
+        (picks, nlocs, rmsds, labels) = picasso_outpost.pick_similar(
+            self.locs, self.info, **kwargs
+        )
+        # print(self.locs.dtype)
+
+        results["n_picks"] = len(picks)
+
+        # show clustering results
+        fig, ax = plt.subplots()
+        # plot non-selected picks
+        ax.scatter(
+            nlocs[labels == -1],
+            rmsds[labels == -1],
+            color="k",
+            alpha=0.1,
+            label="non-selected",
+        )
+        ax.scatter(
+            nlocs[labels == 0],
+            rmsds[labels == 0],
+            color="r",
+            alpha=0.3,
+            label="selected",
+        )
+        ax.set_xlabel("# localizations in pick")
+        ax.set_ylabel("root mean square distance in pick")
+        ax.set_title("Selection of picks")
+        ax.legend()
+        rcode = generate_random_code(6)
+        results["fp_phasespace"] = os.path.join(
+            results["folder"], f"rawcluster-{rcode}.png"
+        )
+        fig.set_size_inches((9, 9))
+        fig.savefig(results["fp_phasespace"])
+
+        fig, ax = plt.subplots()
+        extent = [
+            np.quantile(nlocs, 0.02),
+            np.quantile(nlocs, 0.98),
+            np.quantile(rmsds, 0.02),
+            np.quantile(rmsds, 0.98),
+        ]
+        gridsize = int(extent[1] - extent[0]) + 1
+        if gridsize > 100:
+            gridsize = 50
+        ax.hexbin(nlocs, rmsds, extent=extent, gridsize=gridsize)
+        ax.set_xlabel("# localizations in pick")
+        ax.set_ylabel("root mean square distance in pick")
+        ax.set_title("Phase Space")
+        results["fp_phasespace_hexbin"] = os.path.join(
+            results["folder"], f"phsp-hexbin-{rcode}.png"
+        )
+        fig.set_size_inches((9, 9))
+        fig.savefig(results["fp_phasespace_hexbin"])
+
+        # all xy coords found for the picks
+        if len(picks) > 2:
+            picked_locs = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                picks,
+                pick_diameter=diameter,
+                return_nonpicked=False,
+            )
+            fullfov_pixelsize = 1000
+            results["fp_picked_fullfov"] = os.path.join(
+                results["folder"], f"picked_locs_fullfov_{rcode}.png"
+            )
+            render.plot_scene(
+                picked_locs,
+                fullfov_pixelsize,
+                self.pixelsize,
+                fp=results["fp_picked_fullfov"],
+            )
+        else:
+            logger.debug(
+                """
+                Not many picks found in specified phase space."""
+            )
+            try:
+                # dt_orig = self.locs.dtype
+                # if not isinstance(dt_orig, list) and len(dt_orig) == 2:
+                #     dt_orig = dt_orig[1]
+                # dtypes = self.locs.dtype + [("group", "<i4")]
+                dtypes = [
+                    ("frame", "<u4"),
+                    ("x", "<f4"),
+                    ("y", "<f4"),
+                    ("photons", "<f4"),
+                    ("sx", "<f4"),
+                    ("sy", "<f4"),
+                    ("bg", "<f4"),
+                    ("lpx", "<f4"),
+                    ("lpy", "<f4"),
+                    ("ellipticity", "<f4"),
+                    ("net_gradient", "<f4"),
+                    ("group", "<i4"),
+                ]
+            except Exception as e:
+                raise e
+            picked_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
+        results["n_picked_locs"] = len(picked_locs)
+        results["n_locs"] = len(self.locs)
+
+        # save picked locs
+        fp_locs = os.path.join(results["folder"], "picked_locs.hdf5")
+        cluster_info = self.info
+        cluster_info.append(
+            {
+                "Generated by": "picasso-workflow.analyse.find_similar",
+                "data": "similar picks",
+            }
+        )
+        io.save_locs(fp_locs, picked_locs, cluster_info)
+        results["fp_picked_locs"] = fp_locs
+
+        # plot representative structures
+        n_plot = parameters.get("n_plot_structures")
+        fp_renderings = []
+        if n_plot is not None:
+            pixelsize = self.pixelsize
+            pixelsize_display = parameters.get("display_pixelsize", 1)
+            for idx, pick_i in enumerate(
+                np.random.choice(len(picks), size=n_plot, replace=False)
+            ):
+                x_min = picks[pick_i][0] - diameter / 2
+                y_min = picks[pick_i][1] - diameter / 2
+                render_kwargs = {
+                    "oversampling": pixelsize / pixelsize_display,
+                    "viewport": [
+                        (y_min, x_min),
+                        (
+                            picks[pick_i][1] + diameter / 2,
+                            picks[pick_i][0] + diameter / 2,
+                        ),
+                    ],
+                }
+                fp_renderings.append(
+                    os.path.join(
+                        results["folder"],
+                        f"render_structure_{idx}_{pick_i}-{rcode}.png",
+                    )
+                )
+                render.plot_scene(
+                    picked_locs,
+                    pixelsize_display,
+                    pixelsize,
+                    fp=fp_renderings[-1],
+                    render_kwargs=render_kwargs,
+                    # x_offset=x_min * pixelsize,
+                    # y_offset=y_min * pixelsize,
+                    title=f"pick {pick_i}",
+                )
+
+        results["fp_cluster_locs"] = fp_locs
+        results["fp_renderings"] = [fp_renderings]
 
         return parameters, results
 
@@ -6512,6 +6938,29 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    def create_le_structures(self, target, reference, pair_distance):
+        # target monomer
+        structures = self._create_spinna_structure(
+            [target], [[1]], pair_distance
+        )
+        # reference monomer
+        structures += self._create_spinna_structure(
+            [reference], [[1]], pair_distance
+        )
+        # heterodimer
+        struct = {
+            "Molecular targets": [target, reference],
+            "Structure title": f"{target}-{reference}-heterodimer",
+            f"{target}_x": [-pair_distance / 2],
+            f"{target}_y": [0],
+            f"{target}_z": [0],
+            f"{reference}_x": [pair_distance / 2],
+            f"{reference}_y": [0],
+            f"{reference}_z": [0],
+        }
+        structures.append(struct)
+        return structures
+
     @profile_resource_usage
     @module_decorator
     def labeling_efficiency_analysis(self, i, parameters, results):
@@ -6587,7 +7036,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     density : dict, channel tag to float
                         density to simulate [nm^2 or nm^3];
                         area density if 2D; volume density if 3D
-                    res_factor : float
+                    granularity : float
                         the spinna res_factor
                     sim_repeats : int
                         number of simulation repeats, for noise reduction
@@ -6618,6 +7067,19 @@ class AutoPicasso(util.AbstractModuleCollection):
         # props = {}
         dimensionality = 2
         pixelsize = self.pixelsize
+        width = max([locs["x"].max() for locs in self.channel_locs]) - min(
+            [locs["x"].min() for locs in self.channel_locs]
+        )
+        height = max([locs["y"].max() for locs in self.channel_locs]) - min(
+            [locs["y"].min() for locs in self.channel_locs]
+        )
+        try:
+            depth = max([locs["z"].max() for locs in self.channel_locs]) - min(
+                [locs["z"].min() for locs in self.channel_locs]
+            )
+        except ValueError:
+            depth = None
+
         if isinstance(parameters["density"], list):
             density = {
                 tag: parameters["density"][cid]
@@ -6654,26 +7116,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                     (locs.x * pixelsize, locs.y * pixelsize)
                 ).T
                 # dim = 2
-        # target monomer
-        structures = self._create_spinna_structure(
-            [target], [[1]], pair_distance
-        )
-        # reference monomer
-        structures += self._create_spinna_structure(
-            [reference], [[1]], pair_distance
-        )
-        # heterodimer
-        struct = {
-            "Molecular targets": [target, reference],
-            "Structure title": f"{target}-{reference}-heterodimer",
-            f"{target}_x": [-pair_distance / 2],
-            f"{target}_y": [0],
-            f"{target}_z": [0],
-            f"{reference}_x": [pair_distance / 2],
-            f"{reference}_y": [0],
-            f"{reference}_z": [0],
-        }
-        structures.append(struct)
 
         compound_density = density_gt[target] / 1 + density_gt[reference] / 1
         # area = parameters["n_simulate"] / (compound_density / 1e6)
@@ -6686,9 +7128,63 @@ class AutoPicasso(util.AbstractModuleCollection):
             for tag in [target, reference]
         }
 
-        structures, targets = picasso_outpost.load_structures_from_dict(
-            structures
-        )
+        if isinstance(pair_distance, list):
+            all_test_structures = []
+            for test_distance in pair_distance:
+                structures = self.create_le_structures(
+                    target, reference, test_distance
+                )
+                (structures, targets) = (
+                    picasso_outpost.load_structures_from_dict(structures)
+                )
+                all_test_structures.append(structures)
+                logger.debug(f"pair distance: {test_distance}")
+                tgts = []
+                for structure in structures:
+                    for tgt in structure.targets:
+                        if tgt not in tgts:
+                            tgts.append(tgt)
+
+                # number of molecular targets in each structure; each row gives one
+                # target species and each column gives one structure
+                n_t = len(tgts)
+                n_s = len(structures)
+                logger.debug(f"{n_s} structures: {str(structures)}")
+                logger.debug(f"{n_t} targets: {str(tgts)}")
+
+            logger.debug(str(all_test_structures))
+            label_unc = {
+                k: v if isinstance(v, list) else [v]
+                for k, v in parameters["labeling_uncertainty"].items()
+            }
+            (best_score, best_idx, label_unc, best_mixer, best_props) = (
+                spinna.compare_models(
+                    models=all_test_structures,
+                    exp_data=exp_data,
+                    granularity=parameters["granularity"],
+                    label_unc=parameters["labeling_uncertainty"],
+                    le=labeling_efficiency,
+                    width=width,
+                    height=height,
+                    depth=depth,
+                )
+            )
+            pair_distance = pair_distance[best_idx]
+            structures = all_test_structures[best_idx]
+            labeling_uncertainty = label_unc
+            results["best_pair_distance"] = pair_distance
+        else:
+            structures = self.create_le_structures(
+                target, reference, pair_distance
+            )
+            labeling_uncertainty = {
+                k: v[0] if isinstance(v, list) else v
+                for k, v in parameters["labeling_uncertainty"].items()
+            }
+
+            structures, targets = picasso_outpost.load_structures_from_dict(
+                structures
+            )
 
         N_structures = picasso_outpost.generate_N_structures(
             structures, n_sim_targets, parameters["granularity"]
@@ -6704,7 +7200,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         spinna_parameters = {
             "structures": structures,
-            "label_unc": parameters["labeling_uncertainty"],
+            "label_unc": labeling_uncertainty,
             "le": labeling_efficiency,
             "mask_dict": None,
             "width": np.sqrt(area * 1e6),
@@ -6725,6 +7221,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             "nn_plotted": parameters["nn_nth"],
             "result_dir": results["folder"],
             "n_simulated": n_sim_targets,
+            "bootstrap": parameters.get("bootstrap"),
         }
 
         result, fp_fig = picasso_outpost.single_spinna_run(**spinna_parameters)
@@ -6742,22 +7239,48 @@ class AutoPicasso(util.AbstractModuleCollection):
                 pass
             fp_fig_out.append(fp_out)
         results["fp_fig"] = fp_fig_out
-        props = result["Fitted proportions of structures"]  # given in percent
+        props = result["props"]  # given in percent
         prop_t = props[0]
         prop_r = props[1]
         prop_tr = props[2]
+        std_t = result["props_std"][0]
+        std_r = result["props_std"][1]
+        std_tr = result["props_std"][2]
+        results["spinna_props_std"] = result["props_std"]
+        results["spinna_props_std"] = result["props_std"]
 
         # SPINNA outputs proportions in terms of #molecules
         le_target = prop_tr / (2 * prop_r + prop_tr)
         le_reference = prop_tr / (2 * prop_t + prop_tr)
 
+        # error propagation for std
+        def le_std(prop_sglo, prop_dbl, std_sglo, std_dbl):
+            """Calculate the standard deviation of le,
+            by error propagation: sum of derivatives
+            with respect to both variables multiplied by their std
+            """
+            deriv_sglo = -2 * prop_dbl / ((2 * prop_sglo + prop_dbl) ** 2)
+            deriv_dbl = (2 * prop_sglo + prop_dbl) ** (-1) - prop_dbl / (
+                2 * prop_sglo + prop_dbl
+            ) ** 2
+            return np.abs(deriv_sglo * std_sglo) + np.abs(deriv_dbl * std_dbl)
+
+        le_target_std = le_std(prop_r, prop_tr, std_r, std_tr)
+        le_reference_std = le_std(prop_t, prop_tr, std_t, std_tr)
+
         results["labeling_efficiency"] = {
             parameters["target_name"]: le_target,
             parameters["reference_name"]: le_reference,
         }
+        results["labeling_efficiency_std"] = {
+            parameters["target_name"]: le_target_std,
+            parameters["reference_name"]: le_reference_std,
+        }
         # results for compatibility with pairwise analysis
         results["labeling_efficiency_target"] = le_target
         results["labeling_efficiency_reference"] = le_reference
+        results["labeling_efficiency_std_target"] = le_target_std
+        results["labeling_efficiency_std_reference"] = le_reference_std
         results["fp_fig_AA"] = fp_fig_out[0]
         results["fp_fig_AB"] = fp_fig_out[1]
         results["fp_fig_BA"] = fp_fig_out[2]

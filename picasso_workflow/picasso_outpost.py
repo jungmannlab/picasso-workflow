@@ -49,11 +49,14 @@ logger = logging.getLogger(__name__)
 def align_channels(
     channel_locs,
     channel_info,
+    channel_tags=None,
     max_iterations=5,
     convergence=0.001,
     fiducial_locs=None,
     force_method=None,
     max_shift=None,
+    plot_histogram=False,
+    plot_dir=None,
 ):
     """This is taken from picasso.gui.render.View.align. As the code is not
     modular enough, it is replicated here. Potentially, this could go into
@@ -74,8 +77,15 @@ def align_channels(
         force_method : None or str
             "RCC": force usage of RCC algorithm, also with fiducials present.
             "picked": force usage of 'by picked' algorithm
+            "filtered_RCC": force usage of filtered RCC algorithm based on
+            shift histograms
         max_shift : float
-            the maximum shift between picks, if undifting fiducials by picked
+            the maximum shift between picks, if undifting fiducials by picked,
+            or the maximum expected shift for filtered_RCC alignment
+        plot_histogram : bool, default False
+            Whether to save 2D histogram plots for filtered_RCC alignment
+        plot_dir : str, optional
+            Directory to save histogram plots for filtered_RCC alignment
     Returns:
         shift : list (len 2-3) of lists (len iterations)
             the shifts in x, y, (z) for each iteration, averaged over
@@ -100,7 +110,7 @@ def align_channels(
     else:
         use_fiducials = False
 
-    if fiducial_locs is not None and not force_method == "RCC":
+    if fiducial_locs is not None and force_method not in ["RCC", "RSSO"]:
         # sort and select corresponding fiducials
         nfidu = [len(np.unique(locs["group"])) for locs in fiducial_locs]
         logger.debug(f"# fiducials before match and sort: {nfidu}")
@@ -115,6 +125,20 @@ def align_channels(
                 fiducial_locs,
             )
         )
+        fp_figs = []
+    elif force_method == "RSSO":
+        algo_used = "RSSO"
+        # Use max_shift parameter if provided, otherwise default to 10.0
+        max_shift_param = max_shift if max_shift is not None else 10.0
+        shift, fp_figs = align_by_rsso(
+            channel_locs,
+            channel_tags,
+            max_shift=max_shift_param,
+            plot_histogram=plot_histogram,
+            plot_dir=plot_dir,
+        )
+        # Create cumulative_shift array for compatibility
+        cumulative_shift = np.array(shift)[..., np.newaxis]
     else:
         algo_used = "RCC"
         (shift, cumulative_shift, channel_locs, fiducial_locs) = align_by_rcc(
@@ -124,8 +148,9 @@ def align_channels(
             convergence,
             fiducial_locs,
         )
+        fp_figs = []
 
-    return shift, cumulative_shift, use_fiducials, algo_used
+    return shift, cumulative_shift, use_fiducials, algo_used, fp_figs
 
 
 def align_by_picked(channel_locs, fiducial_locs):
@@ -277,6 +302,632 @@ def shift_from_rcc(channel_locs, channel_info):
     return imageprocess.rcc(images, callback=progress.set_value)
 
 
+def align_by_rsso(
+    channel_locs,
+    channel_tags=None,
+    max_shift=10.0,
+    plot_histogram=False,
+    plot_dir=None,
+):
+    """
+    Align channels using redundent spot shift overrepresentation (RSSO)
+    based on shift histograms of all channel combinations.
+
+    This function calculates shifts between all channel pairs to provide
+    redundant measurements, then solves for the optimal alignment using
+    least squares. It assumes that localizations in different channels
+    correspond to each other but are shifted by delta_x and delta_y with
+    some normal distributed error.
+
+    Args:
+        channel_locs : list of np.rec.array
+            List of localization arrays for different channels. Each array
+            should have 'x' and 'y' fields.
+        channel_tags : list of str or None
+            the tags to the channels
+        max_shift : float, default 10.0
+            Maximum expected shift in pixels for alignment
+        plot_histogram : bool, default False
+            Whether to save 2D histogram plots for each channel pair
+        plot_dir : str, optional
+            Directory to save histogram plots. If None and plot_histogram
+            is True, saves to current directory.
+
+    Returns:
+        shifts : tuple
+            The channel shifts as (shift_y, shift_x) for compatibility with
+            existing code
+        fp_figs : list
+            List of file paths to saved histogram plots (empty if plot_histogram=False)
+    """
+    n_channels = len(channel_locs)
+    if n_channels < 2:
+        return (np.zeros(n_channels), np.zeros(n_channels)), []
+
+    logger.debug(
+        f"Aligning {n_channels} channels using RSSO method "
+        "with all channel combinations"
+    )
+
+    # Calculate pairwise shifts between all channel combinations
+    pairwise_shifts = {}
+    fp_figs = []
+    n_pairs = 0
+    if channel_tags is None:
+        channel_tags = [str(i) for i in range(n_channels)]
+    for i in range(n_channels):
+        for j in range(i + 1, n_channels):
+            shift_x, shift_y, plot_filepath = _calculate_pairwise_shift(
+                channel_locs[i],
+                channel_locs[j],
+                max_shift,
+                plot_histogram=plot_histogram,
+                plot_dir=plot_dir,
+                channel_pair=(channel_tags[i], channel_tags[j]),
+            )
+
+            if shift_x is not None and shift_y is not None:
+                # Store shift from channel i to channel j
+                pairwise_shifts[(i, j)] = (shift_x, shift_y)
+                n_pairs += 1
+                logger.debug(
+                    f"Channels {i}->{j} shift: "
+                    f"dx={shift_x:.3f}, dy={shift_y:.3f}"
+                )
+
+                # Collect figure file paths if plotting is enabled
+                if plot_filepath is not None:
+                    fp_figs.append(plot_filepath)
+
+    if n_pairs == 0:
+        logger.warning("No valid pairwise shifts found")
+        return (np.zeros(n_channels), np.zeros(n_channels)), []
+
+    # Solve for optimal channel shifts using least squares
+    shifts_x, shifts_y = _solve_optimal_shifts(pairwise_shifts, n_channels)
+
+    # Apply shifts to align channels
+    for i in range(len(channel_locs)):
+        channel_locs[i].x -= shifts_x[i]
+        channel_locs[i].y -= shifts_y[i]
+
+    logger.debug(f"Final channel shifts: x={shifts_x}, y={shifts_y}")
+
+    # Return shifts in format compatible with existing code (y, x order)
+    # and any figure file paths created during plotting
+    return (shifts_x, shifts_y), fp_figs
+
+
+def _calculate_pairwise_shift(
+    locs_i,
+    locs_j,
+    max_shift,
+    plot_histogram=False,
+    plot_dir=None,
+    channel_pair=None,
+):
+    """
+    Calculate shift between two channels using histogram peak finding.
+
+    Args:
+        locs_i : np.rec.array
+            Localizations for first channel
+        locs_j : np.rec.array
+            Localizations for second channel
+        max_shift : float
+            Maximum expected shift in pixels
+        plot_histogram : bool, default False
+            Whether to save 2D histogram plot
+        plot_dir : str, optional
+            Directory to save plots
+        channel_pair : tuple, optional
+            (i, j) channel indices for filename
+
+    Returns:
+        shift_x, shift_y, plot_filepath : float, float, str or None
+            Shift from channel i to channel j, or (None, None, None) if failed.
+            plot_filepath is the path to the saved histogram plot if
+            plot_histogram=True, otherwise None.
+    """
+    if len(locs_i) == 0 or len(locs_j) == 0:
+        return None, None, None
+    # Calculate all pairwise distances and shifts
+    coords_i = np.column_stack([locs_i.x, locs_i.y])
+    coords_j = np.column_stack([locs_j.x, locs_j.y])
+
+    # Use KDTree for efficient nearest neighbor search
+    from scipy.spatial import cKDTree
+
+    tree_i = cKDTree(coords_i)
+
+    # Find all j points within max_shift of any i point
+    valid_shifts_x = []
+    valid_shifts_y = []
+
+    for coord_j in coords_j:
+        # Find all i points within max_shift
+        indices = tree_i.query_ball_point(coord_j, max_shift)
+
+        for i_idx in indices:
+            coord_i = coords_i[i_idx]
+            dx = coord_j[0] - coord_i[0]  # x shift from i to j
+            dy = coord_j[1] - coord_i[1]  # y shift from i to j
+            valid_shifts_x.append(dx)
+            valid_shifts_y.append(dy)
+
+    if len(valid_shifts_x) == 0:
+        return None, None
+    # Create 2D histogram with adaptive binning
+    shift_range = [-max_shift, max_shift]
+    bin_size, bins = _calculate_adaptive_bins(
+        valid_shifts_x, valid_shifts_y, max_shift
+    )
+
+    hist, x_edges, y_edges = np.histogram2d(
+        valid_shifts_x,
+        valid_shifts_y,
+        bins=bins,
+        range=[shift_range, shift_range],
+    )
+
+    # Use 2D Gaussian fitting to find the shift
+    try:
+        shift_x, shift_y = _fit_2d_gaussian_peak(
+            hist, x_edges, y_edges, max_shift
+        )
+        fit_successful = True
+    except (RuntimeError, ValueError) as e:
+        logger.warning(
+            f"2D Gaussian fitting failed: {e}. "
+            "Falling back to histogram maximum."
+        )
+        # Fallback to histogram maximum method
+        peak_idx = np.unravel_index(np.argmax(hist), hist.shape)
+        x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+        y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+        shift_x = x_centers[peak_idx[0]]
+        shift_y = y_centers[peak_idx[1]]
+        fit_successful = False
+
+    # Create and save histogram plot if requested
+    plot_filepath = None
+    if plot_histogram:
+        plot_filepath = _save_shift_histogram_plot(
+            hist,
+            x_edges,
+            y_edges,
+            shift_x,
+            shift_y,
+            max_shift,
+            plot_dir,
+            channel_pair,
+            fit_successful,
+        )
+
+    return shift_x, shift_y, plot_filepath
+
+
+def _calculate_adaptive_bins(valid_shifts_x, valid_shifts_y, max_shift):
+    """
+    Calculate adaptive bin size and number of bins for optimal histogram.
+
+    Args:
+        valid_shifts_x : list
+            X shift values
+        valid_shifts_y : list
+            Y shift values
+        max_shift : float
+            Maximum shift range
+
+    Returns:
+        bin_size : float
+            Calculated bin size in pixels
+        bins : int
+            Number of bins for histogram
+    """
+    base_bin_size = 0.1  # Base bin size of 0.1 pixels
+    n_points = len(valid_shifts_x)
+
+    # Adaptive adjustment based on data density
+    if n_points < 50:
+        # Few points: use larger bins for better statistics
+        bin_size = base_bin_size * 2.0
+    elif n_points < 200:
+        # Moderate points: use base bin size
+        bin_size = base_bin_size
+    else:
+        # Many points: can use smaller bins for higher precision
+        bin_size = base_bin_size * 0.5
+
+    # Calculate number of bins
+    total_range = 2 * max_shift
+    bins = max(10, int(total_range / bin_size))
+
+    # Ensure reasonable limits
+    bins = min(bins, 500)  # Upper limit to prevent excessive computation
+    bins = max(bins, 20)  # Lower limit for meaningful histogram
+
+    logger.debug(
+        f"Adaptive binning: {n_points} points, "
+        f"bin_size={bin_size:.3f}, bins={bins}"
+    )
+
+    return bin_size, bins
+
+
+def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
+    """
+    Fit a 2D Gaussian to the histogram peak to find precise shift location.
+    Values outside the max_shift circle are set to NaN and excluded from fitting.
+
+    Args:
+        hist : np.array
+            2D histogram of shifts
+        x_edges : np.array
+            Histogram x bin edges
+        y_edges : np.array
+            Histogram y bin edges
+        max_shift : float, optional
+            Maximum shift radius. Values outside this circle are set to NaN.
+
+    Returns:
+        shift_x, shift_y : float, float
+            Fitted peak center coordinates
+    """
+    from scipy.optimize import curve_fit
+
+    # Create coordinate grids
+    x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+    y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+    X, Y = np.meshgrid(x_centers, y_centers)
+
+    # Apply circular mask if max_shift is specified
+    hist_masked = hist.T.copy()  # Transpose to match meshgrid convention
+    if max_shift is not None:
+        # Calculate distance from origin for each histogram bin
+        distances = np.sqrt(X**2 + Y**2)
+        # Set values outside max_shift circle to NaN
+        outside_circle = distances > max_shift
+        hist_masked[outside_circle] = np.nan
+        logger.debug(
+            f"Applied circular mask: {np.sum(outside_circle)} bins "
+            f"outside max_shift={max_shift} set to NaN"
+        )
+
+    # Flatten for fitting
+    x_data = X.ravel()
+    y_data = Y.ravel()
+    z_data = hist_masked.ravel()
+
+    # Remove NaN and zero counts for better fitting
+    valid_mask = ~np.isnan(z_data) & (z_data > 0)
+    if np.sum(valid_mask) < 10:
+        raise ValueError("Insufficient non-zero data points for fitting")
+
+    x_fit = x_data[valid_mask]
+    y_fit = y_data[valid_mask]
+    z_fit = z_data[valid_mask]
+
+    # Initial parameter estimates
+    max_idx = np.argmax(z_fit)
+    x0_init = x_fit[max_idx]
+    y0_init = y_fit[max_idx]
+
+    # Improved background estimation using percentiles of valid data
+    background_init = np.percentile(z_fit, 10)  # 10th percentile as background
+    amplitude_init = np.max(z_fit) - background_init  # Peak above background
+    sigma_init = 0.5  # Initial guess for standard deviation
+
+    logger.debug(
+        f"Initial fit parameters: center=({x0_init:.3f}, {y0_init:.3f}), "
+        f"amplitude={amplitude_init:.1f}, background={background_init:.1f}"
+    )
+
+    # Define 2D Gaussian function
+    def gaussian_2d(
+        coords, amplitude, x0, y0, sigma_x, sigma_y, theta, offset
+    ):
+        x, y = coords
+        cos_t, sin_t = np.cos(theta), np.sin(theta)
+        a = (cos_t**2) / (2 * sigma_x**2) + (sin_t**2) / (2 * sigma_y**2)
+        sin_2t = np.sin(2 * theta)
+        b = -sin_2t / (4 * sigma_x**2) + sin_2t / (4 * sigma_y**2)
+        c = (sin_t**2) / (2 * sigma_x**2) + (cos_t**2) / (2 * sigma_y**2)
+        exponent = -(
+            a * (x - x0) ** 2 + 2 * b * (x - x0) * (y - y0) + c * (y - y0) ** 2
+        )
+        return offset + amplitude * np.exp(exponent)
+
+    # Initial parameters: [amplitude, x0, y0, sigma_x, sigma_y, theta, offset]
+    initial_guess = [
+        amplitude_init,
+        x0_init,
+        y0_init,
+        sigma_init,
+        sigma_init,
+        0.0,
+        background_init,
+    ]
+
+    # Parameter bounds with improved background constraints
+    max_amplitude = np.max(z_fit)
+    bounds = (
+        [0, x_centers.min(), y_centers.min(), 0.01, 0.01, -np.pi / 4, 0],
+        [
+            max_amplitude * 2,
+            x_centers.max(),
+            y_centers.max(),
+            2.0,
+            2.0,
+            np.pi / 4,
+            max_amplitude,
+        ],
+    )
+
+    # Perform the fit
+    try:
+        popt, _ = curve_fit(
+            gaussian_2d,
+            (x_fit, y_fit),
+            z_fit,
+            p0=initial_guess,
+            bounds=bounds,
+            maxfev=1000,
+        )
+
+        # Extract fitted center coordinates
+        shift_x = popt[1]  # x0
+        shift_y = popt[2]  # y0
+
+        logger.debug(
+            f"2D Gaussian fit successful: "
+            f"center=({shift_x:.3f}, {shift_y:.3f}), "
+            f"sigma=({popt[3]:.3f}, {popt[4]:.3f}), "
+            f"amplitude={popt[0]:.1f}, background={popt[6]:.1f}"
+        )
+
+        return shift_x, shift_y
+
+    except Exception as e:
+        raise RuntimeError(f"Gaussian fitting failed: {str(e)}")
+
+
+def _save_shift_histogram_plot(
+    hist,
+    x_edges,
+    y_edges,
+    shift_x,
+    shift_y,
+    max_shift,
+    plot_dir,
+    channel_pair,
+    fit_successful=False,
+):
+    """
+    Save 2D histogram plot showing shift distribution and estimated shift.
+
+    Args:
+        hist : np.array
+            2D histogram of shifts
+        x_edges : np.array
+            Histogram x bin edges
+        y_edges : np.array
+            Histogram y bin edges
+        shift_x : float
+            Estimated x shift
+        shift_y : float
+            Estimated y shift
+        max_shift : float
+            Maximum shift range
+        plot_dir : str or None
+            Directory to save plot
+        channel_pair : tuple
+            (i, j) channel indices
+    """
+    import matplotlib.pyplot as plt
+    import os
+
+    # Set up the plot directory
+    if plot_dir is None:
+        plot_dir = "."
+    os.makedirs(plot_dir, exist_ok=True)
+
+    # Create figure and axis
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Create coordinate grids - use bin centers for consistency with fitting
+    x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+    y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+    X_centers, Y_centers = np.meshgrid(x_centers, y_centers)
+
+    # Apply circular mask for visualization (same as fitting)
+    hist_plot = hist.T.copy()
+    if max_shift is not None:
+        distances = np.sqrt(X_centers**2 + Y_centers**2)
+        outside_circle = distances > max_shift
+        hist_plot[outside_circle] = np.nan
+
+    # Plot the 2D histogram - use centers for both histogram and
+    # crosshair consistency
+    # This ensures perfect alignment between the fitted peak and the crosshair
+    im = ax.pcolormesh(
+        X_centers, Y_centers, hist_plot, cmap="viridis", shading="nearest"
+    )
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("Count", rotation=270, labelpad=20)
+
+    # Add circular boundary if max_shift is defined
+    if max_shift is not None:
+        circle = plt.Circle(
+            (0, 0),
+            max_shift,
+            fill=False,
+            color="white",
+            linestyle="--",
+            linewidth=2,
+            alpha=0.8,
+        )
+        ax.add_patch(circle)
+        ax.text(
+            0.02,
+            0.98,
+            f"max_shift = {max_shift:.1f}",
+            transform=ax.transAxes,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
+            fontsize=10,
+        )
+
+    # Mark the estimated shift with a red cross
+    method_str = "2D Gaussian fit" if fit_successful else "Histogram maximum"
+    ax.plot(
+        shift_x,
+        shift_y,
+        "r+",
+        markersize=15,
+        markeredgewidth=1,
+        label=f"Estimated shift: ({shift_x:.3f}, {shift_y:.3f}) [{method_str}]",
+    )
+
+    # Set labels and title
+    ax.set_xlabel("X Shift (pixels)")
+    ax.set_ylabel("Y Shift (pixels)")
+    if channel_pair is not None:
+        title = (
+            f"Shift Histogram: Channel {channel_pair[0]} → {channel_pair[1]}"
+        )
+    else:
+        title = "Shift Histogram"
+    ax.set_title(title)
+
+    # Set axis limits
+    ax.set_xlim(-max_shift, max_shift)
+    ax.set_ylim(-max_shift, max_shift)
+
+    # Add grid and legend
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    # Add text box with statistics
+    total_points = np.sum(hist)
+    peak_count = np.max(hist)
+    textstr = (
+        f"Total shifts: {total_points:.0f}\n" f"Peak count: {peak_count:.0f}"
+    )
+    props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
+    ax.text(
+        0.02,
+        0.98,
+        textstr,
+        transform=ax.transAxes,
+        fontsize=10,
+        verticalalignment="top",
+        bbox=props,
+    )
+
+    # Save the plot
+    if channel_pair is not None:
+        filename = (
+            f"shift_histogram_ch{channel_pair[0]}_to_ch{channel_pair[1]}.png"
+        )
+    else:
+        filename = "shift_histogram.png"
+    filepath = os.path.join(plot_dir, filename)
+
+    ax.set_aspect("equal")
+    plt.tight_layout()
+    plt.savefig(filepath, dpi=150, bbox_inches="tight")
+    # plt.show()
+    plt.close()
+
+    logger.debug(f"Saved shift histogram plot to {filepath}")
+
+    return filepath
+
+
+def _solve_optimal_shifts(pairwise_shifts, n_channels):
+    """
+    Solve for optimal channel shifts using least squares given pairwise
+    measurements.
+
+    The constraint is that shift_j - shift_i = measured_shift_ij for all
+    pairs (i,j). We set the first channel as reference (shift = 0) and
+    solve for the others.
+
+    Args:
+        pairwise_shifts : dict
+            Dictionary with keys (i,j) and values (shift_x, shift_y)
+        n_channels : int
+            Number of channels
+
+    Returns:
+        shifts_x, shifts_y : np.array, np.array
+            Optimal shifts for each channel
+    """
+    if len(pairwise_shifts) == 0:
+        return np.zeros(n_channels), np.zeros(n_channels)
+
+    # Build linear system: A * shifts = b
+    # Each pairwise measurement gives us: shift_j - shift_i = measured_shift
+    n_equations = len(pairwise_shifts)
+    n_unknowns = n_channels - 1  # First channel is reference (shift = 0)
+
+    A_x = np.zeros((n_equations, n_unknowns))
+    A_y = np.zeros((n_equations, n_unknowns))
+    b_x = np.zeros(n_equations)
+    b_y = np.zeros(n_equations)
+
+    eq_idx = 0
+    for (i, j), (shift_x, shift_y) in pairwise_shifts.items():
+        # Equation: shift_j - shift_i = measured_shift
+
+        # Handle reference channel (channel 0 has shift = 0)
+        if i > 0:  # shift_i is unknown
+            A_x[eq_idx, i - 1] = -1
+            A_y[eq_idx, i - 1] = -1
+
+        if j > 0:  # shift_j is unknown
+            A_x[eq_idx, j - 1] = 1
+            A_y[eq_idx, j - 1] = 1
+
+        b_x[eq_idx] = shift_x
+        b_y[eq_idx] = shift_y
+        eq_idx += 1
+
+    # Solve least squares problem
+    try:
+        if n_unknowns > 0:
+            shifts_x_unknowns = np.linalg.lstsq(A_x, b_x, rcond=None)[0]
+            shifts_y_unknowns = np.linalg.lstsq(A_y, b_y, rcond=None)[0]
+        else:
+            shifts_x_unknowns = np.array([])
+            shifts_y_unknowns = np.array([])
+    except np.linalg.LinAlgError:
+        logger.warning(
+            "Failed to solve least squares system, "
+            "using first valid pairwise shift"
+        )
+        # Fallback: use first available pairwise shift
+        (i, j), (shift_x, shift_y) = next(iter(pairwise_shifts.items()))
+        shifts_x_unknowns = np.zeros(n_unknowns)
+        shifts_y_unknowns = np.zeros(n_unknowns)
+        if j > 0:
+            shifts_x_unknowns[j - 1] = shift_x
+            shifts_y_unknowns[j - 1] = shift_y
+
+    # Reconstruct full shift arrays (with reference channel = 0)
+    shifts_x = np.zeros(n_channels)
+    shifts_y = np.zeros(n_channels)
+
+    if n_unknowns > 0:
+        shifts_x[1:] = shifts_x_unknowns
+        shifts_y[1:] = shifts_y_unknowns
+
+    return shifts_x, shifts_y
+
+
 def convert_zeiss_file(filepath_czi, filepath_raw, info=None):
     """Convert Zeiss .czi file into a picasso-readable .raw file.
     Args:
@@ -379,9 +1030,9 @@ def spinna_batch(parameters_filename):
             filepaths of the NND figures
     """
     result_dir, fp_summary, fp_fig = spinna_batch_analysis(parameters_filename)
-    print("result_dir", result_dir)
-    print("fp_summary", fp_summary)
-    print("fp_fig", fp_fig)
+    # print("result_dir", result_dir)
+    # print("fp_summary", fp_summary)
+    # print("fp_fig", fp_fig)
     return result_dir, fp_summary, fp_fig
 
 
@@ -406,6 +1057,7 @@ def single_spinna_run(
     nn_plotted,
     result_dir,
     n_simulated,
+    bootstrap=False,
 ):
     """This function directly runs one spinna simulation.
     The implementation is taken from spinna batch analysis
@@ -441,7 +1093,10 @@ def single_spinna_run(
         gt_coords=exp_data,
         N_sim=sim_repeats,
     ).fit_stoichiometry(
-        N_structures, save=f"{save_filename}_fit_scores.csv", asynch=asynch
+        N_structures,
+        save=f"{save_filename}_fit_scores.csv",
+        asynch=asynch,
+        bootstrap=bootstrap,
     )
 
     # save the results
@@ -465,20 +1120,34 @@ def single_spinna_run(
                 for i in range(len(props_mean))
             ]
         )
+        results["props"] = props_mean
+        results["props_std"] = props_std
     else:
         results["Modified Kolmogorov-Smirnov score"] = score
         results["Fitted proportions of structures"] = opt_props
+        results["props"] = opt_props
+        results["props_std"] = [0] * len(opt_props)
     results["NND bin size (nm)"] = NND_bin
     results["NND max distance (nm)"] = NND_maxdist
 
     # relative proportions of structures for each target
     if len(targets) > 1:
         for target in targets:
-            rel_props = mixer.convert_props_for_target(
-                opt_props,
-                target,
-                n_simulated,
-            )
+            if isinstance(opt_props, tuple):
+                rel_props = mixer.convert_props_for_target(
+                    opt_props[0],
+                    target,
+                    n_simulated,
+                )
+                # rel_props_sd = mixer.convert_props_for_target(
+                #     opt_props[1], target, n_simulated,
+                # )
+            else:
+                rel_props = mixer.convert_props_for_target(
+                    opt_props,
+                    target,
+                    n_simulated,
+                )
             idx_valid = np.where(rel_props != np.inf)[0]
             value = ", ".join(
                 [
@@ -506,8 +1175,12 @@ def single_spinna_run(
     #     duplicate=True
     # )
     n_total = sum(n_simulated.values())
+    if isinstance(opt_props, tuple):
+        opt_prop_vals = opt_props[0]
+    else:
+        opt_prop_vals = opt_props
     dist_sim = spinna.get_NN_dist_simulated(
-        mixer.convert_props_to_counts(opt_props, n_total),
+        mixer.convert_props_to_counts(opt_prop_vals, n_total),
         sim_repeats,
         mixer,
         duplicate=True,
@@ -568,7 +1241,7 @@ def load_structures_from_dict(structure_dict):
     targets : list of strs
         List of all unique molecular targets in the structures.
     """
-    if "Structure title" not in structure_dict[0]:
+    if "Structure title" not in structure_dict[0].keys():
         raise TypeError(
             "Incorrect file. Please choose a file that was created"
             " that was created with Picasso SPINNA."
@@ -736,6 +1409,7 @@ def nndist_loglikelihood_csr(
             min_dist=min_dist,
             max_dist=max_dist,
         )
+        # print(i, dist, prob, np.log(prob))
         log_like += np.sum(np.log(prob))
     return log_like
 
@@ -782,7 +1456,8 @@ def nndistribution_from_csr(
     factor = d / _factorial(k - 1) * lam**k * r ** (d * k - 1)
     dist = factor * np.exp(-lam * r**d)
     # add am even background of observed nn distances, at all distances
-    dist += (bkg_fraction / (np.max(r) - np.min(r))) / (1 + bkg_fraction)
+    if len(r) > 1:
+        dist += (bkg_fraction / (np.max(r) - np.min(r))) / (1 + bkg_fraction)
     dist[dist <= 0] = 1e-200  # np.finfo().eps
     # re-normalize
     if min_dist > 0 or max_dist < np.inf:
@@ -799,7 +1474,7 @@ def nndistribution_from_csr(
         renorm_fact = np.sum(
             prob[(r_temp >= min_dist) & (r_temp <= max_dist)]
         ) / np.sum(prob)
-        print(renorm_fact)
+        # print(renorm_fact)
         dist[(r < min_dist) | (r > max_dist)] = 0
         if renormalize:
             dist = dist / renorm_fact
@@ -810,6 +1485,65 @@ def nndistribution_from_csr(
     # dist[r < min_dist] = 0
     # dist *= renorm_factor
     return dist  # / np.sum(dist)
+
+
+def csr_cdf_for_ks_test(
+    x, k, rho, d=2, min_dist=0, max_dist=np.inf, bkg_fraction=0
+):
+    """CDF of the theoretical CSR distribution for k-th nearest neighbor.
+
+    Used for Kolmogorov-Smirnov goodness-of-fit testing.
+
+    Args:
+        x : float or array-like
+            Distance values to evaluate CDF at
+        k : int
+            k-th nearest neighbor order
+        rho : float
+            Density parameter from CSR fit
+        d : int, default 2
+            Dimensionality (2D or 3D)
+        min_dist : float, default 0
+            Minimum observable distance
+        max_dist : float, default np.inf
+            Maximum observable distance
+        bkg_fraction : float, default 0
+            Background fraction parameter
+
+    Returns:
+        float or array
+            CDF values at input distances
+    """
+    x = np.atleast_1d(x)
+    cdf_values = np.zeros_like(x, dtype=float)
+
+    for i, xi in enumerate(x):
+        if xi <= min_dist:
+            cdf_values[i] = 0.0
+        elif xi >= max_dist:
+            cdf_values[i] = 1.0
+        else:
+            # Calculate CDF by integrating PDF up to xi
+            r_integrate = np.linspace(
+                min_dist, xi, num=min(1000, int(xi * 10))
+            )
+            if len(r_integrate) > 1:
+                pdf_vals = nndistribution_from_csr(
+                    r_integrate,
+                    k,
+                    rho,
+                    d=d,
+                    min_dist=min_dist,
+                    max_dist=max_dist,
+                    bkg_fraction=bkg_fraction,
+                    renormalize=True,
+                )
+                # Numerical integration using trapezoidal rule
+                cdf_values[i] = np.trapz(pdf_vals, r_integrate)
+            else:
+                cdf_values[i] = 0.0
+
+    return cdf_values if len(cdf_values) > 1 else cdf_values[0]
 
 
 ########################################################################
@@ -939,7 +1673,7 @@ def DBSCAN_analysis_pd(clusters_csv, channel_tags):
         barcode_df.loc[:, col] = clusters[col]
 
     barcodes_agg = barcode_df.groupby("barcode").describe()
-    print(barcodes_agg.columns)
+    # print(barcodes_agg.columns)
 
     barcode_map = pd.DataFrame(
         index=np.arange(2 ** len(targets)),
@@ -2289,6 +3023,81 @@ def shifts_from_picked_coordinate(locs, coordinate):
 # End Labeling Efficiency Workflow Modules
 ########################################################################
 
+
+def pick_similar(
+    locs,
+    info,
+    diameter=2,
+    min_n_locs_per_frame=0.01,
+    max_n_locs_per_frame=0.1,
+    min_rmsd=0.1,
+    max_rmsd=0.3,
+):
+    """
+    Searches picks similar to given nlocs/rmsd parameters.
+
+    Focuses on the number of locs and their root mean square
+    displacement from center of mass.
+    Instead of picking "similar" to a few manual picks, the rectangle
+    in nlocs/rmsd space is given directly here
+
+    Args:
+        diameter : float
+            the pick similar diameter
+        min_n_locs_per_frame, max_n_locs_per_frame : float or str
+            the boundaries for min/max nlocs per frame per pick
+            if str: "q0.25" - 0.25-quantile
+        min_rmsd, max_rmsd : float
+            the boundaries for min/max rmsd per pick
+    Returns:
+        similar : list of [x, y] position pairs
+            the positions (picks) of gold beads
+
+    Raises
+    ------
+    NotImplementedError
+        If pick shape is rectangle
+    """
+    maxframe = info[0]["Frames"]
+    # min_n_locs = int(maxframe * min_n_locs_per_frame)
+    # get rmsd and nlocs
+    x_similar, y_similar, rmsds, nlocs = get_pick_similar_vals(
+        locs, info, diameter
+    )
+
+    if isinstance(min_n_locs_per_frame, str):
+        if min_n_locs_per_frame[0] == "q":
+            min_n_locs = np.quantile(nlocs, float(min_n_locs_per_frame[1:]))
+        else:
+            raise AttributeError(
+                "min_n_locs_per_frame must start with q if string"
+            )
+    else:
+        min_n_locs = maxframe * min_n_locs_per_frame
+    if isinstance(max_n_locs_per_frame, str):
+        if max_n_locs_per_frame[0] == "q":
+            max_n_locs = np.quantile(nlocs, float(max_n_locs_per_frame[1:]))
+        else:
+            raise AttributeError(
+                "max_n_locs_per_frame must start with q if string"
+            )
+    else:
+        max_n_locs = maxframe * max_n_locs_per_frame
+
+    labels = -1 * np.ones_like(x_similar)
+    pick_idcs = (
+        (nlocs >= min_n_locs)
+        & (nlocs < max_n_locs)
+        & (rmsds >= min_rmsd)
+        & (rmsds < max_rmsd)
+    )
+    labels[pick_idcs] = 0
+    x_picked = x_similar[pick_idcs]
+    y_picked = y_similar[pick_idcs]
+    picks = list(zip(x_picked, y_picked))
+    return picks, nlocs, rmsds, labels
+
+
 ########################################################################
 # Start pick similar analysis
 # this is basically picasso.postprocess.pick_similar, but instead
@@ -2341,6 +3150,7 @@ def find_structures(
     xi=0.05,
     min_cluster_size=0.05,
 ):
+    """ """
     nframes = info[0]["Frames"]
     min_n_locs = int(nframes * min_n_locs_per_frame)
     # get rmsd and nlocs

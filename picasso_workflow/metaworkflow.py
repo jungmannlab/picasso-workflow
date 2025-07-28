@@ -16,6 +16,7 @@ import multiprocessing
 import pandas as pd
 import logging
 import time
+from datetime import datetime
 import hashlib
 from picasso import io
 import pathlib
@@ -215,11 +216,16 @@ class PathParser:
 
             if isinstance(receptors, list):
                 rcp_idx = receptors.index(k_lvls[-1])
-                dict_query2[rcp_idx] = receptors[rcp_idx]
+                try:
+                    dict_query2[rcp_idx] = k_lvls[-1]
+                except Exception:
+                    pass
             else:
                 rcp_idx = sum([v is not None for v in dict_query2])
-                dict_query2[rcp_idx] = k_lvls[-1]
-            logger.debug(f"created tags {targets}")
+                try:
+                    dict_query2[rcp_idx] = k_lvls[-1]
+                except Exception:
+                    pass
             # check whether input path is windows or posix style
             is_posix = self.check_path_style(v)
             if is_posix:
@@ -230,6 +236,8 @@ class PathParser:
                 dict_query[rcp_idx] = self.windows_path_to_curr_os(
                     v, drive_map=drive_map
                 )
+            logger.debug(f"updated filepaths {filepaths}")
+            logger.debug(f"updated tags {targets}")
         return filepaths, targets
 
 
@@ -447,7 +455,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             execution_item += 1
             if execution_item % self.size != self.rank:
                 continue
-            report_name = tag
+            report_name = tag + "_" + datetime.now().strftime("%y%m%d-%H%M")
             text = f"""
                 Worker of rank {self.rank} working on {report_name}
                 (execution item {execution_item})"""
@@ -470,6 +478,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
                 analysis_config,
                 wkfl_mods,
                 continue_previous_runner=True,
+                postfix="",
             )
             run_wr_kwargs.append(
                 {
@@ -566,7 +575,9 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 continue
 
             if rname := datasets.get("report_name"):
-                report_name = rname
+                report_name = (
+                    rname + "_" + datetime.now().strftime("%y%m%d-%H%M")
+                )
                 # create the corresponding confluence page
                 try:
                     ci = confluence.ConfluenceInterface(
@@ -597,6 +608,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 workflow_modules_multi,
                 continue_previous_runner=True,
                 single_workflow_parallel=False,
+                postfix="",
             )
             run_awr_kwargs.append(
                 {
@@ -938,9 +950,10 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         try:
             ci.create_page(summary_page_title, text)
         except confluence.ConfluenceInterfaceError:
-            pagid, pagtit = ci.get_page_properties(summary_page_title)
-            ci.delete_page(pagid)
-            ci.create_page(summary_page_title, text)
+            # pagid, pagtit = ci.get_page_properties(summary_page_title)
+            # ci.delete_page(pagid)
+            # ci.create_page(summary_page_title, text)
+            logger.debug("Could not create summary page. Probably exists")
         return summary_page_title
 
     def extract_fpfig_from_results(self, awr, figloc):

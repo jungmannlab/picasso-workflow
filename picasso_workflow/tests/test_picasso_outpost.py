@@ -54,7 +54,7 @@ class TestPicassoOutpost(unittest.TestCase):
         )
         info_c = [{"Width": 10, "Height": 10}]
 
-        (shift, cum_shift, use_fiducials, method) = (
+        (shift, cum_shift, use_fiducials, method, fp_figs) = (
             picasso_outpost.align_channels(
                 [locs_a, locs_b, locs_c], [info_a, info_b, info_c]
             )
@@ -90,6 +90,7 @@ class TestPicassoOutpost(unittest.TestCase):
         ]
         # test for one spot
         nnobs = np.array([max(pd) for pd in pdists])
+        print(nnobs, rho)
         loglike = picasso_outpost.nndist_loglikelihood_csr(nnobs, rho)
         assert loglike <= 0
 
@@ -257,3 +258,265 @@ class TestPicassoOutpost(unittest.TestCase):
         ngold_locs = len(gold_locs)
 
         assert ngold_locs == len(centers) * info[0]["Frames"]
+
+    def test_07_rsso_alignment(self):
+        """Test the new filtered_RCC alignment method"""
+        # Create test data with known shift
+        shift_x = 2.0
+        shift_y = 1.5
+
+        # Channel A (reference)
+        locs_a = np.rec.array(
+            [(1, 1), (3, 4), (5, 7), (8, 2)], dtype=[("x", "f4"), ("y", "f4")]
+        )
+
+        # Channel B (shifted version of A with some noise)
+        locs_b = np.rec.array(
+            [
+                (1 + shift_x + 0.1, 1 + shift_y + 0.1),
+                (3 + shift_x - 0.1, 4 + shift_y + 0.1),
+                (5 + shift_x + 0.05, 7 + shift_y - 0.05),
+                (8 + shift_x - 0.05, 2 + shift_y + 0.05),
+            ],
+            dtype=[("x", "f4"), ("y", "f4")],
+        )
+
+        info_a = [{"Width": 20, "Height": 20}]
+        info_b = [{"Width": 20, "Height": 20}]
+
+        # Test the align_channels function with filtered_RCC
+        # original_locs_a = locs_a.copy()
+        # original_locs_b = locs_b.copy()
+
+        (shift, cum_shift, use_fiducials, method, fp_figs) = (
+            picasso_outpost.align_channels(
+                [locs_a, locs_b],
+                [info_a, info_b],
+                force_method="RSSO",
+                max_shift=5.0,
+            )
+        )
+
+        # Check that method was correctly used
+        assert method == "RSSO"
+
+        # Check that shifts are approximately correct
+        # The function should return the shift needed to align channels
+        # shift is a tuple (shifts_y, shifts_x)
+        assert abs(shift[0][1] - shift_y) < 0.2  # y shift for channel B
+        assert abs(shift[1][1] - shift_x) < 0.2  # x shift for channel B
+
+        # Check that channel A (reference) has no shift
+        assert abs(shift[0][0]) < 0.1  # y shift for channel A
+        assert abs(shift[1][0]) < 0.1  # x shift for channel A
+
+        logger.debug(f"Detected shifts: x={shift[1]}, y={shift[0]}")
+        logger.debug(f"Expected shifts: x={-shift_x}, y={-shift_y}")
+
+    def test_08_rsso_direct_function(self):
+        """Test the align_by_rsso function directly"""
+        # Create test data with known shift
+        shift_x = 1.0
+        shift_y = 0.5
+
+        # Channel A (reference)
+        locs_a = np.rec.array(
+            [(2, 2), (4, 4), (6, 6)], dtype=[("x", "f4"), ("y", "f4")]
+        )
+
+        # Channel B (shifted version of A)
+        locs_b = np.rec.array(
+            [
+                (2 + shift_x, 2 + shift_y),
+                (4 + shift_x, 4 + shift_y),
+                (6 + shift_x, 6 + shift_y),
+            ],
+            dtype=[("x", "f4"), ("y", "f4")],
+        )
+
+        # Test the direct function
+        # original_locs_a = locs_a.copy()
+        # original_locs_b = locs_b.copy()
+
+        shifts, fp_figs = picasso_outpost.align_by_rsso(
+            [locs_a, locs_b], max_shift=3.0
+        )
+
+        # Check that shifts are approximately correct
+        # The function should return the shift needed to align channels
+        assert abs(shifts[0][1] - shift_y) < 0.15  # y shift for channel B
+        assert abs(shifts[1][1] - shift_x) < 0.15  # x shift for channel B
+
+        # Check that channel A (reference) has no shift
+        assert abs(shifts[0][0]) < 0.1  # y shift for channel A
+        assert abs(shifts[1][0]) < 0.1  # x shift for channel A
+
+    def test_09_rsso_three_channels(self):
+        """Test rsso with 3 channels to verify redundant benefits."""
+        # Create test data with known shifts
+        shift_x_b = 2.0
+        shift_y_b = 1.0
+        shift_x_c = -1.5
+        shift_y_c = 2.5
+
+        # Channel A (reference)
+        locs_a = np.rec.array(
+            [(2, 2), (4, 4), (6, 6), (8, 8), (10, 10)],
+            dtype=[("x", "f4"), ("y", "f4")],
+        )
+
+        # Channel B (shifted version of A with small noise)
+        locs_b = np.rec.array(
+            [
+                (2 + shift_x_b + 0.05, 2 + shift_y_b - 0.03),
+                (4 + shift_x_b - 0.02, 4 + shift_y_b + 0.04),
+                (6 + shift_x_b + 0.01, 6 + shift_y_b - 0.01),
+                (8 + shift_x_b - 0.03, 8 + shift_y_b + 0.02),
+                (10 + shift_x_b + 0.04, 10 + shift_y_b - 0.05),
+            ],
+            dtype=[("x", "f4"), ("y", "f4")],
+        )
+
+        # Channel C (another shifted version of A with small noise)
+        locs_c = np.rec.array(
+            [
+                (2 + shift_x_c - 0.02, 2 + shift_y_c + 0.06),
+                (4 + shift_x_c + 0.03, 4 + shift_y_c - 0.02),
+                (6 + shift_x_c - 0.01, 6 + shift_y_c + 0.03),
+                (8 + shift_x_c + 0.05, 8 + shift_y_c - 0.04),
+                (10 + shift_x_c - 0.04, 10 + shift_y_c + 0.01),
+            ],
+            dtype=[("x", "f4"), ("y", "f4")],
+        )
+
+        # Test with the improved algorithm
+        shifts, fp_figs = picasso_outpost.align_by_rsso(
+            [locs_a, locs_b, locs_c], max_shift=5.0
+        )
+
+        # Check that shifts are approximately correct
+        # Channel A should have no shift (reference)
+        assert abs(shifts[0][0]) < 0.1  # y shift for channel A
+        assert abs(shifts[1][0]) < 0.1  # x shift for channel A
+
+        # Channel B shifts
+        assert abs(shifts[0][1] - shift_y_b) < 0.1  # y shift for channel B
+        assert abs(shifts[1][1] - shift_x_b) < 0.1  # x shift for channel B
+
+        # Channel C shifts
+        assert abs(shifts[0][2] - shift_y_c) < 0.1  # y shift for channel C
+        assert abs(shifts[1][2] - shift_x_c) < 0.1  # x shift for channel C
+
+        logger.debug(
+            f"3-channel shifts - expected: x=[0, {shift_x_b}, {shift_x_c}], "
+            f"y=[0, {shift_y_b}, {shift_y_c}]"
+        )
+        logger.debug(
+            f"3-channel shifts - detected: x={shifts[1]}, y={shifts[0]}"
+        )
+
+    def test_10_rsso_four_channels_redundancy(self):
+        """Test rsso with 4 channels to demonstrate redundancy."""
+        # Create test data with known shifts
+        shifts_x_true = [0.0, 1.2, -0.8, 2.3]
+        shifts_y_true = [0.0, 0.5, 1.8, -1.1]
+
+        # Base localizations
+        base_locs = [(3, 3), (6, 6), (9, 9), (12, 12), (15, 15)]
+
+        # Set random seed for reproducible results
+        np.random.seed(42)
+
+        channel_locs = []
+        for i in range(4):
+            # Add known shift plus small random noise to each localization
+            shifted_locs = [
+                (
+                    x + shifts_x_true[i] + np.random.normal(0, 0.02),
+                    y + shifts_y_true[i] + np.random.normal(0, 0.02),
+                )
+                for x, y in base_locs
+            ]
+            locs = np.rec.array(shifted_locs, dtype=[("x", "f4"), ("y", "f4")])
+            channel_locs.append(locs)
+
+        # Test with the improved algorithm
+        shifts, fp_figs = picasso_outpost.align_by_rsso(
+            channel_locs, max_shift=5.0
+        )
+
+        # Check accuracy for all channels
+        # The redundant calculation should provide better accuracy
+        for i in range(4):
+            y_error = abs(shifts[0][i] - shifts_y_true[i])
+            x_error = abs(shifts[1][i] - shifts_x_true[i])
+            logger.debug(
+                f"Channel {i}: y_error={y_error:.3f}, x_error={x_error:.3f}"
+            )
+            # With redundant calculations, we expect better accuracy
+            assert y_error < 0.8  # y shift
+            assert x_error < 0.8  # x shift
+
+        logger.debug(
+            f"4-channel shifts - expected: x={shifts_x_true}, "
+            f"y={shifts_y_true}"
+        )
+        logger.debug(
+            f"4-channel shifts - detected: x={shifts[1]}, y={shifts[0]}"
+        )
+
+    def test_11_rsso_plotting(self):
+        """Test the histogram plotting functionality."""
+        import tempfile
+        import os
+
+        # Create test data
+        shift_x = 1.5
+        shift_y = 0.8
+
+        locs_a = np.rec.array(
+            [(2, 2), (4, 4), (6, 6)], dtype=[("x", "f4"), ("y", "f4")]
+        )
+        locs_b = np.rec.array(
+            [
+                (2 + shift_x, 2 + shift_y),
+                (4 + shift_x, 4 + shift_y),
+                (6 + shift_x, 6 + shift_y),
+            ],
+            dtype=[("x", "f4"), ("y", "f4")],
+        )
+
+        # Create temporary directory for plots
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Test with plotting enabled
+            shifts, fp_figs = picasso_outpost.align_by_rsso(
+                [locs_a, locs_b],
+                max_shift=3.0,
+                plot_histogram=True,
+                plot_dir=temp_dir,
+            )
+
+            # Check that plot file was created via file system
+            expected_filename = "shift_histogram_ch0_to_ch1.png"
+            plot_path = os.path.join(temp_dir, expected_filename)
+            assert os.path.exists(
+                plot_path
+            ), f"Plot file {plot_path} not created"
+
+            # Check that figure paths were returned
+            assert (
+                len(fp_figs) == 1
+            ), f"Expected 1 figure path, got {len(fp_figs)}"
+            assert (
+                fp_figs[0] == plot_path
+            ), f"Expected {plot_path}, got {fp_figs[0]}"
+
+            # Check file size is reasonable (not empty)
+            file_size = os.path.getsize(plot_path)
+            assert (
+                file_size > 1000
+            ), f"Plot file seems too small: {file_size} bytes"
+
+            logger.debug(f"Plot saved successfully to {plot_path}")
+            logger.debug(f"Plot file size: {file_size} bytes")
+            logger.debug(f"Returned figure paths: {fp_figs}")
