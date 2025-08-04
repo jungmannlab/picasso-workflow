@@ -29,17 +29,62 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def dummy_module(self):
+    def dummy_module(self, i, parameters, results):
         """A module that does nothing, for quickly removing
         modules in a workflow without having to renumber the
         following result idcs. Only for workflow debugging,
         remove when done.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys: (none)
+                Optional keys: (none)
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results (unchanged)
         """
         pass
 
     @abc.abstractmethod
-    def analysis_documentation(self):
-        """Document the parameters of the analysis machine and software."""
+    def analysis_documentation(self, i, parameters, results):
+        """Document the parameters of the analysis machine and software.
+
+        Creates documentation of the analysis environment including system
+        information, software versions, and configuration parameters.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys: (none)
+                Optional keys: (none)
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                Optional keys:
+                    system_info : dict
+                        System and software version information
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with added system documentation
+        """
         pass
 
     @abc.abstractmethod
@@ -55,23 +100,179 @@ class AbstractModuleCollection(abc.ABC):
     ##########################################################################
 
     @abc.abstractmethod
-    def convert_zeiss_movie(self):
-        """Converts a DNA-PAINT movie into .raw, as supported by picasso."""
+    def convert_zeiss_movie(self, i, parameters, results):
+        """Converts a DNA-PAINT movie into .raw, as supported by picasso.
+
+        Converts Zeiss .czi movie files to picasso-compatible .raw format
+        for subsequent analysis steps in the workflow.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    filepath : str
+                        Path to the input Zeiss .czi file
+                Optional keys:
+                    output_filepath : str
+                        Custom output path for the .raw file
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                Results updated with:
+                    filepath_raw : str
+                        Path to the output .raw file
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with added file path information
+        """
         pass
 
     @abc.abstractmethod
-    def load_dataset_movie(self):
-        """Loads a DNA-PAINT dataset in a format supported by picasso."""
+    def load_dataset_movie(self, i, parameters, results):
+        """Loads a DNA-PAINT dataset in a format supported by picasso.
+
+        Loads DNA-PAINT movie data and metadata into memory for subsequent
+        analysis. Optionally creates sample movies and loads camera configuration.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    filename : str
+                        Path to the movie file to load
+                Optional keys:
+                    sample_movie : dict
+                        Parameters for creating a subsampled movie
+                    load_camera_info : bool
+                        Whether to load camera configuration from picasso.CONFIG
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    picasso version : str
+                        Version of picasso library used
+                    movie.shape : tuple
+                        Movie dimensions (frames, width, height)
+                    sample_movie : dict
+                        Results from subsampled movie creation (if requested)
+
+        Returns:
+            parameters : dict
+                Input parameters, potentially modified (sample_movie paths updated)
+            results : dict
+                Input results with added movie information and metadata
+        """
         pass
 
     @abc.abstractmethod
-    def load_dataset_localizations(self):
-        """Loads a DNA-PAINT dataset in a format supported by picasso."""
+    def load_dataset_localizations(self, i, parameters, results):
+        """Loads a DNA-PAINT dataset in a format supported by picasso.
+
+        Loads pre-computed localization data from file for analysis workflows
+        that skip the identification and localization steps.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    filename : str
+                        Path to the localization file to load
+                Optional keys:
+                    additional_info : dict
+                        Additional metadata to include
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                Results updated with:
+                    picasso version : str
+                        Version of picasso library used
+                    nlocs : int
+                        Number of localizations loaded
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with added localization information
+        """
         pass
 
     @abc.abstractmethod
-    def identify(self):
-        """Identifies localizations in a loaded dataset."""
+    def identify(self, i, parameters, results):
+        """Identifies localizations in a loaded dataset.
+
+        Identifies potential localization sites in the loaded movie using
+        net gradient thresholding. Optionally performs automatic net gradient
+        detection and creates identification vs frame plots.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    box_size : int
+                        Size of the detection box in pixels
+                    min_gradient : float
+                        Minimum net gradient threshold for detection
+                        (required unless auto_netgrad is provided)
+                Optional keys:
+                    auto_netgrad : dict
+                        Parameters for automatic net gradient detection:
+                            box_size : int
+                                Box size for auto detection
+                            frame_numbers : list or int
+                                Frame range for analysis
+                            filename : str
+                                Output filename for auto-detection plot
+                            start_ng : float
+                                Starting net gradient value
+                            zscore : float
+                                Z-score threshold for detection
+                            bins : int
+                                Number of histogram bins
+                    ids_vs_frame : dict
+                        Parameters for plotting identifications vs time:
+                            filename : str
+                                Output filename for plot
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    num_identifications : int
+                        Total number of identifications found
+                    auto_netgrad : dict
+                        Results from automatic net gradient detection (if requested)
+                    ids_vs_frame : dict
+                        Results from identifications vs frame analysis (if requested)
+
+        Returns:
+            parameters : dict
+                Input parameters, potentially with updated min_gradient
+            results : dict
+                Input results with identification statistics and optional plots
+        """
         pass
 
     @abc.abstractmethod
@@ -168,8 +369,46 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def dbscan(self):
-        """Perform clustering using dbscan"""
+    def dbscan(self, i, parameters, results):
+        """Perform clustering using dbscan.
+
+        Applies DBSCAN clustering algorithm to localizations, optionally
+        replacing localizations with cluster centers for subsequent analysis.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    radius : float
+                        The DBSCAN radius parameter in nm
+                    min_samples : int
+                        Minimum number of samples required for a cluster
+                    continue_with_centers : bool
+                        Whether to replace localizations with cluster centers
+                Optional keys:
+                    save_locs : bool
+                        Whether to save clustered localization data to results folder
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    fp_fig_clustersizes : str
+                        Filepath to cluster size distribution figure
+                    fp_centers : str
+                        Filepath to cluster centers file
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with clustering outputs and file paths
+        """
         pass
 
     @abc.abstractmethod
@@ -290,9 +529,62 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def fit_csr(self):
-        """Fit a Completely Spatially Random Distribution to
-        nearest neighbors"""
+    def fit_csr(self, i, parameters, results):
+        """Fit a Completely Spatially Random Distribution to nearest neighbors.
+
+        Fits CSR model to nearest neighbor distance distributions and evaluates
+        goodness-of-fit using statistical measures and visualization.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    nneighbors : str or numpy.ndarray or list
+                        If str: filepath to nearest neighbor data file
+                        If array: 2D array (N, k) of kth nearest neighbor distances
+                        If list: multiple datasets or file paths
+                    dimensionality : int
+                        Spatial dimensionality (2 or 3) for CSR model
+                Optional keys:
+                    kmin : int
+                        Minimum k-th nearest neighbor order to fit (default: 1)
+                    min_dist : float
+                        Minimum observable distance in nm due to technical limits
+                    max_dist : float
+                        Maximum distance for filtering analysis
+                    bkg_fraction : float
+                        Background fraction for fitting
+                    fit_bkg : bool
+                        Whether to fit background (default: False)
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    density : float or list
+                        Fitted spatial density value(s) in units^(-d)
+                    bkg_fraction : list
+                        Background fraction values
+                    fp_fig : str or list
+                        Filepath(s) to CSR fit visualization figure(s)
+                    wasserstein_distances_per_k : list
+                        Wasserstein distances for each k-th nearest neighbor order
+                    mean_wasserstein_distance : float or list
+                        Mean Wasserstein distance across all k orders
+                    ks_pvalues_per_k : list
+                        Kolmogorov-Smirnov p-values for each k-th NN order
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with CSR fitting results and goodness-of-fit metrics
+        """
         pass
 
     # @abs.abstractmethod

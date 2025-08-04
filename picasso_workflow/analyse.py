@@ -441,15 +441,25 @@ class AutoPicasso(util.AbstractModuleCollection):
         modules in a workflow without having to renumber the
         following result idcs. Only for workflow debugging,
         remove when done.
+
         Args:
             i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                and optional keys:
+                The index of the module in the workflow
+            parameters : dict
+                Required keys: (none)
+                Optional keys: (none)
             results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results (unchanged)
         """
         return parameters, results
 
@@ -700,25 +710,44 @@ class AutoPicasso(util.AbstractModuleCollection):
     @module_decorator
     def load_dataset_movie(self, i, parameters, results):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
-        The data is saved in
-            self.movie
-            self.info
+
+        Loads DNA-PAINT movie data and metadata into memory for subsequent
+        analysis. Optionally creates sample movies and loads camera configuration.
+        The data is saved in self.movie and self.info.
+
         Args:
+            i : int
+                The index of the module in the workflow
             parameters : dict
-                necessary items:
+                Required keys:
                     filename : str
-                        the (main) file name to load.
-                optional items:
-                    sample_movie : dict, used for creating a subsampled movie
-                        keywords as used in method create_sample_movie
+                        Path to the movie file to load
+                Optional keys:
+                    sample_movie : dict
+                        Parameters for creating a subsampled movie
                     load_camera_info : bool
-                        whether to load the camera information for the camera
-                        used from picasso.CONFIG
+                        Whether to load camera configuration from picasso.CONFIG
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    picasso version : str
+                        Version of picasso library used
+                    movie.shape : tuple
+                        Movie dimensions (frames, width, height)
+                    sample_movie : dict
+                        Results from subsampled movie creation (if requested)
+
         Returns:
             parameters : dict
-                as input, potentially changed values, for consistency
+                Input parameters, potentially modified (sample_movie paths updated)
             results : dict
-                the analysis results
+                Input results with added movie information and metadata
         """
         results["picasso version"] = picassoversion
         self.movie, self.info = io.load_movie(parameters["filename"])
@@ -1049,25 +1078,62 @@ class AutoPicasso(util.AbstractModuleCollection):
     @module_decorator
     def identify(self, i, parameters, results):
         """Identifies localizations in a loaded dataset.
-        The data is saved in
-            self.identifications
+
+        Identifies potential localization sites in the loaded movie using
+        net gradient thresholding. Optionally performs automatic net gradient
+        detection and creates identification vs frame plots.
+        The data is saved in self.identifications.
+
         Args:
+            i : int
+                The index of the module in the workflow
             parameters : dict
-                necessary items:
-                    box_size : as always
-                    min_gradient : only if not auto_netgrad
-                optional items:
-                    auto_netgrad : dict, in case the min net_gradient
-                        shall be automatically detected.
-                        Items correspond to arguments of _auto_min_netgrad
+                Required keys:
+                    box_size : int
+                        Size of the detection box in pixels
+                    min_gradient : float
+                        Minimum net gradient threshold for detection
+                        (required unless auto_netgrad is provided)
+                Optional keys:
+                    auto_netgrad : dict
+                        Parameters for automatic net gradient detection:
+                            box_size : int
+                                Box size for auto detection
+                            frame_numbers : list or int
+                                Frame range for analysis
+                            filename : str
+                                Output filename for auto-detection plot
+                            start_ng : float
+                                Starting net gradient value
+                            zscore : float
+                                Z-score threshold for detection
+                            bins : int
+                                Number of histogram bins
                     ids_vs_frame : dict
-                        for plotting identifications vs time
-                        items correspond to arguments of _plot_ids_vs_frame
+                        Parameters for plotting identifications vs time:
+                            filename : str
+                                Output filename for plot
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    num_identifications : int
+                        Total number of identifications found
+                    auto_netgrad : dict
+                        Results from automatic net gradient detection (if requested)
+                    ids_vs_frame : dict
+                        Results from identifications vs frame analysis (if requested)
+
         Returns:
             parameters : dict
-                as input, potentially changed values, for consistency
+                Input parameters, potentially with updated min_gradient
             results : dict
-                the analysis results
+                Input results with identification statistics and optional plots
         """
         # auto-detect net grad if required:
         if (autograd_pars := parameters.get("auto_netgrad")) is not None:
@@ -3978,25 +4044,45 @@ class AutoPicasso(util.AbstractModuleCollection):
     @profile_resource_usage
     @module_decorator
     def dbscan(self, i, parameters, results):
-        """Perform dbscan clustering. After this module, the standard
-        locs will be the cluster centers.
+        """Perform clustering using dbscan.
+
+        Applies DBSCAN clustering algorithm to localizations, optionally
+        replacing localizations with cluster centers for subsequent analysis.
+        After this module, the standard locs will be the cluster centers.
+
         Args:
             i : int
-                the index of the module
-            parameters: dict
-                with required keys:
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
                     radius : float
-                        the dbscan radius, in nm
-                    min_samples : float
-                        the dbscan min_samples
+                        The DBSCAN radius parameter in nm
+                    min_samples : int
+                        Minimum number of samples required for a cluster
                     continue_with_centers : bool
-                        whether to keep the centers as locs for the next steps
-                and optional keys:
+                        Whether to replace localizations with cluster centers
+                Optional keys:
                     save_locs : bool
-                        whether to save the locs into the results folder
+                        Whether to save clustered localization data to results folder
             results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    fp_fig_clustersizes : str
+                        Filepath to cluster size distribution figure
+                    fp_centers : str
+                        Filepath to cluster centers file
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with clustering outputs and file paths
         """
         pixelsize = self.pixelsize
         radius = parameters["radius"] / pixelsize
@@ -6345,37 +6431,60 @@ class AutoPicasso(util.AbstractModuleCollection):
     @profile_resource_usage
     @module_decorator
     def fit_csr(self, i, parameters, results):
-        """Fit a Completely Spatially Random Distribution to
-        nearest neighbors and evaluate goodness-of-fit
+        """Fit a Completely Spatially Random Distribution to nearest neighbors.
+
+        Fits CSR model to nearest neighbor distance distributions and evaluates
+        goodness-of-fit using statistical measures and visualization.
+
         Args:
             i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    nneighbors : str or 2D array
-                        if str: filepath to a txt file of numpy-saved data
-                            (as by module nneighbor above)
-                        if 2D array (N, k): kth nearest neighbor distances
-                            for N points
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    nneighbors : str or numpy.ndarray or list
+                        If str: filepath to nearest neighbor data file
+                        If array: 2D array (N, k) of kth nearest neighbor distances
+                        If list: multiple datasets or file paths
                     dimensionality : int
-                        the dimensionality: 2 or 3 - 2D or 3D
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-                    min_dist : float
-                        the minimum distance in nm observeable due to
-                        technical reasons
+                        Spatial dimensionality (2 or 3) for CSR model
+                Optional keys:
                     kmin : int
-                        the minimum-th NN to fit. default 1
+                        Minimum k-th nearest neighbor order to fit (default: 1)
+                    min_dist : float
+                        Minimum observable distance in nm due to technical limits
+                    max_dist : float
+                        Maximum distance for filtering analysis
+                    bkg_fraction : float
+                        Background fraction for fitting
+                    fit_bkg : bool
+                        Whether to fit background (default: False)
             results : dict
-                the results this function generates. This is created
-                in the decorator wrapper. Includes goodness-of-fit metrics:
-                    wasserstein_distances_per_k : list of lists
-                        Wasserstein distances for each k-th NN order
-                    mean_wasserstein_distance : list of floats
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    density : float or list
+                        Fitted spatial density value(s) in units^(-d)
+                    bkg_fraction : list
+                        Background fraction values
+                    fp_fig : str or list
+                        Filepath(s) to CSR fit visualization figure(s)
+                    wasserstein_distances_per_k : list
+                        Wasserstein distances for each k-th nearest neighbor order
+                    mean_wasserstein_distance : float or list
                         Mean Wasserstein distance across all k orders
-                    ks_pvalues_per_k : list of lists
+                    ks_pvalues_per_k : list
                         Kolmogorov-Smirnov p-values for each k-th NN order
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with CSR fitting results and goodness-of-fit metrics
         """
         if isinstance(parameters["nneighbors"], str):
             nneighbor_list = [np.loadtxt(parameters["nneighbors"])]
@@ -7039,17 +7148,28 @@ class AutoPicasso(util.AbstractModuleCollection):
     @profile_resource_usage
     @module_decorator
     def save_datasets_aggregated(self, i, parameters, results):
-        """save data of multiple single-dataset workflows from one
+        """Save data of multiple single-dataset workflows from one
         aggregation workflow.
+
+        Saves all channel localization data and metadata from the aggregated
+        workflow to individual files in the results folder.
+
         Args:
             i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                and optional keys:
+                The index of the module in the workflow
+            parameters : dict
+                Required keys: (none)
+                Optional keys: (none)
             results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+                The results dictionary, updated with:
+                    filepaths : list
+                        List of all saved file paths from the aggregated datasets
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Updated results dictionary with saved file paths
         """
         allfps = self._save_datasets_agg(results["folder"])
         results["filepaths"] = allfps
@@ -7057,7 +7177,19 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     def _save_datasets_agg(self, folder):
-        """ """
+        """Save aggregated channel datasets to individual HDF5 files.
+
+        Internal helper method that iterates through all channels and saves
+        their localization data and metadata to separate files.
+
+        Args:
+            folder : str
+                Target folder path where files will be saved
+
+        Returns:
+            allfps : list of str
+                List of all saved file paths
+        """
         allfps = []
         for locs, info, tag in zip(
             self.channel_locs, self.channel_info, self.channel_tags
@@ -11009,7 +11141,34 @@ class AutoPicasso(util.AbstractModuleCollection):
     @profile_resource_usage
     @module_decorator
     def random_val(self, i, parameters, results):
-        """For debugging and testing the pairwise module"""
+        """Generate random values and plot for debugging and testing the pairwise module.
+
+        Creates a random value and generates a test plot with random data
+        for debugging purposes in pairwise module workflows.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    xlabel : str
+                        Label for the x-axis of the test plot
+                    ylabel : str
+                        Label for the y-axis of the test plot
+                Optional keys: (none)
+            results : dict
+                The results dictionary, updated with:
+                    random_val : float
+                        A random value between 0 and 1
+                    fp_fig : str
+                        Filepath to the generated test figure
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Updated results dictionary with random value and figure path
+        """
         results["random_val"] = np.random.rand()
         fig, ax = plt.subplots()
         x = np.arange(100)
