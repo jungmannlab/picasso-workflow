@@ -111,7 +111,21 @@ class ConfluenceReporter(AbstractModuleCollection):
                 Continuing on the pre-existing page"""
             )
 
-    def report_error(self, e, module, postpone_report=False):
+    def report_error(self, e, module):
+        """Report errors that occur during analysis to Confluence.
+
+        Creates a Confluence page section documenting errors that occurred
+        during workflow execution, including exception details and traceback.
+
+        Args:
+            e : Exception
+                The exception that occurred during analysis
+            module : str
+                Name or identifier of the module where the error occurred
+
+        Returns:
+            None
+        """
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>ERROR OCCURRED</strong></p>
@@ -131,6 +145,25 @@ class ConfluenceReporter(AbstractModuleCollection):
         modules in a workflow without having to renumber the
         following result idcs. Only for workflow debugging,
         remove when done.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys: (none)
+                Optional keys: (none)
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results (unchanged)
         """
         logger.debug("dummy_module.")
         text = f"""
@@ -419,9 +452,38 @@ class ConfluenceReporter(AbstractModuleCollection):
         Generates Confluence documentation for movie loading process.
 
         Args:
-            localize_params : dict
-                net_gradient : the net gradient used
-                frames : the number of frames
+            i : int
+                The index of the module in the workflow
+            pars_load : dict
+                Required keys:
+                    filename : str
+                        Path to the movie file to load
+                Optional keys:
+                    sample_movie : dict
+                        Parameters for creating a subsampled movie
+                    load_camera_info : bool
+                        Whether to load camera configuration from picasso.CONFIG
+            results_load : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    picasso version : str
+                        Version of picasso library used
+                    movie.shape : tuple
+                        Movie dimensions (frames, width, height)
+                    sample_movie : dict
+                        Results from subsampled movie creation (if requested)
+
+        Returns:
+            pars_load : dict
+                Input parameters, potentially modified (sample_movie paths updated)
+            results_load : dict
+                Input results with added movie information and metadata
         """
         logger.debug("Reporting a loaded dataset.")
         text = f"""
@@ -485,8 +547,31 @@ class ConfluenceReporter(AbstractModuleCollection):
 
         Args:
             i : int
+                The index of the module in the workflow
             parameters : dict
+                Required keys:
+                    filename : str
+                        Path to the localization file to load
+                Optional keys:
+                    additional_info : dict
+                        Additional metadata to include
             results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                Results updated with:
+                    picasso version : str
+                        Version of picasso library used
+                    nlocs : int
+                        Number of localizations loaded
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with added localization information
         """
         logger.debug("Reporting a loaded dataset.")
         text = f"""
@@ -515,13 +600,55 @@ class ConfluenceReporter(AbstractModuleCollection):
         Generates Confluence documentation for the identification process.
 
         Args:
-            localize_params : dict
-                net_gradient : the net gradient used
-                frames : the number of frames
-            fn_movie : str
-                the filename to the movie generated
-            fn_hist : str
-                the filename to the histogram plot generated
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    box_size : int
+                        Size of the detection box in pixels
+                    min_gradient : float
+                        Minimum net gradient threshold for detection
+                        (required unless auto_netgrad is provided)
+                Optional keys:
+                    auto_netgrad : dict
+                        Parameters for automatic net gradient detection:
+                            box_size : int
+                                Box size for auto detection
+                            frame_numbers : list or int
+                                Frame range for analysis
+                            filename : str
+                                Output filename for auto-detection plot
+                            start_ng : float
+                                Starting net gradient value
+                            zscore : float
+                                Z-score threshold for detection
+                            bins : int
+                                Number of histogram bins
+                    ids_vs_frame : dict
+                        Parameters for plotting identifications vs time:
+                            filename : str
+                                Output filename for plot
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    num_identifications : int
+                        Total number of identifications found
+                    auto_netgrad : dict
+                        Results from automatic net gradient detection (if requested)
+                    ids_vs_frame : dict
+                        Results from identifications vs frame analysis (if requested)
+
+        Returns:
+            parameters : dict
+                Input parameters, potentially with updated min_gradient
+            results : dict
+                Input results with identification statistics and optional plots
         """
         logger.debug("Reporting Identification.")
         text = f"""
