@@ -97,6 +97,20 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     def report_error(self, e, module):
+        """Report errors that occur during analysis to Confluence.
+
+        Creates a Confluence page section documenting errors that occurred
+        during workflow execution, including exception details and traceback.
+
+        Args:
+            e : Exception
+                The exception that occurred during analysis
+            module : str
+                Name or identifier of the module where the error occurred
+
+        Returns:
+            None
+        """
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>ERROR OCCURRED</strong></p>
@@ -116,6 +130,25 @@ class ConfluenceReporter(AbstractModuleCollection):
         modules in a workflow without having to renumber the
         following result idcs. Only for workflow debugging,
         remove when done.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys: (none)
+                Optional keys: (none)
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results (unchanged)
         """
         logger.debug("dummy_module.")
         text = f"""
@@ -158,7 +191,38 @@ class ConfluenceReporter(AbstractModuleCollection):
     ##########################################################################
 
     def convert_zeiss_movie(self, i, parameters, results):
-        """Descries converting from Zeiss."""
+        """Converts a DNA-PAINT movie into .raw, as supported by picasso.
+
+        Converts Zeiss .czi movie files to picasso-compatible .raw format
+        for subsequent analysis steps in the workflow.
+        Generates Confluence documentation for the conversion process.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    filepath : str
+                        Path to the input Zeiss .czi file
+                Optional keys:
+                    output_filepath : str
+                        Custom output path for the .raw file
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                Results updated with:
+                    filepath_raw : str
+                        Path to the output .raw file
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with added file path information
+        """
         logger.debug("Reporting convert_zeiss_movie.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -173,11 +237,45 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     def load_dataset_movie(self, i, pars_load, results_load):
-        """Describes the loading
+        """Loads a DNA-PAINT dataset in a format supported by picasso.
+
+        Loads DNA-PAINT movie data and metadata into memory for subsequent
+        analysis. Optionally creates sample movies and loads camera configuration.
+        Generates Confluence documentation for movie loading process.
+
         Args:
-            localize_params : dict
-                net_gradient : the net gradient used
-                frames : the number of frames
+            i : int
+                The index of the module in the workflow
+            pars_load : dict
+                Required keys:
+                    filename : str
+                        Path to the movie file to load
+                Optional keys:
+                    sample_movie : dict
+                        Parameters for creating a subsampled movie
+                    load_camera_info : bool
+                        Whether to load camera configuration from picasso.CONFIG
+            results_load : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    picasso version : str
+                        Version of picasso library used
+                    movie.shape : tuple
+                        Movie dimensions (frames, width, height)
+                    sample_movie : dict
+                        Results from subsampled movie creation (if requested)
+
+        Returns:
+            pars_load : dict
+                Input parameters, potentially modified (sample_movie paths updated)
+            results_load : dict
+                Input results with added movie information and metadata
         """
         logger.debug("Reporting a loaded dataset.")
         text = f"""
@@ -222,11 +320,39 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     def load_dataset_localizations(self, i, parameters, results):
-        """Describes the loading
+        """Loads a DNA-PAINT dataset in a format supported by picasso.
+
+        Loads pre-computed localization data from file for analysis workflows
+        that skip the identification and localization steps.
+        Generates Confluence documentation for loading localization data.
+
         Args:
             i : int
+                The index of the module in the workflow
             parameters : dict
+                Required keys:
+                    filename : str
+                        Path to the localization file to load
+                Optional keys:
+                    additional_info : dict
+                        Additional metadata to include
             results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                Results updated with:
+                    picasso version : str
+                        Version of picasso library used
+                    nlocs : int
+                        Number of localizations loaded
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with added localization information
         """
         logger.debug("Reporting a loaded dataset.")
         text = f"""
@@ -247,15 +373,63 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     def identify(self, i, parameters, results):
-        """Describes the identify step
+        """Identifies localizations in a loaded dataset.
+
+        Identifies potential localization sites in the loaded movie using
+        net gradient thresholding. Optionally performs automatic net gradient
+        detection and creates identification vs frame plots.
+        Generates Confluence documentation for the identification process.
+
         Args:
-            localize_params : dict
-                net_gradient : the net gradient used
-                frames : the number of frames
-            fn_movie : str
-                the filename to the movie generated
-            fn_hist : str
-                the filename to the histogram plot generated
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    box_size : int
+                        Size of the detection box in pixels
+                    min_gradient : float
+                        Minimum net gradient threshold for detection
+                        (required unless auto_netgrad is provided)
+                Optional keys:
+                    auto_netgrad : dict
+                        Parameters for automatic net gradient detection:
+                            box_size : int
+                                Box size for auto detection
+                            frame_numbers : list or int
+                                Frame range for analysis
+                            filename : str
+                                Output filename for auto-detection plot
+                            start_ng : float
+                                Starting net gradient value
+                            zscore : float
+                                Z-score threshold for detection
+                            bins : int
+                                Number of histogram bins
+                    ids_vs_frame : dict
+                        Parameters for plotting identifications vs time:
+                            filename : str
+                                Output filename for plot
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    num_identifications : int
+                        Total number of identifications found
+                    auto_netgrad : dict
+                        Results from automatic net gradient detection (if requested)
+                    ids_vs_frame : dict
+                        Results from identifications vs frame analysis (if requested)
+
+        Returns:
+            parameters : dict
+                Input parameters, potentially with updated min_gradient
+            results : dict
+                Input results with identification statistics and optional plots
         """
         logger.debug("Reporting Identification.")
         text = f"""
@@ -679,6 +853,39 @@ class ConfluenceReporter(AbstractModuleCollection):
     #     )
 
     def density(self, i, parameters, results):
+        """Document local density computation analysis.
+
+        Generates Confluence documentation for local localization density
+        calculation, including computation parameters and timing information.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    radius : float
+                        Radius for local density calculation in nm
+                Optional keys:
+                    save_locs : bool
+                        Whether to save density-annotated localizations
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    nlocs : int
+                        Number of localizations processed
+                Optional keys:
+                    density_stats : dict
+                        Statistical summary of density calculations
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results (unchanged)
+        """
         logger.debug("Reporting density.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -699,6 +906,50 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def dbscan(self, i, parameters, results, parameter_text, result_text):
+        """Perform clustering using dbscan.
+
+        Applies DBSCAN clustering algorithm to localizations, optionally
+        replacing localizations with cluster centers for subsequent analysis.
+        Generates Confluence documentation for the DBSCAN clustering analysis.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    radius : float
+                        The DBSCAN radius parameter in nm
+                    min_samples : int
+                        Minimum number of samples required for a cluster
+                    continue_with_centers : bool
+                        Whether to replace localizations with cluster centers
+                Optional keys:
+                    save_locs : bool
+                        Whether to save clustered localization data to results folder
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    fp_fig_clustersizes : str
+                        Filepath to cluster size distribution figure
+                    fp_centers : str
+                        Filepath to cluster centers file
+            parameter_text : str
+                Pre-formatted parameter documentation text
+            result_text : str
+                Pre-formatted results documentation text
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with clustering outputs and file paths
+        """
         logger.debug("Reporting dbscan.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -733,6 +984,43 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     def hdbscan(self, i, parameters, results):
+        """Perform clustering using hdbscan.
+
+        Applies HDBSCAN (Hierarchical DBSCAN) clustering algorithm to localizations.
+        Generates Confluence documentation for HDBSCAN clustering analysis.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    min_cluster : int
+                        Minimum cluster size for HDBSCAN
+                    min_sample : int
+                        Minimum samples parameter for HDBSCAN
+                Optional keys:
+                    continue_with_centers : bool
+                        Whether to use cluster centers for subsequent analysis
+                    save_locs : bool
+                        Whether to save clustered localization data
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                Optional keys:
+                    n_clusters : int
+                        Number of clusters identified
+                    cluster_centers : numpy.ndarray
+                        Coordinates of cluster centers
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results (unchanged)
+        """
         logger.debug("Reporting hdbscan.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1005,6 +1293,66 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def fit_csr(self, i, parameters, results, parameter_text, result_text):
+        """Fit a Completely Spatially Random Distribution to nearest neighbors.
+
+        Fits CSR model to nearest neighbor distance distributions and evaluates
+        goodness-of-fit using statistical measures and visualization.
+        Generates Confluence documentation for CSR distribution fitting analysis.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    nneighbors : str or numpy.ndarray or list
+                        If str: filepath to nearest neighbor data file
+                        If array: 2D array (N, k) of kth nearest neighbor distances
+                        If list: multiple datasets or file paths
+                    dimensionality : int
+                        Spatial dimensionality (2 or 3) for CSR model
+                Optional keys:
+                    kmin : int
+                        Minimum k-th nearest neighbor order to fit (default: 1)
+                    min_dist : float
+                        Minimum observable distance in nm due to technical limits
+                    max_dist : float
+                        Maximum distance for filtering analysis
+                    bkg_fraction : float
+                        Background fraction for fitting
+                    fit_bkg : bool
+                        Whether to fit background (default: False)
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    density : float or list
+                        Fitted spatial density value(s) in units^(-d)
+                    bkg_fraction : list
+                        Background fraction values
+                    fp_fig : str or list
+                        Filepath(s) to CSR fit visualization figure(s)
+                    wasserstein_distances_per_k : list
+                        Wasserstein distances for each k-th nearest neighbor order
+                    mean_wasserstein_distance : float or list
+                        Mean Wasserstein distance across all k orders
+                    ks_pvalues_per_k : list
+                        Kolmogorov-Smirnov p-values for each k-th NN order
+            parameter_text : str
+                Pre-formatted parameter documentation text
+            result_text : str
+                Pre-formatted results documentation text
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with CSR fitting results and goodness-of-fit metrics
+        """
         logger.debug("Reporting fit_csr.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
