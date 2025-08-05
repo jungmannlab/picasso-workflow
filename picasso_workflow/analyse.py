@@ -6626,6 +6626,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                         the minimum value(s) to accept
                     maxval : dtype of field (or list of it)
                         the maximum value(s) to accept
+                    mode : str
+                        the mode of threshold application:
+                         - absolute: minval and maxval are values
+                            in units of the field
+                         - zscore: minval and maxval are in units of
+                            standard deviations from the mean
+                            (-2, 2 means cut off at 2*std from mean)
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -6642,6 +6649,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                 all_xmin = [None] * len(all_field)
             if all_xmax is None:
                 all_xmax = [None] * len(all_field)
+        if parameters.get("mode") == "zscore":
+            # Turn from zscores into absolute values
+            for i, field in enumerate(all_field):
+                mean = np.mean(self.locs[field])
+                std = np.std(self.locs[field])
+                all_xmin = [
+                    None if mi is None else mean + mi * std for mi in all_xmin
+                ]
+                all_xmax = [
+                    None if ma is None else mean + ma * std for ma in all_xmax
+                ]
 
         results["nlocs_before"] = len(self.locs)
         # plot heatmaps before filtering
