@@ -2026,7 +2026,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["n_locs_clustered"] = len(clustered_locs)
         results["n_centers"] = len(center_locs)
 
-        self.locs = center_locs
+        self.locs = copy.copy(center_locs)
         self.info = gmm_info
 
         return parameters, results
@@ -6633,6 +6633,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                          - zscore: minval and maxval are in units of
                             standard deviations from the mean
                             (-2, 2 means cut off at 2*std from mean)
+                         - quantile: minval and maxval are quantiles
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -6659,6 +6660,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ]
                 all_xmax = [
                     None if ma is None else mean + ma * std for ma in all_xmax
+                ]
+        elif parameters.get("mode") == "quantile":
+            # Turn from quantiles into absolute values
+            for i, field in enumerate(all_field):
+                all_xmin = [
+                    None if mi is None else np.quantile(self.locs[field], mi)
+                    for mi in all_xmin
+                ]
+                all_xmax = [
+                    None if mi is None else np.quantile(self.locs[field], mi)
+                    for mi in all_xmin
                 ]
 
         results["nlocs_before"] = len(self.locs)
