@@ -8,6 +8,7 @@ Description: Interaction with Confluence
 import logging
 import traceback
 import os
+import numpy as np
 import pandas as pd
 from atlassian import Confluence as con
 from requests.exceptions import ConnectionError, HTTPError
@@ -444,6 +445,104 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     @module_decorator
+    def undrift_rsso(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        """Report RSSO undrifting results to Confluence"""
+        logger.debug("Reporting undrift_rsso.")
+
+        drift_mag_x = results.get("drift_magnitude_x", np.nan)
+        drift_mag_y = results.get("drift_magnitude_y", np.nan)
+        total_drift = results.get("total_drift", np.nan)
+        drift_quality = results.get("mean_drift_quality", np.nan)
+
+        coarse_drift_x = results.get("coarse_drift_magnitude_x", np.nan)
+        coarse_drift_y = results.get("coarse_drift_magnitude_y", np.nan)
+        fine_drift_x = results.get("fine_drift_magnitude_x", np.nan)
+        fine_drift_y = results.get("fine_drift_magnitude_y", np.nan)
+
+        # Confidence interval metrics
+        mean_uncertainty_x = results.get("mean_uncertainty_x", np.nan)
+        mean_uncertainty_y = results.get("mean_uncertainty_y", np.nan)
+        confidence_95_x = results.get("confidence_95_x", np.nan)
+        confidence_95_y = results.get("confidence_95_y", np.nan)
+        max_uncertainty_x = results.get("max_uncertainty_x", np.nan)
+        max_uncertainty_y = results.get("max_uncertainty_y", np.nan)
+
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Undrifting via RSSO
+        (2-stage with confidence analysis)</strong></p>
+        Summary:
+        <ul>
+        <li>t<sub>on</sub>: {parameters.get('ton')} frames</li>
+        <li>t<sub>off</sub>: {parameters.get('toff')} frames</li>
+        <li>Max shift per frame: {parameters.get('max_shift')} pixels</li>
+        <li>Processing chunk size:
+            {parameters.get('processing_chunk_size', 100)} frames</li>
+        <li>Min locs per frame: {parameters.get('min_locs_per_frame', 10)}</li>
+        <li>Min locs per block:
+            {parameters.get('min_locs_per_block', 100)}</li>
+        </ul>
+
+        <p><strong>Drift Results:</strong></p>
+        <ul>
+        <li><strong>Coarse drift (t<sub>off</sub>-scale):</strong>
+        X={coarse_drift_x:.2f} nm, Y={coarse_drift_y:.2f} nm</li>
+        <li><strong>Fine drift (frame-scale):</strong>
+        X={fine_drift_x:.2f} nm, Y={fine_drift_y:.2f} nm</li>
+        <li><strong>Total drift:</strong>
+        X={drift_mag_x:.2f} nm, Y={drift_mag_y:.2f} nm</li>
+        <li><strong>Total drift magnitude:</strong> {total_drift:.2f} nm</li>
+        <li>Mean drift quality: {drift_quality:.1f} measurements/frame</li>
+        </ul>
+
+        <p><strong>Confidence Analysis:</strong></p>
+        <ul>
+        <li><strong>Mean uncertainty:</strong>
+        X={mean_uncertainty_x:.2f} nm, Y={mean_uncertainty_y:.2f} nm</li>
+        <li><strong>Max uncertainty:</strong>
+        X={max_uncertainty_x:.2f} nm, Y={max_uncertainty_y:.2f} nm</li>
+        <li><strong>95% confidence interval:</strong>
+        ±{confidence_95_x:.2f} nm (X), ±{confidence_95_y:.2f} nm (Y)</li>
+        <li><strong>Relative precision:</strong>
+        {(mean_uncertainty_x/drift_mag_x*100 if drift_mag_x > 0 else 0):.1f}%
+        (X),
+        {(mean_uncertainty_y/drift_mag_y*100 if drift_mag_y > 0 else 0):.1f}%
+        (Y)</li>
+        </ul>
+
+        <ul>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        # Add drift plot if available
+        if fp_fig := results.get("fp_fig"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig_name = os.path.split(fp_fig)
+            text += f"""
+            <p><strong>Drift Trajectory:</strong></p>
+            <ac:image ac:align="center" ac:layout="center">
+            <ri:attachment ri:filename="{fp_fig_name}" />
+            </ac:image>
+            """
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    @module_decorator
     def undrift_aim(self, i, parameters, results, parameter_text, result_text):
         """Describes the AIM undrifting
         Args:
@@ -677,6 +776,54 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     @module_decorator
+    def resolution_analysis(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        """Report resolution analysis results to Confluence"""
+
+        resolution = results.get("resolution", np.nan)
+        sigma_x = results.get("sigma_x", np.nan)
+        sigma_y = results.get("sigma_y", np.nan)
+        fit_quality = results.get("fit_quality", np.nan)
+
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Resolution Analysis
+        (Point Pattern Autocorrelation)</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Resolution: {resolution:.1f} nm (FWHM)</li>
+        <li>σ<sub>x</sub>: {sigma_x:.1f} nm</li>
+        <li>σ<sub>y</sub>: {sigma_y:.1f} nm</li>
+        <li>Fit Quality (R²): {fit_quality:.3f}</li>
+        <li>Grid spacing (Δr): {parameters.get('delta_r', 5.0):.1f} nm</li>
+        <li>Max radius: {parameters.get('r_max', 100.0):.1f} nm</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        # Add resolution plot if available
+        if fig_resolution := results.get("fig_resolution"):
+            text += f"""
+            <p><strong>Resolution Analysis Plot:</strong></p>
+            <ac:image ac:align="center" ac:layout="center"
+                ac:original-height="400">
+            <ri:attachment ri:filename="{os.path.basename(fig_resolution)}" />
+            </ac:image>
+            """
+            self.ci.upload_attachment(self.report_page_id, fig_resolution)
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    @module_decorator
     def smlm_clusterer(
         self, i, parameters, results, parameter_text, result_text
     ):
@@ -717,7 +864,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         locspctr = results["n_locs_clustered"] / results["n_centers"]
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: Gaussian Mixture Model clustering</strong></p>
+        <p><strong>Module {i:02d}:
+        Gaussian Mixture Model clustering</strong></p>
         Keeping centers as new locs.
         Summary:
         <ul>
@@ -882,23 +1030,25 @@ class ConfluenceReporter(AbstractModuleCollection):
         # Add goodness-of-fit documentation
         # text += """</ul>
         # <p><strong>Goodness-of-Fit Assessment</strong></p>
-        # <p>The quality of the CSR model fit is evaluated using two complementary
-        # approaches:</p>
+        # <p>The quality of the CSR model fit is evaluated using two
+        # complementary approaches:</p>
         # <ul>
-        # <li><strong>Wasserstein Distance:</strong> Measures the distributional
-        # difference between observed and theoretical CSR nearest neighbor distances.
-        # Lower values indicate better fit (typical range: 0.01-1.0 nm).</li>
-        # <li><strong>Kolmogorov-Smirnov Tests:</strong> Statistical tests for each
-        # k-th nearest neighbor order. Higher p-values (greater 0.05) suggest good
-        # agreement with CSR, while lower p-values (smaller than 0.05) indicate
-        # significant deviation from spatial randomness.</li>
+        # <li><strong>Wasserstein Distance:</strong> Measures the
+        # distributional difference between observed and theoretical CSR
+        # nearest neighbor distances. Lower values indicate better fit
+        # (typical range: 0.01-1.0 nm).</li>
+        # <li><strong>Kolmogorov-Smirnov Tests:</strong> Statistical tests
+        # for each k-th nearest neighbor order. Higher p-values (greater 0.05)
+        # suggest good agreement with CSR, while lower p-values (smaller than
+        # 0.05) indicate significant deviation from spatial randomness.</li>
         # </ul>
         # """
         text += """</ul>
         <p><strong>Goodness-of-Fit Assessment</strong></p>
         The quality of the CSR model fit is evaluated using
         <strong>Wasserstein Distance:</strong> Measures the distributional
-        difference between observed and theoretical CSR nearest neighbor distances.
+        difference between observed and theoretical CSR nearest neighbor
+        distances.
         Lower values indicate better fit (typical range: 0.01-1.0 nm).
         """
 
@@ -1075,6 +1225,40 @@ class ConfluenceReporter(AbstractModuleCollection):
             pass
         except IndexError:
             pass
+
+        # Add confidence analysis information if available
+        shift_uncertainties = results.get("shift_uncertainties", {})
+        confidence_txt = ""
+        if (
+            shift_uncertainties
+            and results.get("alignment_algorithm") == "RSSO"
+        ):
+            mean_x_uncertainty = shift_uncertainties.get(
+                "mean_x_uncertainty", np.nan
+            )
+            mean_y_uncertainty = shift_uncertainties.get(
+                "mean_y_uncertainty", np.nan
+            )
+            max_x_uncertainty = shift_uncertainties.get(
+                "max_x_uncertainty", np.nan
+            )
+            max_y_uncertainty = shift_uncertainties.get(
+                "max_y_uncertainty", np.nan
+            )
+
+            if not np.isnan(mean_x_uncertainty):
+                confidence_txt = f"""
+                <li><strong>Confidence Analysis (RSSO method):</strong></li>
+                <ul>
+                <li>Mean X shift uncertainty: {mean_x_uncertainty:.3f} px</li>
+                <li>Mean Y shift uncertainty: {mean_y_uncertainty:.3f} px</li>
+                <li>Max X shift uncertainty: {max_x_uncertainty:.3f} px</li>
+                <li>Max Y shift uncertainty: {max_y_uncertainty:.3f} px</li>
+                <li>95% confidence intervals:
+                ±{1.96*np.mean([mean_x_uncertainty, mean_y_uncertainty]):.3f}
+                px</li>
+                </ul>
+                """
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Align Channels</strong></p>
@@ -1085,6 +1269,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         Summary:
         <ul>
         {shifttxt}
+        {confidence_txt}
         </ul>
         {parameter_text}
         {result_text}
@@ -1106,6 +1291,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         if fp_figs := results.get("fp_figs"):
             fig_fps += fp_figs
             titles += [f"Shift plot {i}" for i in range(len(fp_figs))]
+        if fp_fig := results.get("fig_confidence_filepath"):
+            fig_fps.append(fp_fig)
+            titles.append("Channel shifts with confidence intervals")
 
         if len(fig_fps) > 1:
             fn_figs = []

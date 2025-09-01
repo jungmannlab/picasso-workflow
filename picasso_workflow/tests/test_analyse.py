@@ -345,6 +345,8 @@ class TestAnalyseModules(unittest.TestCase):
             np.zeros((3, 4, 5)),
             False,
             "RCC",
+            [],
+            {},
         )
         self.ap.channel_info = []
 
@@ -981,6 +983,191 @@ class TestAnalyseModules(unittest.TestCase):
                 self.results_folder, "00_labeling_efficiency_analysis"
             )
         )
+
+    def test_15_undrift_rsso(self):
+        """Test the undrift_rsso module with synthetic drift data"""
+        import numpy as np
+
+        # Create synthetic data with known drift
+        np.random.seed(42)
+        n_frames = 50  # Fewer frames for faster test
+        n_locs_per_frame = 200  # More locs per frame for better statistics
+        true_drift_rate_x = 0.05  # Smaller drift rate (pixels per frame)
+        true_drift_rate_y = 0.03  # Smaller drift rate (pixels per frame)
+
+        # Generate synthetic localizations with drift
+        all_locs = []
+        true_drift_x = []
+        true_drift_y = []
+
+        for frame in range(n_frames):
+            # Calculate cumulative drift
+            drift_x = true_drift_rate_x * frame
+            drift_y = true_drift_rate_y * frame
+            true_drift_x.append(drift_x)
+            true_drift_y.append(drift_y)
+
+            # Generate random localizations with added drift
+            x_base = np.random.uniform(10, 50, n_locs_per_frame)
+            y_base = np.random.uniform(10, 50, n_locs_per_frame)
+
+            frame_locs = np.rec.array(
+                [
+                    (
+                        frame,
+                        x + drift_x,
+                        y + drift_y,
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        1,
+                    )
+                    for x, y in zip(x_base, y_base)
+                ],
+                dtype=self.locs_dtype,
+            )
+
+            all_locs.append(frame_locs)
+
+        # Combine all localizations
+        synthetic_locs = np.lib.recfunctions.stack_arrays(
+            all_locs, asrecarray=True, usemask=False
+        )
+
+        # Create AutoPicasso instance with synthetic data
+        analysis_config = {
+            "camera_info": {
+                "Gain": 1,
+                "Sensitivity": 0.45,
+                "Baseline": 100,
+                "Qe": 0.82,
+                "Pixelsize": 130,  # nm
+            },
+            "gpufit_installed": False,
+        }
+        ap = analyse.AutoPicasso(self.results_folder, analysis_config)
+        ap.locs = synthetic_locs
+        ap.info = [
+            {"Frames": n_frames, "Width": 64, "Height": 64, "Pixelsize": 100}
+        ]  # 100 nm pixels
+
+        # Test parameters
+        parameters = {
+            "ton": 3.0,  # 3 frame half-life
+            "toff": 10.0,  # 10 frame reappearance time
+            "max_shift": 0.5,  # 0.5 pixel max shift per frame
+            "processing_chunk_size": 25,  # Processing chunk size
+            "min_locs_per_frame": 20,  # Ensure sufficient data for frame-level
+            "min_locs_per_block": 100,  # Ensure sufficient data for block-level
+            "plot_drift": True,
+            "save_locs": False,
+        }
+
+        # Run undrift_rsso
+        parameters, results = ap.undrift_rsso(0, parameters)
+
+        # Verify results
+        assert results["success"], "undrift_rsso should succeed"
+        assert (
+            "drift_magnitude_x" in results
+        ), "Should return drift magnitude X"
+        assert (
+            "drift_magnitude_y" in results
+        ), "Should return drift magnitude Y"
+        assert "total_drift" in results, "Should return total drift"
+        assert (
+            "mean_drift_quality" in results
+        ), "Should return drift quality metric"
+
+        # Check two-stage specific results
+        assert (
+            "coarse_drift_magnitude_x" in results
+        ), "Should return coarse drift X"
+        assert (
+            "coarse_drift_magnitude_y" in results
+        ), "Should return coarse drift Y"
+        assert (
+            "fine_drift_magnitude_x" in results
+        ), "Should return fine drift X"
+        assert (
+            "fine_drift_magnitude_y" in results
+        ), "Should return fine drift Y"
+
+        # Check that drift was detected (should be > 0 since we added artificial drift)
+        assert results["total_drift"] > 0, "Should detect non-zero drift"
+
+        # Check that drift plot was created
+        assert "fp_fig" in results, "Should create drift plot"
+        assert os.path.exists(
+            results["fp_fig"]
+        ), "Drift plot file should exist"
+
+        # Verify that drift arrays are stored
+        assert hasattr(ap, "drift"), "Should store drift in ap.drift"
+        assert ap.drift.shape[1] == 2, "Should have x and y drift dimensions"
+        assert (
+            ap.drift.shape[0] == n_frames
+        ), "Drift array should match number of frames"
+
+        # Clean up
+        if os.path.exists(results["fp_fig"]):
+            os.remove(results["fp_fig"])
+
+    def test_16_undrift_rsso_edge_cases(self):
+        """Test undrift_rsso with edge cases and error conditions"""
+        # Test with insufficient data
+        analysis_config = {
+            "camera_info": {
+                "Gain": 1,
+                "Sensitivity": 0.45,
+                "Baseline": 100,
+                "Qe": 0.82,
+                "Pixelsize": 130,  # nm
+            },
+            "gpufit_installed": False,
+        }
+        ap = analyse.AutoPicasso(self.results_folder, analysis_config)
+
+        # Create minimal dataset (too few localizations)
+        minimal_locs = np.rec.array(
+            [
+                (0, 10.0, 10.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1),
+                (1, 10.1, 10.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1),
+            ],
+            dtype=self.locs_dtype,
+        )
+
+        ap.locs = minimal_locs
+        ap.info = [{"Frames": 2, "Width": 64, "Height": 64, "Pixelsize": 100}]
+
+        parameters = {
+            "ton": 5.0,
+            "toff": 20.0,
+            "max_shift": 1.0,
+            "min_locs_per_frame": 100,  # Impossibly high threshold
+            "plot_drift": False,
+            "save_locs": False,
+        }
+
+        # Should handle gracefully
+        parameters, results = ap.undrift_rsso(0, parameters)
+
+        # Should still succeed even with insufficient data
+        assert results["success"]
+        assert "total_drift" in results
+
+        # Test with no localizations
+        empty_locs = np.array([], dtype=self.locs_dtype).view(np.recarray)
+        ap.locs = empty_locs
+
+        parameters, results = ap.undrift_rsso(0, parameters)
+        assert results["success"]
+        assert results["total_drift"] == 0.0
 
 
 # @unittest.skip("")

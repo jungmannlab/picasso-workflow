@@ -1441,9 +1441,502 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @profile_resource_usage
+    @module_decorator
+    def undrift_rsso(self, i, parameters, results):
+        """Undrift localized data using RSSO-based temporal drift correction
+
+        This method applies the RSSO (Redundant Spot Shift Overrepresentation)
+        algorithm to correct for temporal drift by analyzing 2D shift histograms
+        between temporally adjacent localizations. It accounts for the timescales
+        ton (localization half-life) and toff (reappearance time).
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    ton : float
+                        Half-life of localization in frames (how long a spot stays
+                        visible)
+                    toff : float
+                        Time in frames for a spot to reappear after disappearing
+                    max_shift : float
+                        Maximum expected drift per frame in pixels
+                optional items:
+                    processing_chunk_size : int
+                        Number of frames per processing chunk for memory efficiency
+                        (default: 100)
+                    min_locs_per_frame : int
+                        Minimum localizations per frame for reliable drift estimation
+                        (default: 10)
+                    min_locs_per_block : int
+                        Minimum localizations per toff-scale block for reliable drift
+                        estimation (default: 100)
+                    plot_drift : bool
+                        Whether to save drift plots (default: True)
+                    save_locs : bool
+                        Whether to save undrifted localizations (default: True)
+
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results including drift trajectory and plots
+        """
+
+        def _estimate_drift_between_frame_groups(
+            locs_ref, locs_target, max_shift, min_locs
+        ):
+            """Helper function to estimate drift between two groups of localizations
+            using RSSO
+
+            Returns:
+                shift_x, shift_y: drift measurements
+                quality: quality metric based on number of localizations
+                uncertainty_x, uncertainty_y: estimated uncertainties in shift
+                measurements
+            """
+            from picasso_workflow.picasso_outpost import (
+                _calculate_pairwise_shift,
+            )
+
+            if len(locs_ref) < min_locs or len(locs_target) < min_locs:
+                return None, None, 0, None, None
+
+            shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
+                locs_ref, locs_target, max_shift, plot_histogram=False
+            )
+
+            if shift_x is not None and shift_y is not None:
+                quality = len(locs_ref) + len(locs_target)
+                # Extract uncertainty estimates from Gaussian fit
+                # Use sigma values as measure of uncertainty in the shift
+                uncertainty_x = (
+                    uncertainty_info["sigma_x"]
+                    if uncertainty_info["fit_successful"]
+                    else uncertainty_info["shift_x_error"]
+                )
+                uncertainty_y = (
+                    uncertainty_info["sigma_y"]
+                    if uncertainty_info["fit_successful"]
+                    else uncertainty_info["shift_y_error"]
+                )
+                return shift_x, shift_y, quality, uncertainty_x, uncertainty_y
+            else:
+                return None, None, 0, None, None
+
+        pixelsize = self.pixelsize
+        ton = parameters["ton"]
+        toff = parameters["toff"]
+        max_shift = parameters["max_shift"]
+
+        processing_chunk_size = parameters.get("processing_chunk_size", 100)
+        min_locs_per_frame = parameters.get("min_locs_per_frame", 10)
+        min_locs_per_block = parameters.get("min_locs_per_block", 100)
+        plot_drift = parameters.get("plot_drift", True)
+
+        # Get frame range and ensure we have data
+        if len(self.locs) == 0:
+            # Handle empty dataset
+            self.drift = np.array([[0.0, 0.0]])
+            results["success"] = True
+            results["drift_magnitude_x"] = 0.0
+            results["drift_magnitude_y"] = 0.0
+            results["total_drift"] = 0.0
+            results["mean_drift_quality"] = 0.0
+            return parameters, results
+
+        frames = np.arange(
+            self.locs["frame"].min(), self.locs["frame"].max() + 1
+        )
+        n_frames = len(frames)
+
+        # Initialize drift arrays
+        drift_x_coarse = np.zeros(n_frames)  # Long-timescale drift
+        drift_y_coarse = np.zeros(n_frames)
+        drift_x_fine = np.zeros(n_frames)  # Short-timescale drift
+        drift_y_fine = np.zeros(n_frames)
+        drift_quality = np.zeros(n_frames)
+
+        # Initialize uncertainty arrays
+        uncertainty_x_coarse = np.zeros(
+            n_frames
+        )  # Uncertainty in coarse drift
+        uncertainty_y_coarse = np.zeros(n_frames)
+        uncertainty_x_fine = np.zeros(n_frames)  # Uncertainty in fine drift
+        uncertainty_y_fine = np.zeros(n_frames)
+
+        logger.debug(
+            f"RSSO undrift (2-stage): {n_frames} frames, ton={ton}, toff={toff}"
+        )
+
+        # STAGE 1: Long-timescale drift correction on toff scale
+        logger.debug("Stage 1: Long-timescale drift correction")
+        toff_block_size = int(toff)
+
+        for block_start in range(0, n_frames, toff_block_size):
+            block_end = min(block_start + toff_block_size, n_frames)
+
+            if block_start == 0:
+                continue  # Skip first block (reference)
+
+            # Get localizations for current and previous toff-scale blocks
+            current_block_frames = frames[block_start:block_end]
+            prev_block_frames = frames[
+                max(0, block_start - toff_block_size) : block_start
+            ]
+
+            current_block_locs = self.locs[
+                np.isin(self.locs["frame"], current_block_frames)
+            ]
+            prev_block_locs = self.locs[
+                np.isin(self.locs["frame"], prev_block_frames)
+            ]
+
+            # Estimate drift between blocks
+            shift_x, shift_y, quality, uncertainty_x, uncertainty_y = (
+                _estimate_drift_between_frame_groups(
+                    prev_block_locs,
+                    current_block_locs,
+                    max_shift * toff_block_size,
+                    min_locs_per_block,
+                )
+            )
+
+            if shift_x is not None and shift_y is not None:
+                # Distribute block drift across frames in the block
+                block_drift_x = shift_x / toff_block_size  # Per-frame drift
+                block_drift_y = shift_y / toff_block_size
+                # Uncertainty also scales with block size
+                block_uncertainty_x = (
+                    uncertainty_x / toff_block_size
+                    if uncertainty_x is not None
+                    else 0
+                )
+                block_uncertainty_y = (
+                    uncertainty_y / toff_block_size
+                    if uncertainty_y is not None
+                    else 0
+                )
+
+                for frame_idx in range(block_start, block_end):
+                    if frame_idx > 0:
+                        drift_x_coarse[frame_idx] = (
+                            drift_x_coarse[frame_idx - 1] + block_drift_x
+                        )
+                        drift_y_coarse[frame_idx] = (
+                            drift_y_coarse[frame_idx - 1] + block_drift_y
+                        )
+                        # Accumulate uncertainties (assuming independence)
+                        uncertainty_x_coarse[frame_idx] = np.sqrt(
+                            uncertainty_x_coarse[frame_idx - 1] ** 2
+                            + block_uncertainty_x**2
+                        )
+                        uncertainty_y_coarse[frame_idx] = np.sqrt(
+                            uncertainty_y_coarse[frame_idx - 1] ** 2
+                            + block_uncertainty_y**2
+                        )
+                    else:
+                        uncertainty_x_coarse[frame_idx] = block_uncertainty_x
+                        uncertainty_y_coarse[frame_idx] = block_uncertainty_y
+                    drift_quality[frame_idx] += quality / (
+                        block_end - block_start
+                    )
+            else:
+                # Use previous block's drift rate if estimation failed
+                for frame_idx in range(block_start, block_end):
+                    if frame_idx > 0:
+                        drift_x_coarse[frame_idx] = drift_x_coarse[
+                            frame_idx - 1
+                        ]
+                        drift_y_coarse[frame_idx] = drift_y_coarse[
+                            frame_idx - 1
+                        ]
+                        uncertainty_x_coarse[frame_idx] = uncertainty_x_coarse[
+                            frame_idx - 1
+                        ]
+                        uncertainty_y_coarse[frame_idx] = uncertainty_y_coarse[
+                            frame_idx - 1
+                        ]
+
+        # Apply coarse drift correction
+        temp_locs = self.locs.copy()
+        for frame_idx, frame in enumerate(frames):
+            frame_mask = temp_locs["frame"] == frame
+            if frame_idx < len(drift_x_coarse):
+                temp_locs["x"][frame_mask] -= drift_x_coarse[frame_idx]
+                temp_locs["y"][frame_mask] -= drift_y_coarse[frame_idx]
+
+        # STAGE 2: Short-timescale drift correction on consecutive frames
+        logger.debug("Stage 2: Short-timescale drift correction")
+
+        for frame_idx in range(1, n_frames):
+            current_frame = frames[frame_idx]
+            prev_frame = frames[frame_idx - 1]
+
+            # Get localizations for current and previous frame
+            # (from coarse-corrected data)
+            current_locs = temp_locs[temp_locs["frame"] == current_frame]
+            prev_locs = temp_locs[temp_locs["frame"] == prev_frame]
+
+            # Estimate fine drift between consecutive frames
+            shift_x, shift_y, quality, uncertainty_x, uncertainty_y = (
+                _estimate_drift_between_frame_groups(
+                    prev_locs, current_locs, max_shift, min_locs_per_frame
+                )
+            )
+
+            if shift_x is not None and shift_y is not None:
+                # Accumulate fine drift
+                drift_x_fine[frame_idx] = drift_x_fine[frame_idx - 1] + shift_x
+                drift_y_fine[frame_idx] = drift_y_fine[frame_idx - 1] + shift_y
+                # Accumulate uncertainties (assuming independence)
+                if uncertainty_x is not None and uncertainty_y is not None:
+                    uncertainty_x_fine[frame_idx] = np.sqrt(
+                        uncertainty_x_fine[frame_idx - 1] ** 2
+                        + uncertainty_x**2
+                    )
+                    uncertainty_y_fine[frame_idx] = np.sqrt(
+                        uncertainty_y_fine[frame_idx - 1] ** 2
+                        + uncertainty_y**2
+                    )
+                else:
+                    uncertainty_x_fine[frame_idx] = uncertainty_x_fine[
+                        frame_idx - 1
+                    ]
+                    uncertainty_y_fine[frame_idx] = uncertainty_y_fine[
+                        frame_idx - 1
+                    ]
+                drift_quality[frame_idx] += quality
+            else:
+                # Use previous fine drift if estimation failed
+                drift_x_fine[frame_idx] = drift_x_fine[frame_idx - 1]
+                drift_y_fine[frame_idx] = drift_y_fine[frame_idx - 1]
+                uncertainty_x_fine[frame_idx] = uncertainty_x_fine[
+                    frame_idx - 1
+                ]
+                uncertainty_y_fine[frame_idx] = uncertainty_y_fine[
+                    frame_idx - 1
+                ]
+
+        # Combine coarse and fine drift
+        total_drift_x = drift_x_coarse + drift_x_fine
+        total_drift_y = drift_y_coarse + drift_y_fine
+
+        # Combine uncertainties (assuming independence)
+        total_uncertainty_x = np.sqrt(
+            uncertainty_x_coarse**2 + uncertainty_x_fine**2
+        )
+        total_uncertainty_y = np.sqrt(
+            uncertainty_y_coarse**2 + uncertainty_y_fine**2
+        )
+
+        # Smooth final drift trajectory using ton-scale moving average
+        smooth_window = int(ton)
+        if smooth_window > 1:
+            from scipy.ndimage import uniform_filter1d
+
+            total_drift_x = uniform_filter1d(
+                total_drift_x, size=smooth_window, mode="nearest"
+            )
+            total_drift_y = uniform_filter1d(
+                total_drift_y, size=smooth_window, mode="nearest"
+            )
+
+        # Apply drift correction to localizations
+        corrected_locs = self.locs.copy()
+        for frame_idx, frame in enumerate(frames):
+            frame_mask = corrected_locs["frame"] == frame
+            if frame_idx < len(total_drift_x):
+                corrected_locs["x"][frame_mask] -= total_drift_x[frame_idx]
+                corrected_locs["y"][frame_mask] -= total_drift_y[frame_idx]
+
+        # Update self.locs and create drift info
+        self.locs = corrected_locs
+        # Format drift as 2D array for compatibility with _plot_drift
+        self.drift = np.column_stack([total_drift_x, total_drift_y])
+        # Store uncertainty information
+        self.drift_uncertainty = np.column_stack(
+            [total_uncertainty_x, total_uncertainty_y]
+        )
+
+        # Add info about undrifting
+        new_info = {
+            "Generated by": "undrift_rsso",
+            "ton": ton,
+            "toff": toff,
+            "max_shift": max_shift,
+            "processing_chunk_size": processing_chunk_size,
+            "toff_block_size": toff_block_size,
+            "parameters": parameters,
+        }
+        self.info = self.info + [new_info]
+
+        # Create drift plot with confidence intervals
+        if plot_drift:
+            dims = ["x", "y"]
+            fp_fig = os.path.join(results["folder"], "undrift_rsso.png")
+            self._plot_drift_with_confidence(
+                fp_fig,
+                dims,
+                pixelsize,
+                method="RSSO (2-stage)",
+                drift=self.drift,
+                uncertainty=self.drift_uncertainty,
+            )
+            results["fp_fig"] = fp_fig
+
+        # Store results
+        results["success"] = True
+        results["drift_magnitude_x"] = (
+            np.max(np.abs(total_drift_x)) * pixelsize
+            if len(total_drift_x) > 0
+            else 0.0
+        )
+        results["drift_magnitude_y"] = (
+            np.max(np.abs(total_drift_y)) * pixelsize
+            if len(total_drift_y) > 0
+            else 0.0
+        )
+        results["total_drift"] = np.sqrt(
+            results["drift_magnitude_x"] ** 2
+            + results["drift_magnitude_y"] ** 2
+        )
+        results["mean_drift_quality"] = (
+            np.mean(drift_quality[drift_quality > 0])
+            if np.any(drift_quality > 0)
+            else 0.0
+        )
+        results["coarse_drift_magnitude_x"] = (
+            np.max(np.abs(drift_x_coarse)) * pixelsize
+            if len(drift_x_coarse) > 0
+            else 0.0
+        )
+        results["coarse_drift_magnitude_y"] = (
+            np.max(np.abs(drift_y_coarse)) * pixelsize
+            if len(drift_y_coarse) > 0
+            else 0.0
+        )
+        results["fine_drift_magnitude_x"] = (
+            np.max(np.abs(drift_x_fine)) * pixelsize
+            if len(drift_x_fine) > 0
+            else 0.0
+        )
+        results["fine_drift_magnitude_y"] = (
+            np.max(np.abs(drift_y_fine)) * pixelsize
+            if len(drift_y_fine) > 0
+            else 0.0
+        )
+
+        # Add confidence interval statistics
+        results["mean_uncertainty_x"] = (
+            np.mean(total_uncertainty_x) * pixelsize
+        )
+        results["mean_uncertainty_y"] = (
+            np.mean(total_uncertainty_y) * pixelsize
+        )
+        results["max_uncertainty_x"] = np.max(total_uncertainty_x) * pixelsize
+        results["max_uncertainty_y"] = np.max(total_uncertainty_y) * pixelsize
+        results["confidence_95_x"] = (
+            1.96 * np.mean(total_uncertainty_x) * pixelsize
+        )  # 95% confidence interval
+        results["confidence_95_y"] = (
+            1.96 * np.mean(total_uncertainty_y) * pixelsize
+        )
+
+        # Save undrifted localizations if requested
+        if parameters.get("save_locs", True):
+            fp_locs = os.path.join(
+                results["folder"], "locs_undrifted_rsso.hdf5"
+            )
+            io.save_locs(fp_locs, corrected_locs, self.info)
+            results["fp_locs"] = fp_locs
+
+        return parameters, results
+
+    def _plot_drift_with_confidence(
+        self,
+        filename,
+        dimensions,
+        pixelsize,
+        method="",
+        drift=None,
+        uncertainty=None,
+    ):
+        """Plot drift with confidence intervals"""
+        if drift is None:
+            drift = self.drift
+        if uncertainty is None:
+            uncertainty = getattr(self, "drift_uncertainty", None)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        frames = np.arange(drift.shape[0])
+
+        colors = ["blue", "red", "green", "orange"]
+
+        for i, dim in enumerate(dimensions):
+            color = colors[i % len(colors)]
+
+            if isinstance(drift, np.recarray):
+                drift_values = drift[dim] * pixelsize
+                uncertainty_values = (
+                    uncertainty[dim] * pixelsize
+                    if uncertainty is not None
+                    else None
+                )
+            else:
+                drift_values = drift[:, i] * pixelsize
+                uncertainty_values = (
+                    uncertainty[:, i] * pixelsize
+                    if uncertainty is not None
+                    else None
+                )
+
+            # Plot drift trajectory
+            ax.plot(
+                frames,
+                drift_values,
+                label=f"{dim} drift",
+                color=color,
+                linewidth=2,
+            )
+
+            # Plot confidence intervals if available
+            if uncertainty_values is not None:
+                # 1-sigma confidence interval
+                ax.fill_between(
+                    frames,
+                    drift_values - uncertainty_values,
+                    drift_values + uncertainty_values,
+                    alpha=0.3,
+                    color=color,
+                    label=f"{dim} ±1σ",
+                )
+                # 2-sigma confidence interval
+                ax.fill_between(
+                    frames,
+                    drift_values - 2 * uncertainty_values,
+                    drift_values + 2 * uncertainty_values,
+                    alpha=0.1,
+                    color=color,
+                    label=f"{dim} ±2σ",
+                )
+
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Drift [nm]")
+        ax.set_title(f"Undrift by {method} (with confidence intervals)")
+        ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        fig.savefig(filename, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
     def _plot_drift(
         self, filename, dimensions, pixelsize, method="", drift=None
     ):
+        """Legacy drift plotting method for compatibility"""
         if drift is None:
             drift = self.drift
         fig, ax = plt.subplots()
@@ -1458,6 +1951,94 @@ class AutoPicasso(util.AbstractModuleCollection):
         ax.set_title(f"undrift by {method}")
         ax.legend()
         fig.savefig(filename)
+        plt.close(fig)
+
+    def _plot_channel_alignment_with_confidence(
+        self, shifts, shift_uncertainties, filename
+    ):
+        """Plot channel alignment shifts with confidence intervals"""
+        import matplotlib.pyplot as plt
+
+        n_channels = shifts.shape[1]
+        if n_channels < 2:
+            return
+
+        channel_indices = np.arange(n_channels)
+
+        # Extract uncertainties
+        shift_x_uncertainties = shift_uncertainties.get(
+            "shift_x_uncertainties", np.zeros(n_channels)
+        )
+        shift_y_uncertainties = shift_uncertainties.get(
+            "shift_y_uncertainties", np.zeros(n_channels)
+        )
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+        # X shifts plot
+        shifts_x = shifts[1, :]  # X shifts are in second row
+        ax1.errorbar(
+            channel_indices,
+            shifts_x,
+            yerr=shift_x_uncertainties,
+            fmt="o-",
+            capsize=5,
+            capthick=2,
+            label="X shifts",
+        )
+        ax1.fill_between(
+            channel_indices,
+            shifts_x - 2 * shift_x_uncertainties,
+            shifts_x + 2 * shift_x_uncertainties,
+            alpha=0.2,
+            label="2σ confidence",
+        )
+        ax1.fill_between(
+            channel_indices,
+            shifts_x - shift_x_uncertainties,
+            shifts_x + shift_x_uncertainties,
+            alpha=0.3,
+            label="1σ confidence",
+        )
+        ax1.set_xlabel("Channel Index")
+        ax1.set_ylabel("X Shift [pixels]")
+        ax1.set_title("Channel X Alignment Shifts")
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # Y shifts plot
+        shifts_y = shifts[0, :]  # Y shifts are in first row
+        ax2.errorbar(
+            channel_indices,
+            shifts_y,
+            yerr=shift_y_uncertainties,
+            fmt="o-",
+            capsize=5,
+            capthick=2,
+            label="Y shifts",
+        )
+        ax2.fill_between(
+            channel_indices,
+            shifts_y - 2 * shift_y_uncertainties,
+            shifts_y + 2 * shift_y_uncertainties,
+            alpha=0.2,
+            label="2σ confidence",
+        )
+        ax2.fill_between(
+            channel_indices,
+            shifts_y - shift_y_uncertainties,
+            shifts_y + shift_y_uncertainties,
+            alpha=0.3,
+            label="1σ confidence",
+        )
+        ax2.set_xlabel("Channel Index")
+        ax2.set_ylabel("Y Shift [pixels]")
+        ax2.set_title("Channel Y Alignment Shifts")
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        fig.savefig(filename, dpi=300, bbox_inches="tight")
         plt.close(fig)
 
     @profile_resource_usage
@@ -1781,6 +2362,147 @@ class AutoPicasso(util.AbstractModuleCollection):
         config = Plotter.saveAllResults()
         for k, v in config.items():
             results[k] = v
+
+    @profile_resource_usage
+    @module_decorator
+    def resolution_analysis(self, i, parameters, results):
+        """Perform resolution analysis using point pattern autocorrelation
+
+        This method calculates the spatial resolution of localizations
+        by computing a 2D autocorrelation function and fitting a Gaussian to
+        extract resolution metrics.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_locs : str
+                        file path to input locs
+                with optional keys:
+                    delta_r : float
+                        grid spacing for autocorrelation (default: 5 nm)
+                    r_max : float
+                        maximum radius for autocorrelation (default: 100 nm)
+
+        Results:
+            resolution : float
+                average resolution in nm (FWHM)
+            sigma_x, sigma_y : float
+                Gaussian standard deviations in x,y directions
+            fwhm_x, fwhm_y : float
+                Full-width half-maximum in x,y directions
+            fit_quality : float
+                R-squared goodness of fit
+            autocorr_map : ndarray
+                2D autocorrelation intensity map
+            fig_resolution : str
+                path to resolution plot
+        """
+        import pandas as pd
+        from picasso_workflow.picasso_outpost import (
+            resolution_ppac,
+            analyse_resolution_ppac,
+        )
+
+        # Load localizations
+        folder_in, file_in = os.path.split(parameters["fp_locs"])
+        file_nameonly, _ = os.path.splitext(file_in)
+        locs = pd.read_hdf(parameters["fp_locs"])
+
+        # Get parameters with defaults
+        delta_r = parameters.get("delta_r", 5.0)  # 5 nm default
+        r_max = parameters.get("r_max", 100.0)  # 100 nm default
+
+        # Calculate autocorrelation
+        autocorr_map = resolution_ppac(locs, self.pixelsize, delta_r, r_max)
+
+        # Analyze autocorrelation with Gaussian fitting
+        analysis_results = analyse_resolution_ppac(autocorr_map, delta_r)
+
+        # Store results
+        results["resolution"] = analysis_results["resolution"]
+        results["sigma_x"] = analysis_results["sigma_x"]
+        results["sigma_y"] = analysis_results["sigma_y"]
+        results["fwhm_x"] = analysis_results["fwhm_x"]
+        results["fwhm_y"] = analysis_results["fwhm_y"]
+        results["fit_quality"] = analysis_results["fit_quality"]
+        results["autocorr_map"] = autocorr_map
+
+        # Create visualization
+        import matplotlib.pyplot as plt
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+        # Plot autocorrelation map
+        extent = [-r_max, r_max, -r_max, r_max]
+        im1 = ax1.imshow(
+            autocorr_map, extent=extent, origin="lower", cmap="hot"
+        )
+        ax1.set_xlabel("Δx (nm)")
+        ax1.set_ylabel("Δy (nm)")
+        ax1.set_title("Autocorrelation Map")
+        plt.colorbar(im1, ax=ax1)
+
+        # Plot fit results if successful
+        if analysis_results["fit_success"]:
+            # Create fitted surface for visualization
+            size = autocorr_map.shape[0]
+            center = size // 2
+            x_grid = np.arange(size) * delta_r - center * delta_r
+            y_grid = np.arange(size) * delta_r - center * delta_r
+            X, Y = np.meshgrid(x_grid, y_grid)
+
+            # Recreate 2D Gaussian for plotting
+            def gaussian_2d_plot(
+                x, y, amplitude, x0, y0, sigma_x, sigma_y, background
+            ):
+                return (
+                    amplitude
+                    * np.exp(
+                        -(
+                            (x - x0) ** 2 / (2 * sigma_x**2)
+                            + (y - y0) ** 2 / (2 * sigma_y**2)
+                        )
+                    )
+                    + background
+                )
+
+            fitted_surface = gaussian_2d_plot(
+                X, Y, *analysis_results["fit_params"]
+            )
+
+            im2 = ax2.imshow(
+                fitted_surface, extent=extent, origin="lower", cmap="hot"
+            )
+            ax2.set_xlabel("Δx (nm)")
+            ax2.set_ylabel("Δy (nm)")
+            ax2.set_title(
+                f'Gaussian Fit\nResolution: {analysis_results["resolution"]:.1f} nm\n'
+                + f'R²: {analysis_results["fit_quality"]:.3f}'
+            )
+            plt.colorbar(im2, ax=ax2)
+        else:
+            ax2.text(
+                0.5,
+                0.5,
+                f'Fit Failed\n{analysis_results.get("error", "")}',
+                transform=ax2.transAxes,
+                ha="center",
+                va="center",
+            )
+            ax2.set_title("Gaussian Fit Failed")
+
+        plt.tight_layout()
+
+        # Save plot
+        plot_path = os.path.join(
+            results["folder"], f"{file_nameonly}_resolution_analysis.png"
+        )
+        plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+        plt.close()
+
+        results["fig_resolution"] = plot_path
 
     @profile_resource_usage
     @module_decorator
@@ -2786,19 +3508,25 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         align_pars = parameters.get("align_pars", {})
         align_pars["plot_dir"] = results["folder"]
-        (shifts, cum_shifts, used_fiducials, algo_used, fp_figs) = (
-            picasso_outpost.align_channels(
-                self.channel_locs,
-                self.channel_info,
-                self.channel_tags,
-                fiducial_locs=fiducial_locs,
-                **align_pars,
-            )
+        (
+            shifts,
+            cum_shifts,
+            used_fiducials,
+            algo_used,
+            fp_figs,
+            shift_uncertainties,
+        ) = picasso_outpost.align_channels(
+            self.channel_locs,
+            self.channel_info,
+            self.channel_tags,
+            fiducial_locs=fiducial_locs,
+            **align_pars,
         )
         results["shifts"] = cum_shifts[:, :, -1]
         results["alignment_algorithm"] = algo_used
         results["used_fiducials"] = used_fiducials
         results["fp_figs"] = fp_figs
+        results["shift_uncertainties"] = shift_uncertainties
 
         fp_shifts = os.path.join(results["folder"], "shifts.txt")
         np.savetxt(fp_shifts, results["shifts"])
@@ -2835,6 +3563,19 @@ class AutoPicasso(util.AbstractModuleCollection):
             fig_filepath = os.path.join(results["folder"], fn)
             picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath
+
+            # Add confidence interval plotting for RSSO method
+            if algo_used == "RSSO" and shift_uncertainties:
+                fn_confidence = fn.replace(".png", "_with_confidence.png")
+                fig_confidence_filepath = os.path.join(
+                    results["folder"], fn_confidence
+                )
+                self._plot_channel_alignment_with_confidence(
+                    results["shifts"],
+                    shift_uncertainties,
+                    fig_confidence_filepath,
+                )
+                results["fig_confidence_filepath"] = fig_confidence_filepath
 
         if parameters.get("crop_boundaries"):
             max_xmin, min_xmax = -np.inf, np.inf

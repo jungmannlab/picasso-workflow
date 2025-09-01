@@ -96,6 +96,13 @@ def align_channels(
         use_fiducials : bool
             reports on whether fiducials have been used (and aligned by picked)
             or not (and alignment was by rcc)
+        algo_used : str
+            the algorithm used for alignment
+        fp_figs : list
+            list of figure file paths if plotting was enabled
+        shift_uncertainties : dict
+            dictionary containing uncertainty information (only available
+            for RSSO method)
     """
     logger.debug("Aligning datasets")
     if force_method is None:
@@ -130,7 +137,7 @@ def align_channels(
         algo_used = "RSSO"
         # Use max_shift parameter if provided, otherwise default to 10.0
         max_shift_param = max_shift if max_shift is not None else 10.0
-        shift, fp_figs = align_by_rsso(
+        shift, fp_figs, shift_uncertainties = align_by_rsso(
             channel_locs,
             channel_tags,
             max_shift=max_shift_param,
@@ -149,8 +156,16 @@ def align_channels(
             fiducial_locs,
         )
         fp_figs = []
+        shift_uncertainties = {}  # No uncertainty analysis for RCC method
 
-    return shift, cumulative_shift, use_fiducials, algo_used, fp_figs
+    return (
+        shift,
+        cumulative_shift,
+        use_fiducials,
+        algo_used,
+        fp_figs,
+        shift_uncertainties,
+    )
 
 
 def align_by_picked(channel_locs, fiducial_locs):
@@ -338,11 +353,14 @@ def align_by_rsso(
             The channel shifts as (shift_y, shift_x) for compatibility with
             existing code
         fp_figs : list
-            List of file paths to saved histogram plots (empty if plot_histogram=False)
+            List of file paths to saved histogram plots
+            (empty if plot_histogram=False)
+        shift_uncertainties : dict
+            Dictionary containing uncertainty information for channel shifts
     """
     n_channels = len(channel_locs)
     if n_channels < 2:
-        return (np.zeros(n_channels), np.zeros(n_channels)), []
+        return (np.zeros(n_channels), np.zeros(n_channels)), [], {}
 
     logger.debug(
         f"Aligning {n_channels} channels using RSSO method "
@@ -351,28 +369,36 @@ def align_by_rsso(
 
     # Calculate pairwise shifts between all channel combinations
     pairwise_shifts = {}
+    pairwise_uncertainties = {}
     fp_figs = []
     n_pairs = 0
     if channel_tags is None:
         channel_tags = [str(i) for i in range(n_channels)]
     for i in range(n_channels):
         for j in range(i + 1, n_channels):
-            shift_x, shift_y, plot_filepath = _calculate_pairwise_shift(
-                channel_locs[i],
-                channel_locs[j],
-                max_shift,
-                plot_histogram=plot_histogram,
-                plot_dir=plot_dir,
-                channel_pair=(channel_tags[i], channel_tags[j]),
+            shift_x, shift_y, plot_filepath, uncertainty_info = (
+                _calculate_pairwise_shift(
+                    channel_locs[i],
+                    channel_locs[j],
+                    max_shift,
+                    plot_histogram=plot_histogram,
+                    plot_dir=plot_dir,
+                    channel_pair=(channel_tags[i], channel_tags[j]),
+                )
             )
 
             if shift_x is not None and shift_y is not None:
                 # Store shift from channel i to channel j
                 pairwise_shifts[(i, j)] = (shift_x, shift_y)
+                pairwise_uncertainties[(i, j)] = uncertainty_info
                 n_pairs += 1
+                x_unc = uncertainty_info.get("shift_x_uncertainty", np.nan)
+                y_unc = uncertainty_info.get("shift_y_uncertainty", np.nan)
                 logger.debug(
                     f"Channels {i}->{j} shift: "
-                    f"dx={shift_x:.3f}, dy={shift_y:.3f}"
+                    f"dx={shift_x:.3f}, dy={shift_y:.3f}, "
+                    f"uncertainty: dx_err={x_unc:.3f}, "
+                    f"dy_err={y_unc:.3f}"
                 )
 
                 # Collect figure file paths if plotting is enabled
@@ -381,10 +407,12 @@ def align_by_rsso(
 
     if n_pairs == 0:
         logger.warning("No valid pairwise shifts found")
-        return (np.zeros(n_channels), np.zeros(n_channels)), []
+        return (np.zeros(n_channels), np.zeros(n_channels)), [], {}
 
     # Solve for optimal channel shifts using least squares
-    shifts_x, shifts_y = _solve_optimal_shifts(pairwise_shifts, n_channels)
+    shifts_x, shifts_y, shift_uncertainties = _solve_optimal_shifts(
+        pairwise_shifts, n_channels, pairwise_uncertainties
+    )
 
     # Apply shifts to align channels
     for i in range(len(channel_locs)):
@@ -395,7 +423,7 @@ def align_by_rsso(
 
     # Return shifts in format compatible with existing code (y, x order)
     # and any figure file paths created during plotting
-    return (shifts_x, shifts_y), fp_figs
+    return (shifts_x, shifts_y), fp_figs, shift_uncertainties
 
 
 def _calculate_pairwise_shift(
@@ -428,9 +456,13 @@ def _calculate_pairwise_shift(
             Shift from channel i to channel j, or (None, None, None) if failed.
             plot_filepath is the path to the saved histogram plot if
             plot_histogram=True, otherwise None.
+        sigma_x, sigma_y : float, float
+            Gaussian widths representing uncertainty in shift measurements
+        shift_x_error, shift_y_error : float, float
+            Parameter errors from covariance matrix fitting
     """
     if len(locs_i) == 0 or len(locs_j) == 0:
-        return None, None, None
+        return None, None, None, None, None, None
     # Calculate all pairwise distances and shifts
     coords_i = np.column_stack([locs_i.x, locs_i.y])
     coords_j = np.column_stack([locs_j.x, locs_j.y])
@@ -456,7 +488,7 @@ def _calculate_pairwise_shift(
             valid_shifts_y.append(dy)
 
     if len(valid_shifts_x) == 0:
-        return None, None
+        return None, None, None, None, None, None
     # Create 2D histogram with adaptive binning
     shift_range = [-max_shift, max_shift]
     bin_size, bins = _calculate_adaptive_bins(
@@ -472,8 +504,8 @@ def _calculate_pairwise_shift(
 
     # Use 2D Gaussian fitting to find the shift
     try:
-        shift_x, shift_y = _fit_2d_gaussian_peak(
-            hist, x_edges, y_edges, max_shift
+        shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error = (
+            _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift)
         )
         fit_successful = True
     except (RuntimeError, ValueError) as e:
@@ -487,6 +519,11 @@ def _calculate_pairwise_shift(
         y_centers = (y_edges[:-1] + y_edges[1:]) / 2
         shift_x = x_centers[peak_idx[0]]
         shift_y = y_centers[peak_idx[1]]
+        # Set uncertainty estimates for fallback method
+        sigma_x = bin_size  # Use bin size as rough uncertainty estimate
+        sigma_y = bin_size
+        shift_x_error = bin_size / 2  # Conservative error estimate
+        shift_y_error = bin_size / 2
         fit_successful = False
 
     # Create and save histogram plot if requested
@@ -504,7 +541,16 @@ def _calculate_pairwise_shift(
             fit_successful,
         )
 
-    return shift_x, shift_y, plot_filepath
+    # Return shift values and uncertainties
+    uncertainty_info = {
+        "sigma_x": sigma_x,
+        "sigma_y": sigma_y,
+        "shift_x_error": shift_x_error,
+        "shift_y_error": shift_y_error,
+        "fit_successful": fit_successful,
+    }
+
+    return shift_x, shift_y, plot_filepath, uncertainty_info
 
 
 def _calculate_adaptive_bins(valid_shifts_x, valid_shifts_y, max_shift):
@@ -558,7 +604,8 @@ def _calculate_adaptive_bins(valid_shifts_x, valid_shifts_y, max_shift):
 def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
     """
     Fit a 2D Gaussian to the histogram peak to find precise shift location.
-    Values outside the max_shift circle are set to NaN and excluded from fitting.
+    Values outside the max_shift circle are set to NaN and excluded from
+    fitting.
 
     Args:
         hist : np.array
@@ -666,7 +713,7 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
 
     # Perform the fit
     try:
-        popt, _ = curve_fit(
+        popt, pcov = curve_fit(
             gaussian_2d,
             (x_fit, y_fit),
             z_fit,
@@ -675,18 +722,26 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
             maxfev=1000,
         )
 
-        # Extract fitted center coordinates
+        # Extract fitted center coordinates and uncertainties
         shift_x = popt[1]  # x0
         shift_y = popt[2]  # y0
+        sigma_x = popt[3]  # Gaussian width in x (uncertainty measure)
+        sigma_y = popt[4]  # Gaussian width in y (uncertainty measure)
+
+        # Extract parameter uncertainties from covariance matrix
+        param_errors = np.sqrt(np.diag(pcov))
+        shift_x_error = param_errors[1]  # Error in x0
+        shift_y_error = param_errors[2]  # Error in y0
 
         logger.debug(
             f"2D Gaussian fit successful: "
-            f"center=({shift_x:.3f}, {shift_y:.3f}), "
-            f"sigma=({popt[3]:.3f}, {popt[4]:.3f}), "
+            f"center=({shift_x:.3f}±{shift_x_error:.3f}, "
+            f"{shift_y:.3f}±{shift_y_error:.3f}), "
+            f"sigma=({sigma_x:.3f}, {sigma_y:.3f}), "
             f"amplitude={popt[0]:.1f}, background={popt[6]:.1f}"
         )
 
-        return shift_x, shift_y
+        return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error
 
     except Exception as e:
         raise RuntimeError(f"Gaussian fitting failed: {str(e)}")
@@ -788,7 +843,10 @@ def _save_shift_histogram_plot(
         "r+",
         markersize=15,
         markeredgewidth=1,
-        label=f"Estimated shift: ({shift_x:.3f}, {shift_y:.3f}) [{method_str}]",
+        label=(
+            f"Estimated shift: ({shift_x:.3f}, {shift_y:.3f})"
+            + f" [{method_str}]"
+        ),
     )
 
     # Set labels and title
@@ -847,7 +905,9 @@ def _save_shift_histogram_plot(
     return filepath
 
 
-def _solve_optimal_shifts(pairwise_shifts, n_channels):
+def _solve_optimal_shifts(
+    pairwise_shifts, n_channels, pairwise_uncertainties=None
+):
     """
     Solve for optimal channel shifts using least squares given pairwise
     measurements.
@@ -861,13 +921,18 @@ def _solve_optimal_shifts(pairwise_shifts, n_channels):
             Dictionary with keys (i,j) and values (shift_x, shift_y)
         n_channels : int
             Number of channels
+        pairwise_uncertainties : dict, optional
+            Dictionary with keys (i,j) and values containing uncertainty
+            information
 
     Returns:
         shifts_x, shifts_y : np.array, np.array
             Optimal shifts for each channel
+        shift_uncertainties : dict
+            Dictionary containing uncertainty information for channel shifts
     """
     if len(pairwise_shifts) == 0:
-        return np.zeros(n_channels), np.zeros(n_channels)
+        return np.zeros(n_channels), np.zeros(n_channels), {}
 
     # Build linear system: A * shifts = b
     # Each pairwise measurement gives us: shift_j - shift_i = measured_shift
@@ -878,6 +943,25 @@ def _solve_optimal_shifts(pairwise_shifts, n_channels):
     A_y = np.zeros((n_equations, n_unknowns))
     b_x = np.zeros(n_equations)
     b_y = np.zeros(n_equations)
+
+    # Build weight matrices for uncertainty propagation if available
+    W_x = np.eye(n_equations)  # Default to identity (equal weights)
+    W_y = np.eye(n_equations)
+    if pairwise_uncertainties is not None:
+        for eq_idx, (i, j) in enumerate(pairwise_shifts.keys()):
+            uncertainty_info = pairwise_uncertainties.get((i, j), {})
+            shift_x_uncertainty = uncertainty_info.get(
+                "shift_x_uncertainty", 1.0
+            )
+            shift_y_uncertainty = uncertainty_info.get(
+                "shift_y_uncertainty", 1.0
+            )
+
+            # Use inverse variance weighting (higher precision = higher weight)
+            if shift_x_uncertainty > 0:
+                W_x[eq_idx, eq_idx] = 1.0 / (shift_x_uncertainty**2)
+            if shift_y_uncertainty > 0:
+                W_y[eq_idx, eq_idx] = 1.0 / (shift_y_uncertainty**2)
 
     eq_idx = 0
     for (i, j), (shift_x, shift_y) in pairwise_shifts.items():
@@ -896,17 +980,37 @@ def _solve_optimal_shifts(pairwise_shifts, n_channels):
         b_y[eq_idx] = shift_y
         eq_idx += 1
 
-    # Solve least squares problem
+    # Solve weighted least squares problem
+    shift_x_uncertainties = np.zeros(n_channels)
+    shift_y_uncertainties = np.zeros(n_channels)
+
     try:
         if n_unknowns > 0:
-            shifts_x_unknowns = np.linalg.lstsq(A_x, b_x, rcond=None)[0]
-            shifts_y_unknowns = np.linalg.lstsq(A_y, b_y, rcond=None)[0]
+            # Weighted least squares: (A^T W A)^-1 A^T W b
+            AtWA_x = A_x.T @ W_x @ A_x
+            AtWb_x = A_x.T @ W_x @ b_x
+            AtWA_y = A_y.T @ W_y @ A_y
+            AtWb_y = A_y.T @ W_y @ b_y
+
+            # Solve for shifts
+            shifts_x_unknowns = np.linalg.solve(AtWA_x, AtWb_x)
+            shifts_y_unknowns = np.linalg.solve(AtWA_y, AtWb_y)
+
+            # Calculate uncertainties from covariance matrix
+            # Covariance = (A^T W A)^-1
+            cov_x = np.linalg.inv(AtWA_x)
+            cov_y = np.linalg.inv(AtWA_y)
+
+            # Diagonal elements give variances, sqrt gives standard errors
+            shift_x_uncertainties[1:] = np.sqrt(np.diag(cov_x))
+            shift_y_uncertainties[1:] = np.sqrt(np.diag(cov_y))
+
         else:
             shifts_x_unknowns = np.array([])
             shifts_y_unknowns = np.array([])
-    except np.linalg.LinAlgError:
+    except (np.linalg.LinAlgError, np.linalg.LinAlgError):
         logger.warning(
-            "Failed to solve least squares system, "
+            "Failed to solve weighted least squares system, "
             "using first valid pairwise shift"
         )
         # Fallback: use first available pairwise shift
@@ -917,6 +1021,17 @@ def _solve_optimal_shifts(pairwise_shifts, n_channels):
             shifts_x_unknowns[j - 1] = shift_x
             shifts_y_unknowns[j - 1] = shift_y
 
+        # Use fallback uncertainty if available
+        if pairwise_uncertainties is not None:
+            uncertainty_info = pairwise_uncertainties.get((i, j), {})
+            if j > 0:
+                shift_x_uncertainties[j] = uncertainty_info.get(
+                    "shift_x_uncertainty", 1.0
+                )
+                shift_y_uncertainties[j] = uncertainty_info.get(
+                    "shift_y_uncertainty", 1.0
+                )
+
     # Reconstruct full shift arrays (with reference channel = 0)
     shifts_x = np.zeros(n_channels)
     shifts_y = np.zeros(n_channels)
@@ -925,7 +1040,34 @@ def _solve_optimal_shifts(pairwise_shifts, n_channels):
         shifts_x[1:] = shifts_x_unknowns
         shifts_y[1:] = shifts_y_unknowns
 
-    return shifts_x, shifts_y
+    # Create uncertainty summary
+    shift_uncertainties = {
+        "shift_x_uncertainties": shift_x_uncertainties,
+        "shift_y_uncertainties": shift_y_uncertainties,
+        "mean_x_uncertainty": (
+            np.mean(shift_x_uncertainties[shift_x_uncertainties > 0])
+            if np.any(shift_x_uncertainties > 0)
+            else np.nan
+        ),
+        "mean_y_uncertainty": (
+            np.mean(shift_y_uncertainties[shift_y_uncertainties > 0])
+            if np.any(shift_y_uncertainties > 0)
+            else np.nan
+        ),
+        "max_x_uncertainty": (
+            np.max(shift_x_uncertainties)
+            if len(shift_x_uncertainties) > 0
+            else np.nan
+        ),
+        "max_y_uncertainty": (
+            np.max(shift_y_uncertainties)
+            if len(shift_y_uncertainties) > 0
+            else np.nan
+        ),
+        "pairwise_uncertainties": pairwise_uncertainties or {},
+    }
+
+    return shifts_x, shifts_y, shift_uncertainties
 
 
 def convert_zeiss_file(filepath_czi, filepath_raw, info=None):
@@ -3326,24 +3468,174 @@ def plot_2dhist(locs, field_x, field_y, fig, ax):
 
 
 def resolution_ppac(locs, pixelsize, delta_r, r_max):
-    """Calculate the resolution by autocorrelation"""
+    """Calculate the resolution by 2D point pattern autocorrelation
+
+    Args:
+        locs: DataFrame with 'x' and 'y' columns of localizations
+        pixelsize: Pixel size in physical units (e.g., nm)
+        delta_r: Grid spacing for autocorrelation calculation
+        r_max: Maximum radius for autocorrelation
+
+    Returns:
+        2D autocorrelation intensity map normalized by central value
+    """
     r_max = (r_max // delta_r) * delta_r
     r_search = delta_r / 2
-    rs = np.arange(-r_max, r_max, step=delta_r)
-    idx_ctr = int(len(rs) / 2)
-    intensities = np.zeros([len(rs)] * 2)
-    xy = np.array([locs["x"] * pixelsize, locs["y"] * pixelsize])
+    rs = np.arange(
+        -r_max, r_max + delta_r / 2, step=delta_r
+    )  # Include endpoint
+    idx_ctr = len(rs) // 2
+    intensities = np.zeros((len(rs), len(rs)))
+
+    # Fix: Create N×2 array correctly
+    xy = np.column_stack([locs["x"] * pixelsize, locs["y"] * pixelsize])
     tree_i = KDTree(xy)
+
+    # Pre-calculate shifted coordinates for efficiency
     for i, delta_x in enumerate(rs):
         for j, delta_y in enumerate(rs):
-            xy_shift = xy.copy()
-            xy_shift[:, 0] += delta_x
-            xy_shift[:, 1] += delta_y
+            xy_shift = xy + np.array([delta_x, delta_y])
             tree_probe = KDTree(xy_shift)
             intensities[i, j] = tree_i.count_neighbors(tree_probe, r_search)
 
-    # normalize by maximum (no shift)
-    intensities = intensities / intensities[idx_ctr, idx_ctr]
+    # Normalize by maximum (no shift) and handle division by zero
+    max_intensity = intensities[idx_ctr, idx_ctr]
+    if max_intensity > 0:
+        intensities = intensities / max_intensity
 
-    # now, analyse, fit Gaussian, ..
     return intensities
+
+
+def analyse_resolution_ppac(intensities, delta_r):
+    """Fit 2D Gaussian to autocorrelation map to extract resolution
+
+    Args:
+        intensities: 2D autocorrelation intensity map from resolution_ppac
+        delta_r: Grid spacing used for autocorrelation calculation
+
+    Returns:
+        dict: Resolution analysis results containing:
+            - sigma_x, sigma_y: Gaussian standard deviations in x,y (physical units)
+            - resolution: Average resolution (2.35 * mean(sigma_x, sigma_y))
+            - fwhm_x, fwhm_y: Full-width half-maximum values
+            - amplitude: Fitted Gaussian amplitude
+            - background: Fitted background level
+            - fit_quality: R-squared goodness of fit
+    """
+    from scipy.optimize import curve_fit
+
+    def gaussian_2d(coords, amplitude, x0, y0, sigma_x, sigma_y, background):
+        """2D Gaussian function for fitting"""
+        x, y = coords
+        return (
+            amplitude
+            * np.exp(
+                -(
+                    (x - x0) ** 2 / (2 * sigma_x**2)
+                    + (y - y0) ** 2 / (2 * sigma_y**2)
+                )
+            )
+            + background
+        )
+
+    # Create coordinate grids
+    size = intensities.shape[0]
+    center = size // 2
+    x_grid = np.arange(size) * delta_r - center * delta_r
+    y_grid = np.arange(size) * delta_r - center * delta_r
+    X, Y = np.meshgrid(x_grid, y_grid)
+    coords = (X.flatten(), Y.flatten())
+    z_data = intensities.flatten()
+
+    # Initial parameter guess
+    amplitude_guess = np.max(intensities) - np.min(intensities)
+    background_guess = np.min(intensities)
+    sigma_guess = delta_r * 3  # Initial guess for sigma
+
+    initial_guess = [
+        amplitude_guess,
+        0,
+        0,
+        sigma_guess,
+        sigma_guess,
+        background_guess,
+    ]
+
+    # Set parameter bounds
+    bounds = (
+        [
+            0,
+            -center * delta_r,
+            -center * delta_r,
+            delta_r / 2,
+            delta_r / 2,
+            0,
+        ],  # Lower bounds
+        [
+            np.inf,
+            center * delta_r,
+            center * delta_r,
+            center * delta_r,
+            center * delta_r,
+            np.inf,
+        ],  # Upper bounds
+    )
+
+    try:
+        # Perform the fit
+        popt, pcov = curve_fit(
+            gaussian_2d,
+            coords,
+            z_data,
+            p0=initial_guess,
+            bounds=bounds,
+            maxfev=5000,
+        )
+
+        amplitude, x0, y0, sigma_x, sigma_y, background = popt
+
+        # Calculate fit quality (R-squared)
+        fitted_data = gaussian_2d(coords, *popt)
+        ss_res = np.sum((z_data - fitted_data) ** 2)
+        ss_tot = np.sum((z_data - np.mean(z_data)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+        # Calculate resolution metrics
+        fwhm_x = 2.35 * sigma_x  # FWHM = 2.35 * sigma for Gaussian
+        fwhm_y = 2.35 * sigma_y
+        resolution = np.mean([fwhm_x, fwhm_y])  # Average resolution
+
+        return {
+            "sigma_x": sigma_x,
+            "sigma_y": sigma_y,
+            "resolution": resolution,
+            "fwhm_x": fwhm_x,
+            "fwhm_y": fwhm_y,
+            "amplitude": amplitude,
+            "background": background,
+            "center_x": x0,
+            "center_y": y0,
+            "fit_quality": r_squared,
+            "fit_success": True,
+            "fit_params": popt,
+            "fit_covariance": pcov,
+        }
+
+    except Exception as e:
+        # Return fallback values if fit fails
+        return {
+            "sigma_x": np.nan,
+            "sigma_y": np.nan,
+            "resolution": np.nan,
+            "fwhm_x": np.nan,
+            "fwhm_y": np.nan,
+            "amplitude": np.nan,
+            "background": np.nan,
+            "center_x": np.nan,
+            "center_y": np.nan,
+            "fit_quality": np.nan,
+            "fit_success": False,
+            "error": str(e),
+            "fit_params": None,
+            "fit_covariance": None,
+        }
