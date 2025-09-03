@@ -2423,9 +2423,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fit_quality"] = analysis_results["fit_quality"]
         results["autocorr_map"] = autocorr_map
 
-        # Create visualization
-        import matplotlib.pyplot as plt
-
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
         # Plot autocorrelation map
@@ -2495,6 +2492,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         plt.close()
 
         results["fig_resolution"] = plot_path
+
+        return parameters, results
 
     @profile_resource_usage
     @module_decorator
