@@ -531,8 +531,9 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_smlm_clusterer"))
 
+    @patch("picasso_workflow.analyse.g5m.test_subclustering")
     @patch("picasso_workflow.analyse.g5m.run_g5m")
-    def gaussian_mixture_cluster(self, mock_gmms):
+    def gaussian_mixture_cluster(self, mock_gmms, mock_test_subclustering):
         self.ap.info = [{"Width": 1000, "Height": 1000}]
         locs_dtype = [
             ("frame", "u4"),
@@ -542,6 +543,7 @@ class TestAnalyseModules(unittest.TestCase):
             ("lpx", "f4"),
             ("lpy", "f4"),
             ("n", "u4"),
+            ("n_events", "u4"),
         ]
         self.ap.locs = np.rec.array(
             [
@@ -551,6 +553,7 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         mock_gmms.return_value = self.ap.locs, self.ap.locs, self.ap.info
+        mock_test_subclustering.return_value = None
 
         parameters = {"min_locs": 10, "min_sigma": 0.2, "max_sigma": 0.9}
         parameters, results = self.ap.gaussian_mixture_cluster(0, parameters)
@@ -930,12 +933,14 @@ class TestAnalyseModules(unittest.TestCase):
             "density": {"CD86": 92.4, "GFP": 83.5},
             "n_simulate": 10000,
             "granularity": 5,
-            "labeling_uncertainty": 5,
+            "labeling_uncertainty": {"CD86": 5, "GFP": 5},
             "sim_repeats": 2,
             # "nn_nth": 2,
         }
         spinna_result = {
-            "Fitted proportions of structures": np.array([0.4, 0.15, 0.35])
+            "Fitted proportions of structures": np.array([0.4, 0.15, 0.35]),
+            "props": np.array([40.0, 15.0, 35.0]),
+            "props_std": np.array([2.0, 1.0, 3.0]),
         }
         mock_spinna_sgl.return_value = (
             spinna_result,
@@ -1168,6 +1173,118 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = ap.undrift_rsso(0, parameters)
         assert results["success"]
         assert results["total_drift"] == 0.0
+
+    @patch("picasso_workflow.analyse.picasso_outpost.pick_similar")
+    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.analyse.render.plot_scene")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def find_similar(
+        self,
+        mock_save_locs,
+        mock_plot_scene,
+        mock_picked_locs,
+        mock_pick_similar,
+    ):
+        """Test the find_similar module"""
+        # Mock pick_similar to return test data
+        mock_picks = np.array([[10.0, 10.0], [20.0, 20.0], [30.0, 30.0]])
+        mock_nlocs = np.array([50, 75, 100])
+        mock_rmsds = np.array([1.5, 2.0, 2.5])
+        mock_labels = np.array(
+            [0, 0, -1]
+        )  # Two selected picks, one not selected
+
+        mock_pick_similar.return_value = (
+            mock_picks,
+            mock_nlocs,
+            mock_rmsds,
+            mock_labels,
+        )
+
+        # Mock picked_locs to return test localizations
+        test_locs = np.rec.array(
+            [
+                (0, 10.0, 10.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1, 0),
+                (1, 10.1, 10.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1, 0),
+                (2, 20.0, 20.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1, 1),
+            ],
+            dtype=self.locs_dtype + [("group", "<i4")],
+        )
+        mock_picked_locs.return_value = test_locs
+
+        # Set up test data
+        self.ap.locs = np.rec.array(
+            [
+                (
+                    i,
+                    10 + np.random.rand(),
+                    10 + np.random.rand(),
+                    1000,
+                    1.0,
+                    1.0,
+                    100,
+                    0.1,
+                    0.1,
+                    0.5,
+                    50,
+                    i,
+                )
+                for i in range(100)
+            ],
+            dtype=self.locs_dtype,
+        )
+        self.ap.info = [{"Width": 64, "Height": 64, "Pixelsize": 130}]
+
+        # Test parameters
+        parameters = {
+            "diameter": 5.0,
+            "min_n_locs_per_frame": 0.01,
+            "max_n_locs_per_frame": 0.1,
+            "min_rmsd": 1.0,
+            "max_rmsd": 3.0,
+            "n_plot_structures": 2,
+            "display_pixelsize": 1.0,
+        }
+
+        # Run find_similar
+        parameters, results = self.ap.find_similar(0, parameters)
+
+        # Verify results
+        assert results["n_picks"] == 3, "Should return correct number of picks"
+        assert (
+            results["n_picked_locs"] == 3
+        ), "Should return correct number of picked locs"
+        assert (
+            results["n_locs"] == 100
+        ), "Should return correct total number of locs"
+
+        # Check that files were created
+        assert "fp_phasespace" in results, "Should create phase space plot"
+        assert (
+            "fp_phasespace_hexbin" in results
+        ), "Should create hexbin phase space plot"
+        assert "fp_picked_fullfov" in results, "Should create full FOV plot"
+        assert "fp_picked_locs" in results, "Should save picked locs file"
+
+        # Verify mock calls (may be called multiple times by test framework)
+        assert mock_pick_similar.called, "pick_similar should be called"
+        assert mock_picked_locs.called, "picked_locs should be called"
+        assert mock_save_locs.called, "save_locs should be called"
+
+        # Verify pick_similar was called with correct arguments
+        call_args = mock_pick_similar.call_args
+        assert (
+            call_args[0][0] is self.ap.locs
+        ), "Should pass locs to pick_similar"
+        assert (
+            call_args[0][1] is self.ap.info
+        ), "Should pass info to pick_similar"
+        assert (
+            call_args[1]["diameter"] == 5.0
+        ), "Should pass diameter parameter"
+
+        # Clean up
+        shutil.rmtree(os.path.join(self.results_folder, "00_find_similar"))
 
 
 # @unittest.skip("")

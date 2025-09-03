@@ -2531,11 +2531,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         if nrows is not None:
             fig_fps = results.get("fp_renderings")  # list (col) of list of fps
             col_titles = [f"Example {i + 1}" for i in range(nrows)]
-            row_titles = [
-                f"Structure Cluster {i}" for i in range(len(fig_fps))
-            ]
+            if fig_fps is not None:
+                row_titles = [
+                    f"Structure Cluster {i}" for i in range(len(fig_fps))
+                ]
+            else:
+                row_titles = []
 
-            if len(fig_fps) > 0:
+            if fig_fps is not None and len(fig_fps) > 0:
                 fn_figs = []
                 for row_fps in fig_fps:
                     row_fns = []
@@ -2639,11 +2642,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         if nrows is not None:
             fig_fps = results.get("fp_renderings")  # list (col) of list of fps
             col_titles = [f"Example {i + 1}" for i in range(nrows)]
-            row_titles = [
-                f"Structure Cluster {i}" for i in range(len(fig_fps))
-            ]
+            if fig_fps is not None:
+                row_titles = [
+                    f"Structure Cluster {i}" for i in range(len(fig_fps))
+                ]
+            else:
+                row_titles = []
 
-            if len(fig_fps) > 0:
+            if fig_fps is not None and len(fig_fps) > 0:
                 fn_figs = []
                 for row_fps in fig_fps:
                     row_fns = []

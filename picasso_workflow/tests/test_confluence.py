@@ -1101,8 +1101,70 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "duration": 4.12,
             "success": True,
             "labeling_efficiency": {"ref": 0.57, "tgt": 0.23},
+            "labeling_efficiency_std": {"ref": 0.03, "tgt": 0.01},
         }
         self.cr.labeling_efficiency_analysis(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def find_similar(self):
+        parameters = {
+            "diameter": 5.0,
+            "min_n_locs_per_frame": 0.01,
+            "max_n_locs_per_frame": 0.1,
+            "min_rmsd": 1.0,
+            "max_rmsd": 3.0,
+            "n_plot_structures": 2,
+            "display_pixelsize": 1.0,
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "n_picks": 5,
+            "n_picked_locs": 150,
+            "n_locs": 2000,
+            "fp_phasespace": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "TestData",
+                "confluence",
+                "testimg.png",
+            ),
+            "fp_phasespace_hexbin": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "TestData",
+                "confluence",
+                "testimg.png",
+            ),
+            "fp_picked_fullfov": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "TestData",
+                "confluence",
+                "testimg.png",
+            ),
+            "fp_renderings": [
+                [
+                    os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "TestData",
+                        "confluence",
+                        "testimg.png",
+                    ),
+                    os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "TestData",
+                        "confluence",
+                        "testimg.png",
+                    ),
+                ]
+            ],
+        }
+        self.cr.find_similar(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
