@@ -87,6 +87,49 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def undrift_rsso(self):
+        """Undrift localized data using RSSO-based temporal drift correction
+
+        This method applies the RSSO (Redundant Spot Shift Overrepresentation)
+        algorithm to correct for temporal drift by analyzing 2D shift histograms
+        between temporally adjacent localizations. It accounts for the timescales
+        ton (localization half-life) and toff (reappearance time).
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    ton : float
+                        Half-life of localization in frames (how long a spot stays
+                        visible)
+                    toff : float
+                        Time in frames for a spot to reappear after disappearing
+                    max_shift : float
+                        Maximum expected drift per frame in pixels
+                optional items:
+                    processing_chunk_size : int
+                        Number of frames per processing chunk for memory efficiency
+                        (default: 100)
+                    min_locs_per_frame : int
+                        Minimum localizations per frame for reliable drift estimation
+                        (default: 10)
+                    min_locs_per_block : int
+                        Minimum localizations per toff-scale block for reliable drift
+                        estimation (default: 100)
+                    plot_drift : bool
+                        Whether to save drift plots (default: True)
+                    save_locs : bool
+                        Whether to save undrifted localizations (default: True)
+
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results including drift trajectory and plots
+        """
+
+    @abc.abstractmethod
     def undrift_aim(self):
         """Unrift localized data using the AIM algorithm"""
         pass
@@ -126,6 +169,40 @@ class AbstractModuleCollection(abc.ABC):
     def binding_event_analysis(self):
         """Perform clustering using the smlm clusterer"""
         pass
+
+    @abc.abstractmethod
+    def resolution_analysis(self):
+        """Perform resolution analysis using point pattern autocorrelation
+
+        This method calculates the spatial resolution of localizations
+        by computing a 2D autocorrelation function and fitting a Gaussian to
+        extract resolution metrics.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                with optional keys:
+                    delta_r : float
+                        grid spacing for autocorrelation (default: 5 nm)
+                    r_max : float
+                        maximum radius for autocorrelation (default: 100 nm)
+
+        Results:
+            resolution : float
+                average resolution in nm (FWHM)
+            sigma_x, sigma_y : float
+                Gaussian standard deviations in x,y directions
+            fwhm_x, fwhm_y : float
+                Full-width half-maximum in x,y directions
+            fit_quality : float
+                R-squared goodness of fit
+            autocorr_map : ndarray
+                2D autocorrelation intensity map
+            fig_resolution : str
+                path to resolution plot
+        """
 
     @abc.abstractmethod
     def smlm_clusterer(self):

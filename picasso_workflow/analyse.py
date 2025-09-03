@@ -2377,8 +2377,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the index of the module
             parameters: dict
                 with required keys:
-                    fp_locs : str
-                        file path to input locs
                 with optional keys:
                     delta_r : float
                         grid spacing for autocorrelation (default: 5 nm)
@@ -2399,23 +2397,19 @@ class AutoPicasso(util.AbstractModuleCollection):
             fig_resolution : str
                 path to resolution plot
         """
-        import pandas as pd
         from picasso_workflow.picasso_outpost import (
             resolution_ppac,
             analyse_resolution_ppac,
         )
-
-        # Load localizations
-        folder_in, file_in = os.path.split(parameters["fp_locs"])
-        file_nameonly, _ = os.path.splitext(file_in)
-        locs = pd.read_hdf(parameters["fp_locs"])
 
         # Get parameters with defaults
         delta_r = parameters.get("delta_r", 5.0)  # 5 nm default
         r_max = parameters.get("r_max", 100.0)  # 100 nm default
 
         # Calculate autocorrelation
-        autocorr_map = resolution_ppac(locs, self.pixelsize, delta_r, r_max)
+        autocorr_map = resolution_ppac(
+            self.locs, self.pixelsize, delta_r, r_max
+        )
 
         # Analyze autocorrelation with Gaussian fitting
         analysis_results = analyse_resolution_ppac(autocorr_map, delta_r)
@@ -2496,9 +2490,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         plt.tight_layout()
 
         # Save plot
-        plot_path = os.path.join(
-            results["folder"], f"{file_nameonly}_resolution_analysis.png"
-        )
+        plot_path = os.path.join(results["folder"], "resolution_analysis.png")
         plt.savefig(plot_path, dpi=300, bbox_inches="tight")
         plt.close()
 
