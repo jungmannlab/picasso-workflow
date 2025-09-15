@@ -5,6 +5,10 @@ Author: Heinrich Grabmayr
 Initial Date: March 7, 2024
 Description: This is the picasso interface of picasso-workflow
 """
+from picasso import lib, io, localize, gausslq, postprocess, clusterer
+from picasso import aim, spinna  # , g5m
+from picasso import __version__ as picassoversion
+from picasso import CONFIG as pCONFIG
 import copy
 import gc
 # import logging
@@ -198,7 +202,8 @@ def profile_resource_usage(method):
         except Exception as e:
             raise e
             # print(f"Profiling error: {e}")
-            # return None, profiling_results
+            # return None, profiling_results  # Return None for results on
+            # error
 
         results["peak_memory_gb"] = profiling_results["peak_memory_gb"]
         try:
@@ -712,8 +717,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
 
         Loads DNA-PAINT movie data and metadata into memory for subsequent
-        analysis. Optionally creates sample movies and loads camera configuration.
-        The data is saved in self.movie and self.info.
+        analysis. Optionally creates sample movies and loads camera
+        configuration. The data is saved in self.movie and self.info.
 
         Args:
             i : int
@@ -726,7 +731,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     sample_movie : dict
                         Parameters for creating a subsampled movie
                     load_camera_info : bool
-                        Whether to load camera configuration from picasso.CONFIG
+                        Whether to load camera configuration from
+                        picasso.CONFIG
             results : dict
                 Required keys:
                     start time : str
@@ -745,7 +751,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         Returns:
             parameters : dict
-                Input parameters, potentially modified (sample_movie paths updated)
+                Input parameters, potentially modified (sample_movie paths
+                updated)
             results : dict
                 Input results with added movie information and metadata
         """
@@ -1069,9 +1076,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             pix = ix * (box_size + border_width)
             piy = iy * (box_size + border_width)
             # logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
-            canvas[
-                pix : pix + box_size, piy : piy + box_size
-            ] = picasso_outpost.normalize_spot(spot)
+            canvas[pix:pix + box_size, piy:piy + box_size] = (
+                picasso_outpost.normalize_spot(spot)
+            )
         return canvas, ng_start, ng_end
 
     @profile_resource_usage
@@ -1125,9 +1132,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                     num_identifications : int
                         Total number of identifications found
                     auto_netgrad : dict
-                        Results from automatic net gradient detection (if requested)
+                        Results from automatic net gradient detection (if
+                        requested)
                     ids_vs_frame : dict
-                        Results from identifications vs frame analysis (if requested)
+                        Results from identifications vs frame analysis (if
+                        requested)
 
         Returns:
             parameters : dict
@@ -1531,8 +1540,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize = self.pixelsize
         progress = parameters.get("progress", None)
 
-        # dirty debug: picasso.aim.aim expects the existence
-        # of info[1]["Pixelsize"]
+        # dirty debug: picasso.aim.aim expects the existence of
+        # info[1]["Pixelsize"]
         self.info[1]["Pixelsize"] = pixelsize
 
         self.locs, self.info, self.drift = aim.aim(
@@ -4063,7 +4072,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                         Whether to replace localizations with cluster centers
                 Optional keys:
                     save_locs : bool
-                        Whether to save clustered localization data to results folder
+                        Whether to save clustered localization data to results
+                        folder
             results : dict
                 Required keys:
                     start time : str
@@ -6078,125 +6088,126 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
-    @module_decorator
-    def gaussian_mixture_cluster(self, i, parameters, results):
-        """Perform clustering using gaussian mixture modelsAfter this module,
-        the standard locs will be the Gaussian centers.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    locs : np.recarray
-                        Localizations.
-                    info : list
-                        Information dictionaries.
-                    min_locs : int
-                        Minimum number of localizations per component. Used to
-                        filter out components with too few localizations that
-                        likely  represent background.
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-                    max_rounds_without_best_bic : int
-                        (default=3)
-                        Maximum number of rounds without BIC improvement to
-                        terminate the optimal GMM search.
-                    bootstrap_check : bool (default=False)
-                        If True, the standard error of the means (SEM) is
-                        calculated using bootstrapping. If False, the standard,
-                        single Gaussian SEM is used as approximation.
-                    calibration : dict (default=None)
-                        Calibration dictionary with x and y coefficients, z
-                        step size and the number of frames. Only required for
-                        3D data.
-                    asynch : bool (default=True)
-                        If True, the GMM search is run in parallel using
-                        multiprocessing. If False, the GMM search is run
-                        without multiprocessing.
-                    callback_parent : function (default='silent')
-                        Callback function's parent object for displaying
-                        progress bar. If None, the progress bar displayed
-                        directly to the console. If 'silent', no progress
-                        is displayed
-                    sigma_bounds : float (not recommended)
-                        Minimum standard deviation of the Gaussian components
-                        in nanometers. Useful for avoiding overfitting within
-                        a single localization cloud. Now using individual
-                        loc precision, so min_sigma is not recommended.
-                    loc_prec_handle : Literal["local", "global", "abs"]
-                        default: local
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
-        """
-        pixelsize = self.pixelsize
-        required_args = ["min_locs"]
-        optional_args = [
-            ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
-            ("bootstrap_check", False),
-            ("calibration", None),
-            ("pixelsize", pixelsize),
-            ("asynch", True),
-            ("callback_parent", "silent"),
-            ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
-            ("loc_prec_handle", "local"),
-        ]
-        try:
-            kwargs = {k: parameters[k] for k in required_args}
-        except KeyError as e:
-            logger.error(
-                f"""All of the following arguments are required for
-                picasso.g5m.run_g5m: {required_args}"""
-            )
-            raise e
-        # sigma values are given in nm in parameters but px in gmm
-        if "min_sigma" in kwargs.keys():
-            kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
-            kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
-        for oa, default in optional_args:
-            kwargs[oa] = parameters.get(oa, default)
+    # @profile_resource_usage
+    # @module_decorator
+    # def gaussian_mixture_cluster(self, i, parameters, results):
+    #     """Perform clustering using gaussian mixture modelsAfter this module,
+    #     the standard locs will be the Gaussian centers.
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #                 locs : np.recarray
+    #                     Localizations.
+    #                 info : list
+    #                     Information dictionaries.
+    #                 min_locs : int
+    #                     Minimum number of localizations per component. Used
+    #                     to filter out components with too few localizations
+    #                     that likely represent background.
+    #             and optional keys:
+    #                 save_locs : bool
+    #                     whether to save the locs into the results folder
+    #                 max_rounds_without_best_bic : int
+    #                     (default=3)
+    #                     Maximum number of rounds without BIC improvement to
+    #                     terminate the optimal GMM search.
+    #                 bootstrap_check : bool (default=False)
+    #                     If True, the standard error of the means (SEM) is
+    #                     calculated using bootstrapping. If False, the
+    #                     standard, single Gaussian SEM is used as
+    #                     approximation.
+    #                 calibration : dict (default=None)
+    #                     Calibration dictionary with x and y coefficients, z
+    #                     step size and the number of frames. Only required for
+    #                     3D data.
+    #                 asynch : bool (default=True)
+    #                     If True, the GMM search is run in parallel using
+    #                     multiprocessing. If False, the GMM search is run
+    #                     without multiprocessing.
+    #                 callback_parent : function (default='silent')
+    #                     Callback function's parent object for displaying
+    #                     progress bar. If None, the progress bar displayed
+    #                     directly to the console. If 'silent', no progress
+    #                     is displayed
+    #                 sigma_bounds : float (not recommended)
+    #                     Minimum standard deviation of the Gaussian components
+    #                     in nanometers. Useful for avoiding overfitting within
+    #                     a single localization cloud. Now using individual
+    #                     loc precision, so min_sigma is not recommended.
+    #                 loc_prec_handle : Literal["local", "global", "abs"]
+    #                     default: local
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     pixelsize = self.pixelsize
+    #     required_args = ["min_locs"]
+    #     optional_args = [
+    #         ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
+    #         ("bootstrap_check", False),
+    #         ("calibration", None),
+    #         ("pixelsize", pixelsize),
+    #         ("asynch", True),
+    #         ("callback_parent", "silent"),
+    #         ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
+    #         ("loc_prec_handle", "local"),
+    #     ]
+    #     try:
+    #         kwargs = {k: parameters[k] for k in required_args}
+    #     except KeyError as e:
+    #         logger.error(
+    #             f"""All of the following arguments are required for
+    #             picasso.g5m.run_g5m: {required_args}"""
+    #         )
+    #         raise e
+    #     # sigma values are given in nm in parameters but px in gmm
+    #     if "min_sigma" in kwargs.keys():
+    #         kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
+    #         kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
+    #     for oa, default in optional_args:
+    #         kwargs[oa] = parameters.get(oa, default)
 
-        results["g5m_args"] = str(kwargs)
+    #     results["g5m_args"] = str(kwargs)
 
-        center_locs, clustered_locs, gmm_info = g5m.run_g5m(
-            self.locs, self.info, **kwargs
-        )
+    #     center_locs, clustered_locs, gmm_info = g5m.run_g5m(
+    #         self.locs, self.info, **kwargs
+    #     )
 
-        if parameters.get("save_locs"):
-            fp_centers = os.path.join(results["folder"], "gmm_centers.hdf5")
-            io.save_locs(fp_centers, center_locs, gmm_info)
-            fp_centers = os.path.join(
-                results["folder"], "gmm_clustered_locs.hdf5"
-            )
-            io.save_locs(fp_centers, clustered_locs, gmm_info)
+    #     if parameters.get("save_locs"):
+    #         fp_centers = os.path.join(results["folder"], "gmm_centers.hdf5")
+    #         io.save_locs(fp_centers, center_locs, gmm_info)
+    #         fp_centers = os.path.join(
+    #             results["folder"], "gmm_clustered_locs.hdf5"
+    #         )
+    #         io.save_locs(fp_centers, clustered_locs, gmm_info)
 
-        # plot: histogram of cluster sizes
-        fig, ax = plt.subplots()
-        maxbin = int(np.quantile(center_locs["n"], 0.95))
-        ax.hist(center_locs["n"], bins=np.arange(maxbin))
-        ax.set_xlabel("cluster size [locs]")
-        ax.set_ylabel("Frequency")
-        results["fp_fig_clustersizes"] = os.path.join(
-            results["folder"], "fig_gmm_clustersize.png"
-        )
-        fig.savefig(results["fp_fig_clustersizes"])
+    #     # plot: histogram of cluster sizes
+    #     fig, ax = plt.subplots()
+    #     maxbin = int(np.quantile(center_locs["n"], 0.95))
+    #     ax.hist(center_locs["n"], bins=np.arange(maxbin))
+    #     ax.set_xlabel("cluster size [locs]")
+    #     ax.set_ylabel("Frequency")
+    #     results["fp_fig_clustersizes"] = os.path.join(
+    #         results["folder"], "fig_gmm_clustersize.png"
+    #     )
+    #     fig.savefig(results["fp_fig_clustersizes"])
 
-        # test for subclustering
-        results["fp_fig_subclustering"] = os.path.join(
-            results["folder"], "subcluster_test.png"
-        )
-        g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
+    #     # test for subclustering
+    #     results["fp_fig_subclustering"] = os.path.join(
+    #         results["folder"], "subcluster_test.png"
+    #     )
+    #     g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
 
-        results["n_locs_in"] = len(self.locs)
-        results["n_locs_clustered"] = len(clustered_locs)
-        results["n_centers"] = len(center_locs)
+    #     results["n_locs_in"] = len(self.locs)
+    #     results["n_locs_clustered"] = len(clustered_locs)
+    #     results["n_centers"] = len(center_locs)
 
-        self.locs = copy.copy(center_locs)
-        self.info = gmm_info
+    #     self.locs = copy.copy(center_locs)
+    #     self.info = gmm_info
 
-        return parameters, results
+    #     return parameters, results
 
     @profile_resource_usage
     @module_decorator
@@ -6303,16 +6314,17 @@ class AutoPicasso(util.AbstractModuleCollection):
             # np.savetxt(out_path, np.sort(alldist, axis=1), newline="\r\n")
             # alldist[alldist == 0] = float("inf")
             # nneighbors = np.sort(alldist, axis=1)[:, : parameters["nth"]]
-            nneighbors = alldist[:, 1 : parameters["nth_NN"] + 1]
+            nneighbors = alldist[:, 1:parameters["nth_NN"] + 1]
             out_path = os.path.join(results["folder"], f"{tag}_nneighbors.txt")
             np.savetxt(out_path, nneighbors, newline="\r\n")
             nn_fps.append(out_path)
 
             # logger.debug("calculated bin parameters")
-            # # as alldist can be large, reduce it here already, so memory can be
-            # # freed
+            # # as alldist can be large, reduce it here already, so memory
+            # can be freed
             nspots = alldist.shape[0]
-            # alldist = alldist[:, np.min(alldist, axis=1) <= (rmax_rdf + deltar)]
+            # idx_ = np.min(alldist, axis=1) <= (rmax_rdf + deltar)
+            # alldist = alldist[:, idx_]
             # logger.debug("cropped 2d alldist")
             # alldist = np.sort(alldist.flatten())
             # logger.debug("flattened alldist")
@@ -6394,7 +6406,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # assuming the RDF converged to the bulk density in
         # its second half
-        density = np.median(rdf[int(len(rs) / 2) :])
+        density = np.median(rdf[int(len(rs) / 2):])
 
         # plot results
         ax.plot(rs, rdf * 1e3 ** d)
@@ -6419,7 +6431,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # assuming the RDF converged to the bulk density in
         # its second half
-        density = np.median(rdf[int(len(rs) / 2) :])
+        density = np.median(rdf[int(len(rs) / 2):])
 
         # plot results
         ax.plot(rs, rdf * 1e3 ** d)
@@ -6443,7 +6455,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Required keys:
                     nneighbors : str or numpy.ndarray or list
                         If str: filepath to nearest neighbor data file
-                        If array: 2D array (N, k) of kth nearest neighbor distances
+                        If array: 2D array (N, k) of kth nearest neighbor
+                        distances
                         If list: multiple datasets or file paths
                     dimensionality : int
                         Spatial dimensionality (2 or 3) for CSR model
@@ -6451,7 +6464,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     kmin : int
                         Minimum k-th nearest neighbor order to fit (default: 1)
                     min_dist : float
-                        Minimum observable distance in nm due to technical limits
+                        Minimum observable distance in nm due to technical
+                        limits
                     max_dist : float
                         Maximum distance for filtering analysis
                     bkg_fraction : float
@@ -6474,7 +6488,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     fp_fig : str or list
                         Filepath(s) to CSR fit visualization figure(s)
                     wasserstein_distances_per_k : list
-                        Wasserstein distances for each k-th nearest neighbor order
+                        Wasserstein distances for each k-th nearest neighbor
+                        order
                     mean_wasserstein_distance : float or list
                         Mean Wasserstein distance across all k orders
                     ks_pvalues_per_k : list
@@ -6484,7 +6499,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters : dict
                 Input parameters (unchanged)
             results : dict
-                Input results with CSR fitting results and goodness-of-fit metrics
+                Input results with CSR fitting results and goodness-of-fit
+                metrics
         """
         if isinstance(parameters["nneighbors"], str):
             nneighbor_list = [np.loadtxt(parameters["nneighbors"])]
@@ -6913,8 +6929,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                         image boundaries (after shifting)
                     fp_co_shift_channel_locs : list of str
                         hdf5 files not in the 'main workflow' that should
-                        be shifted as well. This could e.g. be clustered localizations
-                        when the workflow has continued with cluster centers
+                        be shifted as well. This could e.g. be clustered
+                        localizations when the workflow has continued with
+                        cluster centers
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -7163,7 +7180,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             results : dict
                 The results dictionary, updated with:
                     filepaths : list
-                        List of all saved file paths from the aggregated datasets
+                        List of all saved file paths from the aggregated
+                        datasets
 
         Returns:
             parameters : dict
@@ -7664,12 +7682,10 @@ class AutoPicasso(util.AbstractModuleCollection):
     # @module_decorator
     # def ripleysk_rafal(self, i, parameters, results):
     #     """Exactly along Rafal's code"""
-    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis import (
-    #         analyze as analyze_whole_cell,
-    #     )
-    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis import (
-    #         postprocess_ripley_matrix,
-    #     )
+    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis \
+    #         import analyze as analyze_whole_cell
+    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis \
+    #         import postprocess_ripley_matrix
 
     #     rcode = generate_random_code(6)
 
@@ -7677,10 +7693,12 @@ class AutoPicasso(util.AbstractModuleCollection):
     #     RADII = np.concatenate(
     #         (np.arange(4, 80, 2), np.arange(80, R_MAX + 1, 12))
     #     )
+    #     # boundaries for plotting final ripley matrices (as described in
+    #     # methods)
     #     VMIN, VMAX = [
     #         -2000,
     #         2000,
-    #     ]  # boundaries for plotting final ripley matrices (as described in methods)
+    #     ]
 
     #     # first: binary
     #     ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
@@ -7732,7 +7750,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     #         mask,
     #         extent=[
     #             0,
-    #             mask.shape[0] * 10 / 1000,  # 10 nm mask pixel size (upsample)
+    #             mask.shape[0] * 10 / 1000,  # 10 nm mask pixel size
     #             0,
     #             mask.shape[1] * 10 / 1000,
     #         ],
@@ -8258,7 +8276,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         #     channel_tags = data["aggregation_workflow"][
         #         "single_dataset_tileparameters"
         #     ]["#tags"]
-        # fp_ripleys_integrals = [fp for fp in fp_ripleys_integrals if fp != ""]
+        # fp_ripleys_integrals = [
+        #     fp for fp in fp_ripleys_integrals if fp != ""
+        # ]
         # output_folders = [fp for fp in output_folders if fp != ""]
         results["output_folders"] = output_folders
 
@@ -8335,7 +8355,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     CSR simulation within the density mask, or randomizing
                     the real data
                 randomization_radius : float
-                    for controltype "RND", the radius [nm] by which to randomize.
+                    for controltype "RND", the radius [nm] by which to
+                    randomize.
                 # output_folders : list of str
                 #     folders to write the significant pairs into. This can
                 #     e.g. be the 'manual' results folders of the
@@ -8580,8 +8601,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         Args:
             parameters:
                 channel_map : dict
-                    maps between channels (protein names, tags before combining)
-                    and index in the combine_id column of combined locs
+                    maps between channels (protein names, tags before
+                    combining) and index in the combine_id column of combined
+                    locs
                 labeling_efficiency : dict, channel tag to float, range 0-100
                     labeling efficiency percentage, default for all targets
                 labeling_uncertainty : dict, channel tag to float
@@ -8665,14 +8687,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         #         "fit_NND_bin": [fit_NND_bin],
         #         "fit_NND_maxdist": [fit_NND_maxdist],
         #         "N_structures": N_structures,
-        #         "save_filename": os.path.join(results["folder"], "homo-{tag}"),
+        #         "save_filename": (
+        #              os.path.join(results["folder"], "homo-{tag}")
+        #         ),
         #         "asynch": True,
         #         "targets": [tag],
         #         "apply_mask": False,
         #         "nn_plotted": parameters["nn_nth"],
         #         "result_dir": results["folder"],
         #     }
-        #     result, fp_fig = picasso_outpost.spinna_sgl_temp(spinna_parameters)
+        #     result, fp_fig = (
+        #         picasso_outpost.spinna_sgl_temp(spinna_parameters)
+        #     )
         #     props[tag] = result["Fitted proportions of structures"]
         # logger.debug(f'found proportions of {props}')
 
@@ -10990,7 +11016,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 nrows=len(fields) - 1, ncols=len(fields) - 1, squeeze=False
             )
             for i, field_x in enumerate(fields[:-1]):
-                for j, field_y in enumerate(fields[i + 1 :]):
+                for j, field_y in enumerate(fields[i + 1:]):
                     picasso_outpost.plot_2dhist(
                         self.locs, field_x, field_y, fig, ax[i, j]
                     )
@@ -11141,7 +11167,8 @@ class AutoPicasso(util.AbstractModuleCollection):
     @profile_resource_usage
     @module_decorator
     def random_val(self, i, parameters, results):
-        """Generate random values and plot for debugging and testing the pairwise module.
+        """Generate random values and plot for debugging and testing the
+        pairwise module.
 
         Creates a random value and generates a test plot with random data
         for debugging purposes in pairwise module workflows.
@@ -11391,8 +11418,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                         if tgt not in tgts:
                             tgts.append(tgt)
 
-                # number of molecular targets in each structure; each row gives one
-                # target species and each column gives one structure
+                # number of molecular targets in each structure; each
+                # row gives one target species and each column gives one
+                # structure
                 n_t = len(tgts)
                 n_s = len(structures)
                 logger.debug(f"{n_s} structures: {str(structures)}")
