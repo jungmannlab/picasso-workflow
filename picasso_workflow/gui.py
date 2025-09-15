@@ -10,9 +10,16 @@ from picasso_workflow import util
 import logging
 import subprocess
 import os
+import sys
+# import pkgutil
+# import importlib
+import traceback
 import tempfile
+from picasso import lib
+from PyQt5 import QtWidgets, QtCore
 
 logger = logging.getLogger(__name__)
+__GUIVERSION__ = "0.1.0"
 
 
 class ModuleDescriptor(util.AbstractModuleCollection):
@@ -4708,3 +4715,193 @@ class SlurmCommunicator:
             "success": result["success"],
             "stderr": result["stderr"],
         }
+
+
+class Window(QtWidgets.QMainWindow):
+    """Main window for the picasso-workflow GUI application."""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(f"picasso-workflow {__GUIVERSION__}")
+        self.resize(1024, 600)
+
+        self.workflow = []
+
+        layout = QtWidgets.QGridLayout()
+        central_widget = QtWidgets.QWidget()
+        self.setCentralWidget(central_widget)
+        central_widget.setLayout(layout)
+        # self.files_box = lib.ScrollableGroupBox("Files", self)
+        self._files_box = QtWidgets.QGroupBox("Files")
+        self.files_box = QtWidgets.QGridLayout(self._files_box)
+        layout.addWidget(self._files_box, 0, 0)
+        self._modules_box = QtWidgets.QGroupBox("Modules")
+        self.modules_box = QtWidgets.QGridLayout(self._modules_box)
+        layout.addWidget(self._modules_box, 0, 1)
+
+        # select files to process
+        add_files_button = QtWidgets.QPushButton("Add files")
+        self.files_box.addWidget(add_files_button, 0, 0)
+        add_files_button.clicked.connect(self.add_files)
+        remove_files_button = QtWidgets.QPushButton("Remove selected")
+        self.files_box.addWidget(remove_files_button, 0, 1)
+        remove_files_button.clicked.connect(self.remove_selected_files)
+        clear_files_button = QtWidgets.QPushButton("Clear list")
+        self.files_box.addWidget(clear_files_button, 0, 2)
+        clear_files_button.clicked.connect(self.clear_file_list)
+        self.files_list = QtWidgets.QListWidget()
+        self.files_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.ExtendedSelection
+        )
+        self.files_box.addWidget(self.files_list, 1, 0, 1, 3)
+
+        # adding modules
+        current_module = QtWidgets.QGroupBox("Current Module")
+        current_layout = QtWidgets.QVBoxLayout(current_module)
+        self.modules_box.addWidget(current_module, 0, 0)
+        # module_descriptor = ModuleDescriptor()
+        # modules = module_descriptor.get_module_names()
+        modules = [
+            "Localize", "Undrift AIM", "Undrift picked", "Undrift RCC",
+            "Filter", "Average", "DBSCAN", "SMLM clusterer", "G5M",
+        ]  # TODO: get actual modules
+        self.module_combobox = QtWidgets.QComboBox()
+        self.module_combobox.addItem("Select module")
+        self.module_combobox.addItems(modules)
+        self.module_combobox.currentTextChanged.connect(self.on_module_changed)
+        current_layout.addWidget(self.module_combobox)
+        # label describing the module selected
+        self.current_module_desc = QtWidgets.QLabel("No module selected")
+        current_layout.addWidget(self.current_module_desc)
+        # button to add the selected module
+        self.add_module_button = QtWidgets.QPushButton("Add module")
+        current_layout.addWidget(self.add_module_button)
+        self.add_module_button.clicked.connect(self.add_module)
+        self.add_module_button.setEnabled(False)
+
+        # widget showing the workflow
+        self.workflow_box = lib.ScrollableGroupBox("Selected workflow", self)
+        self.modules_box.addWidget(self.workflow_box, 1, 0)
+
+        # buttons to remove the last element, save and load workflow
+        workflow_buttons = QtWidgets.QHBoxLayout()
+        workflow_buttons_widget = QtWidgets.QWidget()
+        workflow_buttons_widget.setLayout(workflow_buttons)
+        self.modules_box.addWidget(workflow_buttons_widget, 2, 0)
+        remove_last_button = QtWidgets.QPushButton("Remove last")
+        workflow_buttons.addWidget(remove_last_button)
+        remove_last_button.clicked.connect(self.remove_last)
+        save_workflow_button = QtWidgets.QPushButton("Save workflow")
+        workflow_buttons.addWidget(save_workflow_button)
+        save_workflow_button.clicked.connect(self.save_workflow)
+        load_workflow_button = QtWidgets.QPushButton("Load workflow")
+        workflow_buttons.addWidget(load_workflow_button)
+        load_workflow_button.clicked.connect(self.load_workflow)
+
+        # resize the widgets
+        # Set fixed size for the group box
+        current_module.setMinimumSize(500, 300)
+
+    def add_files(self):
+        """Add file(s)/directory to the file list."""
+        # TODO: allow for the selection of the directory
+        # TODO: change allowed formats!
+        options = QtWidgets.QFileDialog.Options()
+        options |= QtWidgets.QFileDialog.ReadOnly
+        files, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            self,
+            "Select Files",
+            "",
+            "All Files (*);;Text Files (*.txt);;CSV Files (*.csv)",
+            options=options,
+        )
+        if files:
+            for file in files:
+                if not self.files_list.findItems(file, QtCore.Qt.MatchExactly):
+                    self.files_list.addItem(file)
+
+    def remove_selected_files(self):
+        """Remove the selected files from the file list."""
+        selected_items = self.files_list.selectedItems()
+        if not selected_items:
+            return
+        for item in selected_items:
+            self.files_list.takeItem(self.files_list.row(item))
+
+    def clear_file_list(self):
+        """Clear the file list."""
+        if self.files_list.count() == 0:
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Clear file list",
+            "Are you sure you want to clear the file list?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply == QtWidgets.QMessageBox.Yes:
+            self.files_list.clear()
+
+    def add_module(self):
+        """Add the currently selected module to the workflow."""
+        module_name = self.module_combobox.currentText()
+        added_workflow = QtWidgets.QLabel(
+            f"{len(self.workflow)}: {module_name}"
+        )
+        self.workflow.append(added_workflow)
+        self.workflow_box.add_widget(added_workflow, len(self.workflow) - 1, 0)
+
+    def remove_last(self):
+        """Remove the last module from the workflow."""
+        # print("removing last module")
+        if not self.workflow:
+            QtWidgets.QMessageBox.warning(
+                self, "Workflow empty", "No modules to remove."
+            )
+            return
+        self.workflow_box.content_layout.removeWidget(self.workflow[-1])
+        del self.workflow[-1]
+
+    def save_workflow(self):
+        """Save the current workflow to a YAML file."""
+        # TODO: save workflow
+        print("saving workflow")
+
+    def load_workflow(self):
+        """Load a workflow from a YAML file."""
+        # TODO: load workflow
+        print("loading workflow")
+
+    def on_module_changed(self, text):
+        """Update the module description when a new module is selected."""
+        if text == "Select module":
+            self.current_module_desc.setText("No module selected")
+            self.add_module_button.setEnabled(False)
+        else:
+            self.current_module_desc.setText(
+                f"The description of the module {text} will be shown here."
+            )
+            self.add_module_button.setEnabled(True)
+
+
+def main():
+    app = QtWidgets.QApplication(sys.argv)
+    window = Window()
+    window.show()
+
+    def excepthook(type, value, tback):
+        lib.cancel_dialogs()
+        QtCore.QCoreApplication.instance().processEvents()
+        message = "".join(traceback.format_exception(type, value, tback))
+        errorbox = QtWidgets.QMessageBox.critical(
+            window, "An error occured", message
+        )
+        errorbox.exec_()
+        sys.__excepthook__(type, value, tback)
+
+    sys.excepthook = excepthook
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()
