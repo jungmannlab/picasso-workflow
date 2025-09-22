@@ -453,13 +453,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """
         parameters_spec = {
             "filepath": {
-                "type": "file",
+                "type": "str",
                 "description": "Path to the input Zeiss .czi file",
                 "extensions": [".czi"],
                 "required": True,
             },
             "output_filepath": {
-                "type": "file",
+                "type": "str",
                 "description": "Custom output path for the .raw file",
                 "extensions": [".raw"],
                 "required": False,
@@ -530,7 +530,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """
         parameters_spec = {
             "filename": {
-                "type": "file",
+                "type": "str",
                 "description": "Path to the movie file to load",
                 "extensions": [".raw", ".tif", ".tiff", ".ome.tif"],
                 "required": True,
@@ -639,7 +639,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """
         parameters_spec = {
             "filename": {
-                "type": "file",
+                "type": "str",
                 "description": "Path to the localization file to load",
                 "extensions": [".hdf5", ".h5"],
                 "required": True,
@@ -968,13 +968,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """
         parameters_spec = {
             "filepath": {
-                "type": "file",
+                "type": "str",
                 "description": "Path to the input brightfield image",
                 "extensions": [".tif", ".tiff", ".png", ".jpg"],
                 "required": True,
             },
             "output_filepath": {
-                "type": "file",
+                "type": "str",
                 "description": "Custom output path for the PNG file",
                 "extensions": [".png"],
                 "required": False,
@@ -1977,7 +1977,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """
         parameters_spec = {
             "nneighbors": {
-                "type": ["file", "numpy.ndarray", "list"],
+                "type": ["str", "numpy.ndarray", "list"],
                 "description": (
                     "Nearest neighbor data (file path, array, or list)"
                 ),
@@ -3713,7 +3713,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """
         parameters_spec = {
             "picked_locs": {
-                "type": ["numpy.ndarray", "file"],
+                "type": ["numpy.ndarray", "str"],
                 "description": "Picked localization coordinates or file path",
                 "extensions": [".hdf5", ".txt"],
                 "required": True,
