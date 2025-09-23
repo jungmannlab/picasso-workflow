@@ -1488,7 +1488,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
             prev_block_locs,
             current_block_locs,
-            max_shift * toff_block_size,
+            max_shift,
             plot_histogram=False,
         )
         logger.debug(
