@@ -1520,6 +1520,9 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _process_fine_drift_chunk(args):
         """Stateless helper function for processing fine drift chunks in parallel"""
         (locs_data, frames, chunk_frames, max_shift, min_locs_per_frame) = args
+        logger.debug(
+            f"undrifting chunk {min(chunk_frames)} to {max(chunk_frames)}"
+        )
 
         from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
 
@@ -1670,7 +1673,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         processing_chunk_size = parameters.get("processing_chunk_size", 100)
         min_locs_per_frame = parameters.get("min_locs_per_frame", 10)
-        min_locs_per_block = parameters.get("min_locs_per_block", 100)
+        # min_locs_per_block = parameters.get("min_locs_per_block", 100)
         plot_drift = parameters.get("plot_drift", True)
         n_processes = parameters.get(
             "n_processes", None
@@ -1711,144 +1714,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             f"RSSO undrift (2-stage): {n_frames} frames, ton={ton}, toff={toff}"
         )
 
-        # STAGE 1: Long-timescale drift correction on toff scale (parallelized)
-        logger.debug("Stage 1: Long-timescale drift correction (parallel)")
-        toff_block_size = int(toff)
-
-        # Prepare arguments for parallel processing
-        block_args = []
-        for block_start in range(0, n_frames, toff_block_size):
-            block_end = min(block_start + toff_block_size, n_frames)
-            block_args.append(
-                (
-                    self.locs,
-                    frames,
-                    block_start,
-                    block_end,
-                    toff_block_size,
-                    max_shift,
-                    min_locs_per_block,
-                )
-            )
-
-        # Process blocks in parallel
-        try:
-            if n_processes == 1 or len(block_args) <= 1:
-                # Single-threaded fallback
-                logger.debug("Using single-threaded processing for Stage 1")
-                block_results = [
-                    self._process_drift_block(args) for args in block_args
-                ]
-            else:
-                # Multi-threaded processing
-                logger.debug(
-                    f"Using {n_processes} processes for Stage 1 ({len(block_args)} "
-                    + "blocks)"
-                )
-                from multiprocessing import Pool
-
-                with Pool(processes=n_processes) as pool:
-                    block_results = pool.map(
-                        self._process_drift_block, block_args
-                    )
-        except Exception as e:
-            logger.warning(
-                "Multiprocessing failed for Stage 1, falling back to "
-                + f"single-threaded: {e}"
-            )
-            block_results = [
-                self._process_drift_block(args) for args in block_args
-            ]
-
-        # Process results from parallel computation
-        for result in block_results:
-            if result is None:
-                continue  # Skip first block
-
-            (
-                block_start,
-                block_end,
-                shift_x,
-                shift_y,
-                quality,
-                uncertainty_x,
-                uncertainty_y,
-            ) = result
-
-            if shift_x is not None and shift_y is not None:
-                # Distribute block drift across frames in the block
-                block_drift_x = shift_x / toff_block_size  # Per-frame drift
-                block_drift_y = shift_y / toff_block_size
-                # Uncertainty also scales with block size
-                block_uncertainty_x = (
-                    uncertainty_x / toff_block_size
-                    if uncertainty_x is not None
-                    else 0
-                )
-                block_uncertainty_y = (
-                    uncertainty_y / toff_block_size
-                    if uncertainty_y is not None
-                    else 0
-                )
-
-                for frame_idx in range(block_start, block_end):
-                    if frame_idx > 0:
-                        drift_x_coarse[frame_idx] = (
-                            drift_x_coarse[frame_idx - 1] + block_drift_x
-                        )
-                        drift_y_coarse[frame_idx] = (
-                            drift_y_coarse[frame_idx - 1] + block_drift_y
-                        )
-                        # Accumulate uncertainties (assuming independence)
-                        uncertainty_x_coarse[frame_idx] = np.sqrt(
-                            uncertainty_x_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_x**2
-                        )
-                        uncertainty_y_coarse[frame_idx] = np.sqrt(
-                            uncertainty_y_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_y**2
-                        )
-                    else:
-                        uncertainty_x_coarse[frame_idx] = block_uncertainty_x
-                        uncertainty_y_coarse[frame_idx] = block_uncertainty_y
-                    drift_quality[frame_idx] += quality / (
-                        block_end - block_start
-                    )
-            else:
-                # Use previous block's drift rate if estimation failed
-                for frame_idx in range(block_start, block_end):
-                    if frame_idx > 0:
-                        drift_x_coarse[frame_idx] = drift_x_coarse[
-                            frame_idx - 1
-                        ]
-                        drift_y_coarse[frame_idx] = drift_y_coarse[
-                            frame_idx - 1
-                        ]
-                        uncertainty_x_coarse[frame_idx] = uncertainty_x_coarse[
-                            frame_idx - 1
-                        ]
-                        uncertainty_y_coarse[frame_idx] = uncertainty_y_coarse[
-                            frame_idx - 1
-                        ]
-
-        # Apply coarse drift correction in-place to avoid copy
-        # Create frame index mapping for efficient lookup
-        frame_to_idx = {frame: idx for idx, frame in enumerate(frames)}
-
-        # Cache unique frames to avoid repeated computation
-        unique_frames = np.unique(self.locs["frame"])
-
-        # Apply coarse drift correction without creating temp copy
-        for frame in unique_frames:
-            if frame in frame_to_idx:
-                frame_idx = frame_to_idx[frame]
-                if frame_idx < len(drift_x_coarse):
-                    frame_mask = self.locs["frame"] == frame
-                    self.locs["x"][frame_mask] -= drift_x_coarse[frame_idx]
-                    self.locs["y"][frame_mask] -= drift_y_coarse[frame_idx]
-
-        # STAGE 2: Short-timescale drift correction on consecutive frames (parallelized)
-        logger.debug("Stage 2: Short-timescale drift correction (parallel)")
+        # STAGE 1: Short-timescale drift correction on consecutive frames (parallelized)
+        logger.debug("Stage 1: Short-timescale drift correction (parallel)")
 
         # Prepare chunk arguments for parallel processing
         chunk_args = []
@@ -1940,6 +1807,147 @@ class AutoPicasso(util.AbstractModuleCollection):
                     uncertainty_y_fine[frame_idx] = uncertainty_y_fine[
                         frame_idx - 1
                     ]
+
+        # Apply coarse drift correction in-place to avoid copy
+        # Create frame index mapping for efficient lookup
+        frame_to_idx = {frame: idx for idx, frame in enumerate(frames)}
+
+        # Cache unique frames to avoid repeated computation
+        unique_frames = np.unique(self.locs["frame"])
+
+        # Apply coarse drift correction without creating temp copy
+        for frame in unique_frames:
+            if frame in frame_to_idx:
+                frame_idx = frame_to_idx[frame]
+                if frame_idx < len(drift_x_fine):
+                    frame_mask = self.locs["frame"] == frame
+                    self.locs["x"][frame_mask] -= drift_x_fine[frame_idx]
+                    self.locs["y"][frame_mask] -= drift_y_fine[frame_idx]
+
+        # # STAGE 2: Long-timescale drift correction on toff scale (parallelized)
+        # logger.debug("Stage 2: Long-timescale drift correction (parallel)")
+        # toff_block_size = int(toff)
+
+        # # Prepare arguments for parallel processing
+        # block_args = []
+        # for block_start in range(0, n_frames, toff_block_size):
+        #     block_end = min(block_start + toff_block_size, n_frames)
+        #     block_args.append(
+        #         (
+        #             self.locs,
+        #             frames,
+        #             block_start,
+        #             block_end,
+        #             toff_block_size,
+        #             max_shift,
+        #             min_locs_per_block,
+        #         )
+        #     )
+
+        # # Process blocks in parallel
+        # try:
+        #     if n_processes == 1 or len(block_args) <= 1:
+        #         # Single-threaded fallback
+        #         logger.debug("Using single-threaded processing for Stage 1")
+        #         block_results = [
+        #             self._process_drift_block(args) for args in block_args
+        #         ]
+        #     else:
+        #         # Multi-threaded processing
+        #         logger.debug(
+        #             f"Using {n_processes} processes for Stage 1 ({len(block_args)} "
+        #             + "blocks)"
+        #         )
+        #         from multiprocessing import Pool
+
+        #         with Pool(processes=n_processes) as pool:
+        #             block_results = pool.map(
+        #                 self._process_drift_block, block_args
+        #             )
+        # except Exception as e:
+        #     logger.warning(
+        #         "Multiprocessing failed for Stage 1, falling back to "
+        #         + f"single-threaded: {e}"
+        #     )
+        #     block_results = [
+        #         self._process_drift_block(args) for args in block_args
+        #     ]
+
+        # # Process results from parallel computation
+        # for result in block_results:
+        #     if result is None:
+        #         continue  # Skip first block
+
+        #     (
+        #         block_start,
+        #         block_end,
+        #         shift_x,
+        #         shift_y,
+        #         quality,
+        #         uncertainty_x,
+        #         uncertainty_y,
+        #     ) = result
+
+        #     if shift_x is not None and shift_y is not None:
+        #         # Distribute block drift across frames in the block
+        #         block_drift_x = shift_x / toff_block_size  # Per-frame drift
+        #         block_drift_y = shift_y / toff_block_size
+        #         # Uncertainty also scales with block size
+        #         block_uncertainty_x = (
+        #             uncertainty_x / toff_block_size
+        #             if uncertainty_x is not None
+        #             else 0
+        #         )
+        #         block_uncertainty_y = (
+        #             uncertainty_y / toff_block_size
+        #             if uncertainty_y is not None
+        #             else 0
+        #         )
+
+        #         for frame_idx in range(block_start, block_end):
+        #             if frame_idx > 0:
+        #                 drift_x_coarse[frame_idx] = (
+        #                     drift_x_coarse[frame_idx - 1] + block_drift_x
+        #                 )
+        #                 drift_y_coarse[frame_idx] = (
+        #                     drift_y_coarse[frame_idx - 1] + block_drift_y
+        #                 )
+        #                 # Accumulate uncertainties (assuming independence)
+        #                 uncertainty_x_coarse[frame_idx] = np.sqrt(
+        #                     uncertainty_x_coarse[frame_idx - 1] ** 2
+        #                     + block_uncertainty_x**2
+        #                 )
+        #                 uncertainty_y_coarse[frame_idx] = np.sqrt(
+        #                     uncertainty_y_coarse[frame_idx - 1] ** 2
+        #                     + block_uncertainty_y**2
+        #                 )
+        #             else:
+        #                 uncertainty_x_coarse[frame_idx] = block_uncertainty_x
+        #                 uncertainty_y_coarse[frame_idx] = block_uncertainty_y
+        #             drift_quality[frame_idx] += quality / (
+        #                 block_end - block_start
+        #             )
+        #     else:
+        #         # Use previous block's drift rate if estimation failed
+        #         for frame_idx in range(block_start, block_end):
+        #             if frame_idx > 0:
+        #                 drift_x_coarse[frame_idx] = drift_x_coarse[
+        #                     frame_idx - 1
+        #                 ]
+        #                 drift_y_coarse[frame_idx] = drift_y_coarse[
+        #                     frame_idx - 1
+        #                 ]
+        #                 uncertainty_x_coarse[frame_idx] = uncertainty_x_coarse[
+        #                     frame_idx - 1
+        #                 ]
+        #                 uncertainty_y_coarse[frame_idx] = uncertainty_y_coarse[
+        #                     frame_idx - 1
+        #                 ]
+        drift_x_coarse = 0
+        drift_y_coarse = 0
+        uncertainty_x_coarse = 0
+        uncertainty_y_coarse = 0
+        toff_block_size = int(toff)
 
         # Combine coarse and fine drift
         total_drift_x = drift_x_coarse + drift_x_fine
