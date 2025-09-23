@@ -593,10 +593,10 @@ def _calculate_adaptive_bins(valid_shifts_x, valid_shifts_y, max_shift):
     bins = min(bins, 500)  # Upper limit to prevent excessive computation
     bins = max(bins, 20)  # Lower limit for meaningful histogram
 
-    logger.debug(
-        f"Adaptive binning: {n_points} points, "
-        f"bin_size={bin_size:.3f}, bins={bins}"
-    )
+    # logger.debug(
+    #     f"Adaptive binning: {n_points} points, "
+    #     f"bin_size={bin_size:.3f}, bins={bins}"
+    # )
 
     return bin_size, bins
 
