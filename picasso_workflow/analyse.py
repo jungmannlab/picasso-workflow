@@ -1943,10 +1943,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         #                 uncertainty_y_coarse[frame_idx] = uncertainty_y_coarse[
         #                     frame_idx - 1
         #                 ]
-        drift_x_coarse = 0
-        drift_y_coarse = 0
-        uncertainty_x_coarse = 0
-        uncertainty_y_coarse = 0
         toff_block_size = int(toff)
 
         # Combine coarse and fine drift

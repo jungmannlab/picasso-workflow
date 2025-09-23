@@ -636,10 +636,10 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
         # Set values outside max_shift circle to NaN
         outside_circle = distances > max_shift
         hist_masked[outside_circle] = np.nan
-        logger.debug(
-            f"Applied circular mask: {np.sum(outside_circle)} bins "
-            f"outside max_shift={max_shift} set to NaN"
-        )
+        # logger.debug(
+        #     f"Applied circular mask: {np.sum(outside_circle)} bins "
+        #     f"outside max_shift={max_shift} set to NaN"
+        # )
 
     # Flatten for fitting
     x_data = X.ravel()
@@ -665,10 +665,10 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
     amplitude_init = np.max(z_fit) - background_init  # Peak above background
     sigma_init = 0.5  # Initial guess for standard deviation
 
-    logger.debug(
-        f"Initial fit parameters: center=({x0_init:.3f}, {y0_init:.3f}), "
-        f"amplitude={amplitude_init:.1f}, background={background_init:.1f}"
-    )
+    # logger.debug(
+    #     f"Initial fit parameters: center=({x0_init:.3f}, {y0_init:.3f}), "
+    #     f"amplitude={amplitude_init:.1f}, background={background_init:.1f}"
+    # )
 
     # Define 2D Gaussian function
     def gaussian_2d(
@@ -733,13 +733,13 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
         shift_x_error = param_errors[1]  # Error in x0
         shift_y_error = param_errors[2]  # Error in y0
 
-        logger.debug(
-            f"2D Gaussian fit successful: "
-            f"center=({shift_x:.3f}±{shift_x_error:.3f}, "
-            f"{shift_y:.3f}±{shift_y_error:.3f}), "
-            f"sigma=({sigma_x:.3f}, {sigma_y:.3f}), "
-            f"amplitude={popt[0]:.1f}, background={popt[6]:.1f}"
-        )
+        # logger.debug(
+        #     f"2D Gaussian fit successful: "
+        #     f"center=({shift_x:.3f}±{shift_x_error:.3f}, "
+        #     f"{shift_y:.3f}±{shift_y_error:.3f}), "
+        #     f"sigma=({sigma_x:.3f}, {sigma_y:.3f}), "
+        #     f"amplitude={popt[0]:.1f}, background={popt[6]:.1f}"
+        # )
 
         return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error
 
