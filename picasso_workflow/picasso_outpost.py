@@ -894,7 +894,7 @@ def _save_shift_histogram_plot(
         filename = "shift_histogram.png"
     filepath = os.path.join(plot_dir, filename)
     if os.path.exists(filepath):
-        nfiles = len([f for f in os.path.listdir(plot_dir) if filename in f])
+        nfiles = len([f for f in os.listdir(plot_dir) if filename in f])
         r, e = os.path.splitext(filepath)
         filepath = f"{r}-{nfiles}{e}"
 
