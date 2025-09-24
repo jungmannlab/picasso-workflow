@@ -1527,6 +1527,1296 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             return (block_start, block_end, None, None, 0, None, None)
 
+    def _adaptive_drift_correction(
+        self,
+        frames,
+        max_shift,
+        min_locs_per_frame,
+        min_window_size,
+        max_window_size,
+        confidence_threshold,
+        change_point_sensitivity,
+        n_processes,
+        save_all_rsso_plots,
+        plot_dir,
+    ):
+        """Adaptive drift correction with variable window sizes based on local statistics
+
+        This method uses time series cross validation principles to adaptively
+        choose window sizes, with larger windows in stable regions and smaller
+        windows in rapidly changing regions.
+
+        Returns:
+            tuple: (drift_x_fine, drift_y_fine, uncertainty_x_fine,
+                   uncertainty_y_fine, drift_quality)
+        """
+        from scipy import stats
+        from scipy.signal import find_peaks
+
+        n_frames = len(frames)
+
+        # Initialize drift arrays
+        drift_x_fine = np.zeros(n_frames)
+        drift_y_fine = np.zeros(n_frames)
+        uncertainty_x_fine = np.zeros(n_frames)
+        uncertainty_y_fine = np.zeros(n_frames)
+        drift_quality = np.zeros(n_frames)
+
+        logger.debug(f"Adaptive drift correction: {n_frames} frames, "
+                    f"window size range: {min_window_size}-{max_window_size}")
+
+        # Phase 1: Initial coarse estimation to detect change points
+        coarse_estimates = self._get_coarse_drift_estimates(
+            frames, max_shift, min_locs_per_frame, max_window_size
+        )
+
+        # Phase 2: Temporal outlier filtering
+        if outlier_detection_enabled:
+            coarse_estimates_filtered = self._filter_temporal_outliers(
+                coarse_estimates, outlier_z_threshold
+            )
+        else:
+            coarse_estimates_filtered = coarse_estimates
+
+        # Phase 3: Change point detection (on filtered data)
+        change_points = self._detect_change_points(
+            coarse_estimates_filtered, change_point_sensitivity
+        )
+
+        logger.debug(f"Detected {len(change_points)} change points: {change_points}")
+
+        # Phase 4: Adaptive window sizing
+        optimal_windows = self._calculate_adaptive_windows(
+            frames,
+            change_points,
+            coarse_estimates_filtered,
+            min_window_size,
+            max_window_size,
+            confidence_threshold,
+        )
+
+        # Phase 5: High-precision drift estimation with optimal windows
+        (
+            drift_x_fine,
+            drift_y_fine,
+            uncertainty_x_fine,
+            uncertainty_y_fine,
+            drift_quality,
+        ) = self._estimate_drift_with_adaptive_windows(
+            frames,
+            optimal_windows,
+            max_shift,
+            min_locs_per_frame,
+            save_all_rsso_plots,
+            plot_dir,
+            outlier_detection_enabled,
+            min_signal_to_noise,
+        )
+
+        # Log performance statistics
+        avg_window_size = np.mean(optimal_windows[1:])  # Exclude first frame
+        avg_uncertainty_x = np.mean(uncertainty_x_fine[1:])
+        avg_uncertainty_y = np.mean(uncertainty_y_fine[1:])
+        avg_quality = np.mean(drift_quality[1:])
+
+        logger.info(f"Adaptive drift correction completed: avg_window_size={avg_window_size:.1f}, "
+                   f"avg_uncertainty=({avg_uncertainty_x:.3f}, {avg_uncertainty_y:.3f}), "
+                   f"avg_quality={avg_quality:.0f}")
+
+        # Generate comprehensive drift analysis plot
+        if plot_dir:
+            self._plot_adaptive_drift_analysis(
+                frames,
+                drift_x_fine,
+                drift_y_fine,
+                uncertainty_x_fine,
+                uncertainty_y_fine,
+                drift_quality,
+                optimal_windows,
+                change_points,
+                coarse_estimates,
+                coarse_estimates_filtered,
+                plot_dir,
+                use_spline_interpolation,
+            )
+
+        return (
+            drift_x_fine,
+            drift_y_fine,
+            uncertainty_x_fine,
+            uncertainty_y_fine,
+            drift_quality,
+        )
+
+    def _get_coarse_drift_estimates(self, frames, max_shift, min_locs_per_frame, window_size):
+        """Get initial coarse drift estimates for change point detection"""
+        n_frames = len(frames)
+        coarse_estimates = {"drift_x": [], "drift_y": [], "uncertainty_x": [],
+                           "uncertainty_y": [], "quality": [], "frame_indices": []}
+
+        # Use sliding windows with fixed size for initial estimation
+        for center_idx in range(window_size // 2, n_frames - window_size // 2):
+            start_idx = max(0, center_idx - window_size // 2)
+            end_idx = min(n_frames, center_idx + window_size // 2)
+
+            # Aggregate localizations from window
+            ref_frames = frames[start_idx:center_idx]
+            target_frames = frames[center_idx:end_idx]
+
+            ref_locs = self.locs[np.isin(self.locs["frame"], ref_frames)]
+            target_locs = self.locs[np.isin(self.locs["frame"], target_frames)]
+
+            if len(ref_locs) < min_locs_per_frame or len(target_locs) < min_locs_per_frame:
+                # Insufficient data, use nan
+                coarse_estimates["drift_x"].append(np.nan)
+                coarse_estimates["drift_y"].append(np.nan)
+                coarse_estimates["uncertainty_x"].append(np.nan)
+                coarse_estimates["uncertainty_y"].append(np.nan)
+                coarse_estimates["quality"].append(0)
+            else:
+                shift_x, shift_y, quality, uncertainty_x, uncertainty_y = (
+                    self._estimate_drift_between_frame_groups(
+                        ref_locs, target_locs, max_shift, min_locs_per_frame,
+                        outlier_detection_enabled=False, min_signal_to_noise=0.5  # Disable for coarse estimates
+                    )
+                )
+                coarse_estimates["drift_x"].append(shift_x if shift_x is not None else np.nan)
+                coarse_estimates["drift_y"].append(shift_y if shift_y is not None else np.nan)
+                coarse_estimates["uncertainty_x"].append(uncertainty_x if uncertainty_x is not None else np.nan)
+                coarse_estimates["uncertainty_y"].append(uncertainty_y if uncertainty_y is not None else np.nan)
+                coarse_estimates["quality"].append(quality)
+
+            coarse_estimates["frame_indices"].append(center_idx)
+
+        return coarse_estimates
+
+    def _filter_temporal_outliers(self, coarse_estimates, z_threshold=3.5):
+        """Filter temporal outliers from coarse drift estimates using local consistency
+
+        This method identifies and removes drift measurements that are inconsistent
+        with their temporal neighbors, which often result from RSSO fit failures.
+        """
+        drift_x = np.array(coarse_estimates["drift_x"])
+        drift_y = np.array(coarse_estimates["drift_y"])
+        uncertainties_x = np.array(coarse_estimates["uncertainty_x"])
+        uncertainties_y = np.array(coarse_estimates["uncertainty_y"])
+        qualities = np.array(coarse_estimates["quality"])
+
+        # Create filtered copy
+        filtered_estimates = {key: coarse_estimates[key].copy() for key in coarse_estimates}
+
+        # Find valid measurements
+        valid_mask = ~(np.isnan(drift_x) | np.isnan(drift_y))
+        if np.sum(valid_mask) < 3:  # Need at least 3 points for filtering
+            return filtered_estimates
+
+        # Method 1: Local consistency check using moving median
+        window_size = min(5, max(3, len(drift_x) // 4))
+
+        for i in range(len(drift_x)):
+            if not valid_mask[i]:
+                continue
+
+            # Define local window
+            start_idx = max(0, i - window_size // 2)
+            end_idx = min(len(drift_x), i + window_size // 2 + 1)
+
+            local_drift_x = drift_x[start_idx:end_idx]
+            local_drift_y = drift_y[start_idx:end_idx]
+            local_valid = valid_mask[start_idx:end_idx]
+
+            if np.sum(local_valid) < 2:
+                continue
+
+            # Calculate local statistics (excluding current point)
+            local_x_others = local_drift_x[local_valid & (np.arange(start_idx, end_idx) != i)]
+            local_y_others = local_drift_y[local_valid & (np.arange(start_idx, end_idx) != i)]
+
+            if len(local_x_others) < 2:
+                continue
+
+            # Use robust statistics (median and MAD)
+            median_x = np.median(local_x_others)
+            median_y = np.median(local_y_others)
+            mad_x = np.median(np.abs(local_x_others - median_x))
+            mad_y = np.median(np.abs(local_y_others - median_y))
+
+            # Convert MAD to approximate standard deviation
+            std_x = 1.4826 * mad_x if mad_x > 0 else np.std(local_x_others)
+            std_y = 1.4826 * mad_y if mad_y > 0 else np.std(local_y_others)
+
+            # Check if current measurement is an outlier (Modified Z-score > threshold)
+            z_score_x = abs(drift_x[i] - median_x) / (std_x + 1e-10)
+            z_score_y = abs(drift_y[i] - median_y) / (std_y + 1e-10)
+
+            is_outlier = (z_score_x > z_threshold) or (z_score_y > z_threshold)
+
+            # Additional check: inconsistent with local trend
+            if not is_outlier and len(local_x_others) >= 3:
+                # Check if measurement is inconsistent with local linear trend
+                trend_inconsistency = self._check_trend_inconsistency(
+                    i, start_idx, end_idx, drift_x, drift_y, valid_mask
+                )
+                is_outlier = is_outlier or trend_inconsistency
+
+            if is_outlier:
+                logger.debug(f"Filtering temporal outlier at frame {coarse_estimates['frame_indices'][i]}: "
+                           f"drift=({drift_x[i]:.3f}, {drift_y[i]:.3f}), "
+                           f"z_scores=({z_score_x:.2f}, {z_score_y:.2f})")
+
+                # Mark as invalid
+                filtered_estimates["drift_x"][i] = np.nan
+                filtered_estimates["drift_y"][i] = np.nan
+                filtered_estimates["uncertainty_x"][i] = np.nan
+                filtered_estimates["uncertainty_y"][i] = np.nan
+                filtered_estimates["quality"][i] = 0
+
+        return filtered_estimates
+
+    def _check_trend_inconsistency(self, current_idx, start_idx, end_idx, drift_x, drift_y, valid_mask):
+        """Check if a measurement is inconsistent with local trend"""
+        try:
+            # Get local valid indices
+            local_indices = np.arange(start_idx, end_idx)
+            local_valid = valid_mask[start_idx:end_idx] & (local_indices != current_idx)
+
+            if np.sum(local_valid) < 2:
+                return False
+
+            # Extract local data (excluding current point)
+            local_x = drift_x[start_idx:end_idx][local_valid]
+            local_y = drift_y[start_idx:end_idx][local_valid]
+            local_frame_indices = local_indices[local_valid]
+
+            # Fit linear trend
+            if len(local_x) >= 2:
+                trend_x = np.polyfit(local_frame_indices, local_x, 1)
+                trend_y = np.polyfit(local_frame_indices, local_y, 1)
+
+                # Predict what current measurement should be
+                expected_x = np.polyval(trend_x, current_idx)
+                expected_y = np.polyval(trend_y, current_idx)
+
+                # Calculate residuals for trend fitting
+                residuals_x = local_x - np.polyval(trend_x, local_frame_indices)
+                residuals_y = local_y - np.polyval(trend_y, local_frame_indices)
+
+                # Estimate trend uncertainty
+                trend_std_x = np.std(residuals_x) if len(residuals_x) > 1 else 0
+                trend_std_y = np.std(residuals_y) if len(residuals_y) > 1 else 0
+
+                # Check if current measurement deviates significantly from trend
+                deviation_x = abs(drift_x[current_idx] - expected_x)
+                deviation_y = abs(drift_y[current_idx] - expected_y)
+
+                # Use 3-sigma rule for trend consistency
+                inconsistent_x = deviation_x > 3 * (trend_std_x + 1e-10)
+                inconsistent_y = deviation_y > 3 * (trend_std_y + 1e-10)
+
+                return inconsistent_x or inconsistent_y
+
+        except Exception as e:
+            logger.debug(f"Trend inconsistency check failed: {e}")
+            return False
+
+        return False
+
+    def _detect_change_points(self, coarse_estimates, sensitivity):
+        """Detect change points in drift patterns using statistical methods"""
+        drift_x = np.array(coarse_estimates["drift_x"])
+        drift_y = np.array(coarse_estimates["drift_y"])
+        frame_indices = np.array(coarse_estimates["frame_indices"])
+
+        # Remove nan values
+        valid_mask = ~(np.isnan(drift_x) | np.isnan(drift_y))
+        if np.sum(valid_mask) < 5:  # Need at least 5 points
+            return []
+
+        drift_x_valid = drift_x[valid_mask]
+        drift_y_valid = drift_y[valid_mask]
+        frame_indices_valid = frame_indices[valid_mask]
+
+        change_points = []
+
+        # Method 1: Detect large changes in drift magnitude
+        drift_magnitude = np.sqrt(drift_x_valid**2 + drift_y_valid**2)
+        if len(drift_magnitude) > 3:
+            # Use moving average and standard deviation for change detection
+            window = min(5, len(drift_magnitude) // 3)
+            rolling_mean = np.convolve(drift_magnitude, np.ones(window)/window, mode='same')
+            rolling_std = np.array([np.std(drift_magnitude[max(0, i-window//2):i+window//2+1])
+                                  for i in range(len(drift_magnitude))])
+
+            # Detect outliers (change points)
+            z_scores = np.abs((drift_magnitude - rolling_mean) / (rolling_std + 1e-10))
+            change_indices = np.where(z_scores > sensitivity)[0]
+
+            change_points.extend(frame_indices_valid[change_indices].tolist())
+
+        # Method 2: Confidence interval intersection analysis
+        uncertainties_x = np.array(coarse_estimates["uncertainty_x"])[valid_mask]
+        uncertainties_y = np.array(coarse_estimates["uncertainty_y"])[valid_mask]
+
+        if not np.any(np.isnan(uncertainties_x)) and not np.any(np.isnan(uncertainties_y)):
+            for i in range(1, len(drift_x_valid)):
+                # Check if confidence intervals don't overlap (significant change)
+                prev_ci_x = [drift_x_valid[i-1] - sensitivity*uncertainties_x[i-1],
+                            drift_x_valid[i-1] + sensitivity*uncertainties_x[i-1]]
+                curr_ci_x = [drift_x_valid[i] - sensitivity*uncertainties_x[i],
+                            drift_x_valid[i] + sensitivity*uncertainties_x[i]]
+
+                prev_ci_y = [drift_y_valid[i-1] - sensitivity*uncertainties_y[i-1],
+                            drift_y_valid[i-1] + sensitivity*uncertainties_y[i-1]]
+                curr_ci_y = [drift_y_valid[i] - sensitivity*uncertainties_y[i],
+                            drift_y_valid[i] + sensitivity*uncertainties_y[i]]
+
+                # Check for non-overlapping confidence intervals
+                if (curr_ci_x[0] > prev_ci_x[1] or curr_ci_x[1] < prev_ci_x[0] or
+                    curr_ci_y[0] > prev_ci_y[1] or curr_ci_y[1] < prev_ci_y[0]):
+                    change_points.append(frame_indices_valid[i])
+
+        # Remove duplicates and sort
+        change_points = sorted(list(set(change_points)))
+
+        return change_points
+
+    def _calculate_adaptive_windows(
+        self,
+        frames,
+        change_points,
+        coarse_estimates,
+        min_window_size,
+        max_window_size,
+        confidence_threshold,
+    ):
+        """Calculate optimal window sizes for each frame based on local stability"""
+        n_frames = len(frames)
+        optimal_windows = np.full(n_frames, min_window_size)
+
+        # Convert change points to segments
+        segment_boundaries = [0] + change_points + [n_frames]
+        segments = [(segment_boundaries[i], segment_boundaries[i + 1])
+                   for i in range(len(segment_boundaries) - 1)]
+
+        for start, end in segments:
+            segment_length = end - start
+
+            # Analyze local noise level in this segment
+            local_uncertainties = []
+            local_qualities = []
+
+            for i, frame_idx in enumerate(coarse_estimates["frame_indices"]):
+                if start <= frame_idx < end:
+                    if not np.isnan(coarse_estimates["uncertainty_x"][i]):
+                        local_uncertainties.append(
+                            np.sqrt(coarse_estimates["uncertainty_x"][i]**2 +
+                                   coarse_estimates["uncertainty_y"][i]**2)
+                        )
+                    local_qualities.append(coarse_estimates["quality"][i])
+
+            if local_uncertainties:
+                # Calculate confidence metric for this segment
+                mean_uncertainty = np.mean(local_uncertainties)
+                mean_quality = np.mean(local_qualities) if local_qualities else 0
+
+                # Normalize confidence (higher quality, lower uncertainty = higher confidence)
+                max_quality = max(coarse_estimates["quality"]) if coarse_estimates["quality"] else 1
+                confidence = (mean_quality / max_quality) / (1 + mean_uncertainty)
+
+                # Determine optimal window size based on confidence
+                if confidence >= confidence_threshold:
+                    # High confidence: can use larger windows
+                    target_window_size = min(max_window_size, segment_length // 2)
+                else:
+                    # Low confidence: use smaller windows for better tracking
+                    target_window_size = max(min_window_size, min(max_window_size // 2, segment_length // 3))
+
+                # Set window sizes for this segment
+                for frame_idx in range(start, end):
+                    optimal_windows[frame_idx] = target_window_size
+
+                logger.debug(f"Segment [{start}:{end}] - Confidence: {confidence:.3f}, "
+                           f"Window size: {target_window_size}")
+
+        return optimal_windows
+
+    def _estimate_drift_with_adaptive_windows(
+        self,
+        frames,
+        optimal_windows,
+        max_shift,
+        min_locs_per_frame,
+        save_all_rsso_plots,
+        plot_dir,
+        outlier_detection_enabled=True,
+        min_signal_to_noise=0.5,
+    ):
+        """Estimate drift using adaptive window sizes for each frame"""
+        n_frames = len(frames)
+
+        drift_x_fine = np.zeros(n_frames)
+        drift_y_fine = np.zeros(n_frames)
+        uncertainty_x_fine = np.zeros(n_frames)
+        uncertainty_y_fine = np.zeros(n_frames)
+        drift_quality = np.zeros(n_frames)
+
+        for frame_idx in range(1, n_frames):
+            window_size = int(optimal_windows[frame_idx])
+
+            # Define reference and target windows
+            ref_start = max(0, frame_idx - window_size)
+            ref_end = frame_idx
+            target_start = frame_idx
+            target_end = min(n_frames, frame_idx + window_size)
+
+            # Get localizations for reference and target windows
+            ref_frame_range = frames[ref_start:ref_end]
+            target_frame_range = frames[target_start:target_end]
+
+            ref_locs = self.locs[np.isin(self.locs["frame"], ref_frame_range)]
+            target_locs = self.locs[np.isin(self.locs["frame"], target_frame_range)]
+
+            # Estimate drift for this frame
+            shift_x, shift_y, quality, uncertainty_x, uncertainty_y = (
+                self._estimate_drift_between_frame_groups(
+                    ref_locs, target_locs, max_shift, min_locs_per_frame,
+                    outlier_detection_enabled, min_signal_to_noise
+                )
+            )
+
+            if shift_x is not None and shift_y is not None:
+                # Scale by window overlap to get per-frame drift
+                overlap_factor = min(window_size, target_end - target_start) / window_size
+                per_frame_shift_x = shift_x * overlap_factor / window_size
+                per_frame_shift_y = shift_y * overlap_factor / window_size
+
+                # Accumulate drift
+                drift_x_fine[frame_idx] = drift_x_fine[frame_idx - 1] + per_frame_shift_x
+                drift_y_fine[frame_idx] = drift_y_fine[frame_idx - 1] + per_frame_shift_y
+
+                # Scale uncertainties appropriately
+                scaled_uncertainty_x = uncertainty_x * overlap_factor / window_size if uncertainty_x else 0
+                scaled_uncertainty_y = uncertainty_y * overlap_factor / window_size if uncertainty_y else 0
+
+                uncertainty_x_fine[frame_idx] = np.sqrt(
+                    uncertainty_x_fine[frame_idx - 1] ** 2 + scaled_uncertainty_x**2
+                )
+                uncertainty_y_fine[frame_idx] = np.sqrt(
+                    uncertainty_y_fine[frame_idx - 1] ** 2 + scaled_uncertainty_y**2
+                )
+
+                drift_quality[frame_idx] = quality
+            else:
+                # Failed estimation - use previous values
+                drift_x_fine[frame_idx] = drift_x_fine[frame_idx - 1]
+                drift_y_fine[frame_idx] = drift_y_fine[frame_idx - 1]
+                uncertainty_x_fine[frame_idx] = uncertainty_x_fine[frame_idx - 1]
+                uncertainty_y_fine[frame_idx] = uncertainty_y_fine[frame_idx - 1]
+                drift_quality[frame_idx] = 0
+
+        return (
+            drift_x_fine,
+            drift_y_fine,
+            uncertainty_x_fine,
+            uncertainty_y_fine,
+            drift_quality,
+        )
+
+    def _estimate_drift_between_frame_groups(
+        self, locs_ref, locs_target, max_shift, min_locs,
+        outlier_detection_enabled=True, min_signal_to_noise=0.5
+    ):
+        """Helper function to estimate drift between two groups of localizations using RSSO
+
+        Enhanced with RSSO fit failure detection and outlier filtering.
+
+        Returns:
+            shift_x, shift_y: drift measurements (None if failed/outlier)
+            quality: quality metric based on number of localizations
+            uncertainty_x, uncertainty_y: estimated uncertainties in shift measurements
+        """
+        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+
+        if len(locs_ref) < min_locs or len(locs_target) < min_locs:
+            return None, None, 0, None, None
+
+        shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
+            locs_ref, locs_target, max_shift, plot_histogram=False
+        )
+
+        if shift_x is not None and shift_y is not None:
+            # Check for RSSO fit failure indicators
+            fit_successful = uncertainty_info.get("fit_successful", False)
+
+            # Extract uncertainty estimates
+            uncertainty_x = (
+                uncertainty_info["sigma_x"]
+                if fit_successful
+                else uncertainty_info.get("shift_x_error", np.inf)
+            )
+            uncertainty_y = (
+                uncertainty_info["sigma_y"]
+                if fit_successful
+                else uncertainty_info.get("shift_y_error", np.inf)
+            )
+
+            # Quality metrics for outlier detection
+            quality = len(locs_ref) + len(locs_target)
+            shift_magnitude = np.sqrt(shift_x**2 + shift_y**2)
+
+            # Detect RSSO failure and outliers
+            if outlier_detection_enabled:
+                is_outlier = self._detect_rsso_failure_and_outliers(
+                    shift_x, shift_y, uncertainty_x, uncertainty_y,
+                    shift_magnitude, max_shift, fit_successful, quality,
+                    min_signal_to_noise
+                )
+            else:
+                is_outlier = False
+
+            if is_outlier:
+                logger.debug(f"Detected RSSO outlier/failure: shift=({shift_x:.3f}, {shift_y:.3f}), "
+                           f"magnitude={shift_magnitude:.3f}, fit_successful={fit_successful}, "
+                           f"uncertainty=({uncertainty_x:.3f}, {uncertainty_y:.3f})")
+                return None, None, 0, None, None
+
+            return shift_x, shift_y, quality, uncertainty_x, uncertainty_y
+        else:
+            return None, None, 0, None, None
+
+    def _detect_rsso_failure_and_outliers(
+        self, shift_x, shift_y, uncertainty_x, uncertainty_y,
+        shift_magnitude, max_shift, fit_successful, quality, min_signal_to_noise=0.5
+    ):
+        """Detect RSSO fit failures and false drift outliers
+
+        Args:
+            shift_x, shift_y: Estimated drift values
+            uncertainty_x, uncertainty_y: Uncertainty estimates
+            shift_magnitude: Magnitude of drift vector
+            max_shift: Maximum expected drift per comparison
+            fit_successful: Whether the Gaussian fit was successful
+            quality: Quality metric (number of localizations)
+
+        Returns:
+            bool: True if measurement should be considered an outlier/failure
+        """
+
+        # Criterion 1: Gaussian fit failure
+        if not fit_successful:
+            return True
+
+        # Criterion 2: Excessive shift magnitude (likely spurious correlation)
+        # Allow for accumulated drift but flag extreme outliers
+        if shift_magnitude > 3 * max_shift:  # 3x safety margin
+            return True
+
+        # Criterion 3: Excessive uncertainty relative to signal
+        if uncertainty_x is not None and uncertainty_y is not None:
+            # Flag if uncertainty is comparable to or larger than the shift
+            uncertainty_magnitude = np.sqrt(uncertainty_x**2 + uncertainty_y**2)
+            signal_to_noise = shift_magnitude / (uncertainty_magnitude + 1e-10)
+
+            if signal_to_noise < min_signal_to_noise:  # Signal less than minimum threshold
+                return True
+
+            # Flag if uncertainty is unrealistically large (fit instability)
+            if uncertainty_magnitude > 2 * max_shift:
+                return True
+
+        # Criterion 4: Very low quality (insufficient data for reliable estimation)
+        if quality < 20:  # Minimum threshold for reliable cross-correlation
+            return True
+
+        # Criterion 5: Detect common RSSO failure patterns
+        # Check for suspiciously round numbers (often artifacts)
+        if (abs(shift_x) < 1e-10 and abs(shift_y) < 1e-10):  # Exactly zero drift
+            return True
+
+        # Check for extreme aspect ratios (likely spurious)
+        aspect_ratio = max(abs(shift_x), abs(shift_y)) / (min(abs(shift_x), abs(shift_y)) + 1e-10)
+        if aspect_ratio > 10:  # One direction dominates unrealistically
+            return True
+
+        return False
+
+    def _plot_adaptive_drift_analysis(
+        self,
+        frames,
+        drift_x_fine,
+        drift_y_fine,
+        uncertainty_x_fine,
+        uncertainty_y_fine,
+        drift_quality,
+        optimal_windows,
+        change_points,
+        coarse_estimates,
+        coarse_estimates_filtered,
+        plot_dir,
+        use_spline_interpolation,
+    ):
+        """Generate comprehensive drift analysis plot showing local drift, confidence, and window sizes"""
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+        import os
+
+        fig, axes = plt.subplots(4, 1, figsize=(14, 12))
+        stage2_method = "Cubic Spline" if use_spline_interpolation else "Linear Blocks"
+        fig.suptitle(f'Adaptive Drift Correction Analysis (Stage 2: {stage2_method})',
+                     fontsize=16, fontweight='bold')
+
+        frame_indices = np.arange(len(frames))
+
+        # Plot 1: Drift trajectory with confidence intervals
+        ax1 = axes[0]
+        ax1.plot(frame_indices, drift_x_fine, 'b-', label='Drift X', linewidth=1.5)
+        ax1.plot(frame_indices, drift_y_fine, 'r-', label='Drift Y', linewidth=1.5)
+
+        # Add confidence intervals
+        ax1.fill_between(frame_indices,
+                        drift_x_fine - uncertainty_x_fine,
+                        drift_x_fine + uncertainty_x_fine,
+                        alpha=0.3, color='blue', label='X uncertainty')
+        ax1.fill_between(frame_indices,
+                        drift_y_fine - uncertainty_y_fine,
+                        drift_y_fine + uncertainty_y_fine,
+                        alpha=0.3, color='red', label='Y uncertainty')
+
+        # Mark change points
+        for cp in change_points:
+            if cp < len(frames):
+                ax1.axvline(x=cp, color='orange', linestyle='--', alpha=0.7, linewidth=2)
+
+        # Mark filtered outliers
+        coarse_frame_indices = np.array(coarse_estimates["frame_indices"])
+        original_drift_x = np.array(coarse_estimates["drift_x"])
+        original_drift_y = np.array(coarse_estimates["drift_y"])
+        filtered_drift_x = np.array(coarse_estimates_filtered["drift_x"])
+        filtered_drift_y = np.array(coarse_estimates_filtered["drift_y"])
+
+        # Find outliers (points that were valid originally but filtered out)
+        original_valid = ~(np.isnan(original_drift_x) | np.isnan(original_drift_y))
+        filtered_valid = ~(np.isnan(filtered_drift_x) | np.isnan(filtered_drift_y))
+        outliers = original_valid & ~filtered_valid
+
+        if np.any(outliers):
+            outlier_frames = coarse_frame_indices[outliers]
+            outlier_x = original_drift_x[outliers]
+            outlier_y = original_drift_y[outliers]
+            ax1.scatter(outlier_frames, outlier_x, color='red', marker='x', s=50,
+                       label=f'Filtered Outliers ({np.sum(outliers)})', alpha=0.7)
+            ax1.scatter(outlier_frames, outlier_y, color='red', marker='x', s=50, alpha=0.7)
+
+        ax1.set_ylabel('Cumulative Drift (pixels)')
+        ax1.set_title('Drift Trajectory with Confidence Intervals')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # Plot 2: Local drift rate and quality
+        ax2 = axes[1]
+
+        # Calculate instantaneous drift rate
+        drift_rate_x = np.diff(drift_x_fine)
+        drift_rate_y = np.diff(drift_y_fine)
+        drift_rate_magnitude = np.sqrt(drift_rate_x**2 + drift_rate_y**2)
+
+        # Plot drift rate
+        ax2_twin = ax2.twinx()
+        line1 = ax2.plot(frame_indices[1:], drift_rate_magnitude, 'g-', linewidth=1.5,
+                        label='Drift Rate Magnitude')
+
+        # Plot quality as bars
+        quality_normalized = drift_quality / np.max(drift_quality) if np.max(drift_quality) > 0 else drift_quality
+        line2 = ax2_twin.bar(frame_indices, quality_normalized, alpha=0.4, color='purple',
+                           label='Normalized Quality')
+
+        ax2.set_ylabel('Drift Rate (pixels/frame)', color='g')
+        ax2_twin.set_ylabel('Normalized Quality', color='purple')
+        ax2.set_title('Local Drift Rate and Measurement Quality')
+        ax2.tick_params(axis='y', labelcolor='g')
+        ax2_twin.tick_params(axis='y', labelcolor='purple')
+        ax2.grid(True, alpha=0.3)
+
+        # Combined legend
+        lines1, labels1 = ax2.get_legend_handles_labels()
+        lines2, labels2 = ax2_twin.get_legend_handles_labels()
+        ax2.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+
+        # Plot 3: Adaptive window sizes and confidence
+        ax3 = axes[2]
+
+        # Plot window sizes as step function
+        ax3.step(frame_indices, optimal_windows, where='mid', linewidth=2,
+                color='navy', label='Window Size')
+
+        # Add confidence metric overlay
+        ax3_twin = ax3.twinx()
+
+        # Calculate local confidence from coarse estimates
+        confidence_series = np.full(len(frames), np.nan)
+        coarse_frame_indices = np.array(coarse_estimates["frame_indices"])
+        coarse_uncertainties = np.array(coarse_estimates["uncertainty_x"])
+        coarse_qualities = np.array(coarse_estimates["quality"])
+
+        valid_coarse = ~np.isnan(coarse_uncertainties) & (coarse_qualities > 0)
+        if np.any(valid_coarse):
+            max_quality = np.max(coarse_qualities[valid_coarse])
+            for i, frame_idx in enumerate(coarse_frame_indices):
+                if valid_coarse[i] and frame_idx < len(frames):
+                    uncertainty_combined = np.sqrt(
+                        coarse_estimates["uncertainty_x"][i]**2 +
+                        coarse_estimates["uncertainty_y"][i]**2
+                    ) if not np.isnan(coarse_estimates["uncertainty_y"][i]) else coarse_uncertainties[i]
+
+                    confidence = (coarse_qualities[i] / max_quality) / (1 + uncertainty_combined)
+                    confidence_series[frame_idx] = confidence
+
+        # Interpolate confidence for plotting
+        valid_conf_mask = ~np.isnan(confidence_series)
+        if np.any(valid_conf_mask):
+            conf_interp = np.interp(frame_indices, frame_indices[valid_conf_mask],
+                                   confidence_series[valid_conf_mask])
+            ax3_twin.plot(frame_indices, conf_interp, 'orange', linewidth=1.5,
+                         label='Local Confidence', alpha=0.8)
+
+        # Add segments with different window sizes
+        segment_boundaries = [0] + change_points + [len(frames)]
+        colors = plt.cm.Set3(np.linspace(0, 1, len(segment_boundaries)-1))
+
+        for i, (start, end) in enumerate(zip(segment_boundaries[:-1], segment_boundaries[1:])):
+            if end > start:
+                rect = Rectangle((start, 0), end-start, np.max(optimal_windows),
+                               alpha=0.1, color=colors[i % len(colors)])
+                ax3.add_patch(rect)
+
+        ax3.set_ylabel('Window Size (frames)', color='navy')
+        ax3_twin.set_ylabel('Confidence', color='orange')
+        ax3.set_title('Adaptive Window Sizes and Local Confidence')
+        ax3.tick_params(axis='y', labelcolor='navy')
+        ax3_twin.tick_params(axis='y', labelcolor='orange')
+        ax3.grid(True, alpha=0.3)
+
+        # Legend
+        lines3, labels3 = ax3.get_legend_handles_labels()
+        lines3_twin, labels3_twin = ax3_twin.get_legend_handles_labels()
+        ax3.legend(lines3 + lines3_twin, labels3 + labels3_twin, loc='upper right')
+
+        # Plot 4: Uncertainty evolution
+        ax4 = axes[3]
+
+        total_uncertainty = np.sqrt(uncertainty_x_fine**2 + uncertainty_y_fine**2)
+        ax4.plot(frame_indices, uncertainty_x_fine, 'b-', linewidth=1.5,
+                label='X Uncertainty', alpha=0.7)
+        ax4.plot(frame_indices, uncertainty_y_fine, 'r-', linewidth=1.5,
+                label='Y Uncertainty', alpha=0.7)
+        ax4.plot(frame_indices, total_uncertainty, 'k-', linewidth=2,
+                label='Total Uncertainty')
+
+        # Mark change points
+        for cp in change_points:
+            if cp < len(frames):
+                ax4.axvline(x=cp, color='orange', linestyle='--', alpha=0.7)
+
+        ax4.set_ylabel('Uncertainty (pixels)')
+        ax4.set_xlabel('Frame Index')
+        ax4.set_title('Cumulative Uncertainty Evolution')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+
+        # Adjust layout and save
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+        plot_path = os.path.join(plot_dir, "adaptive_drift_analysis.png")
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+
+        logger.debug(f"Saved adaptive drift analysis plot: {plot_path}")
+
+        # Additional summary statistics plot
+        self._plot_drift_statistics_summary(
+            frames, drift_x_fine, drift_y_fine, uncertainty_x_fine,
+            uncertainty_y_fine, optimal_windows, change_points, plot_dir
+        )
+
+    def _plot_drift_statistics_summary(
+        self, frames, drift_x, drift_y, uncertainty_x, uncertainty_y,
+        window_sizes, change_points, plot_dir
+    ):
+        """Generate summary statistics plot for drift correction performance"""
+        import matplotlib.pyplot as plt
+        import os
+
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        fig.suptitle('Drift Correction Performance Summary', fontsize=14, fontweight='bold')
+
+        # Plot 1: Drift magnitude histogram
+        ax1 = axes[0, 0]
+        drift_magnitude = np.sqrt(drift_x**2 + drift_y**2)
+        ax1.hist(drift_magnitude[1:], bins=30, alpha=0.7, color='skyblue', edgecolor='black')
+        ax1.set_xlabel('Total Drift Magnitude (pixels)')
+        ax1.set_ylabel('Frequency')
+        ax1.set_title('Distribution of Cumulative Drift')
+        ax1.grid(True, alpha=0.3)
+
+        # Plot 2: Window size distribution
+        ax2 = axes[0, 1]
+        window_counts, window_bins = np.histogram(window_sizes[1:], bins=20)
+        ax2.bar(window_bins[:-1], window_counts, width=np.diff(window_bins),
+               alpha=0.7, color='lightgreen', edgecolor='black')
+        ax2.set_xlabel('Window Size (frames)')
+        ax2.set_ylabel('Frequency')
+        ax2.set_title('Distribution of Adaptive Window Sizes')
+        ax2.grid(True, alpha=0.3)
+
+        # Plot 3: Uncertainty vs Window Size
+        ax3 = axes[1, 0]
+        total_uncertainty = np.sqrt(uncertainty_x**2 + uncertainty_y**2)
+        ax3.scatter(window_sizes[1:], total_uncertainty[1:], alpha=0.6,
+                   c=np.arange(1, len(window_sizes)), cmap='viridis')
+        ax3.set_xlabel('Window Size (frames)')
+        ax3.set_ylabel('Total Uncertainty (pixels)')
+        ax3.set_title('Uncertainty vs Window Size')
+        ax3.grid(True, alpha=0.3)
+
+        # Plot 4: Change point analysis
+        ax4 = axes[1, 1]
+        if change_points:
+            # Calculate inter-change-point intervals
+            intervals = []
+            prev_cp = 0
+            for cp in change_points:
+                intervals.append(cp - prev_cp)
+                prev_cp = cp
+            intervals.append(len(frames) - prev_cp)
+
+            ax4.hist(intervals, bins=min(15, len(intervals)), alpha=0.7,
+                    color='orange', edgecolor='black')
+            ax4.set_xlabel('Segment Length (frames)')
+            ax4.set_ylabel('Frequency')
+            ax4.set_title(f'Stable Segment Lengths ({len(change_points)} change points)')
+        else:
+            ax4.text(0.5, 0.5, 'No Change Points Detected',
+                    transform=ax4.transAxes, ha='center', va='center', fontsize=12)
+            ax4.set_title('Change Point Analysis')
+
+        ax4.grid(True, alpha=0.3)
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+        summary_path = os.path.join(plot_dir, "drift_correction_summary.png")
+        plt.savefig(summary_path, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+
+        logger.debug(f"Saved drift correction summary plot: {summary_path}")
+
+    def _spline_based_drift_correction(
+        self,
+        frames,
+        toff,
+        max_shift,
+        min_locs_per_block,
+        n_processes,
+        save_all_rsso_plots,
+        plot_dir,
+        smoothing_factor,
+        min_blocks_for_spline,
+    ):
+        """Cubic spline-based long-timescale drift correction using block centers as anchor points
+
+        This method estimates drift at the center of each toff-sized time block, then uses
+        cubic spline interpolation to create a smooth drift trajectory over all frames.
+
+        Returns:
+            tuple: (drift_x_coarse, drift_y_coarse, uncertainty_x_coarse, uncertainty_y_coarse)
+        """
+        from scipy.interpolate import UnivariateSpline
+
+        n_frames = len(frames)
+        toff_block_size = int(toff)
+
+        # Initialize arrays
+        drift_x_coarse = np.zeros(n_frames)
+        drift_y_coarse = np.zeros(n_frames)
+        uncertainty_x_coarse = np.zeros(n_frames)
+        uncertainty_y_coarse = np.zeros(n_frames)
+
+        # Calculate block centers and estimate drift at each center
+        block_centers = []
+        block_center_frames = []
+        block_drifts_x = []
+        block_drifts_y = []
+        block_uncertainties_x = []
+        block_uncertainties_y = []
+        block_weights = []
+
+        logger.debug(f"Processing {int(np.ceil(n_frames / toff_block_size))} time blocks for spline anchors")
+
+        # Process blocks to get anchor points
+        block_args = []
+        for block_start in range(0, n_frames, toff_block_size):
+            block_end = min(block_start + toff_block_size, n_frames)
+
+            # Calculate block center frame
+            center_frame_idx = (block_start + block_end) // 2
+            center_frame = frames[center_frame_idx]
+
+            block_args.append(
+                (
+                    self.locs,
+                    frames,
+                    block_start,
+                    block_end,
+                    toff_block_size,
+                    max_shift,
+                    min_locs_per_block,
+                    save_all_rsso_plots,
+                    plot_dir,
+                )
+            )
+            block_centers.append(center_frame_idx)
+            block_center_frames.append(center_frame)
+
+        # Process blocks in parallel to get drift estimates at centers
+        try:
+            if n_processes == 1 or len(block_args) <= 1:
+                logger.debug("Using single-threaded processing for spline anchor points")
+                block_results = [
+                    self._process_drift_block(args) for args in block_args
+                ]
+            else:
+                logger.debug(
+                    f"Using {n_processes} processes for spline anchor points "
+                    + f"({len(block_args)} blocks)"
+                )
+                from multiprocessing import Pool
+
+                with Pool(processes=n_processes) as pool:
+                    block_results = pool.map(
+                        self._process_drift_block, block_args
+                    )
+        except Exception as e:
+            logger.warning(
+                "Multiprocessing failed for spline anchor points, falling back to "
+                + f"single-threaded: {e}"
+            )
+            block_results = [
+                self._process_drift_block(args) for args in block_args
+            ]
+
+        # Extract valid anchor points for spline fitting
+        valid_anchors = []
+        cumulative_drift_x = 0
+        cumulative_drift_y = 0
+
+        for i, result in enumerate(block_results):
+            if result is None:
+                continue  # Skip first block (no comparison possible)
+
+            (
+                block_start,
+                block_end,
+                shift_x,
+                shift_y,
+                quality,
+                uncertainty_x,
+                uncertainty_y,
+            ) = result
+
+            if shift_x is not None and shift_y is not None and quality > 0:
+                # Accumulate drift to get absolute position
+                cumulative_drift_x += shift_x
+                cumulative_drift_y += shift_y
+
+                # Store anchor point data
+                center_idx = block_centers[i]
+                block_drifts_x.append(cumulative_drift_x)
+                block_drifts_y.append(cumulative_drift_y)
+                block_uncertainties_x.append(uncertainty_x if uncertainty_x else 1.0)
+                block_uncertainties_y.append(uncertainty_y if uncertainty_y else 1.0)
+
+                # Weight based on quality and inverse uncertainty
+                weight_x = quality / (block_uncertainties_x[-1]**2 + 1e-10)
+                weight_y = quality / (block_uncertainties_y[-1]**2 + 1e-10)
+                block_weights.append((weight_x, weight_y))
+
+                valid_anchors.append(center_idx)
+
+                logger.debug(f"Anchor point at frame {center_idx}: drift=({cumulative_drift_x:.3f}, {cumulative_drift_y:.3f}), "
+                           f"quality={quality:.0f}")
+
+        # Check if we have enough anchor points for spline fitting
+        if len(valid_anchors) < min_blocks_for_spline:
+            logger.warning(f"Only {len(valid_anchors)} valid anchor points, need at least {min_blocks_for_spline}. "
+                         "Using linear interpolation instead.")
+            return self._linear_interpolation_fallback(
+                valid_anchors, block_drifts_x, block_drifts_y,
+                block_uncertainties_x, block_uncertainties_y, n_frames
+            )
+
+        # Fit cubic splines to anchor points
+        anchor_frames = np.array(valid_anchors)
+        drifts_x = np.array(block_drifts_x)
+        drifts_y = np.array(block_drifts_y)
+        weights_x = np.array([w[0] for w in block_weights])
+        weights_y = np.array([w[1] for w in block_weights])
+
+        # Determine smoothing factor if not specified
+        if smoothing_factor is None:
+            # Auto-calculate based on data quality and number of points
+            mean_uncertainty_x = np.mean(block_uncertainties_x)
+            mean_uncertainty_y = np.mean(block_uncertainties_y)
+            smoothing_factor = len(valid_anchors) * (mean_uncertainty_x + mean_uncertainty_y) / 2
+            logger.debug(f"Auto-calculated smoothing factor: {smoothing_factor:.3f}")
+
+        try:
+            # Fit univariate splines for X and Y drift
+            spline_x = UnivariateSpline(
+                anchor_frames, drifts_x, w=weights_x, s=smoothing_factor
+            )
+            spline_y = UnivariateSpline(
+                anchor_frames, drifts_y, w=weights_y, s=smoothing_factor
+            )
+
+            # Interpolate drift for all frames
+            frame_indices = np.arange(n_frames)
+            drift_x_coarse = spline_x(frame_indices)
+            drift_y_coarse = spline_y(frame_indices)
+
+            # Estimate uncertainties from spline residuals and propagation
+            spline_residuals_x = drifts_x - spline_x(anchor_frames)
+            spline_residuals_y = drifts_y - spline_y(anchor_frames)
+
+            # Calculate uncertainty estimates
+            base_uncertainty_x = np.std(spline_residuals_x) if len(spline_residuals_x) > 1 else np.mean(block_uncertainties_x)
+            base_uncertainty_y = np.std(spline_residuals_y) if len(spline_residuals_y) > 1 else np.mean(block_uncertainties_y)
+
+            # Interpolate uncertainties (conservative approach)
+            uncertainty_x_coarse = np.full(n_frames, base_uncertainty_x)
+            uncertainty_y_coarse = np.full(n_frames, base_uncertainty_y)
+
+            # Adjust uncertainties based on distance from anchor points
+            for frame_idx in range(n_frames):
+                # Find closest anchor points
+                distances = np.abs(anchor_frames - frame_idx)
+                closest_idx = np.argmin(distances)
+                min_distance = distances[closest_idx]
+
+                # Increase uncertainty for frames far from anchor points
+                distance_factor = 1 + min_distance / toff_block_size
+                uncertainty_x_coarse[frame_idx] *= distance_factor
+                uncertainty_y_coarse[frame_idx] *= distance_factor
+
+            logger.info(f"Spline fitting successful: {len(valid_anchors)} anchor points, "
+                       f"smoothing={smoothing_factor:.3f}, "
+                       f"residual_std=({base_uncertainty_x:.3f}, {base_uncertainty_y:.3f})")
+
+            # Save spline diagnostics if plotting is enabled
+            if plot_dir:
+                self._plot_spline_diagnostics(
+                    anchor_frames, drifts_x, drifts_y, spline_x, spline_y,
+                    frame_indices, drift_x_coarse, drift_y_coarse,
+                    block_uncertainties_x, block_uncertainties_y, plot_dir
+                )
+
+            return drift_x_coarse, drift_y_coarse, uncertainty_x_coarse, uncertainty_y_coarse
+
+        except Exception as e:
+            logger.warning(f"Spline fitting failed: {e}. Using linear interpolation fallback.")
+            return self._linear_interpolation_fallback(
+                valid_anchors, block_drifts_x, block_drifts_y,
+                block_uncertainties_x, block_uncertainties_y, n_frames
+            )
+
+    def _linear_interpolation_fallback(
+        self, anchor_frames, drifts_x, drifts_y, uncertainties_x, uncertainties_y, n_frames
+    ):
+        """Fallback to linear interpolation when spline fitting fails"""
+        from scipy.interpolate import interp1d
+
+        logger.debug("Using linear interpolation fallback")
+
+        if len(anchor_frames) == 0:
+            # No valid data - return zeros
+            return (np.zeros(n_frames), np.zeros(n_frames),
+                   np.ones(n_frames), np.ones(n_frames))
+
+        if len(anchor_frames) == 1:
+            # Single point - constant drift
+            drift_x = np.full(n_frames, drifts_x[0])
+            drift_y = np.full(n_frames, drifts_y[0])
+            uncertainty_x = np.full(n_frames, uncertainties_x[0])
+            uncertainty_y = np.full(n_frames, uncertainties_y[0])
+        else:
+            # Linear interpolation/extrapolation
+            frame_indices = np.arange(n_frames)
+
+            interp_x = interp1d(anchor_frames, drifts_x, kind='linear',
+                               fill_value='extrapolate', bounds_error=False)
+            interp_y = interp1d(anchor_frames, drifts_y, kind='linear',
+                               fill_value='extrapolate', bounds_error=False)
+            interp_unc_x = interp1d(anchor_frames, uncertainties_x, kind='linear',
+                                   fill_value='extrapolate', bounds_error=False)
+            interp_unc_y = interp1d(anchor_frames, uncertainties_y, kind='linear',
+                                   fill_value='extrapolate', bounds_error=False)
+
+            drift_x = interp_x(frame_indices)
+            drift_y = interp_y(frame_indices)
+            uncertainty_x = interp_unc_x(frame_indices)
+            uncertainty_y = interp_unc_y(frame_indices)
+
+        return drift_x, drift_y, uncertainty_x, uncertainty_y
+
+    def _plot_spline_diagnostics(
+        self, anchor_frames, anchor_drifts_x, anchor_drifts_y,
+        spline_x, spline_y, frame_indices, drift_x_interpolated, drift_y_interpolated,
+        anchor_uncertainties_x, anchor_uncertainties_y, plot_dir
+    ):
+        """Generate diagnostic plots for spline fitting quality"""
+        import matplotlib.pyplot as plt
+        import os
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig.suptitle('Cubic Spline Drift Correction Diagnostics', fontsize=14, fontweight='bold')
+
+        # Plot 1: X-direction spline fit
+        ax1 = axes[0, 0]
+        ax1.plot(frame_indices, drift_x_interpolated, 'b-', linewidth=2, label='Spline Fit')
+        ax1.errorbar(anchor_frames, anchor_drifts_x, yerr=anchor_uncertainties_x,
+                    fmt='ro', markersize=6, capsize=3, label='Anchor Points')
+        ax1.set_xlabel('Frame Index')
+        ax1.set_ylabel('Cumulative Drift X (pixels)')
+        ax1.set_title('X-Direction Spline Interpolation')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # Plot 2: Y-direction spline fit
+        ax2 = axes[0, 1]
+        ax2.plot(frame_indices, drift_y_interpolated, 'r-', linewidth=2, label='Spline Fit')
+        ax2.errorbar(anchor_frames, anchor_drifts_y, yerr=anchor_uncertainties_y,
+                    fmt='ro', markersize=6, capsize=3, label='Anchor Points')
+        ax2.set_xlabel('Frame Index')
+        ax2.set_ylabel('Cumulative Drift Y (pixels)')
+        ax2.set_title('Y-Direction Spline Interpolation')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        # Plot 3: Spline residuals
+        ax3 = axes[1, 0]
+        residuals_x = anchor_drifts_x - spline_x(anchor_frames)
+        residuals_y = anchor_drifts_y - spline_y(anchor_frames)
+
+        ax3.scatter(anchor_frames, residuals_x, c='blue', alpha=0.6, label='X Residuals')
+        ax3.scatter(anchor_frames, residuals_y, c='red', alpha=0.6, label='Y Residuals')
+        ax3.axhline(y=0, color='black', linestyle='--', alpha=0.5)
+        ax3.set_xlabel('Frame Index')
+        ax3.set_ylabel('Spline Residual (pixels)')
+        ax3.set_title(f'Fit Residuals (RMS: X={np.std(residuals_x):.3f}, Y={np.std(residuals_y):.3f})')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+        # Plot 4: Drift trajectory comparison
+        ax4 = axes[1, 1]
+        drift_magnitude = np.sqrt(drift_x_interpolated**2 + drift_y_interpolated**2)
+        anchor_magnitude = np.sqrt(np.array(anchor_drifts_x)**2 + np.array(anchor_drifts_y)**2)
+
+        ax4.plot(frame_indices, drift_magnitude, 'g-', linewidth=2, label='Spline Magnitude')
+        ax4.scatter(anchor_frames, anchor_magnitude, c='orange', s=50,
+                   label='Anchor Magnitude', zorder=5)
+        ax4.set_xlabel('Frame Index')
+        ax4.set_ylabel('Total Drift Magnitude (pixels)')
+        ax4.set_title('Drift Magnitude Trajectory')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+        spline_path = os.path.join(plot_dir, "spline_drift_diagnostics.png")
+        plt.savefig(spline_path, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+
+        logger.debug(f"Saved spline diagnostics plot: {spline_path}")
+
+    def _process_linear_block_results(self, block_results, n_frames, toff_block_size, drift_quality):
+        """Process block results using original linear distribution approach"""
+        # Initialize arrays
+        drift_x_coarse = np.zeros(n_frames)
+        drift_y_coarse = np.zeros(n_frames)
+        uncertainty_x_coarse = np.zeros(n_frames)
+        uncertainty_y_coarse = np.zeros(n_frames)
+
+        # Process results from parallel computation (original implementation)
+        for result in block_results:
+            if result is None:
+                continue  # Skip first block
+
+            (
+                block_start,
+                block_end,
+                shift_x,
+                shift_y,
+                quality,
+                uncertainty_x,
+                uncertainty_y,
+            ) = result
+
+            if shift_x is not None and shift_y is not None:
+                # Distribute block drift across frames in the block
+                block_drift_x = shift_x / toff_block_size  # Per-frame drift
+                block_drift_y = shift_y / toff_block_size
+                # Uncertainty also scales with block size
+                block_uncertainty_x = (
+                    uncertainty_x / toff_block_size
+                    if uncertainty_x is not None
+                    else 0
+                )
+                block_uncertainty_y = (
+                    uncertainty_y / toff_block_size
+                    if uncertainty_y is not None
+                    else 0
+                )
+
+                for frame_idx in range(block_start, block_end):
+                    if frame_idx > 0:
+                        drift_x_coarse[frame_idx] = (
+                            drift_x_coarse[frame_idx - 1] + block_drift_x
+                        )
+                        drift_y_coarse[frame_idx] = (
+                            drift_y_coarse[frame_idx - 1] + block_drift_y
+                        )
+                        # Accumulate uncertainties (assuming independence)
+                        uncertainty_x_coarse[frame_idx] = np.sqrt(
+                            uncertainty_x_coarse[frame_idx - 1] ** 2
+                            + block_uncertainty_x**2
+                        )
+                        uncertainty_y_coarse[frame_idx] = np.sqrt(
+                            uncertainty_y_coarse[frame_idx - 1] ** 2
+                            + block_uncertainty_y**2
+                        )
+                    else:
+                        uncertainty_x_coarse[frame_idx] = block_uncertainty_x
+                        uncertainty_y_coarse[frame_idx] = block_uncertainty_y
+                    drift_quality[frame_idx] += quality / (
+                        block_end - block_start
+                    )
+            else:
+                # Use previous block's drift rate if estimation failed
+                for frame_idx in range(block_start, block_end):
+                    if frame_idx > 0:
+                        drift_x_coarse[frame_idx] = drift_x_coarse[
+                            frame_idx - 1
+                        ]
+                        drift_y_coarse[frame_idx] = drift_y_coarse[
+                            frame_idx - 1
+                        ]
+                        uncertainty_x_coarse[frame_idx] = uncertainty_x_coarse[
+                            frame_idx - 1
+                        ]
+                        uncertainty_y_coarse[frame_idx] = uncertainty_y_coarse[
+                            frame_idx - 1
+                        ]
+
+        return drift_x_coarse, drift_y_coarse, uncertainty_x_coarse, uncertainty_y_coarse
+
     @staticmethod
     def _process_fine_drift_chunk(args):
         """Stateless helper function for processing fine drift chunks
@@ -1645,6 +2935,29 @@ class AutoPicasso(util.AbstractModuleCollection):
                         Number of processes for parallel computation. None
                         uses all available cores, 1 disables multiprocessing
                         (default: None)
+                    use_adaptive_aggregation : bool
+                        Enable adaptive window sizing for improved precision
+                        (default: True)
+                    min_window_size : int
+                        Minimum window size for adaptive aggregation (default: 3)
+                    max_window_size : int
+                        Maximum window size for adaptive aggregation (default: 20)
+                    confidence_threshold : float
+                        Confidence threshold for window size adaptation (default: 0.8)
+                    change_point_sensitivity : float
+                        Sensitivity for change point detection (default: 2.0)
+                    outlier_detection_enabled : bool
+                        Enable RSSO failure and outlier detection (default: True)
+                    outlier_z_threshold : float
+                        Z-score threshold for temporal outlier detection (default: 3.5)
+                    min_signal_to_noise : float
+                        Minimum signal-to-noise ratio for drift measurements (default: 0.5)
+                    use_spline_interpolation : bool
+                        Use cubic spline interpolation for stage 2 long-timescale drift (default: True)
+                    spline_smoothing_factor : float
+                        Smoothing factor for cubic splines (0=no smoothing, auto if None, default: None)
+                    min_blocks_for_spline : int
+                        Minimum number of valid blocks required for spline fitting (default: 4)
 
         Returns:
             parameters : dict
@@ -1653,46 +2966,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the analysis results including drift trajectory and plots
         """
 
-        def _estimate_drift_between_frame_groups(
-            locs_ref, locs_target, max_shift, min_locs
-        ):
-            """Helper function to estimate drift between two groups of
-            localizations using RSSO
-
-            Returns:
-                shift_x, shift_y: drift measurements
-                quality: quality metric based on number of localizations
-                uncertainty_x, uncertainty_y: estimated uncertainties in shift
-                measurements
-            """
-            from picasso_workflow.picasso_outpost import (
-                _calculate_pairwise_shift,
-            )
-
-            if len(locs_ref) < min_locs or len(locs_target) < min_locs:
-                return None, None, 0, None, None
-
-            shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-                locs_ref, locs_target, max_shift, plot_histogram=False
-            )
-
-            if shift_x is not None and shift_y is not None:
-                quality = len(locs_ref) + len(locs_target)
-                # Extract uncertainty estimates from Gaussian fit
-                # Use sigma values as measure of uncertainty in the shift
-                uncertainty_x = (
-                    uncertainty_info["sigma_x"]
-                    if uncertainty_info["fit_successful"]
-                    else uncertainty_info["shift_x_error"]
-                )
-                uncertainty_y = (
-                    uncertainty_info["sigma_y"]
-                    if uncertainty_info["fit_successful"]
-                    else uncertainty_info["shift_y_error"]
-                )
-                return shift_x, shift_y, quality, uncertainty_x, uncertainty_y
-            else:
-                return None, None, 0, None, None
 
         pixelsize = self.pixelsize
         ton = parameters["ton"]
@@ -1707,6 +2980,19 @@ class AutoPicasso(util.AbstractModuleCollection):
         n_processes = parameters.get(
             "n_processes", None
         )  # None uses all available cores
+
+        # Adaptive aggregation parameters
+        use_adaptive_aggregation = parameters.get("use_adaptive_aggregation", True)
+        min_window_size = parameters.get("min_window_size", 3)
+        max_window_size = parameters.get("max_window_size", 20)
+        confidence_threshold = parameters.get("confidence_threshold", 0.8)
+        change_point_sensitivity = parameters.get("change_point_sensitivity", 2.0)
+        outlier_detection_enabled = parameters.get("outlier_detection_enabled", True)
+        outlier_z_threshold = parameters.get("outlier_z_threshold", 3.5)
+        min_signal_to_noise = parameters.get("min_signal_to_noise", 0.5)
+        use_spline_interpolation = parameters.get("use_spline_interpolation", True)
+        spline_smoothing_factor = parameters.get("spline_smoothing_factor", None)
+        min_blocks_for_spline = parameters.get("min_blocks_for_spline", 4)
 
         # Get frame range and ensure we have data
         if len(self.locs) == 0:
@@ -1751,102 +3037,125 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             io.save_locs(fp_locs, self.locs, self.info)
 
-        # STAGE 1: Short-timescale drift correction on consecutive frames
-        # (parallelized)
-        logger.debug("Stage 1: Short-timescale drift correction (parallel)")
+        # STAGE 1: Short-timescale drift correction with adaptive aggregation
+        logger.debug("Stage 1: Adaptive short-timescale drift correction")
 
-        # Prepare chunk arguments for parallel processing
-        chunk_args = []
-        for chunk_start in range(1, n_frames, processing_chunk_size):
-            chunk_end = min(chunk_start + processing_chunk_size, n_frames)
-            chunk_frames = list(range(chunk_start, chunk_end))
-            chunk_args.append(
-                (
-                    self.locs,
-                    frames,
-                    chunk_frames,
-                    max_shift,
-                    min_locs_per_frame,
-                    save_all_rsso_plots,
-                    results["folder"],
-                )
+        if use_adaptive_aggregation:
+            # Use adaptive aggregation for improved precision
+            (
+                drift_x_fine,
+                drift_y_fine,
+                uncertainty_x_fine,
+                uncertainty_y_fine,
+                drift_quality,
+            ) = self._adaptive_drift_correction(
+                frames,
+                max_shift,
+                min_locs_per_frame,
+                min_window_size,
+                max_window_size,
+                confidence_threshold,
+                change_point_sensitivity,
+                n_processes,
+                save_all_rsso_plots,
+                results["folder"],
             )
+        else:
+            # Use original frame-by-frame approach
+            logger.debug("Using original frame-by-frame drift correction")
 
-        # Process chunks in parallel
-        try:
-            if n_processes == 1 or len(chunk_args) <= 1:
-                # Single-threaded fallback
-                logger.debug("Using single-threaded processing for Stage 1")
+            # Prepare chunk arguments for parallel processing
+            chunk_args = []
+            for chunk_start in range(1, n_frames, processing_chunk_size):
+                chunk_end = min(chunk_start + processing_chunk_size, n_frames)
+                chunk_frames = list(range(chunk_start, chunk_end))
+                chunk_args.append(
+                    (
+                        self.locs,
+                        frames,
+                        chunk_frames,
+                        max_shift,
+                        min_locs_per_frame,
+                        save_all_rsso_plots,
+                        results["folder"],
+                    )
+                )
+
+            # Process chunks in parallel
+            try:
+                if n_processes == 1 or len(chunk_args) <= 1:
+                    # Single-threaded fallback
+                    logger.debug("Using single-threaded processing for Stage 1")
+                    all_chunk_results = [
+                        self._process_fine_drift_chunk(args) for args in chunk_args
+                    ]
+                else:
+                    # Multi-threaded processing
+                    logger.debug(
+                        f"Using {n_processes} processes for Stage 1 "
+                        + f"({len(chunk_args)} chunks)"
+                    )
+                    from multiprocessing import Pool
+
+                    with Pool(processes=n_processes) as pool:
+                        all_chunk_results = pool.map(
+                            self._process_fine_drift_chunk, chunk_args
+                        )
+            except Exception as e:
+                logger.warning(
+                    "Multiprocessing failed for Stage 1, falling back to "
+                    + f"single-threaded: {e}"
+                )
                 all_chunk_results = [
                     self._process_fine_drift_chunk(args) for args in chunk_args
                 ]
-            else:
-                # Multi-threaded processing
-                logger.debug(
-                    f"Using {n_processes} processes for Stage 1 "
-                    + f"({len(chunk_args)} chunks)"
-                )
-                from multiprocessing import Pool
 
-                with Pool(processes=n_processes) as pool:
-                    all_chunk_results = pool.map(
-                        self._process_fine_drift_chunk, chunk_args
-                    )
-        except Exception as e:
-            logger.warning(
-                "Multiprocessing failed for Stage 1, falling back to "
-                + f"single-threaded: {e}"
-            )
-            all_chunk_results = [
-                self._process_fine_drift_chunk(args) for args in chunk_args
-            ]
-
-        # Process results from parallel computation and accumulate drift
-        for chunk_results in all_chunk_results:
-            for (
-                frame_idx,
-                shift_x,
-                shift_y,
-                quality,
-                uncertainty_x,
-                uncertainty_y,
-            ) in chunk_results:
-                if shift_x is not None and shift_y is not None:
-                    # Accumulate fine drift
-                    drift_x_fine[frame_idx] = (
-                        drift_x_fine[frame_idx - 1] + shift_x
-                    )
-                    drift_y_fine[frame_idx] = (
-                        drift_y_fine[frame_idx - 1] + shift_y
-                    )
-                    # Accumulate uncertainties (assuming independence)
-                    if uncertainty_x is not None and uncertainty_y is not None:
-                        uncertainty_x_fine[frame_idx] = np.sqrt(
-                            uncertainty_x_fine[frame_idx - 1] ** 2
-                            + uncertainty_x**2
+            # Process results from parallel computation and accumulate drift
+            for chunk_results in all_chunk_results:
+                for (
+                    frame_idx,
+                    shift_x,
+                    shift_y,
+                    quality,
+                    uncertainty_x,
+                    uncertainty_y,
+                ) in chunk_results:
+                    if shift_x is not None and shift_y is not None:
+                        # Accumulate fine drift
+                        drift_x_fine[frame_idx] = (
+                            drift_x_fine[frame_idx - 1] + shift_x
                         )
-                        uncertainty_y_fine[frame_idx] = np.sqrt(
-                            uncertainty_y_fine[frame_idx - 1] ** 2
-                            + uncertainty_y**2
+                        drift_y_fine[frame_idx] = (
+                            drift_y_fine[frame_idx - 1] + shift_y
                         )
+                        # Accumulate uncertainties (assuming independence)
+                        if uncertainty_x is not None and uncertainty_y is not None:
+                            uncertainty_x_fine[frame_idx] = np.sqrt(
+                                uncertainty_x_fine[frame_idx - 1] ** 2
+                                + uncertainty_x**2
+                            )
+                            uncertainty_y_fine[frame_idx] = np.sqrt(
+                                uncertainty_y_fine[frame_idx - 1] ** 2
+                                + uncertainty_y**2
+                            )
+                        else:
+                            uncertainty_x_fine[frame_idx] = uncertainty_x_fine[
+                                frame_idx - 1
+                            ]
+                            uncertainty_y_fine[frame_idx] = uncertainty_y_fine[
+                                frame_idx - 1
+                            ]
+                        drift_quality[frame_idx] += quality
                     else:
+                        # Use previous fine drift if estimation failed
+                        drift_x_fine[frame_idx] = drift_x_fine[frame_idx - 1]
+                        drift_y_fine[frame_idx] = drift_y_fine[frame_idx - 1]
                         uncertainty_x_fine[frame_idx] = uncertainty_x_fine[
                             frame_idx - 1
                         ]
                         uncertainty_y_fine[frame_idx] = uncertainty_y_fine[
                             frame_idx - 1
                         ]
-                    drift_quality[frame_idx] += quality
-                else:
-                    # Use previous fine drift if estimation failed
-                    drift_x_fine[frame_idx] = drift_x_fine[frame_idx - 1]
-                    drift_y_fine[frame_idx] = drift_y_fine[frame_idx - 1]
-                    uncertainty_x_fine[frame_idx] = uncertainty_x_fine[
-                        frame_idx - 1
-                    ]
-                    uncertainty_y_fine[frame_idx] = uncertainty_y_fine[
-                        frame_idx - 1
-                    ]
 
         # Apply coarse drift correction in-place to avoid copy
         # Create frame index mapping for efficient lookup
@@ -1871,129 +3180,88 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             io.save_locs(fp_locs, self.locs, self.info)
 
-        # STAGE 2: Long-timescale drift correction on toff scale
-        # (parallelized)
-        logger.debug("Stage 2: Long-timescale drift correction (parallel)")
-        toff_block_size = int(toff)
+        # STAGE 2: Long-timescale drift correction with cubic splines
+        logger.debug("Stage 2: Spline-based long-timescale drift correction")
 
-        # Prepare arguments for parallel processing
-        block_args = []
-        for block_start in range(0, n_frames, toff_block_size):
-            block_end = min(block_start + toff_block_size, n_frames)
-            block_args.append(
-                (
-                    self.locs,
-                    frames,
-                    block_start,
-                    block_end,
-                    toff_block_size,
-                    max_shift,
-                    min_locs_per_block,
-                    save_all_rsso_plots,
-                    results["folder"],
-                )
+        if use_spline_interpolation:
+            # Use cubic spline interpolation with block centers as anchor points
+            (
+                drift_x_coarse,
+                drift_y_coarse,
+                uncertainty_x_coarse,
+                uncertainty_y_coarse,
+            ) = self._spline_based_drift_correction(
+                frames,
+                toff,
+                max_shift,
+                min_locs_per_block,
+                n_processes,
+                save_all_rsso_plots,
+                results["folder"],
+                spline_smoothing_factor,
+                min_blocks_for_spline,
             )
+        else:
+            # Use original linear block-based approach
+            logger.debug("Using original linear block-based drift correction")
+            toff_block_size = int(toff)
 
-        # Process blocks in parallel
-        try:
-            if n_processes == 1 or len(block_args) <= 1:
-                # Single-threaded fallback
-                logger.debug("Using single-threaded processing for Stage 2")
+            # Prepare arguments for parallel processing
+            block_args = []
+            for block_start in range(0, n_frames, toff_block_size):
+                block_end = min(block_start + toff_block_size, n_frames)
+                block_args.append(
+                    (
+                        self.locs,
+                        frames,
+                        block_start,
+                        block_end,
+                        toff_block_size,
+                        max_shift,
+                        min_locs_per_block,
+                        save_all_rsso_plots,
+                        results["folder"],
+                    )
+                )
+
+            # Process blocks in parallel
+            try:
+                if n_processes == 1 or len(block_args) <= 1:
+                    # Single-threaded fallback
+                    logger.debug("Using single-threaded processing for Stage 2")
+                    block_results = [
+                        self._process_drift_block(args) for args in block_args
+                    ]
+                else:
+                    # Multi-threaded processing
+                    logger.debug(
+                        f"Using {n_processes} processes for Stage 2 "
+                        + f"({len(block_args)} blocks)"
+                    )
+                    from multiprocessing import Pool
+
+                    with Pool(processes=n_processes) as pool:
+                        block_results = pool.map(
+                            self._process_drift_block, block_args
+                        )
+            except Exception as e:
+                logger.warning(
+                    "Multiprocessing failed for Stage 2, falling back to "
+                    + f"single-threaded: {e}"
+                )
                 block_results = [
                     self._process_drift_block(args) for args in block_args
                 ]
-            else:
-                # Multi-threaded processing
-                logger.debug(
-                    f"Using {n_processes} processes for Stage 2 \
-                    ({len(block_args)} blocks)"
-                )
-                from multiprocessing import Pool
 
-                with Pool(processes=n_processes) as pool:
-                    block_results = pool.map(
-                        self._process_drift_block, block_args
-                    )
-        except Exception as e:
-            logger.warning(
-                "Multiprocessing failed for Stage 2, falling back to "
-                + f"single-threaded: {e}"
-            )
-            block_results = [
-                self._process_drift_block(args) for args in block_args
-            ]
-
-        # Process results from parallel computation
-        for result in block_results:
-            if result is None:
-                continue  # Skip first block
-
+            # Process results using original linear approach
             (
-                block_start,
-                block_end,
-                shift_x,
-                shift_y,
-                quality,
-                uncertainty_x,
-                uncertainty_y,
-            ) = result
-
-            if shift_x is not None and shift_y is not None:
-                # Distribute block drift across frames in the block
-                block_drift_x = shift_x / toff_block_size  # Per-frame drift
-                block_drift_y = shift_y / toff_block_size
-                # Uncertainty also scales with block size
-                block_uncertainty_x = (
-                    uncertainty_x / toff_block_size
-                    if uncertainty_x is not None
-                    else 0
-                )
-                block_uncertainty_y = (
-                    uncertainty_y / toff_block_size
-                    if uncertainty_y is not None
-                    else 0
-                )
-
-                for frame_idx in range(block_start, block_end):
-                    if frame_idx > 0:
-                        drift_x_coarse[frame_idx] = (
-                            drift_x_coarse[frame_idx - 1] + block_drift_x
-                        )
-                        drift_y_coarse[frame_idx] = (
-                            drift_y_coarse[frame_idx - 1] + block_drift_y
-                        )
-                        # Accumulate uncertainties (assuming independence)
-                        uncertainty_x_coarse[frame_idx] = np.sqrt(
-                            uncertainty_x_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_x**2
-                        )
-                        uncertainty_y_coarse[frame_idx] = np.sqrt(
-                            uncertainty_y_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_y**2
-                        )
-                    else:
-                        uncertainty_x_coarse[frame_idx] = block_uncertainty_x
-                        uncertainty_y_coarse[frame_idx] = block_uncertainty_y
-                    drift_quality[frame_idx] += quality / (
-                        block_end - block_start
-                    )
-            else:
-                # Use previous block's drift rate if estimation failed
-                for frame_idx in range(block_start, block_end):
-                    if frame_idx > 0:
-                        drift_x_coarse[frame_idx] = drift_x_coarse[
-                            frame_idx - 1
-                        ]
-                        drift_y_coarse[frame_idx] = drift_y_coarse[
-                            frame_idx - 1
-                        ]
-                        uncertainty_x_coarse[frame_idx] = uncertainty_x_coarse[
-                            frame_idx - 1
-                        ]
-                        uncertainty_y_coarse[frame_idx] = uncertainty_y_coarse[
-                            frame_idx - 1
-                        ]
-        # toff_block_size = int(toff)
+                drift_x_coarse,
+                drift_y_coarse,
+                uncertainty_x_coarse,
+                uncertainty_y_coarse,
+            ) = self._process_linear_block_results(
+                block_results, n_frames, toff_block_size, drift_quality
+            )
 
         # Combine coarse and fine drift
         total_drift_x = drift_x_coarse + drift_x_fine
