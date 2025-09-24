@@ -1453,6 +1453,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             toff_block_size,
             max_shift,
             min_locs_per_block,
+            save_all_rsso_plots,
+            plot_dir,
         ) = args
 
         from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
@@ -1489,7 +1491,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             prev_block_locs,
             current_block_locs,
             max_shift,
-            plot_histogram=False,
+            plot_histogram=save_all_rsso_plots,
+            plot_dir=plot_dir,
         )
         logger.debug(
             f"""
@@ -1526,7 +1529,15 @@ class AutoPicasso(util.AbstractModuleCollection):
     @staticmethod
     def _process_fine_drift_chunk(args):
         """Stateless helper function for processing fine drift chunks in parallel"""
-        (locs_data, frames, chunk_frames, max_shift, min_locs_per_frame) = args
+        (
+            locs_data,
+            frames,
+            chunk_frames,
+            max_shift,
+            min_locs_per_frame,
+            save_all_rsso_plots,
+            plot_dir,
+        ) = args
         logger.debug(
             f"undrifting chunk {min(chunk_frames)} to {max(chunk_frames)}"
         )
@@ -1555,7 +1566,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                 continue
 
             shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-                prev_locs, current_locs, max_shift, plot_histogram=False
+                prev_locs,
+                current_locs,
+                max_shift,
+                plot_histogram=save_all_rsso_plots,
+                plot_dir=plot_dir,
             )
 
             if shift_x is not None and shift_y is not None:
@@ -1677,6 +1692,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         ton = parameters["ton"]
         toff = parameters["toff"]
         max_shift = parameters["max_shift"]
+        save_all_rsso_plots = parameters.get("save_all_rsso_plots", False)
 
         processing_chunk_size = parameters.get("processing_chunk_size", 100)
         min_locs_per_frame = parameters.get("min_locs_per_frame", 10)
@@ -1721,6 +1737,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             f"RSSO undrift (2-stage): {n_frames} frames, ton={ton}, toff={toff}"
         )
 
+        # Save undrifted localizations if requested
+        if parameters.get("save_locs", True):
+            fp_locs = os.path.join(
+                results["folder"], "locs_undrifted_rsso_input.hdf5"
+            )
+            io.save_locs(fp_locs, self.locs, self.info)
+
         # STAGE 1: Short-timescale drift correction on consecutive frames (parallelized)
         logger.debug("Stage 1: Short-timescale drift correction (parallel)")
 
@@ -1736,6 +1759,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     chunk_frames,
                     max_shift,
                     min_locs_per_frame,
+                    save_all_rsso_plots,
+                    results["folder"],
                 )
             )
 
@@ -1831,6 +1856,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                     self.locs["x"][frame_mask] -= drift_x_fine[frame_idx]
                     self.locs["y"][frame_mask] -= drift_y_fine[frame_idx]
 
+        # Save undrifted localizations if requested
+        if parameters.get("save_locs", True):
+            fp_locs = os.path.join(
+                results["folder"], "locs_undrifted_rsso_1_fine.hdf5"
+            )
+            io.save_locs(fp_locs, self.locs, self.info)
+
         # STAGE 2: Long-timescale drift correction on toff scale (parallelized)
         logger.debug("Stage 2: Long-timescale drift correction (parallel)")
         toff_block_size = int(toff)
@@ -1848,6 +1880,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     toff_block_size,
                     max_shift,
                     min_locs_per_block,
+                    save_all_rsso_plots,
+                    results["folder"],
                 )
             )
 
