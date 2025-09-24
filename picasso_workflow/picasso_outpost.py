@@ -866,7 +866,7 @@ def _save_shift_histogram_plot(
 
     # Add grid and legend
     ax.grid(True, alpha=0.3)
-    ax.legend()
+    ax.legend(loc="lower right")
 
     # Add text box with statistics
     total_points = np.sum(hist)
