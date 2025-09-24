@@ -184,7 +184,7 @@ def profile_resource_usage(method):
         except Exception as e:
             raise e
             # print(f"Profiling error: {e}")
-            # return None, profiling_results  # Return None for results on error
+            # return None, profiling_results
 
         results["peak_memory_gb"] = profiling_results["peak_memory_gb"]
         try:
@@ -1296,7 +1296,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize = self.pixelsize
         progress = parameters.get("progress", None)
 
-        # dirty debug: picasso.aim.aim expects the existence of info[1]["Pixelsize"]
+        # dirty debug: picasso.aim.aim expects the existence
+        # of info[1]["Pixelsize"]
         self.info[1]["Pixelsize"] = pixelsize
 
         self.locs, self.info, self.drift = aim.aim(
@@ -1528,7 +1529,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @staticmethod
     def _process_fine_drift_chunk(args):
-        """Stateless helper function for processing fine drift chunks in parallel"""
+        """Stateless helper function for processing fine drift chunks
+        in parallel"""
         (
             locs_data,
             frames,
@@ -1605,10 +1607,11 @@ class AutoPicasso(util.AbstractModuleCollection):
     def undrift_rsso(self, i, parameters, results):
         """Undrift localized data using RSSO-based temporal drift correction
 
-        This method applies the RSSO (Redundant Spot Shift Overrepresentation)
-        algorithm to correct for temporal drift by analyzing 2D shift histograms
-        between temporally adjacent localizations. It accounts for the timescales
-        ton (localization half-life) and toff (reappearance time).
+        This method applies the RSSO (Redundant Spot Shift
+        Overrepresentation) algorithm to correct for temporal drift by
+        analyzing 2D shift histograms between temporally adjacent
+        localizations. It accounts for the timescales ton (localization
+        half-life) and toff (reappearance time).
 
         Args:
             i : int
@@ -1616,29 +1619,32 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters : dict
                 necessary items:
                     ton : float
-                        Half-life of localization in frames (how long a spot stays
-                        visible)
+                        Half-life of localization in frames (how long a spot
+                        stays visible)
                     toff : float
-                        Time in frames for a spot to reappear after disappearing
+                        Time in frames for a spot to reappear after
+                        disappearing
                     max_shift : float
                         Maximum expected drift per frame in pixels
                 optional items:
                     processing_chunk_size : int
-                        Number of frames per processing chunk for memory efficiency
-                        (default: 100)
+                        Number of frames per processing chunk for memory
+                        efficiency (default: 100)
                     min_locs_per_frame : int
-                        Minimum localizations per frame for reliable drift estimation
-                        (default: 10)
+                        Minimum localizations per frame for reliable drift
+                        estimation (default: 10)
                     min_locs_per_block : int
-                        Minimum localizations per toff-scale block for reliable drift
-                        estimation (default: 100)
+                        Minimum localizations per toff-scale block for
+                        reliable drift estimation (default: 100)
                     plot_drift : bool
                         Whether to save drift plots (default: True)
                     save_locs : bool
-                        Whether to save undrifted localizations (default: True)
+                        Whether to save undrifted localizations
+                        (default: True)
                     n_processes : int or None
-                        Number of processes for parallel computation. None uses all
-                        available cores, 1 disables multiprocessing (default: None)
+                        Number of processes for parallel computation. None
+                        uses all available cores, 1 disables multiprocessing
+                        (default: None)
 
         Returns:
             parameters : dict
@@ -1650,8 +1656,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         def _estimate_drift_between_frame_groups(
             locs_ref, locs_target, max_shift, min_locs
         ):
-            """Helper function to estimate drift between two groups of localizations
-            using RSSO
+            """Helper function to estimate drift between two groups of
+            localizations using RSSO
 
             Returns:
                 shift_x, shift_y: drift measurements
@@ -1734,7 +1740,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         uncertainty_y_fine = np.zeros(n_frames)
 
         logger.debug(
-            f"RSSO undrift (2-stage): {n_frames} frames, ton={ton}, toff={toff}"
+            f"RSSO undrift (2-stage): {n_frames} frames, ton={ton}, \
+            toff={toff}"
         )
 
         # Save undrifted localizations if requested
@@ -1744,7 +1751,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             io.save_locs(fp_locs, self.locs, self.info)
 
-        # STAGE 1: Short-timescale drift correction on consecutive frames (parallelized)
+        # STAGE 1: Short-timescale drift correction on consecutive frames
+        # (parallelized)
         logger.debug("Stage 1: Short-timescale drift correction (parallel)")
 
         # Prepare chunk arguments for parallel processing
@@ -1863,7 +1871,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             io.save_locs(fp_locs, self.locs, self.info)
 
-        # STAGE 2: Long-timescale drift correction on toff scale (parallelized)
+        # STAGE 2: Long-timescale drift correction on toff scale
+        # (parallelized)
         logger.debug("Stage 2: Long-timescale drift correction (parallel)")
         toff_block_size = int(toff)
 
@@ -1896,8 +1905,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             else:
                 # Multi-threaded processing
                 logger.debug(
-                    f"Using {n_processes} processes for Stage 2 ({len(block_args)} "
-                    + "blocks)"
+                    f"Using {n_processes} processes for Stage 2 \
+                    ({len(block_args)} blocks)"
                 )
                 from multiprocessing import Pool
 
@@ -2010,8 +2019,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 total_drift_y, size=smooth_window, mode="nearest"
             )
 
-        # Apply final drift correction in-place (fine drift only since coarse was
-        # already applied)
+        # Apply final drift correction in-place (fine drift only since coarse
+        # was already applied)
         for frame in unique_frames:
             if frame in frame_to_idx:
                 frame_idx = frame_to_idx[frame]
@@ -2676,6 +2685,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                         grid spacing for autocorrelation (default: 5 nm)
                     r_max : float
                         maximum radius for autocorrelation (default: 100 nm)
+                    batch_size : int or None
+                        number of data points per batch for chunking (auto-calculated if None)
+                    n_processes : int or None
+                        number of parallel processes (auto-detected if None, capped at 4)
+                    use_chunking : bool
+                        enable memory-efficient chunking for large datasets (default: True)
+                    use_sparse : bool
+                        use sparse matrices for very large grids (default: False)
 
         Results:
             resolution : float
@@ -2700,9 +2717,30 @@ class AutoPicasso(util.AbstractModuleCollection):
         delta_r = parameters.get("delta_r", 5.0)  # 5 nm default
         r_max = parameters.get("r_max", 100.0)  # 100 nm default
 
-        # Calculate autocorrelation
+        # Performance parameters
+        batch_size = parameters.get(
+            "batch_size", None
+        )  # Auto-calculated if None
+        n_processes = parameters.get(
+            "n_processes", None
+        )  # Auto-detected if None
+        use_chunking = parameters.get(
+            "use_chunking", True
+        )  # Enable chunking by default
+        use_sparse = parameters.get(
+            "use_sparse", False
+        )  # Sparse matrices for very large grids
+
+        # Calculate autocorrelation with performance optimizations
         autocorr_map = resolution_ppac(
-            self.locs, self.pixelsize, delta_r, r_max
+            self.locs,
+            self.pixelsize,
+            delta_r,
+            r_max,
+            batch_size=batch_size,
+            n_processes=n_processes,
+            use_chunking=use_chunking,
+            use_sparse=use_sparse,
         )
 
         # Analyze autocorrelation with Gaussian fitting

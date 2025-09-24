@@ -893,6 +893,10 @@ def _save_shift_histogram_plot(
     else:
         filename = "shift_histogram.png"
     filepath = os.path.join(plot_dir, filename)
+    if os.path.exists(filepath):
+        nfiles = len([f for f in os.path.listdir(plot_dir) if filename in f])
+        r, e = os.path.splitext(filepath)
+        filepath = f"{r}-{nfiles}{e}"
 
     ax.set_aspect("equal")
     plt.tight_layout()
@@ -1539,7 +1543,6 @@ def nndist_loglikelihood_csr(
     # print("nndist_obs shape", nndist_observed.shape)
     for i, dist in enumerate(nndist_observed):
         k = i + kmin
-        # print(f"evaluating csr of {len(dist)} spots at k={k}, with rho={rho}")
         # assert False
         dist_consider = dist[(dist >= min_dist) & (dist <= max_dist)]
         prob = nndistribution_from_csr(
@@ -1784,7 +1787,8 @@ def DBSCAN_analysis_pd(clusters_csv, channel_tags):
     #     col for col in clusters.columns
     #     if col.endswith("_per_cluster") and col.startswith('N_')
     # ]
-    targets = channel_tags  # [col[: -len("_per_cluster")] for col in per_cluster_cols]
+    targets = channel_tags
+    # [col[: -len("_per_cluster")] for col in per_cluster_cols]
     # sort per cluster cols
     per_cluster_cols = [f"N_{target}_per_cluster" for target in targets]
 
@@ -3467,7 +3471,16 @@ def plot_2dhist(locs, field_x, field_y, fig, ax):
 ########################################################################
 
 
-def resolution_ppac(locs, pixelsize, delta_r, r_max):
+def resolution_ppac(
+    locs,
+    pixelsize,
+    delta_r,
+    r_max,
+    batch_size=None,
+    n_processes=None,
+    use_chunking=True,
+    use_sparse=False,
+):
     """Calculate the resolution by 2D point pattern autocorrelation
 
     Args:
@@ -3475,28 +3488,93 @@ def resolution_ppac(locs, pixelsize, delta_r, r_max):
         pixelsize: Pixel size in physical units (e.g., nm)
         delta_r: Grid spacing for autocorrelation calculation
         r_max: Maximum radius for autocorrelation
+        batch_size: Number of grid points to process per batch
+            (auto-calculated if None)
+        n_processes: Number of parallel processes (auto-detected if None)
+        use_chunking: Whether to use memory-efficient chunking (default: True)
+        use_sparse: Whether to use sparse matrices for very large grids
+            (default: False)
 
     Returns:
         2D autocorrelation intensity map normalized by central value
     """
+    import psutil
+    from multiprocessing import cpu_count
+    import gc
+
     r_max = (r_max // delta_r) * delta_r
     r_search = delta_r / 2
     rs = np.arange(
         -r_max, r_max + delta_r / 2, step=delta_r
     )  # Include endpoint
     idx_ctr = len(rs) // 2
-    intensities = np.zeros((len(rs), len(rs)))
 
-    # Fix: Create N×2 array correctly
+    # Choose data structure based on grid size and use_sparse flag
+    grid_size = len(rs)
+    if use_sparse and grid_size > 50:
+        from scipy import sparse
+
+        intensities = sparse.lil_matrix((grid_size, grid_size))
+        using_sparse = True
+    else:
+        intensities = np.zeros((grid_size, grid_size))
+        using_sparse = False
+
+    # Convert to physical coordinates once
     xy = np.column_stack([locs["x"] * pixelsize, locs["y"] * pixelsize])
-    tree_i = KDTree(xy)
+    n_points = len(xy)
 
-    # Pre-calculate shifted coordinates for efficiency
-    for i, delta_x in enumerate(rs):
-        for j, delta_y in enumerate(rs):
-            xy_shift = xy + np.array([delta_x, delta_y])
-            tree_probe = KDTree(xy_shift)
-            intensities[i, j] = tree_i.count_neighbors(tree_probe, r_search)
+    # Auto-calculate optimal batch size based on available memory
+    if batch_size is None:
+        available_memory = psutil.virtual_memory().available
+        # Estimate memory per batch (coordinates + KDTree overhead)
+        memory_per_point = 64  # bytes per coordinate pair + overhead
+        max_points_per_batch = min(
+            n_points, available_memory // (4 * memory_per_point)
+        )
+        batch_size = max(1000, min(10000, max_points_per_batch // 10))
+
+    # Auto-detect number of processes
+    if n_processes is None:
+        n_processes = min(4, cpu_count())  # Cap at 4 to avoid memory pressure
+
+    if use_chunking and n_points > batch_size:
+        # Use chunking for very large datasets
+        result_intensities = _resolution_ppac_chunked(
+            xy, rs, r_search, batch_size, n_processes
+        )
+        if using_sparse:
+            intensities = sparse.lil_matrix(result_intensities)
+        else:
+            intensities = result_intensities
+    elif n_processes > 1 and len(rs) > 4:
+        # Use multiprocessing for medium-large grids
+        result_intensities = _resolution_ppac_parallel(
+            xy, rs, r_search, n_processes
+        )
+        if using_sparse:
+            intensities = sparse.lil_matrix(result_intensities)
+        else:
+            intensities = result_intensities
+    else:
+        # Use original algorithm for small datasets
+        tree_i = KDTree(xy)
+        for i, delta_x in enumerate(rs):
+            for j, delta_y in enumerate(rs):
+                # Memory-efficient: avoid full array copy by using broadcasting
+                xy_shift = xy + np.array([[delta_x, delta_y]])
+                tree_probe = KDTree(xy_shift)
+                intensities[i, j] = tree_i.count_neighbors(
+                    tree_probe, r_search
+                )
+                del tree_probe  # Explicit cleanup
+
+        del tree_i
+        gc.collect()
+
+    # Convert back to dense array if using sparse
+    if using_sparse:
+        intensities = intensities.toarray()
 
     # Normalize by maximum (no shift) and handle division by zero
     max_intensity = intensities[idx_ctr, idx_ctr]
@@ -3504,6 +3582,127 @@ def resolution_ppac(locs, pixelsize, delta_r, r_max):
         intensities = intensities / max_intensity
 
     return intensities
+
+
+def _resolution_ppac_chunked(xy, rs, r_search, batch_size, n_processes):
+    """Memory-efficient chunked autocorrelation calculation"""
+    import gc
+
+    n_points = len(xy)
+    intensities = np.zeros((len(rs), len(rs)))
+
+    # Process data in chunks to manage memory usage
+    n_chunks = (n_points + batch_size - 1) // batch_size
+
+    for chunk_idx in range(n_chunks):
+        start_idx = chunk_idx * batch_size
+        end_idx = min((chunk_idx + 1) * batch_size, n_points)
+        xy_chunk = xy[start_idx:end_idx]
+
+        # Build KDTree for this chunk
+        tree_chunk = KDTree(xy_chunk)
+
+        # Process grid points in parallel for this chunk
+        if n_processes > 1:
+            chunk_intensities = _process_grid_parallel(
+                xy_chunk, tree_chunk, rs, r_search, n_processes
+            )
+        else:
+            chunk_intensities = _process_grid_sequential(
+                xy_chunk, tree_chunk, rs, r_search
+            )
+
+        # Accumulate results (weighted by chunk size)
+        weight = len(xy_chunk) / n_points
+        intensities += chunk_intensities * weight
+
+        # Cleanup
+        del tree_chunk, xy_chunk, chunk_intensities
+        gc.collect()
+
+    return intensities
+
+
+def _resolution_ppac_parallel(xy, rs, r_search, n_processes):
+    """Parallel autocorrelation calculation for medium-sized datasets"""
+    from multiprocessing import Pool
+
+    tree_i = KDTree(xy)
+
+    # Create grid point tasks
+    tasks = [
+        (i, j, xy, rs[i], rs[j], r_search)
+        for i in range(len(rs))
+        for j in range(len(rs))
+    ]
+
+    # Process in parallel
+    with Pool(n_processes) as pool:
+        results = pool.map(_compute_autocorr_point, tasks)
+
+    # Reconstruct intensity matrix
+    intensities = np.zeros((len(rs), len(rs)))
+    for i, j, intensity in results:
+        intensities[i, j] = intensity
+
+    del tree_i
+    return intensities
+
+
+def _process_grid_parallel(xy_chunk, tree_chunk, rs, r_search, n_processes):
+    """Process grid points in parallel for a data chunk"""
+    from multiprocessing import Pool
+
+    tasks = [
+        (i, j, xy_chunk, rs[i], rs[j], r_search)
+        for i in range(len(rs))
+        for j in range(len(rs))
+    ]
+
+    with Pool(n_processes) as pool:
+        results = pool.map(_compute_autocorr_point_chunk, tasks)
+
+    intensities = np.zeros((len(rs), len(rs)))
+    for i, j, intensity in results:
+        intensities[i, j] = intensity
+
+    return intensities
+
+
+def _process_grid_sequential(xy_chunk, tree_chunk, rs, r_search):
+    """Process grid points sequentially for a data chunk"""
+    intensities = np.zeros((len(rs), len(rs)))
+
+    for i, delta_x in enumerate(rs):
+        for j, delta_y in enumerate(rs):
+            xy_shift = xy_chunk + np.array([[delta_x, delta_y]])
+            tree_probe = KDTree(xy_shift)
+            intensities[i, j] = tree_chunk.count_neighbors(
+                tree_probe, r_search
+            )
+            del tree_probe
+
+    return intensities
+
+
+def _compute_autocorr_point(task):
+    """Compute autocorrelation for a single grid point (full dataset)"""
+    i, j, xy, delta_x, delta_y, r_search = task
+    tree_i = KDTree(xy)
+    xy_shift = xy + np.array([[delta_x, delta_y]])
+    tree_probe = KDTree(xy_shift)
+    intensity = tree_i.count_neighbors(tree_probe, r_search)
+    return (i, j, intensity)
+
+
+def _compute_autocorr_point_chunk(task):
+    """Compute autocorrelation for a single grid point (chunk-based)"""
+    i, j, xy_chunk, delta_x, delta_y, r_search = task
+    tree_chunk = KDTree(xy_chunk)
+    xy_shift = xy_chunk + np.array([[delta_x, delta_y]])
+    tree_probe = KDTree(xy_shift)
+    intensity = tree_chunk.count_neighbors(tree_probe, r_search)
+    return (i, j, intensity)
 
 
 def analyse_resolution_ppac(intensities, delta_r):
@@ -3515,7 +3714,8 @@ def analyse_resolution_ppac(intensities, delta_r):
 
     Returns:
         dict: Resolution analysis results containing:
-            - sigma_x, sigma_y: Gaussian standard deviations in x,y (physical units)
+            - sigma_x, sigma_y: Gaussian standard deviations in x,y
+                (physical units)
             - resolution: Average resolution (2.35 * mean(sigma_x, sigma_y))
             - fwhm_x, fwhm_y: Full-width half-maximum values
             - amplitude: Fitted Gaussian amplitude
