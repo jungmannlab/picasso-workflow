@@ -1538,9 +1538,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         outlier_detection_enabled,
         outlier_z_threshold,
         change_point_sensitivity,
+        min_signal_to_noise,
         n_processes,
         save_all_rsso_plots,
         plot_dir,
+        use_spline_interpolation,
     ):
         """Adaptive drift correction with variable window sizes based on local statistics
 
@@ -3533,9 +3535,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                 outlier_detection_enabled,
                 outlier_z_threshold,
                 change_point_sensitivity,
+                min_signal_to_noise,
                 n_processes,
                 save_all_rsso_plots,
                 results["folder"],
+                use_spline_interpolation,
             )
         else:
             # Use original frame-by-frame approach
