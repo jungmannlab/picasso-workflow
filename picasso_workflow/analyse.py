@@ -4592,73 +4592,73 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
 
-def _process_autocorr_chunk(chunk_data):
-    """Process a single spatial chunk for autocorrelation analysis (multiprocessing worker)
+    def _process_autocorr_chunk(chunk_data):
+        """Process a single spatial chunk for autocorrelation analysis (multiprocessing worker)
 
-    Args:
-        chunk_data : tuple
-            (chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx)
+        Args:
+            chunk_data : tuple
+                (chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx)
 
-    Returns:
-        dict or None : Chunk result with autocorr, n_locs, bounds, and chunk_idx
-    """
-    chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx = chunk_data
-    x_min, x_max, y_min, y_max = chunk_bounds
+        Returns:
+            dict or None : Chunk result with autocorr, n_locs, bounds, and chunk_idx
+        """
+        chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx = chunk_data
+        x_min, x_max, y_min, y_max = chunk_bounds
 
-    # Extract localizations in this chunk
-    mask = ((x_coords >= x_min) & (x_coords < x_max) &
-           (y_coords >= y_min) & (y_coords < y_max))
+        # Extract localizations in this chunk
+        mask = ((x_coords >= x_min) & (x_coords < x_max) &
+               (y_coords >= y_min) & (y_coords < y_max))
 
-    chunk_x = x_coords[mask]
-    chunk_y = y_coords[mask]
-    n_locs = len(chunk_x)
+        chunk_x = x_coords[mask]
+        chunk_y = y_coords[mask]
+        n_locs = len(chunk_x)
 
-    if n_locs < min_locs_per_chunk:
-        return None
-
-    try:
-        # Create histogram for this chunk
-        x_bins = np.arange(x_min, x_max + sampling_res, sampling_res)
-        y_bins = np.arange(y_min, y_max + sampling_res, sampling_res)
-
-        chunk_hist, _, _ = np.histogram2d(chunk_x, chunk_y, bins=[x_bins, y_bins])
-        chunk_hist = chunk_hist.astype(np.float32)
-
-        if np.sum(chunk_hist) == 0:
+        if n_locs < min_locs_per_chunk:
             return None
 
-        # Compute autocorrelation using efficient FFT
-        F_hist = np.fft.fft2(chunk_hist)
-        autocorr_full = np.fft.fftshift(
-            np.real(np.fft.ifft2(F_hist * np.conj(F_hist)))
-        )
+        try:
+            # Create histogram for this chunk
+            x_bins = np.arange(x_min, x_max + sampling_res, sampling_res)
+            y_bins = np.arange(y_min, y_max + sampling_res, sampling_res)
 
-        # Extract central autocorr region
-        center = np.array(autocorr_full.shape) // 2
-        safe_shift = min(max_shift_pixels, min(center))
+            chunk_hist, _, _ = np.histogram2d(chunk_x, chunk_y, bins=[x_bins, y_bins])
+            chunk_hist = chunk_hist.astype(np.float32)
 
-        autocorr_chunk = autocorr_full[
-            center[0] - safe_shift:center[0] + safe_shift + 1,
-            center[1] - safe_shift:center[1] + safe_shift + 1
-        ].copy()
+            if np.sum(chunk_hist) == 0:
+                return None
 
-        # Normalize
-        if autocorr_chunk.max() > 0:
-            autocorr_chunk = autocorr_chunk / autocorr_chunk.max()
-            # remove center point
-            center = np.array(autocorr_chunk.shape) // 2
-            autocorr_chunk[center[0], center[1]] = np.nan
+            # Compute autocorrelation using efficient FFT
+            F_hist = np.fft.fft2(chunk_hist)
+            autocorr_full = np.fft.fftshift(
+                np.real(np.fft.ifft2(F_hist * np.conj(F_hist)))
+            )
 
-        return {
-            'autocorr': autocorr_chunk,
-            'n_locs': n_locs,
-            'bounds': (x_min, x_max, y_min, y_max),
-            'chunk_idx': chunk_idx
-        }
+            # Extract central autocorr region
+            center = np.array(autocorr_full.shape) // 2
+            safe_shift = min(max_shift_pixels, min(center))
 
-    except Exception as e:
-        print(f"      Chunk {chunk_idx} failed: {e}")
-        return None
+            autocorr_chunk = autocorr_full[
+                center[0] - safe_shift:center[0] + safe_shift + 1,
+                center[1] - safe_shift:center[1] + safe_shift + 1
+            ].copy()
+
+            # Normalize
+            if autocorr_chunk.max() > 0:
+                autocorr_chunk = autocorr_chunk / autocorr_chunk.max()
+                # remove center point
+                center = np.array(autocorr_chunk.shape) // 2
+                autocorr_chunk[center[0], center[1]] = np.nan
+
+            return {
+                'autocorr': autocorr_chunk,
+                'n_locs': n_locs,
+                'bounds': (x_min, x_max, y_min, y_max),
+                'chunk_idx': chunk_idx
+            }
+
+        except Exception as e:
+            print(f"      Chunk {chunk_idx} failed: {e}")
+            return None
 
 
     @profile_resource_usage
