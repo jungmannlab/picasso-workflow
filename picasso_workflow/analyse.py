@@ -4654,7 +4654,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         max_shift = parameters.get("max_shift", 10.0)  # 10 nm max shift
         n_processes = parameters.get("n_processes", None)
         chunk_size = parameters.get("chunk_size", 1000)
-        max_memory_gb = parameters.get("max_memory_gb", 8.0)  # Max memory limit
+        max_memory_gb = parameters.get(
+            "max_memory_gb", 8.0
+        )  # Max memory limit
 
         if n_processes is None:
             n_processes = min(mp.cpu_count(), 8)
@@ -4686,7 +4688,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Multi-field approach parameters
         field_size = parameters.get("field_size", 10000)  # 10 μm field size
         field_overlap = parameters.get("field_overlap", 0.5)  # 50% overlap
-        min_locs_per_field = parameters.get("min_locs_per_field", 1000)  # Minimum locs per field
+        min_locs_per_field = parameters.get(
+            "min_locs_per_field", 1000
+        )  # Minimum locs per field
 
         print(f"  Using multi-field approach:")
         print(f"    Field size: {field_size/1000:.1f} μm")
@@ -4700,7 +4704,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         n_fields_x = max(1, int(np.ceil(x_range / step_size)))
         n_fields_y = max(1, int(np.ceil(y_range / step_size)))
 
-        print(f"    Grid: {n_fields_x} × {n_fields_y} = {n_fields_x * n_fields_y} fields")
+        print(
+            f"    Grid: {n_fields_x} × {n_fields_y} = {n_fields_x * n_fields_y} fields"
+        )
 
         # Generate field boundaries
         x_min, y_min = x_coords.min(), y_coords.min()
@@ -4713,13 +4719,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                 field_y_min = y_min + j * step_size
                 field_y_max = min(field_y_min + field_size, y_coords.max())
 
-                field_boundaries.append({
-                    'x_min': field_x_min,
-                    'x_max': field_x_max,
-                    'y_min': field_y_min,
-                    'y_max': field_y_max,
-                    'index': (i, j)
-                })
+                field_boundaries.append(
+                    {
+                        "x_min": field_x_min,
+                        "x_max": field_x_max,
+                        "y_min": field_y_min,
+                        "y_max": field_y_max,
+                        "index": (i, j),
+                    }
+                )
 
         print(f"    Total fields to process: {len(field_boundaries)}")
 
@@ -4733,11 +4741,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         print(f"  Processing fields...")
 
         for field_idx, field in enumerate(field_boundaries):
-            print(f"    Processing field {field_idx+1}/{len(field_boundaries)}")
+            print(
+                f"    Processing field {field_idx+1}/{len(field_boundaries)}"
+            )
 
             # Extract localizations within field
-            mask = ((x_coords >= field['x_min']) & (x_coords <= field['x_max']) &
-                    (y_coords >= field['y_min']) & (y_coords <= field['y_max']))
+            mask = (
+                (x_coords >= field["x_min"])
+                & (x_coords <= field["x_max"])
+                & (y_coords >= field["y_min"])
+                & (y_coords <= field["y_max"])
+            )
 
             field_x = x_coords[mask]
             field_y = y_coords[mask]
@@ -4745,33 +4759,56 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             # Skip fields with insufficient localizations
             if n_locs_field < min_locs_per_field:
-                print(f"      Skipping field {field_idx+1}: only {n_locs_field} localizations")
+                print(
+                    f"      Skipping field {field_idx+1}: only {n_locs_field} localizations"
+                )
                 continue
 
             try:
                 # Create field histogram
-                field_x_bins = np.arange(field['x_min'], field['x_max'] + sampling_res, sampling_res)
-                field_y_bins = np.arange(field['y_min'], field['y_max'] + sampling_res, sampling_res)
+                field_x_bins = np.arange(
+                    field["x_min"], field["x_max"] + sampling_res, sampling_res
+                )
+                field_y_bins = np.arange(
+                    field["y_min"], field["y_max"] + sampling_res, sampling_res
+                )
 
-                field_hist, _, _ = np.histogram2d(field_x, field_y,
-                                                bins=[field_x_bins, field_y_bins])
+                field_hist, _, _ = np.histogram2d(
+                    field_x, field_y, bins=[field_x_bins, field_y_bins]
+                )
 
                 if np.sum(field_hist) == 0:
-                    print(f"      Skipping field {field_idx+1}: empty histogram")
+                    print(
+                        f"      Skipping field {field_idx+1}: empty histogram"
+                    )
                     continue
 
                 # Estimate field FFT memory
-                padded_shape = (field_hist.shape[0] + 2*max_shift_pixels,
-                              field_hist.shape[1] + 2*max_shift_pixels)
-                field_fft_memory_gb = (padded_shape[0] * padded_shape[1] * 16 * 3) / (1024**3)
+                padded_shape = (
+                    field_hist.shape[0] + 2 * max_shift_pixels,
+                    field_hist.shape[1] + 2 * max_shift_pixels,
+                )
+                field_fft_memory_gb = (
+                    padded_shape[0] * padded_shape[1] * 16 * 3
+                ) / (1024**3)
 
-                if field_fft_memory_gb > max_memory_gb / 4:  # Use quarter of available memory per field
-                    print(f"      Using direct correlation for field {field_idx+1} (FFT would need {field_fft_memory_gb:.1f} GB)")
+                if (
+                    field_fft_memory_gb > max_memory_gb / 4
+                ):  # Use quarter of available memory per field
+                    print(
+                        f"      Using direct correlation for field {field_idx+1} (FFT would need {field_fft_memory_gb:.1f} GB)"
+                    )
                     # Use direct correlation for this field
-                    autocorr_2d = np.zeros((2*max_shift_pixels + 1, 2*max_shift_pixels + 1), dtype=np.float32)
+                    autocorr_2d = np.zeros(
+                        (2 * max_shift_pixels + 1, 2 * max_shift_pixels + 1),
+                        dtype=np.float32,
+                    )
 
                     # Center the correlation around field center
-                    h_center_x, h_center_y = field_hist.shape[0] // 2, field_hist.shape[1] // 2
+                    h_center_x, h_center_y = (
+                        field_hist.shape[0] // 2,
+                        field_hist.shape[1] // 2,
+                    )
                     margin = max_shift_pixels + 5
 
                     x_start = max(0, h_center_x - margin)
@@ -4782,17 +4819,39 @@ class AutoPicasso(util.AbstractModuleCollection):
                     hist_central = field_hist[x_start:x_end, y_start:y_end]
 
                     for dx in range(-max_shift_pixels, max_shift_pixels + 1):
-                        for dy in range(-max_shift_pixels, max_shift_pixels + 1):
+                        for dy in range(
+                            -max_shift_pixels, max_shift_pixels + 1
+                        ):
                             correlation = 0.0
                             count = 0
 
-                            for i in range(max(0, -dx), min(hist_central.shape[0], hist_central.shape[0] - dx)):
-                                for j in range(max(0, -dy), min(hist_central.shape[1], hist_central.shape[1] - dy)):
-                                    correlation += hist_central[i, j] * hist_central[i + dx, j + dy]
+                            for i in range(
+                                max(0, -dx),
+                                min(
+                                    hist_central.shape[0],
+                                    hist_central.shape[0] - dx,
+                                ),
+                            ):
+                                for j in range(
+                                    max(0, -dy),
+                                    min(
+                                        hist_central.shape[1],
+                                        hist_central.shape[1] - dy,
+                                    ),
+                                ):
+                                    correlation += (
+                                        hist_central[i, j]
+                                        * hist_central[i + dx, j + dy]
+                                    )
                                     count += 1
 
                             if count > 0:
-                                autocorr_2d[dx + max_shift_pixels, dy + max_shift_pixels] = correlation / count
+                                autocorr_2d[
+                                    dx + max_shift_pixels,
+                                    dy + max_shift_pixels,
+                                ] = (
+                                    correlation / count
+                                )
 
                 else:
                     # Use FFT for this field
@@ -4804,30 +4863,53 @@ class AutoPicasso(util.AbstractModuleCollection):
                         field_hist = field_hist.astype(np.float32)
 
                         # Pad histogram for autocorrelation
-                        histogram_padded = np.pad(field_hist, max_shift_pixels,
-                                                mode="constant", constant_values=0)
+                        histogram_padded = np.pad(
+                            field_hist,
+                            max_shift_pixels,
+                            mode="constant",
+                            constant_values=0,
+                        )
 
                         # Compute autocorrelation via FFT
                         hist_fft = fft2(histogram_padded)
-                        autocorr_full = np.real(fftshift(ifft2(hist_fft * np.conj(hist_fft))))
+                        autocorr_full = np.real(
+                            fftshift(ifft2(hist_fft * np.conj(hist_fft)))
+                        )
 
                         # Extract central region
                         center = np.array(autocorr_full.shape) // 2
                         autocorr_2d = autocorr_full[
-                            center[0] - max_shift_pixels : center[0] + max_shift_pixels + 1,
-                            center[1] - max_shift_pixels : center[1] + max_shift_pixels + 1,
+                            center[0]
+                            - max_shift_pixels : center[0]
+                            + max_shift_pixels
+                            + 1,
+                            center[1]
+                            - max_shift_pixels : center[1]
+                            + max_shift_pixels
+                            + 1,
                         ].copy()
 
                         # Clean up
                         del hist_fft, histogram_padded, autocorr_full
 
                     except ImportError:
-                        print(f"      Fallback to direct correlation for field {field_idx+1}")
+                        print(
+                            f"      Fallback to direct correlation for field {field_idx+1}"
+                        )
                         # Fallback to direct method
-                        autocorr_2d = np.zeros((2*max_shift_pixels + 1, 2*max_shift_pixels + 1), dtype=np.float32)
+                        autocorr_2d = np.zeros(
+                            (
+                                2 * max_shift_pixels + 1,
+                                2 * max_shift_pixels + 1,
+                            ),
+                            dtype=np.float32,
+                        )
 
                         # Use similar direct correlation as above
-                        h_center_x, h_center_y = field_hist.shape[0] // 2, field_hist.shape[1] // 2
+                        h_center_x, h_center_y = (
+                            field_hist.shape[0] // 2,
+                            field_hist.shape[1] // 2,
+                        )
                         margin = max_shift_pixels + 5
                         x_start = max(0, h_center_x - margin)
                         x_end = min(field_hist.shape[0], h_center_x + margin)
@@ -4835,16 +4917,40 @@ class AutoPicasso(util.AbstractModuleCollection):
                         y_end = min(field_hist.shape[1], h_center_y + margin)
                         hist_central = field_hist[x_start:x_end, y_start:y_end]
 
-                        for dx in range(-max_shift_pixels, max_shift_pixels + 1):
-                            for dy in range(-max_shift_pixels, max_shift_pixels + 1):
+                        for dx in range(
+                            -max_shift_pixels, max_shift_pixels + 1
+                        ):
+                            for dy in range(
+                                -max_shift_pixels, max_shift_pixels + 1
+                            ):
                                 correlation = 0.0
                                 count = 0
-                                for i in range(max(0, -dx), min(hist_central.shape[0], hist_central.shape[0] - dx)):
-                                    for j in range(max(0, -dy), min(hist_central.shape[1], hist_central.shape[1] - dy)):
-                                        correlation += hist_central[i, j] * hist_central[i + dx, j + dy]
+                                for i in range(
+                                    max(0, -dx),
+                                    min(
+                                        hist_central.shape[0],
+                                        hist_central.shape[0] - dx,
+                                    ),
+                                ):
+                                    for j in range(
+                                        max(0, -dy),
+                                        min(
+                                            hist_central.shape[1],
+                                            hist_central.shape[1] - dy,
+                                        ),
+                                    ):
+                                        correlation += (
+                                            hist_central[i, j]
+                                            * hist_central[i + dx, j + dy]
+                                        )
                                         count += 1
                                 if count > 0:
-                                    autocorr_2d[dx + max_shift_pixels, dy + max_shift_pixels] = correlation / count
+                                    autocorr_2d[
+                                        dx + max_shift_pixels,
+                                        dy + max_shift_pixels,
+                                    ] = (
+                                        correlation / count
+                                    )
 
                 # Normalize field autocorrelation
                 if autocorr_2d.max() > 0:
@@ -4852,21 +4958,23 @@ class AutoPicasso(util.AbstractModuleCollection):
 
                 # Store field result
                 field_result = {
-                    'field_idx': field_idx,
-                    'n_locs': n_locs_field,
-                    'autocorr': autocorr_2d,
-                    'field_bounds': field
+                    "field_idx": field_idx,
+                    "n_locs": n_locs_field,
+                    "autocorr": autocorr_2d,
+                    "field_bounds": field,
                 }
                 field_results.append(field_result)
                 valid_fields += 1
 
-                print(f"      Field {field_idx+1} completed: {n_locs_field} locs, peak autocorr: {autocorr_2d.max():.3f}")
+                print(
+                    f"      Field {field_idx+1} completed: {n_locs_field} locs, peak autocorr: {autocorr_2d.max():.3f}"
+                )
 
             except Exception as e:
                 print(f"      ⚠ Field {field_idx+1} failed: {e}")
                 continue
 
-        total_locs_processed = sum(r['n_locs'] for r in field_results)
+        total_locs_processed = sum(r["n_locs"] for r in field_results)
 
         print(f"  Processed {valid_fields}/{len(field_boundaries)} fields")
         print(f"  Total localizations processed: {total_locs_processed:,}")
@@ -4885,22 +4993,30 @@ class AutoPicasso(util.AbstractModuleCollection):
         print(f"  Computing weighted average...")
 
         # Calculate weights based on number of localizations
-        weights = np.array([r['n_locs'] for r in field_results], dtype=np.float64)
+        weights = np.array(
+            [r["n_locs"] for r in field_results], dtype=np.float64
+        )
         weights = weights / weights.sum()  # Normalize weights
 
-        print(f"    Field weights: {[f'{w:.3f}' for w in weights[:5]]}{'...' if len(weights) > 5 else ''}")
+        print(
+            f"    Field weights: {[f'{w:.3f}' for w in weights[:5]]}{'...' if len(weights) > 5 else ''}"
+        )
 
         # Compute weighted average autocorrelation
-        autocorr_2d = np.zeros_like(field_results[0]['autocorr'], dtype=np.float64)
+        autocorr_2d = np.zeros_like(
+            field_results[0]["autocorr"], dtype=np.float64
+        )
 
         for i, result in enumerate(field_results):
-            autocorr_2d += weights[i] * result['autocorr']
+            autocorr_2d += weights[i] * result["autocorr"]
 
         # Clean up field data to free memory
         del x_coords, y_coords, field_results
         gc.collect()
 
-        print(f"  Weighted average computed, peak value: {autocorr_2d.max():.3f}")
+        print(
+            f"  Weighted average computed, peak value: {autocorr_2d.max():.3f}"
+        )
 
         # Calculate radial profile
         def compute_radial_profile(autocorr_map, sampling_resolution):
