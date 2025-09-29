@@ -4648,7 +4648,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 autocorr_chunk = autocorr_chunk / autocorr_chunk.max()
                 # remove center point
                 center = np.array(autocorr_chunk.shape) // 2
-                autocorr_chunk[center[0], center[1]] = np.nan
+                meanmax = np.mean([
+                    autocorr_chunk[center[0], center[1] - 1],
+                    autocorr_chunk[center[0] - 1, center[1]],
+                    autocorr_chunk[center[0], center[1] + 1],
+                    autocorr_chunk[center[0] + 1, center[1]]
+                    ])
+                autocorr_chunk[center[0], center[1]] = meanmax
 
             return {
                 'autocorr': autocorr_chunk,
@@ -4790,10 +4796,10 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         with mp.Pool(processes=n_processes) as pool:
             # Submit all chunk processing jobs
-            results = pool.map(self._process_autocorr_chunk, chunk_data_list)
+            results_mp = pool.map(self._process_autocorr_chunk, chunk_data_list)
 
             # Collect valid results
-            for result in results:
+            for result in results_mp:
                 if result is not None:
                     chunk_results.append(result)
                     valid_chunks += 1
