@@ -4651,12 +4651,16 @@ class AutoPicasso(util.AbstractModuleCollection):
         print(f"  Using {n_processes} processes")
 
         # Extract coordinates
-        x_coords = self.locs['x'] * self.pixelsize  # Convert to nm
-        y_coords = self.locs['y'] * self.pixelsize  # Convert to nm
+        x_coords = self.locs["x"] * self.pixelsize  # Convert to nm
+        y_coords = self.locs["y"] * self.pixelsize  # Convert to nm
 
         print(f"  Processing {len(x_coords)} localizations")
-        print(f"  Data range: x=[{x_coords.min():.1f}, {x_coords.max():.1f}] nm")
-        print(f"  Data range: y=[{y_coords.min():.1f}, {y_coords.max():.1f}] nm")
+        print(
+            f"  Data range: x=[{x_coords.min():.1f}, {x_coords.max():.1f}] nm"
+        )
+        print(
+            f"  Data range: y=[{y_coords.min():.1f}, {y_coords.max():.1f}] nm"
+        )
 
         # Calculate histogram bounds
         x_min, x_max = x_coords.min(), x_coords.max()
@@ -4671,30 +4675,38 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Memory-efficient histogram creation
         def create_histogram_chunk(coords_chunk):
             x_chunk, y_chunk = coords_chunk
-            hist, _, _ = np.histogram2d(x_chunk, y_chunk, bins=[x_bins, y_bins])
+            hist, _, _ = np.histogram2d(
+                x_chunk, y_chunk, bins=[x_bins, y_bins]
+            )
             return hist
 
         # Split data into chunks for memory management
         n_locs = len(x_coords)
-        n_chunks = max(1, n_locs // (chunk_size * 1000))  # Larger chunks for histogram
+        n_chunks = max(
+            1, n_locs // (chunk_size * 1000)
+        )  # Larger chunks for histogram
 
         if n_chunks > 1:
             print(f"  Using {n_chunks} chunks for memory efficiency")
             chunk_indices = np.array_split(np.arange(n_locs), n_chunks)
 
             # Process chunks and sum histograms
-            histogram = np.zeros((len(x_bins)-1, len(y_bins)-1))
+            histogram = np.zeros((len(x_bins) - 1, len(y_bins) - 1))
             for chunk_idx in chunk_indices:
                 x_chunk = x_coords[chunk_idx]
                 y_chunk = y_coords[chunk_idx]
-                chunk_hist, _, _ = np.histogram2d(x_chunk, y_chunk, bins=[x_bins, y_bins])
+                chunk_hist, _, _ = np.histogram2d(
+                    x_chunk, y_chunk, bins=[x_bins, y_bins]
+                )
                 histogram += chunk_hist
 
             del chunk_indices, x_chunk, y_chunk, chunk_hist
             gc.collect()
         else:
             # Create histogram directly
-            histogram, _, _ = np.histogram2d(x_coords, y_coords, bins=[x_bins, y_bins])
+            histogram, _, _ = np.histogram2d(
+                x_coords, y_coords, bins=[x_bins, y_bins]
+            )
 
         print(f"  Histogram created with {np.sum(histogram)} total counts")
 
@@ -4709,7 +4721,9 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Pad histogram for autocorrelation
         pad_width = max_shift_pixels
-        histogram_padded = np.pad(histogram, pad_width, mode='constant', constant_values=0)
+        histogram_padded = np.pad(
+            histogram, pad_width, mode="constant", constant_values=0
+        )
 
         # Compute autocorrelation via FFT
         hist_fft = fft2(histogram_padded)
@@ -4718,22 +4732,27 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Extract central region
         center = np.array(autocorr_full.shape) // 2
         autocorr_2d = autocorr_full[
-            center[0] - max_shift_pixels:center[0] + max_shift_pixels + 1,
-            center[1] - max_shift_pixels:center[1] + max_shift_pixels + 1
+            center[0] - max_shift_pixels : center[0] + max_shift_pixels + 1,
+            center[1] - max_shift_pixels : center[1] + max_shift_pixels + 1,
         ]
 
         # Normalize autocorrelation
         autocorr_2d = autocorr_2d / autocorr_2d.max()
 
-        print(f"  Autocorrelation computed, peak value: {autocorr_2d.max():.3f}")
+        print(
+            f"  Autocorrelation computed, peak value: {autocorr_2d.max():.3f}"
+        )
 
         # Calculate radial profile
         def compute_radial_profile(autocorr_map, sampling_resolution):
             center = np.array(autocorr_map.shape) // 2
-            y, x = np.ogrid[:autocorr_map.shape[0], :autocorr_map.shape[1]]
+            y, x = np.ogrid[: autocorr_map.shape[0], : autocorr_map.shape[1]]
 
             # Calculate distances from center
-            distances = np.sqrt((x - center[1])**2 + (y - center[0])**2) * sampling_resolution
+            distances = (
+                np.sqrt((x - center[1]) ** 2 + (y - center[0]) ** 2)
+                * sampling_resolution
+            )
 
             # Create radial bins
             max_radius = min(center) * sampling_resolution
@@ -4752,22 +4771,41 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             return radial_profile, radial_distances
 
-        radial_profile, radial_distances = compute_radial_profile(autocorr_2d, sampling_res)
+        radial_profile, radial_distances = compute_radial_profile(
+            autocorr_2d, sampling_res
+        )
 
         # Fit Gaussian to extract resolution
         def gaussian_1d(x, amplitude, center, sigma, background):
-            return amplitude * np.exp(-(x - center)**2 / (2 * sigma**2)) + background
+            return (
+                amplitude * np.exp(-((x - center) ** 2) / (2 * sigma**2))
+                + background
+            )
 
-        def gaussian_2d_fit(xy, amplitude, x0, y0, sigma_x, sigma_y, background):
+        def gaussian_2d_fit(
+            xy, amplitude, x0, y0, sigma_x, sigma_y, background
+        ):
             x, y = xy
-            return (amplitude * np.exp(-((x - x0)**2 / (2 * sigma_x**2) +
-                                       (y - y0)**2 / (2 * sigma_y**2))) + background).ravel()
+            return (
+                amplitude
+                * np.exp(
+                    -(
+                        (x - x0) ** 2 / (2 * sigma_x**2)
+                        + (y - y0) ** 2 / (2 * sigma_y**2)
+                    )
+                )
+                + background
+            ).ravel()
 
         # Fit 1D Gaussian to radial profile
         try:
             # Initial guess for radial fit
             center_peak = radial_profile[0]
-            background_est = np.mean(radial_profile[-10:]) if len(radial_profile) > 10 else 0
+            background_est = (
+                np.mean(radial_profile[-10:])
+                if len(radial_profile) > 10
+                else 0
+            )
 
             p0_radial = [center_peak - background_est, 0, 1.0, background_est]
 
@@ -4781,14 +4819,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 radial_distances[fit_range],
                 radial_profile[fit_range],
                 p0=p0_radial,
-                maxfev=2000
+                maxfev=2000,
             )
 
             sigma_radial = abs(popt_radial[2])
             resolution_radial = sigma_radial * 2.355  # FWHM
 
             radial_fit_success = True
-            print(f"  Radial fit successful: σ = {sigma_radial:.2f} nm, FWHM = {resolution_radial:.2f} nm")
+            print(
+                f"  Radial fit successful: σ = {sigma_radial:.2f} nm, FWHM = {resolution_radial:.2f} nm"
+            )
 
         except Exception as e:
             print(f"  Radial fit failed: {e}")
@@ -4827,7 +4867,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 (X_fit, Y_fit),
                 autocorr_fit.ravel(),
                 p0=p0_2d,
-                maxfev=2000
+                maxfev=2000,
             )
 
             sigma_x = abs(popt_2d[3])
@@ -4837,7 +4877,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             resolution_2d = np.sqrt(fwhm_x * fwhm_y)  # Geometric mean
 
             fit_2d_success = True
-            print(f"  2D fit successful: σx = {sigma_x:.2f} nm, σy = {sigma_y:.2f} nm")
+            print(
+                f"  2D fit successful: σx = {sigma_x:.2f} nm, σy = {sigma_y:.2f} nm"
+            )
             print(f"  Resolution: {resolution_2d:.2f} nm")
 
         except Exception as e:
@@ -4880,48 +4922,62 @@ class AutoPicasso(util.AbstractModuleCollection):
         im1 = ax1.imshow(
             autocorr_2d,
             extent=[-extent_nm, extent_nm, -extent_nm, extent_nm],
-            origin='lower',
-            cmap='hot'
+            origin="lower",
+            cmap="hot",
         )
-        ax1.set_xlabel('Δx (nm)')
-        ax1.set_ylabel('Δy (nm)')
-        ax1.set_title('2D Autocorrelation')
+        ax1.set_xlabel("Δx (nm)")
+        ax1.set_ylabel("Δy (nm)")
+        ax1.set_title("2D Autocorrelation")
         plt.colorbar(im1, ax=ax1, shrink=0.8)
 
         # Plot 2: 2D Gaussian fit
         if fit_2d_success:
             # Recreate fitted surface
-            fitted_2d = gaussian_2d_fit(
-                (X_2d, Y_2d), *popt_2d
-            ).reshape(X_2d.shape)
+            fitted_2d = gaussian_2d_fit((X_2d, Y_2d), *popt_2d).reshape(
+                X_2d.shape
+            )
 
             im2 = ax2.imshow(
                 fitted_2d,
                 extent=[-extent_nm, extent_nm, -extent_nm, extent_nm],
-                origin='lower',
-                cmap='hot'
+                origin="lower",
+                cmap="hot",
             )
-            ax2.set_xlabel('Δx (nm)')
-            ax2.set_ylabel('Δy (nm)')
-            ax2.set_title(f'2D Gaussian Fit\nResolution: {resolution_2d:.2f} nm')
+            ax2.set_xlabel("Δx (nm)")
+            ax2.set_ylabel("Δy (nm)")
+            ax2.set_title(
+                f"2D Gaussian Fit\nResolution: {resolution_2d:.2f} nm"
+            )
             plt.colorbar(im2, ax=ax2, shrink=0.8)
         else:
-            ax2.text(0.5, 0.5, '2D Fit Failed',
-                    transform=ax2.transAxes, ha='center', va='center')
-            ax2.set_title('2D Gaussian Fit Failed')
+            ax2.text(
+                0.5,
+                0.5,
+                "2D Fit Failed",
+                transform=ax2.transAxes,
+                ha="center",
+                va="center",
+            )
+            ax2.set_title("2D Gaussian Fit Failed")
 
         # Plot 3: Radial profile
-        ax3.plot(radial_distances, radial_profile, 'b-', linewidth=2, label='Data')
+        ax3.plot(
+            radial_distances, radial_profile, "b-", linewidth=2, label="Data"
+        )
 
         if radial_fit_success:
             radial_fit = gaussian_1d(radial_distances, *popt_radial)
-            ax3.plot(radial_distances, radial_fit, 'r--', linewidth=2, label='Fit')
-            ax3.set_title(f'Radial Profile\nResolution: {resolution_radial:.2f} nm')
+            ax3.plot(
+                radial_distances, radial_fit, "r--", linewidth=2, label="Fit"
+            )
+            ax3.set_title(
+                f"Radial Profile\nResolution: {resolution_radial:.2f} nm"
+            )
         else:
-            ax3.set_title('Radial Profile (Fit Failed)')
+            ax3.set_title("Radial Profile (Fit Failed)")
 
-        ax3.set_xlabel('Distance (nm)')
-        ax3.set_ylabel('Normalized Autocorrelation')
+        ax3.set_xlabel("Distance (nm)")
+        ax3.set_ylabel("Normalized Autocorrelation")
         ax3.legend()
         ax3.grid(True, alpha=0.3)
 
@@ -4932,46 +4988,88 @@ class AutoPicasso(util.AbstractModuleCollection):
         x_coords_section = np.linspace(-extent_nm, extent_nm, len(x_section))
         y_coords_section = np.linspace(-extent_nm, extent_nm, len(y_section))
 
-        ax4.plot(x_coords_section, x_section, 'b-', linewidth=2, label='X cross-section')
-        ax4.plot(y_coords_section, y_section, 'r-', linewidth=2, label='Y cross-section')
+        ax4.plot(
+            x_coords_section,
+            x_section,
+            "b-",
+            linewidth=2,
+            label="X cross-section",
+        )
+        ax4.plot(
+            y_coords_section,
+            y_section,
+            "r-",
+            linewidth=2,
+            label="Y cross-section",
+        )
 
         if fit_2d_success:
-            x_fit = gaussian_1d(x_coords_section, popt_2d[0], popt_2d[1], popt_2d[3], popt_2d[5])
-            y_fit = gaussian_1d(y_coords_section, popt_2d[0], popt_2d[2], popt_2d[4], popt_2d[5])
-            ax4.plot(x_coords_section, x_fit, 'b--', linewidth=1, alpha=0.7)
-            ax4.plot(y_coords_section, y_fit, 'r--', linewidth=1, alpha=0.7)
+            x_fit = gaussian_1d(
+                x_coords_section,
+                popt_2d[0],
+                popt_2d[1],
+                popt_2d[3],
+                popt_2d[5],
+            )
+            y_fit = gaussian_1d(
+                y_coords_section,
+                popt_2d[0],
+                popt_2d[2],
+                popt_2d[4],
+                popt_2d[5],
+            )
+            ax4.plot(x_coords_section, x_fit, "b--", linewidth=1, alpha=0.7)
+            ax4.plot(y_coords_section, y_fit, "r--", linewidth=1, alpha=0.7)
 
-        ax4.set_xlabel('Distance (nm)')
-        ax4.set_ylabel('Normalized Autocorrelation')
-        ax4.set_title('Cross-sections')
+        ax4.set_xlabel("Distance (nm)")
+        ax4.set_ylabel("Normalized Autocorrelation")
+        ax4.set_title("Cross-sections")
         ax4.legend()
         ax4.grid(True, alpha=0.3)
 
         plt.tight_layout()
 
         # Save 2D autocorrelation plot
-        plot_path_2d = os.path.join(results["folder"], "resolution_autocorr_2d.png")
+        plot_path_2d = os.path.join(
+            results["folder"], "resolution_autocorr_2d.png"
+        )
         plt.savefig(plot_path_2d, dpi=300, bbox_inches="tight")
         plt.close()
 
         # Create radial profile plot
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-        ax.plot(radial_distances, radial_profile, 'b-', linewidth=2, label='Radial profile')
+        ax.plot(
+            radial_distances,
+            radial_profile,
+            "b-",
+            linewidth=2,
+            label="Radial profile",
+        )
 
         if radial_fit_success:
             radial_fit = gaussian_1d(radial_distances, *popt_radial)
-            ax.plot(radial_distances, radial_fit, 'r--', linewidth=2, label='Gaussian fit')
-            ax.set_title(f'Radial Autocorrelation Profile\nResolution: {resolution_radial:.2f} nm (FWHM)')
+            ax.plot(
+                radial_distances,
+                radial_fit,
+                "r--",
+                linewidth=2,
+                label="Gaussian fit",
+            )
+            ax.set_title(
+                f"Radial Autocorrelation Profile\nResolution: {resolution_radial:.2f} nm (FWHM)"
+            )
         else:
-            ax.set_title('Radial Autocorrelation Profile (Fit Failed)')
+            ax.set_title("Radial Autocorrelation Profile (Fit Failed)")
 
-        ax.set_xlabel('Distance (nm)')
-        ax.set_ylabel('Normalized Autocorrelation')
+        ax.set_xlabel("Distance (nm)")
+        ax.set_ylabel("Normalized Autocorrelation")
         ax.legend()
         ax.grid(True, alpha=0.3)
 
         # Save radial plot
-        plot_path_radial = os.path.join(results["folder"], "resolution_autocorr_radial.png")
+        plot_path_radial = os.path.join(
+            results["folder"], "resolution_autocorr_radial.png"
+        )
         plt.savefig(plot_path_radial, dpi=300, bbox_inches="tight")
         plt.close()
 
