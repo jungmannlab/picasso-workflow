@@ -4591,6 +4591,401 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @profile_resource_usage
     @module_decorator
+    def resolution_autocorr(self, i, parameters, results):
+        """Calculate resolution using 2D autocorrelation analysis
+
+        This method estimates spatial resolution by creating a 2D histogram
+        of localizations and computing its autocorrelation. The resolution
+        is determined from the Gaussian width of the central peak.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with optional keys:
+                    sampling_res : float
+                        histogram sampling resolution in nm (default: 0.5)
+                    max_shift : float
+                        maximum autocorrelation shift in nm (default: 10.0)
+                    n_processes : int or None
+                        number of parallel processes (auto-detected if None)
+                    chunk_size : int
+                        chunk size for multiprocessing (default: 1000)
+
+        Results:
+            resolution : float
+                estimated resolution in nm (FWHM)
+            sigma_x, sigma_y : float
+                Gaussian standard deviations in x,y directions
+            fwhm_x, fwhm_y : float
+                Full-width half-maximum in x,y directions
+            autocorr_2d : ndarray
+                2D autocorrelation map
+            radial_profile : ndarray
+                radial profile of autocorrelation
+            radial_distances : ndarray
+                distance values for radial profile
+            fig_autocorr_2d : str
+                path to 2D autocorrelation plot
+            fig_radial : str
+                path to radial profile plot
+        """
+        import multiprocessing as mp
+        from scipy.signal import correlate2d
+        from scipy.optimize import curve_fit
+        from scipy.ndimage import uniform_filter
+        import gc
+
+        # Get parameters with defaults
+        sampling_res = parameters.get("sampling_res", 0.5)  # 0.5 nm sampling
+        max_shift = parameters.get("max_shift", 10.0)  # 10 nm max shift
+        n_processes = parameters.get("n_processes", None)
+        chunk_size = parameters.get("chunk_size", 1000)
+
+        if n_processes is None:
+            n_processes = min(mp.cpu_count(), 8)
+
+        print(f"Computing resolution using autocorrelation analysis...")
+        print(f"  Sampling resolution: {sampling_res} nm")
+        print(f"  Maximum shift: {max_shift} nm")
+        print(f"  Using {n_processes} processes")
+
+        # Extract coordinates
+        x_coords = self.locs['x'] * self.pixelsize  # Convert to nm
+        y_coords = self.locs['y'] * self.pixelsize  # Convert to nm
+
+        print(f"  Processing {len(x_coords)} localizations")
+        print(f"  Data range: x=[{x_coords.min():.1f}, {x_coords.max():.1f}] nm")
+        print(f"  Data range: y=[{y_coords.min():.1f}, {y_coords.max():.1f}] nm")
+
+        # Calculate histogram bounds
+        x_min, x_max = x_coords.min(), x_coords.max()
+        y_min, y_max = y_coords.min(), y_coords.max()
+
+        # Create histogram bins
+        x_bins = np.arange(x_min, x_max + sampling_res, sampling_res)
+        y_bins = np.arange(y_min, y_max + sampling_res, sampling_res)
+
+        print(f"  Creating histogram with {len(x_bins)} x {len(y_bins)} bins")
+
+        # Memory-efficient histogram creation
+        def create_histogram_chunk(coords_chunk):
+            x_chunk, y_chunk = coords_chunk
+            hist, _, _ = np.histogram2d(x_chunk, y_chunk, bins=[x_bins, y_bins])
+            return hist
+
+        # Split data into chunks for memory management
+        n_locs = len(x_coords)
+        n_chunks = max(1, n_locs // (chunk_size * 1000))  # Larger chunks for histogram
+
+        if n_chunks > 1:
+            print(f"  Using {n_chunks} chunks for memory efficiency")
+            chunk_indices = np.array_split(np.arange(n_locs), n_chunks)
+
+            # Process chunks and sum histograms
+            histogram = np.zeros((len(x_bins)-1, len(y_bins)-1))
+            for chunk_idx in chunk_indices:
+                x_chunk = x_coords[chunk_idx]
+                y_chunk = y_coords[chunk_idx]
+                chunk_hist, _, _ = np.histogram2d(x_chunk, y_chunk, bins=[x_bins, y_bins])
+                histogram += chunk_hist
+
+            del chunk_indices, x_chunk, y_chunk, chunk_hist
+            gc.collect()
+        else:
+            # Create histogram directly
+            histogram, _, _ = np.histogram2d(x_coords, y_coords, bins=[x_bins, y_bins])
+
+        print(f"  Histogram created with {np.sum(histogram)} total counts")
+
+        # Calculate autocorrelation size based on max_shift
+        max_shift_pixels = int(np.ceil(max_shift / sampling_res))
+        autocorr_size = 2 * max_shift_pixels + 1
+
+        print(f"  Computing {autocorr_size}x{autocorr_size} autocorrelation")
+
+        # Compute 2D autocorrelation using FFT (more efficient for large arrays)
+        from scipy.fft import fft2, ifft2, fftshift
+
+        # Pad histogram for autocorrelation
+        pad_width = max_shift_pixels
+        histogram_padded = np.pad(histogram, pad_width, mode='constant', constant_values=0)
+
+        # Compute autocorrelation via FFT
+        hist_fft = fft2(histogram_padded)
+        autocorr_full = np.real(fftshift(ifft2(hist_fft * np.conj(hist_fft))))
+
+        # Extract central region
+        center = np.array(autocorr_full.shape) // 2
+        autocorr_2d = autocorr_full[
+            center[0] - max_shift_pixels:center[0] + max_shift_pixels + 1,
+            center[1] - max_shift_pixels:center[1] + max_shift_pixels + 1
+        ]
+
+        # Normalize autocorrelation
+        autocorr_2d = autocorr_2d / autocorr_2d.max()
+
+        print(f"  Autocorrelation computed, peak value: {autocorr_2d.max():.3f}")
+
+        # Calculate radial profile
+        def compute_radial_profile(autocorr_map, sampling_resolution):
+            center = np.array(autocorr_map.shape) // 2
+            y, x = np.ogrid[:autocorr_map.shape[0], :autocorr_map.shape[1]]
+
+            # Calculate distances from center
+            distances = np.sqrt((x - center[1])**2 + (y - center[0])**2) * sampling_resolution
+
+            # Create radial bins
+            max_radius = min(center) * sampling_resolution
+            radial_bins = np.linspace(0, max_radius, min(center))
+
+            # Compute radial profile
+            radial_profile = np.zeros(len(radial_bins) - 1)
+            radial_distances = np.zeros(len(radial_bins) - 1)
+
+            for i in range(len(radial_bins) - 1):
+                r1, r2 = radial_bins[i], radial_bins[i + 1]
+                mask = (distances >= r1) & (distances < r2)
+                if np.sum(mask) > 0:
+                    radial_profile[i] = np.mean(autocorr_map[mask])
+                radial_distances[i] = (r1 + r2) / 2
+
+            return radial_profile, radial_distances
+
+        radial_profile, radial_distances = compute_radial_profile(autocorr_2d, sampling_res)
+
+        # Fit Gaussian to extract resolution
+        def gaussian_1d(x, amplitude, center, sigma, background):
+            return amplitude * np.exp(-(x - center)**2 / (2 * sigma**2)) + background
+
+        def gaussian_2d_fit(xy, amplitude, x0, y0, sigma_x, sigma_y, background):
+            x, y = xy
+            return (amplitude * np.exp(-((x - x0)**2 / (2 * sigma_x**2) +
+                                       (y - y0)**2 / (2 * sigma_y**2))) + background).ravel()
+
+        # Fit 1D Gaussian to radial profile
+        try:
+            # Initial guess for radial fit
+            center_peak = radial_profile[0]
+            background_est = np.mean(radial_profile[-10:]) if len(radial_profile) > 10 else 0
+
+            p0_radial = [center_peak - background_est, 0, 1.0, background_est]
+
+            # Fit only first part where signal is strong
+            fit_range = radial_distances < max_shift / 2
+            if np.sum(fit_range) < 3:
+                fit_range = np.arange(min(10, len(radial_distances)))
+
+            popt_radial, _ = curve_fit(
+                gaussian_1d,
+                radial_distances[fit_range],
+                radial_profile[fit_range],
+                p0=p0_radial,
+                maxfev=2000
+            )
+
+            sigma_radial = abs(popt_radial[2])
+            resolution_radial = sigma_radial * 2.355  # FWHM
+
+            radial_fit_success = True
+            print(f"  Radial fit successful: σ = {sigma_radial:.2f} nm, FWHM = {resolution_radial:.2f} nm")
+
+        except Exception as e:
+            print(f"  Radial fit failed: {e}")
+            radial_fit_success = False
+            sigma_radial = np.nan
+            resolution_radial = np.nan
+            popt_radial = [np.nan] * 4
+
+        # Fit 2D Gaussian to central peak
+        try:
+            center_idx = autocorr_2d.shape[0] // 2
+
+            # Create coordinate grids
+            extent = max_shift_pixels * sampling_res
+            x_2d = np.linspace(-extent, extent, autocorr_2d.shape[1])
+            y_2d = np.linspace(-extent, extent, autocorr_2d.shape[0])
+            X_2d, Y_2d = np.meshgrid(x_2d, y_2d)
+
+            # Initial guess for 2D fit
+            peak_val = autocorr_2d.max()
+            background_2d = np.mean(autocorr_2d[autocorr_2d < peak_val * 0.1])
+
+            p0_2d = [peak_val - background_2d, 0, 0, 1.0, 1.0, background_2d]
+
+            # Fit to central region only
+            fit_size = min(autocorr_2d.shape[0] // 3, 20)
+            center_2d = autocorr_2d.shape[0] // 2
+            fit_region = slice(center_2d - fit_size, center_2d + fit_size + 1)
+
+            autocorr_fit = autocorr_2d[fit_region, fit_region]
+            X_fit = X_2d[fit_region, fit_region]
+            Y_fit = Y_2d[fit_region, fit_region]
+
+            popt_2d, _ = curve_fit(
+                gaussian_2d_fit,
+                (X_fit, Y_fit),
+                autocorr_fit.ravel(),
+                p0=p0_2d,
+                maxfev=2000
+            )
+
+            sigma_x = abs(popt_2d[3])
+            sigma_y = abs(popt_2d[4])
+            fwhm_x = sigma_x * 2.355
+            fwhm_y = sigma_y * 2.355
+            resolution_2d = np.sqrt(fwhm_x * fwhm_y)  # Geometric mean
+
+            fit_2d_success = True
+            print(f"  2D fit successful: σx = {sigma_x:.2f} nm, σy = {sigma_y:.2f} nm")
+            print(f"  Resolution: {resolution_2d:.2f} nm")
+
+        except Exception as e:
+            print(f"  2D fit failed: {e}")
+            fit_2d_success = False
+            sigma_x = sigma_y = np.nan
+            fwhm_x = fwhm_y = np.nan
+            resolution_2d = np.nan
+            popt_2d = [np.nan] * 6
+
+        # Store results
+        if fit_2d_success:
+            results["resolution"] = resolution_2d
+            results["sigma_x"] = sigma_x
+            results["sigma_y"] = sigma_y
+            results["fwhm_x"] = fwhm_x
+            results["fwhm_y"] = fwhm_y
+        elif radial_fit_success:
+            results["resolution"] = resolution_radial
+            results["sigma_x"] = sigma_radial
+            results["sigma_y"] = sigma_radial
+            results["fwhm_x"] = resolution_radial
+            results["fwhm_y"] = resolution_radial
+        else:
+            results["resolution"] = np.nan
+            results["sigma_x"] = np.nan
+            results["sigma_y"] = np.nan
+            results["fwhm_x"] = np.nan
+            results["fwhm_y"] = np.nan
+
+        results["autocorr_2d"] = autocorr_2d
+        results["radial_profile"] = radial_profile
+        results["radial_distances"] = radial_distances
+
+        # Create plots
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
+
+        # Plot 1: 2D autocorrelation map
+        extent_nm = max_shift
+        im1 = ax1.imshow(
+            autocorr_2d,
+            extent=[-extent_nm, extent_nm, -extent_nm, extent_nm],
+            origin='lower',
+            cmap='hot'
+        )
+        ax1.set_xlabel('Δx (nm)')
+        ax1.set_ylabel('Δy (nm)')
+        ax1.set_title('2D Autocorrelation')
+        plt.colorbar(im1, ax=ax1, shrink=0.8)
+
+        # Plot 2: 2D Gaussian fit
+        if fit_2d_success:
+            # Recreate fitted surface
+            fitted_2d = gaussian_2d_fit(
+                (X_2d, Y_2d), *popt_2d
+            ).reshape(X_2d.shape)
+
+            im2 = ax2.imshow(
+                fitted_2d,
+                extent=[-extent_nm, extent_nm, -extent_nm, extent_nm],
+                origin='lower',
+                cmap='hot'
+            )
+            ax2.set_xlabel('Δx (nm)')
+            ax2.set_ylabel('Δy (nm)')
+            ax2.set_title(f'2D Gaussian Fit\nResolution: {resolution_2d:.2f} nm')
+            plt.colorbar(im2, ax=ax2, shrink=0.8)
+        else:
+            ax2.text(0.5, 0.5, '2D Fit Failed',
+                    transform=ax2.transAxes, ha='center', va='center')
+            ax2.set_title('2D Gaussian Fit Failed')
+
+        # Plot 3: Radial profile
+        ax3.plot(radial_distances, radial_profile, 'b-', linewidth=2, label='Data')
+
+        if radial_fit_success:
+            radial_fit = gaussian_1d(radial_distances, *popt_radial)
+            ax3.plot(radial_distances, radial_fit, 'r--', linewidth=2, label='Fit')
+            ax3.set_title(f'Radial Profile\nResolution: {resolution_radial:.2f} nm')
+        else:
+            ax3.set_title('Radial Profile (Fit Failed)')
+
+        ax3.set_xlabel('Distance (nm)')
+        ax3.set_ylabel('Normalized Autocorrelation')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+        # Plot 4: Cross-section through center
+        center_idx = autocorr_2d.shape[0] // 2
+        x_section = autocorr_2d[center_idx, :]
+        y_section = autocorr_2d[:, center_idx]
+        x_coords_section = np.linspace(-extent_nm, extent_nm, len(x_section))
+        y_coords_section = np.linspace(-extent_nm, extent_nm, len(y_section))
+
+        ax4.plot(x_coords_section, x_section, 'b-', linewidth=2, label='X cross-section')
+        ax4.plot(y_coords_section, y_section, 'r-', linewidth=2, label='Y cross-section')
+
+        if fit_2d_success:
+            x_fit = gaussian_1d(x_coords_section, popt_2d[0], popt_2d[1], popt_2d[3], popt_2d[5])
+            y_fit = gaussian_1d(y_coords_section, popt_2d[0], popt_2d[2], popt_2d[4], popt_2d[5])
+            ax4.plot(x_coords_section, x_fit, 'b--', linewidth=1, alpha=0.7)
+            ax4.plot(y_coords_section, y_fit, 'r--', linewidth=1, alpha=0.7)
+
+        ax4.set_xlabel('Distance (nm)')
+        ax4.set_ylabel('Normalized Autocorrelation')
+        ax4.set_title('Cross-sections')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+
+        # Save 2D autocorrelation plot
+        plot_path_2d = os.path.join(results["folder"], "resolution_autocorr_2d.png")
+        plt.savefig(plot_path_2d, dpi=300, bbox_inches="tight")
+        plt.close()
+
+        # Create radial profile plot
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+        ax.plot(radial_distances, radial_profile, 'b-', linewidth=2, label='Radial profile')
+
+        if radial_fit_success:
+            radial_fit = gaussian_1d(radial_distances, *popt_radial)
+            ax.plot(radial_distances, radial_fit, 'r--', linewidth=2, label='Gaussian fit')
+            ax.set_title(f'Radial Autocorrelation Profile\nResolution: {resolution_radial:.2f} nm (FWHM)')
+        else:
+            ax.set_title('Radial Autocorrelation Profile (Fit Failed)')
+
+        ax.set_xlabel('Distance (nm)')
+        ax.set_ylabel('Normalized Autocorrelation')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # Save radial plot
+        plot_path_radial = os.path.join(results["folder"], "resolution_autocorr_radial.png")
+        plt.savefig(plot_path_radial, dpi=300, bbox_inches="tight")
+        plt.close()
+
+        results["fig_autocorr_2d"] = plot_path_2d
+        results["fig_radial"] = plot_path_radial
+
+        # Clean up memory
+        del histogram, autocorr_full, x_coords, y_coords
+        gc.collect()
+
+        return parameters, results
+
+    @profile_resource_usage
+    @module_decorator
     def smlm_clusterer(self, i, parameters, results):
         """Perform smlm clustering. After this module, the standard
         locs will be the cluster centers.
