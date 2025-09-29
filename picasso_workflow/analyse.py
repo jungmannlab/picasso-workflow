@@ -3803,9 +3803,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             "toff": toff,
             "max_shift": max_shift,
             "processing_chunk_size": processing_chunk_size,
-            "toff_block_size": toff_block_size,
             "parameters": parameters,
         }
+        if use_spline_interpolation:
+            new_info["spline_smoothing_factor"] = spline_smoothing_factor
+            new_info["min_blocks_for_spline"] = min_blocks_for_spline
+        else:
+            new_info["toff_block_size"] = toff_block_size
+
         self.info = self.info + [new_info]
 
         # Create drift plot with confidence intervals
