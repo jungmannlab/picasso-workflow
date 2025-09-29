@@ -4592,6 +4592,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
 
+    @staticmethod
     def _process_autocorr_chunk(chunk_data):
         """Process a single spatial chunk for autocorrelation analysis (multiprocessing worker)
 
@@ -4789,7 +4790,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         with mp.Pool(processes=n_processes) as pool:
             # Submit all chunk processing jobs
-            results = pool.map(_process_autocorr_chunk, chunk_data_list)
+            results = pool.map(self._process_autocorr_chunk, chunk_data_list)
 
             # Collect valid results
             for result in results:
