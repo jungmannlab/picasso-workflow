@@ -30,6 +30,8 @@ import pickle
 import random
 import string
 import copy
+import gc
+import multiprocessing as mp
 
 from scipy.ndimage import label
 from scipy.stats import poisson, norm, kstest
@@ -4589,6 +4591,76 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+
+def _process_autocorr_chunk(chunk_data):
+    """Process a single spatial chunk for autocorrelation analysis (multiprocessing worker)
+
+    Args:
+        chunk_data : tuple
+            (chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx)
+
+    Returns:
+        dict or None : Chunk result with autocorr, n_locs, bounds, and chunk_idx
+    """
+    chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx = chunk_data
+    x_min, x_max, y_min, y_max = chunk_bounds
+
+    # Extract localizations in this chunk
+    mask = ((x_coords >= x_min) & (x_coords < x_max) &
+           (y_coords >= y_min) & (y_coords < y_max))
+
+    chunk_x = x_coords[mask]
+    chunk_y = y_coords[mask]
+    n_locs = len(chunk_x)
+
+    if n_locs < min_locs_per_chunk:
+        return None
+
+    try:
+        # Create histogram for this chunk
+        x_bins = np.arange(x_min, x_max + sampling_res, sampling_res)
+        y_bins = np.arange(y_min, y_max + sampling_res, sampling_res)
+
+        chunk_hist, _, _ = np.histogram2d(chunk_x, chunk_y, bins=[x_bins, y_bins])
+        chunk_hist = chunk_hist.astype(np.float32)
+
+        if np.sum(chunk_hist) == 0:
+            return None
+
+        # Compute autocorrelation using efficient FFT
+        F_hist = np.fft.fft2(chunk_hist)
+        autocorr_full = np.fft.fftshift(
+            np.real(np.fft.ifft2(F_hist * np.conj(F_hist)))
+        )
+
+        # Extract central autocorr region
+        center = np.array(autocorr_full.shape) // 2
+        safe_shift = min(max_shift_pixels, min(center))
+
+        autocorr_chunk = autocorr_full[
+            center[0] - safe_shift:center[0] + safe_shift + 1,
+            center[1] - safe_shift:center[1] + safe_shift + 1
+        ].copy()
+
+        # Normalize
+        if autocorr_chunk.max() > 0:
+            autocorr_chunk = autocorr_chunk / autocorr_chunk.max()
+            # remove center point
+            center = np.array(autocorr_chunk.shape) // 2
+            autocorr_chunk[center[0], center[1]] = np.nan
+
+        return {
+            'autocorr': autocorr_chunk,
+            'n_locs': n_locs,
+            'bounds': (x_min, x_max, y_min, y_max),
+            'chunk_idx': chunk_idx
+        }
+
+    except Exception as e:
+        print(f"      Chunk {chunk_idx} failed: {e}")
+        return None
+
+
     @profile_resource_usage
     @module_decorator
     def resolution_autocorr(self, i, parameters, results):
@@ -4634,9 +4706,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             fig_radial : str
                 path to radial profile plot
         """
-        import multiprocessing as mp
         from scipy.optimize import curve_fit
-        import gc
 
         # Get parameters with defaults
         sampling_res = parameters.get("sampling_res", 0.5)  # 0.5 nm sampling
@@ -4685,74 +4755,20 @@ class AutoPicasso(util.AbstractModuleCollection):
             chunk_size_nm = max(2000, new_chunk_size)  # At least 2 μm
             print(f"  ⚠ Reducing chunk size to {chunk_size_nm/1000:.1f} μm to fit memory")
 
-        # Process chunks sequentially to manage memory
-        def process_single_chunk(chunk_bounds):
-            """Process a single spatial chunk"""
-            x_min, x_max, y_min, y_max = chunk_bounds
+        # Determine number of processes
+        n_processes = parameters.get('n_processes', min(mp.cpu_count(), 8))
+        print(f"  Using {n_processes} processes for chunk processing")
 
-            # Extract localizations in this chunk
-            mask = ((x_coords >= x_min) & (x_coords < x_max) &
-                   (y_coords >= y_min) & (y_coords < y_max))
-
-            chunk_x = x_coords[mask]
-            chunk_y = y_coords[mask]
-            n_locs = len(chunk_x)
-
-            if n_locs < min_locs_per_chunk:
-                return None
-
-            try:
-                # Create histogram for this chunk
-                x_bins = np.arange(x_min, x_max + sampling_res, sampling_res)
-                y_bins = np.arange(y_min, y_max + sampling_res, sampling_res)
-
-                chunk_hist, _, _ = np.histogram2d(chunk_x, chunk_y, bins=[x_bins, y_bins])
-                chunk_hist = chunk_hist.astype(np.float32)
-
-                if np.sum(chunk_hist) == 0:
-                    return None
-
-                # Compute autocorrelation using efficient FFT
-                F_hist = np.fft.fft2(chunk_hist)
-                autocorr_full = np.fft.fftshift(
-                    np.real(np.fft.ifft2(F_hist * np.conj(F_hist)))
-                )
-
-                # Extract central autocorr region
-                center = np.array(autocorr_full.shape) // 2
-                safe_shift = min(max_shift_pixels, min(center))
-
-                autocorr_chunk = autocorr_full[
-                    center[0] - safe_shift:center[0] + safe_shift + 1,
-                    center[1] - safe_shift:center[1] + safe_shift + 1
-                ].copy()
-
-                # Normalize
-                if autocorr_chunk.max() > 0:
-                    autocorr_chunk = autocorr_chunk / autocorr_chunk.max()
-
-                return {
-                    'autocorr': autocorr_chunk,
-                    'n_locs': n_locs,
-                    'bounds': (x_min, x_max, y_min, y_max)
-                }
-
-            except Exception as e:
-                print(f"      Chunk failed: {e}")
-                return None
-
-        # Generate chunk boundaries
+        # Generate chunk boundaries and prepare data for multiprocessing
         x_min_global, y_min_global = x_coords.min(), y_coords.min()
 
-        chunk_results = []
-        valid_chunks = 0
+        print(f"  Preparing {total_chunks} chunks for parallel processing...")
 
-        print(f"  Processing chunks sequentially...")
-
+        # Prepare all chunk data for multiprocessing
+        chunk_data_list = []
         for i in range(n_chunks_x):
             for j in range(n_chunks_y):
                 chunk_idx = i * n_chunks_y + j + 1
-                print(f"    Processing chunk {chunk_idx}/{total_chunks}")
 
                 # Define chunk boundaries
                 x_chunk_min = x_min_global + i * chunk_size_nm
@@ -4761,19 +4777,30 @@ class AutoPicasso(util.AbstractModuleCollection):
                 y_chunk_max = min(y_chunk_min + chunk_size_nm, y_coords.max())
 
                 chunk_bounds = (x_chunk_min, x_chunk_max, y_chunk_min, y_chunk_max)
+                chunk_data = (chunk_bounds, x_coords, y_coords, sampling_res,
+                             max_shift_pixels, min_locs_per_chunk, chunk_idx)
+                chunk_data_list.append(chunk_data)
 
-                result = process_single_chunk(chunk_bounds)
+        print(f"  Processing chunks with multiprocessing ({n_processes} processes)...")
 
+        # Process chunks in parallel
+        chunk_results = []
+        valid_chunks = 0
+
+        with mp.Pool(processes=n_processes) as pool:
+            # Submit all chunk processing jobs
+            results = pool.map(_process_autocorr_chunk, chunk_data_list)
+
+            # Collect valid results
+            for result in results:
                 if result is not None:
                     chunk_results.append(result)
                     valid_chunks += 1
+                    chunk_idx = result['chunk_idx']
                     print(f"      Chunk {chunk_idx}: {result['n_locs']} locs, peak: {result['autocorr'].max():.3f}")
-                else:
-                    print(f"      Chunk {chunk_idx}: skipped (insufficient data)")
 
-                # Force garbage collection every 10 chunks
-                if chunk_idx % 10 == 0:
-                    gc.collect()
+        print(f"  Parallel processing completed.")
+        gc.collect()  # Clean up after multiprocessing
 
         total_locs_processed = sum(r['n_locs'] for r in chunk_results)
         print(f"  Processed {valid_chunks}/{total_chunks} chunks")
