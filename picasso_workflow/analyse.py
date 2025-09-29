@@ -4594,9 +4594,9 @@ class AutoPicasso(util.AbstractModuleCollection):
     def resolution_autocorr(self, i, parameters, results):
         """Calculate resolution using 2D autocorrelation analysis
 
-        This method estimates spatial resolution by creating a 2D histogram
-        of localizations and computing its autocorrelation. The resolution
-        is determined from the Gaussian width of the central peak.
+        This method estimates spatial resolution by creating small spatial chunks,
+        computing autocorrelation on each chunk, then combining them weighted by
+        localization count. This preserves exact sampling resolution while managing memory.
 
         Args:
             i : int
@@ -4605,25 +4605,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 with optional keys:
                     sampling_res : float
                         histogram sampling resolution in nm (default: 0.5)
-                        Preserved exactly using multi-field approach
                     max_shift : float
                         maximum autocorrelation shift in nm (default: 10.0)
+                    chunk_size_nm : float
+                        spatial chunk size in nm (default: 5000, i.e., 5 μm)
+                    min_locs_per_chunk : int
+                        minimum localizations per chunk (default: 500)
                     max_memory_gb : float
-                        maximum memory limit in GB (default: 8.0)
-                        Controls FFT vs direct correlation per field
-                    field_size : float
-                        size of individual fields in nm (default: 10000, i.e., 10 μm)
-                        Smaller fields use less memory but may be noisier
-                    field_overlap : float
-                        overlap fraction between adjacent fields (default: 0.5)
-                        Higher overlap reduces edge effects but increases computation
-                    min_locs_per_field : int
-                        minimum localizations per field for processing (default: 1000)
-                        Fields with fewer localizations are skipped
+                        maximum memory limit in GB (default: 2.0)
                     n_processes : int or None
                         number of parallel processes (auto-detected if None)
-                    chunk_size : int
-                        base chunk size for processing (default: 1000)
 
         Results:
             resolution : float
@@ -4633,7 +4624,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             fwhm_x, fwhm_y : float
                 Full-width half-maximum in x,y directions
             autocorr_2d : ndarray
-                2D autocorrelation map
+                2D autocorrelation map (weighted average)
             radial_profile : ndarray
                 radial profile of autocorrelation
             radial_distances : ndarray
@@ -4644,396 +4635,206 @@ class AutoPicasso(util.AbstractModuleCollection):
                 path to radial profile plot
         """
         import multiprocessing as mp
-        from scipy.signal import correlate2d
         from scipy.optimize import curve_fit
-        from scipy.ndimage import uniform_filter
         import gc
 
         # Get parameters with defaults
         sampling_res = parameters.get("sampling_res", 0.5)  # 0.5 nm sampling
         max_shift = parameters.get("max_shift", 10.0)  # 10 nm max shift
+        chunk_size_nm = parameters.get("chunk_size_nm", 5000)  # 5 μm chunks
+        min_locs_per_chunk = parameters.get("min_locs_per_chunk", 500)  # Min locs per chunk
+        max_memory_gb = parameters.get("max_memory_gb", 2.0)  # Smaller memory limit
         n_processes = parameters.get("n_processes", None)
-        chunk_size = parameters.get("chunk_size", 1000)
-        max_memory_gb = parameters.get(
-            "max_memory_gb", 8.0
-        )  # Max memory limit
 
         if n_processes is None:
-            n_processes = min(mp.cpu_count(), 8)
+            n_processes = min(mp.cpu_count(), 4)  # Limit processes for memory
 
         print(f"Computing resolution using autocorrelation analysis...")
-        print(f"  Sampling resolution: {sampling_res} nm")
+        print(f"  Sampling resolution: {sampling_res} nm (preserved exactly)")
         print(f"  Maximum shift: {max_shift} nm")
-        print(f"  Using {n_processes} processes")
-        print(f"  Memory limit: {max_memory_gb} GB")
+        print(f"  Chunk size: {chunk_size_nm/1000:.1f} μm")
+        print(f"  Memory limit: {max_memory_gb} GB per chunk")
 
         # Extract coordinates
         x_coords = self.locs["x"] * self.pixelsize  # Convert to nm
-        y_coords = self.locs["y"] * self.pixelsize  # Convert to nm
+        y_coords = self.locs["y"] * self.pixelsize
 
         print(f"  Processing {len(x_coords)} localizations")
-        print(
-            f"  Data range: x=[{x_coords.min():.1f}, {x_coords.max():.1f}] nm"
-        )
-        print(
-            f"  Data range: y=[{y_coords.min():.1f}, {y_coords.max():.1f}] nm"
-        )
-
-        # Calculate total field size
         x_range = x_coords.max() - x_coords.min()
         y_range = y_coords.max() - y_coords.min()
-
         print(f"  Field size: {x_range/1000:.1f} × {y_range/1000:.1f} μm")
 
-        # Multi-field approach parameters
-        field_size = parameters.get("field_size", 10000)  # 10 μm field size
-        field_overlap = parameters.get("field_overlap", 0.5)  # 50% overlap
-        min_locs_per_field = parameters.get(
-            "min_locs_per_field", 1000
-        )  # Minimum locs per field
+        # Calculate chunking grid
+        n_chunks_x = max(1, int(np.ceil(x_range / chunk_size_nm)))
+        n_chunks_y = max(1, int(np.ceil(y_range / chunk_size_nm)))
+        total_chunks = n_chunks_x * n_chunks_y
 
-        print(f"  Using multi-field approach:")
-        print(f"    Field size: {field_size/1000:.1f} μm")
-        print(f"    Field overlap: {field_overlap*100:.0f}%")
-        print(f"    Min localizations per field: {min_locs_per_field}")
+        print(f"  Using {n_chunks_x} × {n_chunks_y} = {total_chunks} spatial chunks")
 
-        # Calculate field grid
-        step_size = field_size * (1 - field_overlap)
-
-        # Number of fields in each dimension
-        n_fields_x = max(1, int(np.ceil(x_range / step_size)))
-        n_fields_y = max(1, int(np.ceil(y_range / step_size)))
-
-        print(
-            f"    Grid: {n_fields_x} × {n_fields_y} = {n_fields_x * n_fields_y} fields"
-        )
-
-        # Generate field boundaries
-        x_min, y_min = x_coords.min(), y_coords.min()
-
-        field_boundaries = []
-        for i in range(n_fields_x):
-            for j in range(n_fields_y):
-                field_x_min = x_min + i * step_size
-                field_x_max = min(field_x_min + field_size, x_coords.max())
-                field_y_min = y_min + j * step_size
-                field_y_max = min(field_y_min + field_size, y_coords.max())
-
-                field_boundaries.append(
-                    {
-                        "x_min": field_x_min,
-                        "x_max": field_x_max,
-                        "y_min": field_y_min,
-                        "y_max": field_y_max,
-                        "index": (i, j),
-                    }
-                )
-
-        print(f"    Total fields to process: {len(field_boundaries)}")
-
-        # Calculate autocorrelation size once
+        # Memory estimate per chunk
+        chunk_pixels = int(chunk_size_nm / sampling_res)
         max_shift_pixels = int(np.ceil(max_shift / sampling_res))
+        autocorr_size = 2 * max_shift_pixels + 1
 
-        # Process each field and compute autocorrelations
-        field_results = []
-        valid_fields = 0
+        chunk_memory_gb = (chunk_pixels**2 * 4 * 8) / (1024**3)  # float32 * 4 arrays
+        print(f"  Estimated memory per chunk: {chunk_memory_gb:.2f} GB")
 
-        print(f"  Processing fields...")
+        if chunk_memory_gb > max_memory_gb:
+            # Reduce chunk size to fit memory
+            new_chunk_size = np.sqrt(max_memory_gb * (1024**3) / (4 * 8)) * sampling_res
+            chunk_size_nm = max(2000, new_chunk_size)  # At least 2 μm
+            print(f"  ⚠ Reducing chunk size to {chunk_size_nm/1000:.1f} μm to fit memory")
 
-        for field_idx, field in enumerate(field_boundaries):
-            print(
-                f"    Processing field {field_idx+1}/{len(field_boundaries)}"
-            )
+        # Process chunks sequentially to manage memory
+        def process_single_chunk(chunk_bounds):
+            """Process a single spatial chunk"""
+            x_min, x_max, y_min, y_max = chunk_bounds
 
-            # Extract localizations within field
-            mask = (
-                (x_coords >= field["x_min"])
-                & (x_coords <= field["x_max"])
-                & (y_coords >= field["y_min"])
-                & (y_coords <= field["y_max"])
-            )
+            # Extract localizations in this chunk
+            mask = ((x_coords >= x_min) & (x_coords < x_max) &
+                   (y_coords >= y_min) & (y_coords < y_max))
 
-            field_x = x_coords[mask]
-            field_y = y_coords[mask]
-            n_locs_field = len(field_x)
+            chunk_x = x_coords[mask]
+            chunk_y = y_coords[mask]
+            n_locs = len(chunk_x)
 
-            # Skip fields with insufficient localizations
-            if n_locs_field < min_locs_per_field:
-                print(
-                    f"      Skipping field {field_idx+1}: only {n_locs_field} localizations"
-                )
-                continue
+            if n_locs < min_locs_per_chunk:
+                return None
 
             try:
-                # Create field histogram
-                field_x_bins = np.arange(
-                    field["x_min"], field["x_max"] + sampling_res, sampling_res
+                # Create histogram for this chunk
+                x_bins = np.arange(x_min, x_max + sampling_res, sampling_res)
+                y_bins = np.arange(y_min, y_max + sampling_res, sampling_res)
+
+                chunk_hist, _, _ = np.histogram2d(chunk_x, chunk_y, bins=[x_bins, y_bins])
+                chunk_hist = chunk_hist.astype(np.float32)
+
+                if np.sum(chunk_hist) == 0:
+                    return None
+
+                # Compute autocorrelation using efficient FFT
+                F_hist = np.fft.fft2(chunk_hist)
+                autocorr_full = np.fft.fftshift(
+                    np.real(np.fft.ifft2(F_hist * np.conj(F_hist)))
                 )
-                field_y_bins = np.arange(
-                    field["y_min"], field["y_max"] + sampling_res, sampling_res
-                )
 
-                field_hist, _, _ = np.histogram2d(
-                    field_x, field_y, bins=[field_x_bins, field_y_bins]
-                )
+                # Extract central autocorr region
+                center = np.array(autocorr_full.shape) // 2
+                safe_shift = min(max_shift_pixels, min(center))
 
-                if np.sum(field_hist) == 0:
-                    print(
-                        f"      Skipping field {field_idx+1}: empty histogram"
-                    )
-                    continue
+                autocorr_chunk = autocorr_full[
+                    center[0] - safe_shift:center[0] + safe_shift + 1,
+                    center[1] - safe_shift:center[1] + safe_shift + 1
+                ].copy()
 
-                # Estimate field FFT memory
-                padded_shape = (
-                    field_hist.shape[0] + 2 * max_shift_pixels,
-                    field_hist.shape[1] + 2 * max_shift_pixels,
-                )
-                field_fft_memory_gb = (
-                    padded_shape[0] * padded_shape[1] * 16 * 3
-                ) / (1024**3)
+                # Normalize
+                if autocorr_chunk.max() > 0:
+                    autocorr_chunk = autocorr_chunk / autocorr_chunk.max()
 
-                if (
-                    field_fft_memory_gb > max_memory_gb / 4
-                ):  # Use quarter of available memory per field
-                    print(
-                        f"      Using direct correlation for field {field_idx+1} (FFT would need {field_fft_memory_gb:.1f} GB)"
-                    )
-                    # Use direct correlation for this field
-                    autocorr_2d = np.zeros(
-                        (2 * max_shift_pixels + 1, 2 * max_shift_pixels + 1),
-                        dtype=np.float32,
-                    )
-
-                    # Center the correlation around field center
-                    h_center_x, h_center_y = (
-                        field_hist.shape[0] // 2,
-                        field_hist.shape[1] // 2,
-                    )
-                    margin = max_shift_pixels + 5
-
-                    x_start = max(0, h_center_x - margin)
-                    x_end = min(field_hist.shape[0], h_center_x + margin)
-                    y_start = max(0, h_center_y - margin)
-                    y_end = min(field_hist.shape[1], h_center_y + margin)
-
-                    hist_central = field_hist[x_start:x_end, y_start:y_end]
-
-                    for dx in range(-max_shift_pixels, max_shift_pixels + 1):
-                        for dy in range(
-                            -max_shift_pixels, max_shift_pixels + 1
-                        ):
-                            correlation = 0.0
-                            count = 0
-
-                            for i in range(
-                                max(0, -dx),
-                                min(
-                                    hist_central.shape[0],
-                                    hist_central.shape[0] - dx,
-                                ),
-                            ):
-                                for j in range(
-                                    max(0, -dy),
-                                    min(
-                                        hist_central.shape[1],
-                                        hist_central.shape[1] - dy,
-                                    ),
-                                ):
-                                    correlation += (
-                                        hist_central[i, j]
-                                        * hist_central[i + dx, j + dy]
-                                    )
-                                    count += 1
-
-                            if count > 0:
-                                autocorr_2d[
-                                    dx + max_shift_pixels,
-                                    dy + max_shift_pixels,
-                                ] = (
-                                    correlation / count
-                                )
-
-                else:
-                    # Use FFT for this field
-                    print(f"      Using FFT for field {field_idx+1}")
-                    try:
-                        from scipy.fft import fft2, ifft2, fftshift
-
-                        # Convert to float32 to save memory
-                        field_hist = field_hist.astype(np.float32)
-
-                        # Pad histogram for autocorrelation
-                        histogram_padded = np.pad(
-                            field_hist,
-                            max_shift_pixels,
-                            mode="constant",
-                            constant_values=0,
-                        )
-
-                        # Compute autocorrelation via FFT
-                        hist_fft = fft2(histogram_padded)
-                        autocorr_full = np.real(
-                            fftshift(ifft2(hist_fft * np.conj(hist_fft)))
-                        )
-
-                        # Extract central region
-                        center = np.array(autocorr_full.shape) // 2
-                        autocorr_2d = autocorr_full[
-                            center[0]
-                            - max_shift_pixels : center[0]
-                            + max_shift_pixels
-                            + 1,
-                            center[1]
-                            - max_shift_pixels : center[1]
-                            + max_shift_pixels
-                            + 1,
-                        ].copy()
-
-                        # Clean up
-                        del hist_fft, histogram_padded, autocorr_full
-
-                    except ImportError:
-                        print(
-                            f"      Fallback to direct correlation for field {field_idx+1}"
-                        )
-                        # Fallback to direct method
-                        autocorr_2d = np.zeros(
-                            (
-                                2 * max_shift_pixels + 1,
-                                2 * max_shift_pixels + 1,
-                            ),
-                            dtype=np.float32,
-                        )
-
-                        # Use similar direct correlation as above
-                        h_center_x, h_center_y = (
-                            field_hist.shape[0] // 2,
-                            field_hist.shape[1] // 2,
-                        )
-                        margin = max_shift_pixels + 5
-                        x_start = max(0, h_center_x - margin)
-                        x_end = min(field_hist.shape[0], h_center_x + margin)
-                        y_start = max(0, h_center_y - margin)
-                        y_end = min(field_hist.shape[1], h_center_y + margin)
-                        hist_central = field_hist[x_start:x_end, y_start:y_end]
-
-                        for dx in range(
-                            -max_shift_pixels, max_shift_pixels + 1
-                        ):
-                            for dy in range(
-                                -max_shift_pixels, max_shift_pixels + 1
-                            ):
-                                correlation = 0.0
-                                count = 0
-                                for i in range(
-                                    max(0, -dx),
-                                    min(
-                                        hist_central.shape[0],
-                                        hist_central.shape[0] - dx,
-                                    ),
-                                ):
-                                    for j in range(
-                                        max(0, -dy),
-                                        min(
-                                            hist_central.shape[1],
-                                            hist_central.shape[1] - dy,
-                                        ),
-                                    ):
-                                        correlation += (
-                                            hist_central[i, j]
-                                            * hist_central[i + dx, j + dy]
-                                        )
-                                        count += 1
-                                if count > 0:
-                                    autocorr_2d[
-                                        dx + max_shift_pixels,
-                                        dy + max_shift_pixels,
-                                    ] = (
-                                        correlation / count
-                                    )
-
-                # Normalize field autocorrelation
-                if autocorr_2d.max() > 0:
-                    autocorr_2d = autocorr_2d / autocorr_2d.max()
-
-                # Store field result
-                field_result = {
-                    "field_idx": field_idx,
-                    "n_locs": n_locs_field,
-                    "autocorr": autocorr_2d,
-                    "field_bounds": field,
+                return {
+                    'autocorr': autocorr_chunk,
+                    'n_locs': n_locs,
+                    'bounds': (x_min, x_max, y_min, y_max)
                 }
-                field_results.append(field_result)
-                valid_fields += 1
-
-                print(
-                    f"      Field {field_idx+1} completed: {n_locs_field} locs, peak autocorr: {autocorr_2d.max():.3f}"
-                )
 
             except Exception as e:
-                print(f"      ⚠ Field {field_idx+1} failed: {e}")
-                continue
+                print(f"      Chunk failed: {e}")
+                return None
 
-        total_locs_processed = sum(r["n_locs"] for r in field_results)
+        # Generate chunk boundaries
+        x_min_global, y_min_global = x_coords.min(), y_coords.min()
 
-        print(f"  Processed {valid_fields}/{len(field_boundaries)} fields")
-        print(f"  Total localizations processed: {total_locs_processed:,}")
+        chunk_results = []
+        valid_chunks = 0
 
-        if valid_fields == 0:
-            print("  ⚠ No valid fields found!")
+        print(f"  Processing chunks sequentially...")
+
+        for i in range(n_chunks_x):
+            for j in range(n_chunks_y):
+                chunk_idx = i * n_chunks_y + j + 1
+                print(f"    Processing chunk {chunk_idx}/{total_chunks}")
+
+                # Define chunk boundaries
+                x_chunk_min = x_min_global + i * chunk_size_nm
+                x_chunk_max = min(x_chunk_min + chunk_size_nm, x_coords.max())
+                y_chunk_min = y_min_global + j * chunk_size_nm
+                y_chunk_max = min(y_chunk_min + chunk_size_nm, y_coords.max())
+
+                chunk_bounds = (x_chunk_min, x_chunk_max, y_chunk_min, y_chunk_max)
+
+                result = process_single_chunk(chunk_bounds)
+
+                if result is not None:
+                    chunk_results.append(result)
+                    valid_chunks += 1
+                    print(f"      Chunk {chunk_idx}: {result['n_locs']} locs, peak: {result['autocorr'].max():.3f}")
+                else:
+                    print(f"      Chunk {chunk_idx}: skipped (insufficient data)")
+
+                # Force garbage collection every 10 chunks
+                if chunk_idx % 10 == 0:
+                    gc.collect()
+
+        total_locs_processed = sum(r['n_locs'] for r in chunk_results)
+        print(f"  Processed {valid_chunks}/{total_chunks} chunks")
+        print(f"  Total localizations: {total_locs_processed:,}")
+
+        if valid_chunks == 0:
+            print("  ⚠ No valid chunks found!")
             results["resolution"] = np.nan
             results["sigma_x"] = results["sigma_y"] = np.nan
             results["fwhm_x"] = results["fwhm_y"] = np.nan
-            results["autocorr_2d"] = np.zeros((21, 21))  # Default empty
+            results["autocorr_2d"] = np.zeros((21, 21))
             results["radial_profile"] = np.array([])
             results["radial_distances"] = np.array([])
             return parameters, results
 
-        # Weighted average of autocorrelations
-        print(f"  Computing weighted average...")
+        # Combine autocorrelations with proper weighting
+        print(f"  Combining {valid_chunks} chunk autocorrelations...")
 
-        # Calculate weights based on number of localizations
-        weights = np.array(
-            [r["n_locs"] for r in field_results], dtype=np.float64
-        )
-        weights = weights / weights.sum()  # Normalize weights
+        # Calculate weights based on localization count
+        weights = np.array([r['n_locs'] for r in chunk_results], dtype=np.float64)
+        weights = weights / weights.sum()
 
-        print(
-            f"    Field weights: {[f'{w:.3f}' for w in weights[:5]]}{'...' if len(weights) > 5 else ''}"
-        )
+        print(f"    Chunk weights range: {weights.min():.3f} - {weights.max():.3f}")
 
-        # Compute weighted average autocorrelation
-        autocorr_2d = np.zeros_like(
-            field_results[0]["autocorr"], dtype=np.float64
-        )
+        # Find common autocorr size (use smallest)
+        autocorr_sizes = [r['autocorr'].shape[0] for r in chunk_results]
+        min_size = min(autocorr_sizes)
 
-        for i, result in enumerate(field_results):
-            autocorr_2d += weights[i] * result["autocorr"]
+        # Combine weighted autocorrelations
+        combined_autocorr = np.zeros((min_size, min_size), dtype=np.float64)
 
-        # Clean up field data to free memory
-        del x_coords, y_coords, field_results
+        for i, result in enumerate(chunk_results):
+            chunk_autocorr = result['autocorr']
+
+            # Crop to common size if needed
+            if chunk_autocorr.shape[0] > min_size:
+                center = chunk_autocorr.shape[0] // 2
+                half_min = min_size // 2
+                chunk_autocorr = chunk_autocorr[
+                    center - half_min:center - half_min + min_size,
+                    center - half_min:center - half_min + min_size
+                ]
+
+            combined_autocorr += weights[i] * chunk_autocorr
+
+        # Clean up chunk data
+        del chunk_results, x_coords, y_coords
         gc.collect()
 
-        print(
-            f"  Weighted average computed, peak value: {autocorr_2d.max():.3f}"
-        )
+        autocorr_2d = combined_autocorr
+        print(f"  Combined autocorr peak: {autocorr_2d.max():.3f}")
 
         # Calculate radial profile
         def compute_radial_profile(autocorr_map, sampling_resolution):
             center = np.array(autocorr_map.shape) // 2
-            y, x = np.ogrid[: autocorr_map.shape[0], : autocorr_map.shape[1]]
+            y, x = np.ogrid[:autocorr_map.shape[0], :autocorr_map.shape[1]]
 
-            # Calculate distances from center
-            distances = (
-                np.sqrt((x - center[1]) ** 2 + (y - center[0]) ** 2)
-                * sampling_resolution
-            )
-
-            # Create radial bins
+            distances = np.sqrt((x - center[1])**2 + (y - center[0])**2) * sampling_resolution
             max_radius = min(center) * sampling_resolution
             radial_bins = np.linspace(0, max_radius, min(center))
 
-            # Compute radial profile
             radial_profile = np.zeros(len(radial_bins) - 1)
             radial_distances = np.zeros(len(radial_bins) - 1)
 
@@ -5046,64 +4847,39 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             return radial_profile, radial_distances
 
-        radial_profile, radial_distances = compute_radial_profile(
-            autocorr_2d, sampling_res
-        )
+        radial_profile, radial_distances = compute_radial_profile(autocorr_2d, sampling_res)
 
         # Fit Gaussian to extract resolution
         def gaussian_1d(x, amplitude, center, sigma, background):
-            return (
-                amplitude * np.exp(-((x - center) ** 2) / (2 * sigma**2))
-                + background
-            )
+            return amplitude * np.exp(-(x - center)**2 / (2 * sigma**2)) + background
 
-        def gaussian_2d_fit(
-            xy, amplitude, x0, y0, sigma_x, sigma_y, background
-        ):
+        def gaussian_2d_fit(xy, amplitude, x0, y0, sigma_x, sigma_y, background):
             x, y = xy
-            return (
-                amplitude
-                * np.exp(
-                    -(
-                        (x - x0) ** 2 / (2 * sigma_x**2)
-                        + (y - y0) ** 2 / (2 * sigma_y**2)
-                    )
-                )
-                + background
-            ).ravel()
+            return (amplitude * np.exp(-((x - x0)**2 / (2 * sigma_x**2) +
+                                       (y - y0)**2 / (2 * sigma_y**2))) + background).ravel()
 
         # Fit 1D Gaussian to radial profile
         try:
-            # Initial guess for radial fit
             center_peak = radial_profile[0]
-            background_est = (
-                np.mean(radial_profile[-10:])
-                if len(radial_profile) > 10
-                else 0
-            )
-
+            background_est = np.mean(radial_profile[-5:]) if len(radial_profile) > 5 else 0
             p0_radial = [center_peak - background_est, 0, 1.0, background_est]
 
-            # Fit only first part where signal is strong
             fit_range = radial_distances < max_shift / 2
             if np.sum(fit_range) < 3:
-                fit_range = np.arange(min(10, len(radial_distances)))
+                fit_range = slice(min(8, len(radial_distances)))
 
             popt_radial, _ = curve_fit(
                 gaussian_1d,
                 radial_distances[fit_range],
                 radial_profile[fit_range],
                 p0=p0_radial,
-                maxfev=2000,
+                maxfev=2000
             )
 
             sigma_radial = abs(popt_radial[2])
-            resolution_radial = sigma_radial * 2.355  # FWHM
-
+            resolution_radial = sigma_radial * 2.355
             radial_fit_success = True
-            print(
-                f"  Radial fit successful: σ = {sigma_radial:.2f} nm, FWHM = {resolution_radial:.2f} nm"
-            )
+            print(f"  Radial fit: σ = {sigma_radial:.2f} nm, FWHM = {resolution_radial:.2f} nm")
 
         except Exception as e:
             print(f"  Radial fit failed: {e}")
@@ -5112,50 +4888,36 @@ class AutoPicasso(util.AbstractModuleCollection):
             resolution_radial = np.nan
             popt_radial = [np.nan] * 4
 
-        # Fit 2D Gaussian to central peak
+        # Fit 2D Gaussian
         try:
-            center_idx = autocorr_2d.shape[0] // 2
-
-            # Create coordinate grids
-            extent = max_shift_pixels * sampling_res
+            extent = (min_size // 2) * sampling_res
             x_2d = np.linspace(-extent, extent, autocorr_2d.shape[1])
             y_2d = np.linspace(-extent, extent, autocorr_2d.shape[0])
             X_2d, Y_2d = np.meshgrid(x_2d, y_2d)
 
-            # Initial guess for 2D fit
             peak_val = autocorr_2d.max()
             background_2d = np.mean(autocorr_2d[autocorr_2d < peak_val * 0.1])
-
             p0_2d = [peak_val - background_2d, 0, 0, 1.0, 1.0, background_2d]
 
-            # Fit to central region only
-            fit_size = min(autocorr_2d.shape[0] // 3, 20)
+            fit_size = min(autocorr_2d.shape[0] // 3, 15)
             center_2d = autocorr_2d.shape[0] // 2
             fit_region = slice(center_2d - fit_size, center_2d + fit_size + 1)
 
-            autocorr_fit = autocorr_2d[fit_region, fit_region]
-            X_fit = X_2d[fit_region, fit_region]
-            Y_fit = Y_2d[fit_region, fit_region]
-
             popt_2d, _ = curve_fit(
                 gaussian_2d_fit,
-                (X_fit, Y_fit),
-                autocorr_fit.ravel(),
+                (X_2d[fit_region, fit_region], Y_2d[fit_region, fit_region]),
+                autocorr_2d[fit_region, fit_region].ravel(),
                 p0=p0_2d,
-                maxfev=2000,
+                maxfev=2000
             )
 
             sigma_x = abs(popt_2d[3])
             sigma_y = abs(popt_2d[4])
             fwhm_x = sigma_x * 2.355
             fwhm_y = sigma_y * 2.355
-            resolution_2d = np.sqrt(fwhm_x * fwhm_y)  # Geometric mean
-
+            resolution_2d = np.sqrt(fwhm_x * fwhm_y)
             fit_2d_success = True
-            print(
-                f"  2D fit successful: σx = {sigma_x:.2f} nm, σy = {sigma_y:.2f} nm"
-            )
-            print(f"  Resolution: {resolution_2d:.2f} nm")
+            print(f"  2D fit: σx = {sigma_x:.2f}, σy = {sigma_y:.2f} nm, resolution = {resolution_2d:.2f} nm")
 
         except Exception as e:
             print(f"  2D fit failed: {e}")
@@ -5189,171 +4951,58 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["radial_profile"] = radial_profile
         results["radial_distances"] = radial_distances
 
-        # Create plots
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
+        # Create plots (simplified to save memory)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
 
-        # Plot 1: 2D autocorrelation map
-        extent_nm = max_shift
-        im1 = ax1.imshow(
-            autocorr_2d,
-            extent=[-extent_nm, extent_nm, -extent_nm, extent_nm],
-            origin="lower",
-            cmap="hot",
-        )
-        ax1.set_xlabel("Δx (nm)")
-        ax1.set_ylabel("Δy (nm)")
-        ax1.set_title("2D Autocorrelation")
+        # Plot 1: 2D autocorrelation
+        extent_nm = (min_size // 2) * sampling_res
+        im1 = ax1.imshow(autocorr_2d, extent=[-extent_nm, extent_nm, -extent_nm, extent_nm],
+                       origin='lower', cmap='hot')
+        ax1.set_xlabel('Δx (nm)')
+        ax1.set_ylabel('Δy (nm)')
+        ax1.set_title('2D Autocorrelation')
         plt.colorbar(im1, ax=ax1, shrink=0.8)
 
-        # Plot 2: 2D Gaussian fit
-        if fit_2d_success:
-            # Recreate fitted surface
-            fitted_2d = gaussian_2d_fit((X_2d, Y_2d), *popt_2d).reshape(
-                X_2d.shape
-            )
-
-            im2 = ax2.imshow(
-                fitted_2d,
-                extent=[-extent_nm, extent_nm, -extent_nm, extent_nm],
-                origin="lower",
-                cmap="hot",
-            )
-            ax2.set_xlabel("Δx (nm)")
-            ax2.set_ylabel("Δy (nm)")
-            ax2.set_title(
-                f"2D Gaussian Fit\nResolution: {resolution_2d:.2f} nm"
-            )
-            plt.colorbar(im2, ax=ax2, shrink=0.8)
-        else:
-            ax2.text(
-                0.5,
-                0.5,
-                "2D Fit Failed",
-                transform=ax2.transAxes,
-                ha="center",
-                va="center",
-            )
-            ax2.set_title("2D Gaussian Fit Failed")
-
-        # Plot 3: Radial profile
-        ax3.plot(
-            radial_distances, radial_profile, "b-", linewidth=2, label="Data"
-        )
-
+        # Plot 2: Radial profile
+        ax2.plot(radial_distances, radial_profile, 'b-', linewidth=2, label='Data')
         if radial_fit_success:
             radial_fit = gaussian_1d(radial_distances, *popt_radial)
-            ax3.plot(
-                radial_distances, radial_fit, "r--", linewidth=2, label="Fit"
-            )
-            ax3.set_title(
-                f"Radial Profile\nResolution: {resolution_radial:.2f} nm"
-            )
+            ax2.plot(radial_distances, radial_fit, 'r--', linewidth=2, label='Fit')
+            ax2.set_title(f'Radial Profile (FWHM: {resolution_radial:.2f} nm)')
         else:
-            ax3.set_title("Radial Profile (Fit Failed)")
+            ax2.set_title('Radial Profile')
 
-        ax3.set_xlabel("Distance (nm)")
-        ax3.set_ylabel("Normalized Autocorrelation")
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
-
-        # Plot 4: Cross-section through center
-        center_idx = autocorr_2d.shape[0] // 2
-        x_section = autocorr_2d[center_idx, :]
-        y_section = autocorr_2d[:, center_idx]
-        x_coords_section = np.linspace(-extent_nm, extent_nm, len(x_section))
-        y_coords_section = np.linspace(-extent_nm, extent_nm, len(y_section))
-
-        ax4.plot(
-            x_coords_section,
-            x_section,
-            "b-",
-            linewidth=2,
-            label="X cross-section",
-        )
-        ax4.plot(
-            y_coords_section,
-            y_section,
-            "r-",
-            linewidth=2,
-            label="Y cross-section",
-        )
-
-        if fit_2d_success:
-            x_fit = gaussian_1d(
-                x_coords_section,
-                popt_2d[0],
-                popt_2d[1],
-                popt_2d[3],
-                popt_2d[5],
-            )
-            y_fit = gaussian_1d(
-                y_coords_section,
-                popt_2d[0],
-                popt_2d[2],
-                popt_2d[4],
-                popt_2d[5],
-            )
-            ax4.plot(x_coords_section, x_fit, "b--", linewidth=1, alpha=0.7)
-            ax4.plot(y_coords_section, y_fit, "r--", linewidth=1, alpha=0.7)
-
-        ax4.set_xlabel("Distance (nm)")
-        ax4.set_ylabel("Normalized Autocorrelation")
-        ax4.set_title("Cross-sections")
-        ax4.legend()
-        ax4.grid(True, alpha=0.3)
+        ax2.set_xlabel('Distance (nm)')
+        ax2.set_ylabel('Autocorrelation')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
 
         plt.tight_layout()
 
-        # Save 2D autocorrelation plot
-        plot_path_2d = os.path.join(
-            results["folder"], "resolution_autocorr_2d.png"
-        )
+        # Save plots
+        plot_path_2d = os.path.join(results["folder"], "resolution_autocorr_2d.png")
         plt.savefig(plot_path_2d, dpi=300, bbox_inches="tight")
         plt.close()
 
-        # Create radial profile plot
-        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-        ax.plot(
-            radial_distances,
-            radial_profile,
-            "b-",
-            linewidth=2,
-            label="Radial profile",
-        )
-
+        # Simple radial plot
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.plot(radial_distances, radial_profile, 'b-', linewidth=2)
         if radial_fit_success:
             radial_fit = gaussian_1d(radial_distances, *popt_radial)
-            ax.plot(
-                radial_distances,
-                radial_fit,
-                "r--",
-                linewidth=2,
-                label="Gaussian fit",
-            )
-            ax.set_title(
-                f"Radial Autocorrelation Profile\nResolution: {resolution_radial:.2f} nm (FWHM)"
-            )
-        else:
-            ax.set_title("Radial Autocorrelation Profile (Fit Failed)")
-
-        ax.set_xlabel("Distance (nm)")
-        ax.set_ylabel("Normalized Autocorrelation")
-        ax.legend()
+            ax.plot(radial_distances, radial_fit, 'r--', linewidth=2)
+            ax.set_title(f'Radial Autocorr (Resolution: {resolution_radial:.2f} nm FWHM)')
+        ax.set_xlabel('Distance (nm)')
+        ax.set_ylabel('Autocorrelation')
         ax.grid(True, alpha=0.3)
 
-        # Save radial plot
-        plot_path_radial = os.path.join(
-            results["folder"], "resolution_autocorr_radial.png"
-        )
+        plot_path_radial = os.path.join(results["folder"], "resolution_autocorr_radial.png")
         plt.savefig(plot_path_radial, dpi=300, bbox_inches="tight")
         plt.close()
 
         results["fig_autocorr_2d"] = plot_path_2d
         results["fig_radial"] = plot_path_radial
 
-        # Final memory cleanup
         gc.collect()
-
         return parameters, results
 
     @profile_resource_usage
