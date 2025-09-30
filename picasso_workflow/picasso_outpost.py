@@ -3581,6 +3581,13 @@ def resolution_ppac(
     max_intensity = intensities[idx_ctr, idx_ctr]
     if max_intensity > 0:
         intensities = intensities / max_intensity
+    # set the center to the mean of its 4-connected neighbors
+    intensities[idx_ctr, idx_ctr] = np.mean([
+        intensities[idx_ctr - 1, idx_ctr],
+        intensities[idx_ctr, idx_ctr - 1],
+        intensities[idx_ctr + 1, idx_ctr],
+        intensities[idx_ctr, idx_ctr + 1]
+        ])
 
     return intensities
 

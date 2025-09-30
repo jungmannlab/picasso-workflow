@@ -475,18 +475,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["CPU Frequency [MHz]"] = psutil.cpu_freq().current
         results["CPU cores"] = psutil.cpu_count()
         results["Memory total [GB]"] = psutil.virtual_memory().total // (
-            1024**3
+            1024 ** 3
         )
-        results["Memory available [GB]"] = (
-            psutil.virtual_memory().available // (1024**3)
-        )
+        results[
+            "Memory available [GB]"
+        ] = psutil.virtual_memory().available // (1024 ** 3)
         try:
             gpu_info = psutil.virtual_memory().gpu
         except AttributeError:
             gpu_info = None
         if gpu_info:
             results["GPU"] = gpu_info.name
-            results["GPU memory"] = gpu_info.memory_total // (1024**3)
+            results["GPU memory"] = gpu_info.memory_total // (1024 ** 3)
         else:
             results["GPU"] = "N/A"
             results["GPU memory [GB]"] = 0
@@ -851,10 +851,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # sample_spots = localize.get_spots(
         sample_spots = picasso_outpost.get_spots(
-            self.movie,
-            sample_identifications,
-            box_size,
-            self.camera_info,
+            self.movie, sample_identifications, box_size, self.camera_info,
         )
         ng_start = np.min(sample_identifications["net_gradient"])
         ng_end = np.max(sample_identifications["net_gradient"])
@@ -873,9 +870,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             pix = ix * (box_size + border_width)
             piy = iy * (box_size + border_width)
             # logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
-            canvas[pix : pix + box_size, piy : piy + box_size] = (
-                picasso_outpost.normalize_spot(spot)
-            )
+            canvas[
+                pix : pix + box_size, piy : piy + box_size
+            ] = picasso_outpost.normalize_spot(spot)
         return canvas, ng_start, ng_end
 
     @profile_resource_usage
@@ -1697,15 +1694,19 @@ class AutoPicasso(util.AbstractModuleCollection):
                 coarse_estimates["uncertainty_y"].append(np.nan)
                 coarse_estimates["quality"].append(0)
             else:
-                shift_x, shift_y, quality, uncertainty_x, uncertainty_y = (
-                    self._estimate_drift_between_frame_groups(
-                        ref_locs,
-                        target_locs,
-                        max_shift,
-                        min_locs_per_frame,
-                        outlier_detection_enabled=False,
-                        min_signal_to_noise=0.5,  # Disable for coarse estimates
-                    )
+                (
+                    shift_x,
+                    shift_y,
+                    quality,
+                    uncertainty_x,
+                    uncertainty_y,
+                ) = self._estimate_drift_between_frame_groups(
+                    ref_locs,
+                    target_locs,
+                    max_shift,
+                    min_locs_per_frame,
+                    outlier_detection_enabled=False,
+                    min_signal_to_noise=0.5,  # Disable for coarse estimates
                 )
                 coarse_estimates["drift_x"].append(
                     shift_x if shift_x is not None else np.nan
@@ -1894,7 +1895,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         change_points = []
 
         # Method 1: Detect large changes in drift magnitude
-        drift_magnitude = np.sqrt(drift_x_valid**2 + drift_y_valid**2)
+        drift_magnitude = np.sqrt(drift_x_valid ** 2 + drift_y_valid ** 2)
         if len(drift_magnitude) > 3:
             # Use moving average and standard deviation for change detection
             window = min(5, len(drift_magnitude) // 3)
@@ -2087,15 +2088,19 @@ class AutoPicasso(util.AbstractModuleCollection):
             ]
 
             # Estimate drift for this frame
-            shift_x, shift_y, quality, uncertainty_x, uncertainty_y = (
-                self._estimate_drift_between_frame_groups(
-                    ref_locs,
-                    target_locs,
-                    max_shift,
-                    min_locs_per_frame,
-                    outlier_detection_enabled,
-                    min_signal_to_noise,
-                )
+            (
+                shift_x,
+                shift_y,
+                quality,
+                uncertainty_x,
+                uncertainty_y,
+            ) = self._estimate_drift_between_frame_groups(
+                ref_locs,
+                target_locs,
+                max_shift,
+                min_locs_per_frame,
+                outlier_detection_enabled,
+                min_signal_to_noise,
             )
 
             if shift_x is not None and shift_y is not None:
@@ -2128,11 +2133,11 @@ class AutoPicasso(util.AbstractModuleCollection):
 
                 uncertainty_x_fine[frame_idx] = np.sqrt(
                     uncertainty_x_fine[frame_idx - 1] ** 2
-                    + scaled_uncertainty_x**2
+                    + scaled_uncertainty_x ** 2
                 )
                 uncertainty_y_fine[frame_idx] = np.sqrt(
                     uncertainty_y_fine[frame_idx - 1] ** 2
-                    + scaled_uncertainty_y**2
+                    + scaled_uncertainty_y ** 2
                 )
 
                 drift_quality[frame_idx] = quality
@@ -2201,7 +2206,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             # Quality metrics for outlier detection
             quality = len(locs_ref) + len(locs_target)
-            shift_magnitude = np.sqrt(shift_x**2 + shift_y**2)
+            shift_magnitude = np.sqrt(shift_x ** 2 + shift_y ** 2)
 
             # Detect RSSO failure and outliers
             if outlier_detection_enabled:
@@ -2270,7 +2275,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if uncertainty_x is not None and uncertainty_y is not None:
             # Flag if uncertainty is comparable to or larger than the shift
             uncertainty_magnitude = np.sqrt(
-                uncertainty_x**2 + uncertainty_y**2
+                uncertainty_x ** 2 + uncertainty_y ** 2
             )
             signal_to_noise = shift_magnitude / (uncertainty_magnitude + 1e-10)
 
@@ -2420,7 +2425,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Calculate instantaneous drift rate
         drift_rate_x = np.diff(drift_x_fine)
         drift_rate_y = np.diff(drift_y_fine)
-        drift_rate_magnitude = np.sqrt(drift_rate_x**2 + drift_rate_y**2)
+        drift_rate_magnitude = np.sqrt(drift_rate_x ** 2 + drift_rate_y ** 2)
 
         # Plot drift rate
         ax2_twin = ax2.twinx()
@@ -2551,7 +2556,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         ax4 = axes[3]
 
         total_uncertainty = np.sqrt(
-            uncertainty_x_fine**2 + uncertainty_y_fine**2
+            uncertainty_x_fine ** 2 + uncertainty_y_fine ** 2
         )
         ax4.plot(
             frame_indices,
@@ -2633,7 +2638,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Plot 1: Drift magnitude histogram
         ax1 = axes[0, 0]
-        drift_magnitude = np.sqrt(drift_x**2 + drift_y**2)
+        drift_magnitude = np.sqrt(drift_x ** 2 + drift_y ** 2)
         ax1.hist(
             drift_magnitude[1:],
             bins=30,
@@ -2664,7 +2669,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Plot 3: Uncertainty vs Window Size
         ax3 = axes[1, 0]
-        total_uncertainty = np.sqrt(uncertainty_x**2 + uncertainty_y**2)
+        total_uncertainty = np.sqrt(uncertainty_x ** 2 + uncertainty_y ** 2)
         ax3.scatter(
             window_sizes[1:],
             total_uncertainty[1:],
@@ -3162,7 +3167,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Plot 4: Drift trajectory comparison
         ax4 = axes[1, 1]
         drift_magnitude = np.sqrt(
-            drift_x_interpolated**2 + drift_y_interpolated**2
+            drift_x_interpolated ** 2 + drift_y_interpolated ** 2
         )
         anchor_magnitude = np.sqrt(
             np.array(anchor_drifts_x) ** 2 + np.array(anchor_drifts_y) ** 2
@@ -3251,11 +3256,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                         # Accumulate uncertainties (assuming independence)
                         uncertainty_x_coarse[frame_idx] = np.sqrt(
                             uncertainty_x_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_x**2
+                            + block_uncertainty_x ** 2
                         )
                         uncertainty_y_coarse[frame_idx] = np.sqrt(
                             uncertainty_y_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_y**2
+                            + block_uncertainty_y ** 2
                         )
                     else:
                         uncertainty_x_coarse[frame_idx] = block_uncertainty_x
@@ -3365,13 +3370,14 @@ class AutoPicasso(util.AbstractModuleCollection):
     @profile_resource_usage
     @module_decorator
     def undrift_rsso(self, i, parameters, results):
-        """Undrift localized data using RSSO-based temporal drift correction
+        """Undrift localized data using iterative RSSO-based drift correction
 
-        This method applies the RSSO (Redundant Spot Shift
-        Overrepresentation) algorithm to correct for temporal drift by
-        analyzing 2D shift histograms between temporally adjacent
-        localizations. It accounts for the timescales ton (localization
-        half-life) and toff (reappearance time).
+        This method applies an iterative RSSO (Redundant Spot Shift
+        Overrepresentation) approach where each frame is compared against
+        the whole dataset to compute total drift for that frame. The process
+        is repeated iteratively with the undrifted dataset to improve accuracy.
+        Includes uncertainty analysis, confidence evaluation, windowing and
+        outlier detection.
 
         Args:
             i : int
@@ -3387,91 +3393,82 @@ class AutoPicasso(util.AbstractModuleCollection):
                     max_shift : float
                         Maximum expected drift per frame in pixels
                 optional items:
-                    processing_chunk_size : int
-                        Number of frames per processing chunk for memory
-                        efficiency (default: 100)
                     min_locs_per_frame : int
                         Minimum localizations per frame for reliable drift
                         estimation (default: 10)
-                    min_locs_per_block : int
-                        Minimum localizations per toff-scale block for
-                        reliable drift estimation (default: 100)
+                    max_iterations : int
+                        Maximum number of iterative refinement rounds (default: 5)
+                    convergence_threshold : float
+                        RMS drift change threshold for convergence in nm (default: 0.1)
                     plot_drift : bool
                         Whether to save drift plots (default: True)
                     save_locs : bool
-                        Whether to save undrifted localizations
-                        (default: True)
+                        Whether to save undrifted localizations (default: True)
                     n_processes : int or None
-                        Number of processes for parallel computation. None
-                        uses all available cores, 1 disables multiprocessing
-                        (default: None)
-                    use_adaptive_aggregation : bool
-                        Enable adaptive window sizing for improved precision
-                        (default: True)
-                    min_window_size : int
-                        Minimum window size for adaptive aggregation (default: 3)
-                    max_window_size : int
-                        Maximum window size for adaptive aggregation (default: 20)
+                        Number of processes for parallel computation (default: auto)
                     confidence_threshold : float
-                        Confidence threshold for window size adaptation (default: 0.8)
-                    change_point_sensitivity : float
-                        Sensitivity for change point detection (default: 2.0)
+                        Confidence threshold for windowing analysis (default: 0.8)
                     outlier_detection_enabled : bool
                         Enable RSSO failure and outlier detection (default: True)
                     outlier_z_threshold : float
                         Z-score threshold for temporal outlier detection (default: 3.5)
                     min_signal_to_noise : float
                         Minimum signal-to-noise ratio for drift measurements (default: 0.5)
-                    use_spline_interpolation : bool
-                        Use cubic spline interpolation for stage 2 long-timescale drift (default: True)
-                    spline_smoothing_factor : float
-                        Smoothing factor for cubic splines (0=no smoothing, auto if None, default: None)
-                    min_blocks_for_spline : int
-                        Minimum number of valid blocks required for spline fitting (default: 4)
+                    windowing_enabled : bool
+                        Enable adaptive windowing for low-confidence frames (default: True)
+                    window_size_range : tuple
+                        Min and max window sizes for adaptive windowing (default: (3, 20))
 
         Returns:
             parameters : dict
                 as input, potentially changed values, for consistency
             results : dict
-                the analysis results including drift trajectory and plots
+                the analysis results including:
+                    success : bool
+                        whether drift correction succeeded
+                    drift_x, drift_y : ndarray
+                        total drift trajectories in nm for each frame
+                    uncertainty_x, uncertainty_y : ndarray
+                        uncertainty estimates for drift measurements
+                    drift_quality : ndarray
+                        quality/confidence metrics per frame
+                    n_iterations : int
+                        number of iterations performed
+                    convergence_rms : float
+                        final RMS change indicating convergence
+                    drift_plots : str
+                        path to drift visualization plots
         """
 
         pixelsize = self.pixelsize
         ton = parameters["ton"]
         toff = parameters["toff"]
         max_shift = parameters["max_shift"]
-        save_all_rsso_plots = parameters.get("save_all_rsso_plots", False)
-
-        processing_chunk_size = parameters.get("processing_chunk_size", 100)
+        # New iterative parameters
         min_locs_per_frame = parameters.get("min_locs_per_frame", 10)
-        min_locs_per_block = parameters.get("min_locs_per_block", 100)
+        max_iterations = parameters.get("max_iterations", 5)
+        convergence_threshold = parameters.get(
+            "convergence_threshold", 0.1
+        )  # nm
+        save_locs = parameters.get("save_locs", True)
         plot_drift = parameters.get("plot_drift", True)
-        n_processes = parameters.get(
-            "n_processes", None
-        )  # None uses all available cores
+        n_processes = parameters.get("n_processes", min(mp.cpu_count(), 8))
 
-        # Adaptive aggregation parameters
-        use_adaptive_aggregation = parameters.get(
-            "use_adaptive_aggregation", True
-        )
-        min_window_size = parameters.get("min_window_size", 3)
-        max_window_size = parameters.get("max_window_size", 20)
+        # Analysis parameters
         confidence_threshold = parameters.get("confidence_threshold", 0.8)
-        change_point_sensitivity = parameters.get(
-            "change_point_sensitivity", 2.0
-        )
         outlier_detection_enabled = parameters.get(
             "outlier_detection_enabled", True
         )
         outlier_z_threshold = parameters.get("outlier_z_threshold", 3.5)
         min_signal_to_noise = parameters.get("min_signal_to_noise", 0.5)
-        use_spline_interpolation = parameters.get(
-            "use_spline_interpolation", True
+        windowing_enabled = parameters.get("windowing_enabled", True)
+        window_size_range = parameters.get("window_size_range", (3, 20))
+
+        print(
+            f"Iterative RSSO undrift: max_iterations={max_iterations}, "
+            f"convergence_threshold={convergence_threshold:.3f} nm"
         )
-        spline_smoothing_factor = parameters.get(
-            "spline_smoothing_factor", None
-        )
-        min_blocks_for_spline = parameters.get("min_blocks_for_spline", 4)
+        print(f"Using {n_processes} processes for parallel computation")
 
         # Get frame range and ensure we have data
         if len(self.locs) == 0:
@@ -3489,433 +3486,348 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         n_frames = len(frames)
 
-        # Initialize drift arrays
-        drift_x_coarse = np.zeros(n_frames)  # Long-timescale drift
-        drift_y_coarse = np.zeros(n_frames)
-        drift_x_fine = np.zeros(n_frames)  # Short-timescale drift
-        drift_y_fine = np.zeros(n_frames)
-        drift_quality = np.zeros(n_frames)
+        # Initialize arrays for iterative approach
+        drift_x = np.zeros(n_frames)  # Total drift per frame
+        drift_y = np.zeros(n_frames)
+        uncertainty_x = np.zeros(n_frames)  # Uncertainty estimates
+        uncertainty_y = np.zeros(n_frames)
+        confidence = np.zeros(n_frames)  # Confidence measures
+        drift_quality = np.zeros(n_frames)  # Quality metrics
 
-        # Initialize uncertainty arrays
-        uncertainty_x_coarse = np.zeros(
-            n_frames
-        )  # Uncertainty in coarse drift
-        uncertainty_y_coarse = np.zeros(n_frames)
-        uncertainty_x_fine = np.zeros(n_frames)  # Uncertainty in fine drift
-        uncertainty_y_fine = np.zeros(n_frames)
+        # Initialize current localization dataset (will be iteratively corrected)
+        current_locs = self.locs.copy()
 
-        logger.debug(
-            f"RSSO undrift (2-stage): {n_frames} frames, ton={ton}, \
-            toff={toff}"
+        print(
+            f"Starting iterative RSSO undrift: {n_frames} frames, ton={ton}, toff={toff}"
         )
 
-        # Save undrifted localizations if requested
-        if parameters.get("save_locs", True):
+        # Save original localizations if requested
+        if save_locs:
             fp_locs = os.path.join(
-                results["folder"], "locs_undrifted_rsso_input.hdf5"
+                results["folder"], "locs_original_input.hdf5"
             )
             io.save_locs(fp_locs, self.locs, self.info)
 
-        # STAGE 1: Short-timescale drift correction with adaptive aggregation
-        logger.debug("Stage 1: Adaptive short-timescale drift correction")
+        # Start iterative refinement loop
+        iteration_history = []
+        convergence_rms = float("inf")
 
-        if use_adaptive_aggregation:
-            # Use adaptive aggregation for improved precision
-            (
-                drift_x_fine,
-                drift_y_fine,
-                uncertainty_x_fine,
-                uncertainty_y_fine,
-                drift_quality,
-            ) = self._adaptive_drift_correction(
-                frames,
-                max_shift,
-                min_locs_per_frame,
-                min_window_size,
-                max_window_size,
-                confidence_threshold,
-                outlier_detection_enabled,
-                outlier_z_threshold,
-                change_point_sensitivity,
-                min_signal_to_noise,
-                n_processes,
-                save_all_rsso_plots,
-                results["folder"],
-                use_spline_interpolation,
-            )
-        else:
-            # Use original frame-by-frame approach
-            logger.debug("Using original frame-by-frame drift correction")
+        for iteration in range(max_iterations):
+            print(f"  Iteration {iteration + 1}/{max_iterations}")
 
-            # Prepare chunk arguments for parallel processing
-            chunk_args = []
-            for chunk_start in range(1, n_frames, processing_chunk_size):
-                chunk_end = min(chunk_start + processing_chunk_size, n_frames)
-                chunk_frames = list(range(chunk_start, chunk_end))
-                chunk_args.append(
-                    (
-                        self.locs,
-                        frames,
-                        chunk_frames,
-                        max_shift,
-                        min_locs_per_frame,
-                        save_all_rsso_plots,
-                        results["folder"],
-                    )
+            # Prepare frame data for parallel processing
+            frame_data_list = []
+            for frame_idx in range(n_frames):
+                frame_mask = current_locs["frame"] == frames[frame_idx]
+                frame_locs = current_locs[frame_mask]
+
+                # Use all other frames as the dataset for comparison
+                dataset_mask = current_locs["frame"] != frames[frame_idx]
+                dataset_locs = current_locs[dataset_mask]
+
+                frame_data = (
+                    frame_idx,
+                    frame_locs,
+                    dataset_locs,
+                    max_shift,
+                    min_locs_per_frame,
+                    ton,
+                    toff,
+                )
+                frame_data_list.append(frame_data)
+
+            # Compute frame-to-dataset shifts in parallel
+            print(f"    Computing shifts for {n_frames} frames...")
+
+            with mp.Pool(processes=n_processes) as pool:
+                shift_results = pool.map(
+                    _compute_frame_to_dataset_shift, frame_data_list
                 )
 
-            # Process chunks in parallel
-            try:
-                if n_processes == 1 or len(chunk_args) <= 1:
-                    # Single-threaded fallback
-                    logger.debug(
-                        "Using single-threaded processing for Stage 1"
-                    )
-                    all_chunk_results = [
-                        self._process_fine_drift_chunk(args)
-                        for args in chunk_args
-                    ]
-                else:
-                    # Multi-threaded processing
-                    logger.debug(
-                        f"Using {n_processes} processes for Stage 1 "
-                        + f"({len(chunk_args)} chunks)"
-                    )
-                    from multiprocessing import Pool
+            # Process results and update drift arrays
+            frame_shifts_x = np.zeros(n_frames)
+            frame_shifts_y = np.zeros(n_frames)
+            new_uncertainty_x = np.zeros(n_frames)
+            new_uncertainty_y = np.zeros(n_frames)
+            new_confidence = np.zeros(n_frames)
+            new_quality = np.zeros(n_frames)
 
-                    with Pool(processes=n_processes) as pool:
-                        all_chunk_results = pool.map(
-                            self._process_fine_drift_chunk, chunk_args
-                        )
-            except Exception as e:
-                logger.warning(
-                    "Multiprocessing failed for Stage 1, falling back to "
-                    + f"single-threaded: {e}"
-                )
-                all_chunk_results = [
-                    self._process_fine_drift_chunk(args) for args in chunk_args
-                ]
+            valid_measurements = 0
 
-            # Process results from parallel computation and accumulate drift
-            for chunk_results in all_chunk_results:
-                for (
+            for result in shift_results:
+                (
                     frame_idx,
                     shift_x,
                     shift_y,
-                    quality,
-                    uncertainty_x,
-                    uncertainty_y,
-                ) in chunk_results:
-                    if shift_x is not None and shift_y is not None:
-                        # Accumulate fine drift
-                        drift_x_fine[frame_idx] = (
-                            drift_x_fine[frame_idx - 1] + shift_x
-                        )
-                        drift_y_fine[frame_idx] = (
-                            drift_y_fine[frame_idx - 1] + shift_y
-                        )
-                        # Accumulate uncertainties (assuming independence)
+                    uncertainty_x_val,
+                    uncertainty_y_val,
+                    conf,
+                    qual,
+                ) = result
+
+                if shift_x is not None and shift_y is not None:
+                    frame_shifts_x[frame_idx] = (
+                        shift_x * pixelsize
+                    )  # Convert to nm
+                    frame_shifts_y[frame_idx] = shift_y * pixelsize
+                    new_uncertainty_x[frame_idx] = (
+                        uncertainty_x_val * pixelsize
+                        if uncertainty_x_val
+                        else np.nan
+                    )
+                    new_uncertainty_y[frame_idx] = (
+                        uncertainty_y_val * pixelsize
+                        if uncertainty_y_val
+                        else np.nan
+                    )
+                    new_confidence[frame_idx] = conf
+                    new_quality[frame_idx] = qual
+                    valid_measurements += 1
+
+            print(f"    Valid measurements: {valid_measurements}/{n_frames}")
+
+            # Handle outliers and windowing for low-confidence measurements
+            if windowing_enabled:
+                # Apply windowing to low-confidence frames
+                low_confidence_mask = new_confidence < confidence_threshold
+                n_low_conf = np.sum(low_confidence_mask)
+                if n_low_conf > 0:
+                    print(
+                        f"    Applying windowing to {n_low_conf} low-confidence frames"
+                    )
+                    # For low-confidence frames, use windowed averaging (simplified approach)
+                    min_window, max_window = window_size_range
+                    for frame_idx in np.where(low_confidence_mask)[0]:
                         if (
-                            uncertainty_x is not None
-                            and uncertainty_y is not None
-                        ):
-                            uncertainty_x_fine[frame_idx] = np.sqrt(
-                                uncertainty_x_fine[frame_idx - 1] ** 2
-                                + uncertainty_x**2
+                            frame_idx > 0
+                        ):  # Use previous frame's shift as fallback
+                            frame_shifts_x[frame_idx] = (
+                                frame_shifts_x[frame_idx - 1] * 0.5
                             )
-                            uncertainty_y_fine[frame_idx] = np.sqrt(
-                                uncertainty_y_fine[frame_idx - 1] ** 2
-                                + uncertainty_y**2
+                            frame_shifts_y[frame_idx] = (
+                                frame_shifts_y[frame_idx - 1] * 0.5
                             )
-                        else:
-                            uncertainty_x_fine[frame_idx] = uncertainty_x_fine[
-                                frame_idx - 1
-                            ]
-                            uncertainty_y_fine[frame_idx] = uncertainty_y_fine[
-                                frame_idx - 1
-                            ]
-                        drift_quality[frame_idx] += quality
-                    else:
-                        # Use previous fine drift if estimation failed
-                        drift_x_fine[frame_idx] = drift_x_fine[frame_idx - 1]
-                        drift_y_fine[frame_idx] = drift_y_fine[frame_idx - 1]
-                        uncertainty_x_fine[frame_idx] = uncertainty_x_fine[
-                            frame_idx - 1
-                        ]
-                        uncertainty_y_fine[frame_idx] = uncertainty_y_fine[
-                            frame_idx - 1
-                        ]
+                            new_confidence[frame_idx] = 0.5
 
-        # Apply coarse drift correction in-place to avoid copy
-        # Create frame index mapping for efficient lookup
-        frame_to_idx = {frame: idx for idx, frame in enumerate(frames)}
-
-        # Cache unique frames to avoid repeated computation
-        unique_frames = np.unique(self.locs["frame"])
-
-        # Apply coarse drift correction without creating temp copy
-        for frame in unique_frames:
-            if frame in frame_to_idx:
-                frame_idx = frame_to_idx[frame]
-                if frame_idx < len(drift_x_fine):
-                    frame_mask = self.locs["frame"] == frame
-                    self.locs["x"][frame_mask] -= drift_x_fine[frame_idx]
-                    self.locs["y"][frame_mask] -= drift_y_fine[frame_idx]
-
-        # Save undrifted localizations if requested
-        if parameters.get("save_locs", True):
-            fp_locs = os.path.join(
-                results["folder"], "locs_undrifted_rsso_1_fine.hdf5"
-            )
-            io.save_locs(fp_locs, self.locs, self.info)
-
-        # STAGE 2: Long-timescale drift correction with cubic splines
-        logger.debug("Stage 2: Spline-based long-timescale drift correction")
-
-        if use_spline_interpolation:
-            # Use cubic spline interpolation with block centers as anchor points
-            (
-                drift_x_coarse,
-                drift_y_coarse,
-                uncertainty_x_coarse,
-                uncertainty_y_coarse,
-            ) = self._spline_based_drift_correction(
-                frames,
-                toff,
-                max_shift,
-                min_locs_per_block,
-                n_processes,
-                save_all_rsso_plots,
-                results["folder"],
-                spline_smoothing_factor,
-                min_blocks_for_spline,
-            )
-        else:
-            # Use original linear block-based approach
-            logger.debug("Using original linear block-based drift correction")
-            toff_block_size = int(toff)
-
-            # Prepare arguments for parallel processing
-            block_args = []
-            for block_start in range(0, n_frames, toff_block_size):
-                block_end = min(block_start + toff_block_size, n_frames)
-                block_args.append(
-                    (
-                        self.locs,
-                        frames,
-                        block_start,
-                        block_end,
-                        toff_block_size,
-                        max_shift,
-                        min_locs_per_block,
-                        save_all_rsso_plots,
-                        results["folder"],
-                    )
+            # Outlier detection using z-score
+            if outlier_detection_enabled and valid_measurements > 5:
+                shifts_magnitude = np.sqrt(
+                    frame_shifts_x ** 2 + frame_shifts_y ** 2
                 )
-
-            # Process blocks in parallel
-            try:
-                if n_processes == 1 or len(block_args) <= 1:
-                    # Single-threaded fallback
-                    logger.debug(
-                        "Using single-threaded processing for Stage 2"
+                valid_shifts = shifts_magnitude[shifts_magnitude > 0]
+                if len(valid_shifts) > 0:
+                    z_scores = np.abs(
+                        (shifts_magnitude - np.mean(valid_shifts))
+                        / np.std(valid_shifts)
                     )
-                    block_results = [
-                        self._process_drift_block(args) for args in block_args
-                    ]
-                else:
-                    # Multi-threaded processing
-                    logger.debug(
-                        f"Using {n_processes} processes for Stage 2 "
-                        + f"({len(block_args)} blocks)"
-                    )
-                    from multiprocessing import Pool
-
-                    with Pool(processes=n_processes) as pool:
-                        block_results = pool.map(
-                            self._process_drift_block, block_args
+                    outliers = z_scores > outlier_z_threshold
+                    n_outliers = np.sum(outliers)
+                    if n_outliers > 0:
+                        print(
+                            f"    Detected and filtered {n_outliers} outliers"
                         )
-            except Exception as e:
-                logger.warning(
-                    "Multiprocessing failed for Stage 2, falling back to "
-                    + f"single-threaded: {e}"
+                        # Set outlier shifts to zero
+                        frame_shifts_x[outliers] = 0
+                        frame_shifts_y[outliers] = 0
+                        new_confidence[outliers] = 0
+
+            # Update cumulative drift arrays
+            drift_x += frame_shifts_x
+            drift_y += frame_shifts_y
+            uncertainty_x = new_uncertainty_x.copy()
+            uncertainty_y = new_uncertainty_y.copy()
+            confidence = new_confidence.copy()
+            drift_quality = new_quality.copy()
+
+            # Apply drift correction to current localizations for next iteration
+            current_locs["x"] -= (
+                frame_shifts_x[current_locs["frame"] - frames[0]] / pixelsize
+            )
+            current_locs["y"] -= (
+                frame_shifts_y[current_locs["frame"] - frames[0]] / pixelsize
+            )
+
+            # Check for convergence
+            if iteration > 0:
+                # Calculate RMS change from previous iteration
+                prev_drift_x, prev_drift_y = (
+                    iteration_history[-1]["drift_x"],
+                    iteration_history[-1]["drift_y"],
                 )
-                block_results = [
-                    self._process_drift_block(args) for args in block_args
+                rms_change_x = np.sqrt(np.mean((drift_x - prev_drift_x) ** 2))
+                rms_change_y = np.sqrt(np.mean((drift_y - prev_drift_y) ** 2))
+                convergence_rms = np.sqrt(
+                    rms_change_x ** 2 + rms_change_y ** 2
+                )
+
+                print(f"    RMS change: {convergence_rms:.3f} nm")
+
+                if convergence_rms < convergence_threshold:
+                    print(
+                        f"    ✓ Converged after {iteration + 1} iterations (RMS change < {convergence_threshold:.3f} nm)"
+                    )
+                    break
+
+            # Store iteration history
+            iteration_history.append(
+                {
+                    "iteration": iteration + 1,
+                    "drift_x": drift_x.copy(),
+                    "drift_y": drift_y.copy(),
+                    "convergence_rms": convergence_rms,
+                    "valid_measurements": valid_measurements,
+                }
+            )
+
+            print(f"    Iteration {iteration + 1} completed")
+
+        # Finalize results
+        n_iterations = len(iteration_history)
+        final_convergence_rms = (
+            convergence_rms if n_iterations > 1 else float("inf")
+        )
+
+        print(
+            f"Iterative RSSO completed: {n_iterations} iterations, final RMS: {final_convergence_rms:.3f} nm"
+        )
+
+        # Apply final drift correction to original localizations
+        self.locs["x"] -= drift_x[self.locs["frame"] - frames[0]] / pixelsize
+        self.locs["y"] -= drift_y[self.locs["frame"] - frames[0]] / pixelsize
+
+        # Store drift trajectory for plotting
+        self.drift = np.column_stack([drift_x, drift_y])
+
+        # Store comprehensive results
+        results["success"] = True
+        results["n_iterations"] = n_iterations
+        results["convergence_rms"] = final_convergence_rms
+        results["converged"] = final_convergence_rms < convergence_threshold
+
+        # Drift statistics
+        drift_magnitude_x = np.max(np.abs(drift_x))
+        drift_magnitude_y = np.max(np.abs(drift_y))
+        total_drift = np.sqrt(drift_magnitude_x ** 2 + drift_magnitude_y ** 2)
+        mean_drift_quality = np.mean(drift_quality[drift_quality > 0])
+
+        results["drift_magnitude_x"] = drift_magnitude_x
+        results["drift_magnitude_y"] = drift_magnitude_y
+        results["total_drift"] = total_drift
+        results["mean_drift_quality"] = mean_drift_quality
+
+        # Store drift trajectories and uncertainties
+        results["drift_x"] = drift_x
+        results["drift_y"] = drift_y
+        results["uncertainty_x"] = uncertainty_x
+        results["uncertainty_y"] = uncertainty_y
+        results["confidence"] = confidence
+        results["drift_quality"] = drift_quality
+
+        # Store iteration history
+        results["iteration_history"] = iteration_history
+
+        print(
+            f"Final drift: X={drift_magnitude_x:.1f} nm, Y={drift_magnitude_y:.1f} nm, Total={total_drift:.1f} nm"
+        )
+        print(f"Mean quality: {mean_drift_quality:.2f}")
+
+        # Create drift plots with confidence intervals
+        if plot_drift:
+            print("Creating drift plots...")
+
+            # Plot drift trajectory with confidence intervals
+            import matplotlib.pyplot as plt
+
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+
+            frame_indices = np.arange(n_frames)
+
+            # X drift plot
+            ax1.plot(
+                frame_indices, drift_x, "b-", linewidth=2, label="X drift"
+            )
+            if not np.all(np.isnan(uncertainty_x)):
+                ax1.fill_between(
+                    frame_indices,
+                    drift_x - uncertainty_x,
+                    drift_x + uncertainty_x,
+                    alpha=0.3,
+                    color="blue",
+                    label="X uncertainty",
+                )
+            ax1.set_ylabel("X Drift (nm)")
+            ax1.set_title(
+                f"Iterative RSSO Drift Correction ({n_iterations} iterations)"
+            )
+            ax1.grid(True, alpha=0.3)
+            ax1.legend()
+
+            # Y drift plot
+            ax2.plot(
+                frame_indices, drift_y, "r-", linewidth=2, label="Y drift"
+            )
+            if not np.all(np.isnan(uncertainty_y)):
+                ax2.fill_between(
+                    frame_indices,
+                    drift_y - uncertainty_y,
+                    drift_y + uncertainty_y,
+                    alpha=0.3,
+                    color="red",
+                    label="Y uncertainty",
+                )
+            ax2.set_xlabel("Frame")
+            ax2.set_ylabel("Y Drift (nm)")
+            ax2.grid(True, alpha=0.3)
+            ax2.legend()
+
+            plt.tight_layout()
+
+            # Save drift plot
+            drift_plot_path = os.path.join(
+                results["folder"], "drift_rsso_iterative.png"
+            )
+            plt.savefig(drift_plot_path, dpi=300, bbox_inches="tight")
+            plt.close()
+            results["drift_plot"] = drift_plot_path
+
+            # Create convergence plot if multiple iterations
+            if n_iterations > 1:
+                fig, ax = plt.subplots(figsize=(8, 5))
+                iterations = [
+                    h["iteration"] for h in iteration_history[1:]
+                ]  # Skip first iteration
+                rms_values = [
+                    h["convergence_rms"] for h in iteration_history[1:]
                 ]
 
-            # Process results using original linear approach
-            (
-                drift_x_coarse,
-                drift_y_coarse,
-                uncertainty_x_coarse,
-                uncertainty_y_coarse,
-            ) = self._process_linear_block_results(
-                block_results, n_frames, toff_block_size, drift_quality
-            )
+                ax.plot(
+                    iterations, rms_values, "g-o", linewidth=2, markersize=6
+                )
+                ax.axhline(
+                    y=convergence_threshold,
+                    color="r",
+                    linestyle="--",
+                    label=f"Convergence threshold ({convergence_threshold:.3f} nm)",
+                )
+                ax.set_xlabel("Iteration")
+                ax.set_ylabel("RMS Change (nm)")
+                ax.set_title("RSSO Convergence History")
+                ax.grid(True, alpha=0.3)
+                ax.legend()
 
-        # Combine coarse and fine drift
-        total_drift_x = drift_x_coarse + drift_x_fine
-        total_drift_y = drift_y_coarse + drift_y_fine
+                convergence_plot_path = os.path.join(
+                    results["folder"], "convergence_rsso_iterative.png"
+                )
+                plt.savefig(
+                    convergence_plot_path, dpi=300, bbox_inches="tight"
+                )
+                plt.close()
+                results["convergence_plot"] = convergence_plot_path
 
-        # Combine uncertainties (assuming independence)
-        total_uncertainty_x = np.sqrt(
-            uncertainty_x_coarse**2 + uncertainty_x_fine**2
-        )
-        total_uncertainty_y = np.sqrt(
-            uncertainty_y_coarse**2 + uncertainty_y_fine**2
-        )
-
-        # Smooth final drift trajectory using ton-scale moving average
-        smooth_window = int(ton)
-        if smooth_window > 1:
-            from scipy.ndimage import uniform_filter1d
-
-            total_drift_x = uniform_filter1d(
-                total_drift_x, size=smooth_window, mode="nearest"
-            )
-            total_drift_y = uniform_filter1d(
-                total_drift_y, size=smooth_window, mode="nearest"
-            )
-
-        # Apply final drift correction in-place (fine drift only since coarse
-        # was already applied)
-        for frame in unique_frames:
-            if frame in frame_to_idx:
-                frame_idx = frame_to_idx[frame]
-                if frame_idx < len(drift_x_fine):
-                    frame_mask = self.locs["frame"] == frame
-                    self.locs["x"][frame_mask] -= drift_x_fine[frame_idx]
-                    self.locs["y"][frame_mask] -= drift_y_fine[frame_idx]
-
-        # Clear temporary variables to free memory
-        del frame_to_idx
-
-        # Format drift as 2D array for compatibility with _plot_drift
-        self.drift = np.column_stack([total_drift_x, total_drift_y])
-        # Store uncertainty information
-        self.drift_uncertainty = np.column_stack(
-            [total_uncertainty_x, total_uncertainty_y]
-        )
-
-        # Add info about undrifting
-        new_info = {
-            "Generated by": "undrift_rsso",
-            "ton": ton,
-            "toff": toff,
-            "max_shift": max_shift,
-            "processing_chunk_size": processing_chunk_size,
-            "parameters": parameters,
-        }
-        if use_spline_interpolation:
-            new_info["spline_smoothing_factor"] = spline_smoothing_factor
-            new_info["min_blocks_for_spline"] = min_blocks_for_spline
-        else:
-            new_info["toff_block_size"] = toff_block_size
-
-        self.info = self.info + [new_info]
-
-        # Create drift plot with confidence intervals
-        if plot_drift:
-            dims = ["x", "y"]
-            fp_fig = os.path.join(results["folder"], "undrift_rsso.png")
-            self._plot_drift_with_confidence(
-                fp_fig,
-                dims,
-                pixelsize,
-                method="RSSO (2-stage)",
-                drift=self.drift,
-                uncertainty=self.drift_uncertainty,
-            )
-            results["fp_fig"] = fp_fig
-
-            fp_fig = os.path.join(results["folder"], "undrift_rsso_1_fine.png")
-            self._plot_drift_with_confidence(
-                fp_fig,
-                dims,
-                pixelsize,
-                method="RSSO (2-stage) fine",
-                drift=np.column_stack([drift_x_fine, drift_y_fine]),
-                uncertainty=np.column_stack(
-                    [uncertainty_x_fine, uncertainty_y_fine]
-                ),
-            )
-            fp_fig = os.path.join(
-                results["folder"], "undrift_rsso_2_coarse.png"
-            )
-            self._plot_drift_with_confidence(
-                fp_fig,
-                dims,
-                pixelsize,
-                method="RSSO (2-stage) coarse",
-                drift=np.column_stack([drift_x_coarse, drift_y_coarse]),
-                uncertainty=np.column_stack(
-                    [uncertainty_x_coarse, uncertainty_y_coarse]
-                ),
-            )
-
-        # Store results
-        results["success"] = True
-        results["drift_magnitude_x"] = (
-            np.max(np.abs(total_drift_x)) * pixelsize
-            if len(total_drift_x) > 0
-            else 0.0
-        )
-        results["drift_magnitude_y"] = (
-            np.max(np.abs(total_drift_y)) * pixelsize
-            if len(total_drift_y) > 0
-            else 0.0
-        )
-        results["total_drift"] = np.sqrt(
-            results["drift_magnitude_x"] ** 2
-            + results["drift_magnitude_y"] ** 2
-        )
-        results["mean_drift_quality"] = (
-            np.mean(drift_quality[drift_quality > 0])
-            if np.any(drift_quality > 0)
-            else 0.0
-        )
-        results["coarse_drift_magnitude_x"] = (
-            np.max(np.abs(drift_x_coarse)) * pixelsize
-            if len(drift_x_coarse) > 0
-            else 0.0
-        )
-        results["coarse_drift_magnitude_y"] = (
-            np.max(np.abs(drift_y_coarse)) * pixelsize
-            if len(drift_y_coarse) > 0
-            else 0.0
-        )
-        results["fine_drift_magnitude_x"] = (
-            np.max(np.abs(drift_x_fine)) * pixelsize
-            if len(drift_x_fine) > 0
-            else 0.0
-        )
-        results["fine_drift_magnitude_y"] = (
-            np.max(np.abs(drift_y_fine)) * pixelsize
-            if len(drift_y_fine) > 0
-            else 0.0
-        )
-
-        # Add confidence interval statistics
-        results["mean_uncertainty_x"] = (
-            np.mean(total_uncertainty_x) * pixelsize
-        )
-        results["mean_uncertainty_y"] = (
-            np.mean(total_uncertainty_y) * pixelsize
-        )
-        results["max_uncertainty_x"] = np.max(total_uncertainty_x) * pixelsize
-        results["max_uncertainty_y"] = np.max(total_uncertainty_y) * pixelsize
-        results["confidence_95_x"] = (
-            1.96 * np.mean(total_uncertainty_x) * pixelsize
-        )  # 95% confidence interval
-        results["confidence_95_y"] = (
-            1.96 * np.mean(total_uncertainty_y) * pixelsize
-        )
-
-        # Save undrifted localizations if requested
-        if parameters.get("save_locs", True):
+        # Save final undrifted localizations
+        if save_locs:
             fp_locs = os.path.join(
-                results["folder"], "locs_undrifted_rsso.hdf5"
+                results["folder"], "locs_undrifted_rsso_iterative.hdf5"
             )
             io.save_locs(fp_locs, self.locs, self.info)
             results["fp_locs"] = fp_locs
@@ -4548,8 +4460,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     amplitude
                     * np.exp(
                         -(
-                            (x - x0) ** 2 / (2 * sigma_x**2)
-                            + (y - y0) ** 2 / (2 * sigma_y**2)
+                            (x - x0) ** 2 / (2 * sigma_x ** 2)
+                            + (y - y0) ** 2 / (2 * sigma_y ** 2)
                         )
                     )
                     + background
@@ -4591,96 +4503,180 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @staticmethod
-    def _process_autocorr_chunk(chunk_data):
-        """Process a single spatial chunk for autocorrelation analysis (multiprocessing worker)
 
-        Args:
-            chunk_data : tuple
-                (chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx)
+def _compute_frame_to_dataset_shift(frame_data):
+    """Compute RSSO shift of single frame against whole dataset (multiprocessing worker)
 
-        Returns:
-            dict or None : Chunk result with autocorr, n_locs, bounds, and chunk_idx
-        """
-        (
-            chunk_bounds,
-            chunk_x,  # x_coords,
-            chunk_y,  # y_coords,
-            sampling_res,
-            max_shift_pixels,
-            min_locs_per_chunk,
-            chunk_idx,
-        ) = chunk_data
-        x_min, x_max, y_min, y_max = chunk_bounds
+    Args:
+        frame_data : tuple
+            (frame_idx, frame_locs, dataset_locs, max_shift, min_locs_per_frame, ton, toff)
 
-        # # Extract localizations in this chunk
-        # mask = (
-        #     (x_coords >= x_min)
-        #     & (x_coords < x_max)
-        #     & (y_coords >= y_min)
-        #     & (y_coords < y_max)
-        # )
+    Returns:
+        tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
+    """
+    from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
 
-        # chunk_x = x_coords[mask]
-        # chunk_y = y_coords[mask]
-        n_locs = len(chunk_x)
+    (
+        frame_idx,
+        frame_locs,
+        dataset_locs,
+        max_shift,
+        min_locs_per_frame,
+        ton,
+        toff,
+    ) = frame_data
 
-        if n_locs < min_locs_per_chunk:
-            return None
+    # Skip frames with insufficient localizations
+    if len(frame_locs) < min_locs_per_frame:
+        return (frame_idx, None, None, None, None, 0.0, 0.0)
 
-        try:
-            # Create histogram for this chunk
-            x_bins = np.arange(x_min, x_max + sampling_res, sampling_res)
-            y_bins = np.arange(y_min, y_max + sampling_res, sampling_res)
+    try:
+        # Calculate RSSO shift between frame and whole dataset
+        shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
+            dataset_locs, frame_locs, max_shift, plot_histogram=False
+        )
 
-            chunk_hist, _, _ = np.histogram2d(
-                chunk_x, chunk_y, bins=[x_bins, y_bins]
+        if shift_x is not None and shift_y is not None:
+            # Extract uncertainty information
+            uncertainty_x = (
+                uncertainty_info.get("uncertainty_x", np.nan)
+                if uncertainty_info
+                else np.nan
             )
-            chunk_hist = chunk_hist.astype(np.float32)
-
-            if np.sum(chunk_hist) == 0:
-                return None
-
-            # Compute autocorrelation using efficient FFT
-            F_hist = np.fft.fft2(chunk_hist)
-            autocorr_full = np.fft.fftshift(
-                np.real(np.fft.ifft2(F_hist * np.conj(F_hist)))
+            uncertainty_y = (
+                uncertainty_info.get("uncertainty_y", np.nan)
+                if uncertainty_info
+                else np.nan
             )
 
-            # Extract central autocorr region
-            center = np.array(autocorr_full.shape) // 2
-            safe_shift = min(max_shift_pixels, min(center))
+            # Calculate confidence based on number of localizations and uncertainty
+            n_locs_frame = len(frame_locs)
+            n_locs_dataset = len(dataset_locs)
 
-            autocorr_chunk = autocorr_full[
-                center[0] - safe_shift : center[0] + safe_shift + 1,
-                center[1] - safe_shift : center[1] + safe_shift + 1,
-            ].copy()
-
-            # Normalize
-            if autocorr_chunk.max() > 0:
-                autocorr_chunk = autocorr_chunk / autocorr_chunk.max()
-                # remove center point
-                center = np.array(autocorr_chunk.shape) // 2
-                meanmax = np.mean(
-                    [
-                        autocorr_chunk[center[0], center[1] - 1],
-                        autocorr_chunk[center[0] - 1, center[1]],
-                        autocorr_chunk[center[0], center[1] + 1],
-                        autocorr_chunk[center[0] + 1, center[1]],
-                    ]
+            # Simple confidence metric based on localization count and uncertainty
+            if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
+                confidence = min(
+                    1.0,
+                    (n_locs_frame / 50.0)
+                    * (
+                        1.0
+                        / (
+                            1.0
+                            + np.sqrt(uncertainty_x ** 2 + uncertainty_y ** 2)
+                        )
+                    ),
                 )
-                autocorr_chunk[center[0], center[1]] = meanmax
+            else:
+                confidence = min(1.0, n_locs_frame / 50.0)
 
-            return {
-                "autocorr": autocorr_chunk,
-                "n_locs": n_locs,
-                "bounds": (x_min, x_max, y_min, y_max),
-                "chunk_idx": chunk_idx,
-            }
+            quality = n_locs_frame * confidence
 
-        except Exception as e:
-            print(f"      Chunk {chunk_idx} failed: {e}")
+            return (
+                frame_idx,
+                shift_x,
+                shift_y,
+                uncertainty_x,
+                uncertainty_y,
+                confidence,
+                quality,
+            )
+        else:
+            return (frame_idx, None, None, None, None, 0.0, 0.0)
+
+    except Exception as e:
+        print(f"      Frame {frame_idx} RSSO failed: {e}")
+        return (frame_idx, None, None, None, None, 0.0, 0.0)
+
+
+def _process_autocorr_chunk(chunk_data):
+    """Process a single spatial chunk for autocorrelation analysis (multiprocessing worker)
+
+    Args:
+        chunk_data : tuple
+            (chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx)
+
+    Returns:
+        dict or None : Chunk result with autocorr, n_locs, bounds, and chunk_idx
+    """
+    (
+        chunk_bounds,
+        chunk_x,  # x_coords,
+        chunk_y,  # y_coords,
+        sampling_res,
+        max_shift_pixels,
+        min_locs_per_chunk,
+        chunk_idx,
+    ) = chunk_data
+    x_min, x_max, y_min, y_max = chunk_bounds
+
+    # # Extract localizations in this chunk
+    # mask = (
+    #     (x_coords >= x_min)
+    #     & (x_coords < x_max)
+    #     & (y_coords >= y_min)
+    #     & (y_coords < y_max)
+    # )
+
+    # chunk_x = x_coords[mask]
+    # chunk_y = y_coords[mask]
+    n_locs = len(chunk_x)
+
+    if n_locs < min_locs_per_chunk:
+        return None
+
+    try:
+        # Create histogram for this chunk
+        x_bins = np.arange(x_min, x_max + sampling_res, sampling_res)
+        y_bins = np.arange(y_min, y_max + sampling_res, sampling_res)
+
+        chunk_hist, _, _ = np.histogram2d(
+            chunk_x, chunk_y, bins=[x_bins, y_bins]
+        )
+        chunk_hist = chunk_hist.astype(np.float32)
+
+        if np.sum(chunk_hist) == 0:
             return None
+
+        # Compute autocorrelation using efficient FFT
+        F_hist = np.fft.fft2(chunk_hist)
+        autocorr_full = np.fft.fftshift(
+            np.real(np.fft.ifft2(F_hist * np.conj(F_hist)))
+        )
+
+        # Extract central autocorr region
+        center = np.array(autocorr_full.shape) // 2
+        safe_shift = min(max_shift_pixels, min(center))
+
+        autocorr_chunk = autocorr_full[
+            center[0] - safe_shift : center[0] + safe_shift + 1,
+            center[1] - safe_shift : center[1] + safe_shift + 1,
+        ].copy()
+
+        # Normalize
+        if autocorr_chunk.max() > 0:
+            autocorr_chunk = autocorr_chunk / autocorr_chunk.max()
+            # remove center point
+            center = np.array(autocorr_chunk.shape) // 2
+            meanmax = np.mean(
+                [
+                    autocorr_chunk[center[0], center[1] - 1],
+                    autocorr_chunk[center[0] - 1, center[1]],
+                    autocorr_chunk[center[0], center[1] + 1],
+                    autocorr_chunk[center[0] + 1, center[1]],
+                ]
+            )
+            autocorr_chunk[center[0], center[1]] = meanmax
+
+        return {
+            "autocorr": autocorr_chunk,
+            "n_locs": n_locs,
+            "bounds": (x_min, x_max, y_min, y_max),
+            "chunk_idx": chunk_idx,
+        }
+
+    except Exception as e:
+        print(f"      Chunk {chunk_idx} failed: {e}")
+        return None
 
     @profile_resource_usage
     @module_decorator
@@ -4744,27 +4740,31 @@ class AutoPicasso(util.AbstractModuleCollection):
         if n_processes is None:
             n_processes = min(mp.cpu_count(), 4)  # Limit processes for memory
 
-        print(f"Computing resolution using autocorrelation analysis...")
-        print(f"  Sampling resolution: {sampling_res} nm (preserved exactly)")
-        print(f"  Maximum shift: {max_shift} nm")
-        print(f"  Chunk size: {chunk_size_nm/1000:.1f} μm")
-        print(f"  Memory limit: {max_memory_gb} GB per chunk")
+        logger.debug(f"Computing resolution using autocorrelation analysis...")
+        logger.debug(
+            f"  Sampling resolution: {sampling_res} nm (preserved exactly)"
+        )
+        logger.debug(f"  Maximum shift: {max_shift} nm")
+        logger.debug(f"  Chunk size: {chunk_size_nm/1000:.1f} μm")
+        logger.debug(f"  Memory limit: {max_memory_gb} GB per chunk")
 
         # Extract coordinates
         x_coords = self.locs["x"] * self.pixelsize  # Convert to nm
         y_coords = self.locs["y"] * self.pixelsize
 
-        print(f"  Processing {len(x_coords)} localizations")
+        logger.debug(f"  Processing {len(x_coords)} localizations")
         x_range = x_coords.max() - x_coords.min()
         y_range = y_coords.max() - y_coords.min()
-        print(f"  Field size: {x_range/1000:.1f} × {y_range/1000:.1f} μm")
+        logger.debug(
+            f"  Field size: {x_range/1000:.1f} × {y_range/1000:.1f} μm"
+        )
 
         # Calculate chunking grid
         n_chunks_x = max(1, int(np.ceil(x_range / chunk_size_nm)))
         n_chunks_y = max(1, int(np.ceil(y_range / chunk_size_nm)))
         total_chunks = n_chunks_x * n_chunks_y
 
-        print(
+        logger.debug(
             f"  Using {n_chunks_x} × {n_chunks_y} = {total_chunks} spatial chunks"
         )
 
@@ -4773,36 +4773,38 @@ class AutoPicasso(util.AbstractModuleCollection):
         max_shift_pixels = int(np.ceil(max_shift / sampling_res))
         autocorr_size = 2 * max_shift_pixels + 1
 
-        chunk_memory_gb = (chunk_pixels**2 * 4 * 8) / (
-            1024**3
+        chunk_memory_gb = (chunk_pixels ** 2 * 4 * 8) / (
+            1024 ** 3
         )  # float32 * 4 arrays
-        print(f"  Estimated memory per chunk: {chunk_memory_gb:.2f} GB")
+        logger.debug(f"  Estimated memory per chunk: {chunk_memory_gb:.2f} GB")
 
         if chunk_memory_gb > max_memory_gb:
             # Reduce chunk size to fit memory
             new_chunk_size = (
-                np.sqrt(max_memory_gb * (1024**3) / (4 * 8)) * sampling_res
+                np.sqrt(max_memory_gb * (1024 ** 3) / (4 * 8)) * sampling_res
             )
             chunk_size_nm = max(2000, new_chunk_size)  # At least 2 μm
-            print(
+            logger.debug(
                 f"  ⚠ Reducing chunk size to {chunk_size_nm/1000:.1f} μm to fit memory"
             )
             n_chunks_x = max(1, int(np.ceil(x_range / chunk_size_nm)))
             n_chunks_y = max(1, int(np.ceil(y_range / chunk_size_nm)))
             total_chunks = n_chunks_x * n_chunks_y
 
-            print(
+            logger.debug(
                 f"  Using {n_chunks_x} × {n_chunks_y} = {total_chunks} spatial chunks"
             )
 
         # Determine number of processes
         n_processes = parameters.get("n_processes", min(mp.cpu_count(), 8))
-        print(f"  Using {n_processes} processes for chunk processing")
+        logger.debug(f"  Using {n_processes} processes for chunk processing")
 
         # Generate chunk boundaries and prepare data for multiprocessing
         x_min_global, y_min_global = x_coords.min(), y_coords.min()
 
-        print(f"  Preparing {total_chunks} chunks for parallel processing...")
+        logger.debug(
+            f"  Preparing {total_chunks} chunks for parallel processing..."
+        )
 
         # Prepare all chunk data for multiprocessing
         chunk_data_list = []
@@ -4843,7 +4845,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 chunk_data_list.append(chunk_data)
 
-        print(
+        logger.debug(
             f"  Processing chunks with multiprocessing ({n_processes} processes)..."
         )
 
@@ -4863,19 +4865,19 @@ class AutoPicasso(util.AbstractModuleCollection):
                     chunk_results.append(result)
                     valid_chunks += 1
                     chunk_idx = result["chunk_idx"]
-                    print(
+                    logger.debug(
                         f"      Chunk {chunk_idx}: {result['n_locs']} locs, peak: {result['autocorr'].max():.3f}"
                     )
 
-        print(f"  Parallel processing completed.")
+        logger.debug(f"  Parallel processing completed.")
         gc.collect()  # Clean up after multiprocessing
 
         total_locs_processed = sum(r["n_locs"] for r in chunk_results)
-        print(f"  Processed {valid_chunks}/{total_chunks} chunks")
-        print(f"  Total localizations: {total_locs_processed:,}")
+        logger.debug(f"  Processed {valid_chunks}/{total_chunks} chunks")
+        logger.debug(f"  Total localizations: {total_locs_processed:,}")
 
         if valid_chunks == 0:
-            print("  ⚠ No valid chunks found!")
+            logger.debug("  ⚠ No valid chunks found!")
             results["resolution"] = np.nan
             results["sigma_x"] = results["sigma_y"] = np.nan
             results["fwhm_x"] = results["fwhm_y"] = np.nan
@@ -4885,7 +4887,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             return parameters, results
 
         # Combine autocorrelations with proper weighting
-        print(f"  Combining {valid_chunks} chunk autocorrelations...")
+        logger.debug(f"  Combining {valid_chunks} chunk autocorrelations...")
 
         # Calculate weights based on localization count
         weights = np.array(
@@ -4893,7 +4895,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         weights = weights / weights.sum()
 
-        print(
+        logger.debug(
             f"    Chunk weights range: {weights.min():.3f} - {weights.max():.3f}"
         )
 
@@ -4923,7 +4925,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         gc.collect()
 
         autocorr_2d = combined_autocorr
-        print(f"  Combined autocorr peak: {autocorr_2d.max():.3f}")
+        logger.debug(f"  Combined autocorr peak: {autocorr_2d.max():.3f}")
 
         # Calculate radial profile
         def compute_radial_profile(autocorr_map, sampling_resolution):
@@ -4956,7 +4958,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Fit Gaussian to extract resolution
         def gaussian_1d(x, amplitude, sigma, background):
             return (
-                amplitude * np.exp(-((x) ** 2) / (2 * sigma**2)) + background
+                amplitude * np.exp(-((x) ** 2) / (2 * sigma ** 2)) + background
             )
 
         # Fit double Gaussian to extract resolution
@@ -4964,8 +4966,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             x, amplitude_1, amplitude_2, sigma_1, sigma_2, background
         ):
             return (
-                amplitude_1 * np.exp(-((x) ** 2) / (2 * sigma_1**2))
-                + amplitude_2 * np.exp(-((x) ** 2) / (2 * sigma_2**2))
+                amplitude_1 * np.exp(-((x) ** 2) / (2 * sigma_1 ** 2))
+                + amplitude_2 * np.exp(-((x) ** 2) / (2 * sigma_2 ** 2))
             ) + background
 
         def gaussian_2d_fit(
@@ -4976,8 +4978,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 amplitude
                 * np.exp(
                     -(
-                        (x - x0) ** 2 / (2 * sigma_x**2)
-                        + (y - y0) ** 2 / (2 * sigma_y**2)
+                        (x - x0) ** 2 / (2 * sigma_x ** 2)
+                        + (y - y0) ** 2 / (2 * sigma_y ** 2)
                     )
                 )
                 # + background
@@ -5003,19 +5005,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 p0=p0_radial,
                 maxfev=2000,
             )
-            print(
-                f"  radial_distances {radial_distances[fit_range]}, popt_radial {popt_radial}"
-            )
 
             sigma_radial = abs(popt_radial[1])
             resolution_radial = sigma_radial * 2.355
             radial_fit_success = True
-            print(
+            logger.debug(
                 f"  Radial fit: σ = {sigma_radial:.2f} nm, FWHM = {resolution_radial:.2f} nm"
             )
 
         except Exception as e:
-            print(f"  Radial fit failed: {e}")
+            logger.debug(f"  Radial fit failed: {e}")
             radial_fit_success = False
             sigma_radial = np.nan
             resolution_radial = np.nan
@@ -5057,19 +5056,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 bounds=(bounds_lo, bounds_hi),
                 maxfev=2000,
             )
-            print(
-                f"  radial_distances {radial_distances[fit_range]}, popt_radial {popt_dblradial}"
-            )
 
             sigma_dblradial = abs(popt_dblradial[2])
             resolution_dblradial = sigma_dblradial * 2.355
             dblradial_fit_success = True
-            print(
+            logger.debug(
                 f"  Double Radial fit: σ = {sigma_dblradial:.2f} nm, FWHM = {resolution_dblradial:.2f} nm"
             )
 
         except Exception as e:
-            print(f"  Radial fit failed: {e}")
+            logger.debug(f"  Radial fit failed: {e}")
             radial_fit_success = False
             sigma_radial = np.nan
             resolution_radial = np.nan
@@ -5111,12 +5107,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             fwhm_y = sigma_y * 2.355
             resolution_2d = np.sqrt(fwhm_x * fwhm_y)
             fit_2d_success = True
-            print(
+            logger.debug(
                 f"  2D fit: σx = {sigma_x:.2f}, σy = {sigma_y:.2f} nm, resolution = {resolution_2d:.2f} nm"
             )
 
         except Exception as e:
-            print(f"  2D fit failed: {e}")
+            logger.debug(f"  2D fit failed: {e}")
             fit_2d_success = False
             sigma_x = sigma_y = np.nan
             fwhm_x = fwhm_y = np.nan
@@ -5534,8 +5530,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 if dim in ["x", "y"]:
                     points[:, i] = points[:, i] * pixelsize
 
-            # print(points)
-            # print(points.shape)
+            # logger.debug(points)
+            # logger.debug(points.shape)
             if len(locs) < 10000:
                 alldist = distance.cdist(points, points)
                 logger.debug("found all distances")
@@ -5651,11 +5647,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _calc_radial_distribution_function_legacy(
         self, alldist, deltar, rmax, nspots, d=2, ax=None
     ):
-        rs = np.arange(
-            0,
-            rmax + deltar,
-            deltar,
-        )
+        rs = np.arange(0, rmax + deltar, deltar,)
         # n_means = np.zeros_like(rs)
         # d_areas = np.zeros_like(rs)
 
@@ -5682,7 +5674,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         density = np.median(rdf[int(len(rs) / 2) :])
 
         # plot results
-        ax.plot(rs, rdf * 1e3**d)
+        ax.plot(rs, rdf * 1e3 ** d)
         ax.set_xlabel("Radius [nm]")
         ax.set_ylabel(f"density [µm^{-d}]")
         ax.set_title("Radial Distribution Function")
@@ -5691,11 +5683,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _calc_radial_distribution_function(  # _KD(
         self, locs, deltar, rmax, nspots, d=2, ax=None
     ):
-        rs = np.arange(
-            0,
-            rmax + deltar,
-            deltar,
-        )
+        rs = np.arange(0, rmax + deltar, deltar,)
 
         tree = KDTree(locs)
         n_means = tree.count_neighbors(tree, rs) / nspots - 1
@@ -5711,7 +5699,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         density = np.median(rdf[int(len(rs) / 2) :])
 
         # plot results
-        ax.plot(rs, rdf * 1e3**d)
+        ax.plot(rs, rdf * 1e3 ** d)
         ax.set_xlabel("Radius [nm]")
         ax.set_ylabel(f"density [µm^{-d}]")
         ax.set_title("Radial Distribution Function")
@@ -5802,9 +5790,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_fig"] = []
         for tag, nneighbors in zip(tags, nneighbor_list):
             kwargs["nn_dists"] = nneighbors.T[kmin - 1 :, :]
-            rho_mle, fitresult = (
-                picasso_outpost.estimate_density_from_neighbordists(**kwargs)
-            )
+            (
+                rho_mle,
+                fitresult,
+            ) = picasso_outpost.estimate_density_from_neighbordists(**kwargs)
             # print(fitresult)
             logger.debug(str(fitresult))
             densities.append(rho_mle)
@@ -6142,9 +6131,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             #     "channel",
             # )
             locs = lib.append_to_rec(
-                locs,
-                i * np.ones(len(locs), dtype=np.int8),
-                "channel",
+                locs, i * np.ones(len(locs), dtype=np.int8), "channel",
             )
             self.channel_locs.append(locs)
             self.channel_info.append(info)
@@ -6791,8 +6778,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 uz = np.array([0, 0, 1])
                 edgelength = int(np.ceil(n ** (1 / dimensionality)))
                 for i in range(n):
-                    iz = i // (edgelength**2)
-                    iy = i % (edgelength**2)
+                    iz = i // (edgelength ** 2)
+                    iy = i % (edgelength ** 2)
                     ix = i % edgelength
                     positions[:, i] = ix * ux + iy * uy + iz * uz
                 positions[0, :] -= np.mean(positions[0, :])
@@ -6865,18 +6852,20 @@ class AutoPicasso(util.AbstractModuleCollection):
             fp_combined_locs = parameters["fp_combined_locs"]
         combined_locs, _ = io.load_locs(fp_combined_locs)
 
-        (ripleysResults, ripleysIntegrals, ripleysMeanVal) = (
-            run_ripleysAnalysis.performRipleysMultiAnalysis(
-                path=results["folder"],
-                filename="",
-                fileIDs=self.channel_tags,
-                radii=radii,
-                nRandomControls=nRandomControls,
-                channel_locs=self.channel_locs,
-                combined_locs=combined_locs,
-                pixelsize=self.pixelsize,
-                atype=parameters["atype"],
-            )
+        (
+            ripleysResults,
+            ripleysIntegrals,
+            ripleysMeanVal,
+        ) = run_ripleysAnalysis.performRipleysMultiAnalysis(
+            path=results["folder"],
+            filename="",
+            fileIDs=self.channel_tags,
+            radii=radii,
+            nRandomControls=nRandomControls,
+            channel_locs=self.channel_locs,
+            combined_locs=combined_locs,
+            pixelsize=self.pixelsize,
+            atype=parameters["atype"],
         )
 
         results["fp_ripleys_meanval"] = os.path.join(
@@ -6898,9 +6887,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         results["ripleys_significant"] = self._find_ripleys_significant(
-            ripleysMeanVal,
-            parameters["ripleys_threshold"],
-            self.channel_tags,
+            ripleysMeanVal, parameters["ripleys_threshold"], self.channel_tags,
         )
 
         return parameters, results
@@ -7226,46 +7213,52 @@ class AutoPicasso(util.AbstractModuleCollection):
         ]
 
         if parameters["metric"] == "FRC":
-            (ripley_matrix, fig_u, fig_n, curves, curves_norm) = (
-                outpost_modules.ripleys.typefraction_all_channels(
-                    mol_coords,
-                    radii,
-                    nRandomControls,
-                    names=self.channel_tags,
-                    shuffle_self=parameters.get("shuffle_self", False),
-                    relocate_self=parameters.get("relocate_self", False),
-                    fraction_exclude_self=parameters.get(
-                        "fraction_exclude_self", False
-                    ),
-                    normalize_to_bulkfraction=parameters.get(
-                        "normalize_to_bulkfraction", None
-                    ),
-                    showControlEnvelope=parameters.get(
-                        "showControlEnvelope", None
-                    ),
-                )
+            (
+                ripley_matrix,
+                fig_u,
+                fig_n,
+                curves,
+                curves_norm,
+            ) = outpost_modules.ripleys.typefraction_all_channels(
+                mol_coords,
+                radii,
+                nRandomControls,
+                names=self.channel_tags,
+                shuffle_self=parameters.get("shuffle_self", False),
+                relocate_self=parameters.get("relocate_self", False),
+                fraction_exclude_self=parameters.get(
+                    "fraction_exclude_self", False
+                ),
+                normalize_to_bulkfraction=parameters.get(
+                    "normalize_to_bulkfraction", None
+                ),
+                showControlEnvelope=parameters.get(
+                    "showControlEnvelope", None
+                ),
             )
         else:
-            (ripley_matrix, fig_u, fig_n, curves, curves_norm) = (
-                outpost_modules.ripleys.analyze_all_channels(
-                    mol_coords,
-                    mask,
-                    mask_pixel_size,
-                    area,
-                    radii,
-                    nRandomControls,
-                    names=self.channel_tags,
-                    metric=parameters["metric"],
-                    controltype=parameters.get("controltype"),
-                    randomization_radius=parameters.get(
-                        "randomization_radius"
-                    ),
-                    normalization=parameters.get("normalization"),
-                    aggfun=parameters.get("aggfun"),
-                    showControlEnvelope=parameters.get(
-                        "showControlEnvelope", None
-                    ),
-                )
+            (
+                ripley_matrix,
+                fig_u,
+                fig_n,
+                curves,
+                curves_norm,
+            ) = outpost_modules.ripleys.analyze_all_channels(
+                mol_coords,
+                mask,
+                mask_pixel_size,
+                area,
+                radii,
+                nRandomControls,
+                names=self.channel_tags,
+                metric=parameters["metric"],
+                controltype=parameters.get("controltype"),
+                randomization_radius=parameters.get("randomization_radius"),
+                normalization=parameters.get("normalization"),
+                aggfun=parameters.get("aggfun"),
+                showControlEnvelope=parameters.get(
+                    "showControlEnvelope", None
+                ),
             )
 
         results["fp_curves"] = os.path.join(results["folder"], "curves.npy")
@@ -7359,13 +7352,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 if std is not None:
                     txt += f"\n+-{std[i, j]:.2f}"
                 ax.text(
-                    j,
-                    i,
-                    txt,
-                    ha="center",
-                    va="center",
-                    color="black",
-                    size=8,
+                    j, i, txt, ha="center", va="center", color="black", size=8,
                 )
         ax.set_xticklabels(channel_tags, rotation=45)
         ax.set_yticklabels(channel_tags, rotation=45)
@@ -7612,10 +7599,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 parameters["swkfl_ripleysk_key"],
                 "fp_ripleys_meanval",
             ): fp_ripleys_meanvals,
-            (
-                parameters["swkfl_ripleysk_key"],
-                "fp_curves",
-            ): fp_curves,
+            (parameters["swkfl_ripleysk_key"], "fp_curves",): fp_curves,
             (
                 parameters["swkfl_ripleysk_key"],
                 "fp_curves_norm",
@@ -7651,18 +7635,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 parameters["swkfl_ripleysk_key"],
                 "ripleys_threshold",
             ): ripleys_thresholds,
-            (
-                parameters["swkfl_ripleysk_key"],
-                "metric",
-            ): ripleys_metrics,
+            (parameters["swkfl_ripleysk_key"], "metric",): ripleys_metrics,
             (
                 parameters["swkfl_ripleysk_key"],
                 "controltype",
             ): ripleys_controltypes,
-            (
-                parameters["swkfl_ripleysk_key"],
-                "radii",
-            ): ripleys_radii,
+            (parameters["swkfl_ripleysk_key"], "radii",): ripleys_radii,
             (
                 parameters["swkfl_ripleysk_key"],
                 "significance_threshold",
@@ -8165,13 +8143,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 if std is not None:
                     txt += f"\n+-{std.loc[A, B]:.2f}"
                 ax.text(
-                    j,
-                    i,
-                    txt,
-                    ha="center",
-                    va="center",
-                    color="black",
-                    size=8,
+                    j, i, txt, ha="center", va="center", color="black", size=8,
                 )
         ax.set_xticklabels(direct_interaction.columns, rotation=45)
         ax.set_yticklabels(direct_interaction.index, rotation=45)
@@ -8322,9 +8294,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # get exp coordinates in mask
         new_info = combined_info + [
-            {
-                "Generated by": "picasso-workflow: create_mask",
-            }
+            {"Generated by": "picasso-workflow: create_mask",}
         ]
         # self.channel_info = [new_info]
         df_merge_mask, mask_dict = mask.exp_data_in_mask(
@@ -8587,7 +8557,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize = self.pixelsize
         nth_largest = parameters.get("nth_largest", 0)
         mask = outpost_modules.mask.CellMask.load(parameters["fp_mask"])
-        mask_pixel_area = mask._upsample**2
+        mask_pixel_area = mask._upsample ** 2
         densities = mask.densities
 
         nbins = parameters.get("nbins", 20)
@@ -8718,7 +8688,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             color="r",
             label="selection boundaries",
         )
-        mask_pixel_area = mask._upsample**2
+        mask_pixel_area = mask._upsample ** 2
         xlim = ax.get_xlim()
         x_density = np.linspace(xlim[0], xlim[1], 100) * 1e-6
         x_nlocs = x_density * mask_pixel_area
@@ -8906,9 +8876,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     search_i = int(search_i)
                     if search_i == i and search_name == module_name:
                         parameter_val = module_pars.get(search_parname)
-                        loaded_data[(search_module, search_parname)] = (
-                            parameter_val
-                        )
+                        loaded_data[
+                            (search_module, search_parname)
+                        ] = parameter_val
 
         # find AggregationWorkflowRunner config
         fp_wr_cfg = os.path.join(
@@ -9195,38 +9165,14 @@ class AutoPicasso(util.AbstractModuleCollection):
         exp_key = parameters["swkfl_dbscan_molint_key"]
         csr_key = parameters["swkfl_CSR_sim_in_mask_key"]
         search_dict = {
-            (
-                exp_key,
-                "fp_barcode",
-            ): fp_exp_bc,
-            (
-                exp_key,
-                "fp_barcode_agg",
-            ): fp_exp_bcagg,
-            (
-                exp_key,
-                "fp_barcode_map",
-            ): fp_exp_bcmap,
-            (
-                exp_key,
-                "fp_cluster_info",
-            ): fp_cluster_info_exp,
-            (
-                csr_key,
-                "fp_barcode",
-            ): fp_csr_bc,
-            (
-                csr_key,
-                "fp_barcode_agg",
-            ): fp_csr_bcagg,
-            (
-                csr_key,
-                "fp_barcode_map",
-            ): fp_csr_bcmap,
-            (
-                csr_key,
-                "fp_cluster_info",
-            ): fp_cluster_info_csr,
+            (exp_key, "fp_barcode",): fp_exp_bc,
+            (exp_key, "fp_barcode_agg",): fp_exp_bcagg,
+            (exp_key, "fp_barcode_map",): fp_exp_bcmap,
+            (exp_key, "fp_cluster_info",): fp_cluster_info_exp,
+            (csr_key, "fp_barcode",): fp_csr_bc,
+            (csr_key, "fp_barcode_agg",): fp_csr_bcagg,
+            (csr_key, "fp_barcode_map",): fp_csr_bcmap,
+            (csr_key, "fp_cluster_info",): fp_cluster_info_csr,
         }
         for folder, name in zip(
             parameters["fp_workflows"], parameters["report_names"]
@@ -9408,18 +9354,19 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_fig_nbarcodesbox"] = os.path.join(
             results["folder"], "n_barcodes_boxplot.png"
         )
-        (significant_barcodes, p_values) = (
-            picasso_outpost._plot_and_compare_barcodes(
-                barcode_numbers,
-                origin_colors,
-                targets,
-                parameters["ttest_pvalue_max"],
-                parameters["population_threshold"],
-                parameters["cellfraction_threshold"],
-                results["fp_fig_nbarcodesbox"],
-                title="Barcode Occurrence",
-                ylabel="# barcodes found",
-            )
+        (
+            significant_barcodes,
+            p_values,
+        ) = picasso_outpost._plot_and_compare_barcodes(
+            barcode_numbers,
+            origin_colors,
+            targets,
+            parameters["ttest_pvalue_max"],
+            parameters["population_threshold"],
+            parameters["cellfraction_threshold"],
+            results["fp_fig_nbarcodesbox"],
+            title="Barcode Occurrence",
+            ylabel="# barcodes found",
         )
         # results["significant_barcodes"] = significant_barcodes
         # results["ttest_pvalues"] = p_values
@@ -9446,18 +9393,19 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_fig_abarcodesbox"] = os.path.join(
             results["folder"], "a_barcodes_boxplot.png"
         )
-        (significant_barcodes, p_values) = (
-            picasso_outpost._plot_and_compare_barcodes(
-                barcode_areas,
-                origin_colors,
-                targets,
-                parameters["ttest_pvalue_max"],
-                parameters["population_threshold"],
-                parameters["cellfraction_threshold"],
-                results["fp_fig_abarcodesbox"],
-                title="Barcode Areas",
-                ylabel="total cluster area (nm^2)",
-            )
+        (
+            significant_barcodes,
+            p_values,
+        ) = picasso_outpost._plot_and_compare_barcodes(
+            barcode_areas,
+            origin_colors,
+            targets,
+            parameters["ttest_pvalue_max"],
+            parameters["population_threshold"],
+            parameters["cellfraction_threshold"],
+            results["fp_fig_abarcodesbox"],
+            title="Barcode Areas",
+            ylabel="total cluster area (nm^2)",
         )
         results["significant_barcodes"] = significant_barcodes
         results["ttest_pvalues"] = p_values
@@ -9892,9 +9840,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         for prop in ["min_n_locs_per_frame", "xi", "min_cluster_size"]:
             if val := parameters.get(prop):
                 kwargs[prop] = val
-        (cluster_picks, nlocs, rmsds, labels, newlabels) = (
-            picasso_outpost.find_structures(self.locs, self.info, **kwargs)
-        )
+        (
+            cluster_picks,
+            nlocs,
+            rmsds,
+            labels,
+            newlabels,
+        ) = picasso_outpost.find_structures(self.locs, self.info, **kwargs)
 
         results["n_clusters"] = len(cluster_picks)
         results["n_picks"] = [len(picks) for picks in cluster_picks]
@@ -10631,9 +10583,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 structures = self.create_le_structures(
                     target, reference, test_distance
                 )
-                (structures, targets) = (
-                    picasso_outpost.load_structures_from_dict(structures)
-                )
+                (
+                    structures,
+                    targets,
+                ) = picasso_outpost.load_structures_from_dict(structures)
                 all_test_structures.append(structures)
                 logger.debug(f"pair distance: {test_distance}")
                 tgts = []
@@ -10654,17 +10607,21 @@ class AutoPicasso(util.AbstractModuleCollection):
                 k: v if isinstance(v, list) else [v]
                 for k, v in parameters["labeling_uncertainty"].items()
             }
-            (best_score, best_idx, label_unc, best_mixer, best_props) = (
-                spinna.compare_models(
-                    models=all_test_structures,
-                    exp_data=exp_data,
-                    granularity=parameters["granularity"],
-                    label_unc=parameters["labeling_uncertainty"],
-                    le=labeling_efficiency,
-                    width=width,
-                    height=height,
-                    depth=depth,
-                )
+            (
+                best_score,
+                best_idx,
+                label_unc,
+                best_mixer,
+                best_props,
+            ) = spinna.compare_models(
+                models=all_test_structures,
+                exp_data=exp_data,
+                granularity=parameters["granularity"],
+                label_unc=parameters["labeling_uncertainty"],
+                le=labeling_efficiency,
+                width=width,
+                height=height,
+                depth=depth,
             )
             pair_distance = pair_distance[best_idx]
             structures = all_test_structures[best_idx]
