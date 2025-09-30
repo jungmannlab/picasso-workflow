@@ -4591,7 +4591,6 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-
     @staticmethod
     def _process_autocorr_chunk(chunk_data):
         """Process a single spatial chunk for autocorrelation analysis (multiprocessing worker)
@@ -4603,12 +4602,24 @@ class AutoPicasso(util.AbstractModuleCollection):
         Returns:
             dict or None : Chunk result with autocorr, n_locs, bounds, and chunk_idx
         """
-        chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx = chunk_data
+        (
+            chunk_bounds,
+            x_coords,
+            y_coords,
+            sampling_res,
+            max_shift_pixels,
+            min_locs_per_chunk,
+            chunk_idx,
+        ) = chunk_data
         x_min, x_max, y_min, y_max = chunk_bounds
 
         # Extract localizations in this chunk
-        mask = ((x_coords >= x_min) & (x_coords < x_max) &
-               (y_coords >= y_min) & (y_coords < y_max))
+        mask = (
+            (x_coords >= x_min)
+            & (x_coords < x_max)
+            & (y_coords >= y_min)
+            & (y_coords < y_max)
+        )
 
         chunk_x = x_coords[mask]
         chunk_y = y_coords[mask]
@@ -4622,7 +4633,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             x_bins = np.arange(x_min, x_max + sampling_res, sampling_res)
             y_bins = np.arange(y_min, y_max + sampling_res, sampling_res)
 
-            chunk_hist, _, _ = np.histogram2d(chunk_x, chunk_y, bins=[x_bins, y_bins])
+            chunk_hist, _, _ = np.histogram2d(
+                chunk_x, chunk_y, bins=[x_bins, y_bins]
+            )
             chunk_hist = chunk_hist.astype(np.float32)
 
             if np.sum(chunk_hist) == 0:
@@ -4639,8 +4652,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             safe_shift = min(max_shift_pixels, min(center))
 
             autocorr_chunk = autocorr_full[
-                center[0] - safe_shift:center[0] + safe_shift + 1,
-                center[1] - safe_shift:center[1] + safe_shift + 1
+                center[0] - safe_shift : center[0] + safe_shift + 1,
+                center[1] - safe_shift : center[1] + safe_shift + 1,
             ].copy()
 
             # Normalize
@@ -4648,25 +4661,26 @@ class AutoPicasso(util.AbstractModuleCollection):
                 autocorr_chunk = autocorr_chunk / autocorr_chunk.max()
                 # remove center point
                 center = np.array(autocorr_chunk.shape) // 2
-                meanmax = np.mean([
-                    autocorr_chunk[center[0], center[1] - 1],
-                    autocorr_chunk[center[0] - 1, center[1]],
-                    autocorr_chunk[center[0], center[1] + 1],
-                    autocorr_chunk[center[0] + 1, center[1]]
-                    ])
+                meanmax = np.mean(
+                    [
+                        autocorr_chunk[center[0], center[1] - 1],
+                        autocorr_chunk[center[0] - 1, center[1]],
+                        autocorr_chunk[center[0], center[1] + 1],
+                        autocorr_chunk[center[0] + 1, center[1]],
+                    ]
+                )
                 autocorr_chunk[center[0], center[1]] = meanmax
 
             return {
-                'autocorr': autocorr_chunk,
-                'n_locs': n_locs,
-                'bounds': (x_min, x_max, y_min, y_max),
-                'chunk_idx': chunk_idx
+                "autocorr": autocorr_chunk,
+                "n_locs": n_locs,
+                "bounds": (x_min, x_max, y_min, y_max),
+                "chunk_idx": chunk_idx,
             }
 
         except Exception as e:
             print(f"      Chunk {chunk_idx} failed: {e}")
             return None
-
 
     @profile_resource_usage
     @module_decorator
@@ -4719,8 +4733,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         sampling_res = parameters.get("sampling_res", 0.5)  # 0.5 nm sampling
         max_shift = parameters.get("max_shift", 10.0)  # 10 nm max shift
         chunk_size_nm = parameters.get("chunk_size_nm", 5000)  # 5 μm chunks
-        min_locs_per_chunk = parameters.get("min_locs_per_chunk", 500)  # Min locs per chunk
-        max_memory_gb = parameters.get("max_memory_gb", 2.0)  # Smaller memory limit
+        min_locs_per_chunk = parameters.get(
+            "min_locs_per_chunk", 500
+        )  # Min locs per chunk
+        max_memory_gb = parameters.get(
+            "max_memory_gb", 2.0
+        )  # Smaller memory limit
         n_processes = parameters.get("n_processes", None)
 
         if n_processes is None:
@@ -4746,24 +4764,32 @@ class AutoPicasso(util.AbstractModuleCollection):
         n_chunks_y = max(1, int(np.ceil(y_range / chunk_size_nm)))
         total_chunks = n_chunks_x * n_chunks_y
 
-        print(f"  Using {n_chunks_x} × {n_chunks_y} = {total_chunks} spatial chunks")
+        print(
+            f"  Using {n_chunks_x} × {n_chunks_y} = {total_chunks} spatial chunks"
+        )
 
         # Memory estimate per chunk
         chunk_pixels = int(chunk_size_nm / sampling_res)
         max_shift_pixels = int(np.ceil(max_shift / sampling_res))
         autocorr_size = 2 * max_shift_pixels + 1
 
-        chunk_memory_gb = (chunk_pixels**2 * 4 * 8) / (1024**3)  # float32 * 4 arrays
+        chunk_memory_gb = (chunk_pixels**2 * 4 * 8) / (
+            1024**3
+        )  # float32 * 4 arrays
         print(f"  Estimated memory per chunk: {chunk_memory_gb:.2f} GB")
 
         if chunk_memory_gb > max_memory_gb:
             # Reduce chunk size to fit memory
-            new_chunk_size = np.sqrt(max_memory_gb * (1024**3) / (4 * 8)) * sampling_res
+            new_chunk_size = (
+                np.sqrt(max_memory_gb * (1024**3) / (4 * 8)) * sampling_res
+            )
             chunk_size_nm = max(2000, new_chunk_size)  # At least 2 μm
-            print(f"  ⚠ Reducing chunk size to {chunk_size_nm/1000:.1f} μm to fit memory")
+            print(
+                f"  ⚠ Reducing chunk size to {chunk_size_nm/1000:.1f} μm to fit memory"
+            )
 
         # Determine number of processes
-        n_processes = parameters.get('n_processes', min(mp.cpu_count(), 8))
+        n_processes = parameters.get("n_processes", min(mp.cpu_count(), 8))
         print(f"  Using {n_processes} processes for chunk processing")
 
         # Generate chunk boundaries and prepare data for multiprocessing
@@ -4783,12 +4809,26 @@ class AutoPicasso(util.AbstractModuleCollection):
                 y_chunk_min = y_min_global + j * chunk_size_nm
                 y_chunk_max = min(y_chunk_min + chunk_size_nm, y_coords.max())
 
-                chunk_bounds = (x_chunk_min, x_chunk_max, y_chunk_min, y_chunk_max)
-                chunk_data = (chunk_bounds, x_coords, y_coords, sampling_res,
-                             max_shift_pixels, min_locs_per_chunk, chunk_idx)
+                chunk_bounds = (
+                    x_chunk_min,
+                    x_chunk_max,
+                    y_chunk_min,
+                    y_chunk_max,
+                )
+                chunk_data = (
+                    chunk_bounds,
+                    x_coords,
+                    y_coords,
+                    sampling_res,
+                    max_shift_pixels,
+                    min_locs_per_chunk,
+                    chunk_idx,
+                )
                 chunk_data_list.append(chunk_data)
 
-        print(f"  Processing chunks with multiprocessing ({n_processes} processes)...")
+        print(
+            f"  Processing chunks with multiprocessing ({n_processes} processes)..."
+        )
 
         # Process chunks in parallel
         chunk_results = []
@@ -4796,20 +4836,24 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         with mp.Pool(processes=n_processes) as pool:
             # Submit all chunk processing jobs
-            results_mp = pool.map(self._process_autocorr_chunk, chunk_data_list)
+            results_mp = pool.map(
+                self._process_autocorr_chunk, chunk_data_list
+            )
 
             # Collect valid results
             for result in results_mp:
                 if result is not None:
                     chunk_results.append(result)
                     valid_chunks += 1
-                    chunk_idx = result['chunk_idx']
-                    print(f"      Chunk {chunk_idx}: {result['n_locs']} locs, peak: {result['autocorr'].max():.3f}")
+                    chunk_idx = result["chunk_idx"]
+                    print(
+                        f"      Chunk {chunk_idx}: {result['n_locs']} locs, peak: {result['autocorr'].max():.3f}"
+                    )
 
         print(f"  Parallel processing completed.")
         gc.collect()  # Clean up after multiprocessing
 
-        total_locs_processed = sum(r['n_locs'] for r in chunk_results)
+        total_locs_processed = sum(r["n_locs"] for r in chunk_results)
         print(f"  Processed {valid_chunks}/{total_chunks} chunks")
         print(f"  Total localizations: {total_locs_processed:,}")
 
@@ -4827,28 +4871,32 @@ class AutoPicasso(util.AbstractModuleCollection):
         print(f"  Combining {valid_chunks} chunk autocorrelations...")
 
         # Calculate weights based on localization count
-        weights = np.array([r['n_locs'] for r in chunk_results], dtype=np.float64)
+        weights = np.array(
+            [r["n_locs"] for r in chunk_results], dtype=np.float64
+        )
         weights = weights / weights.sum()
 
-        print(f"    Chunk weights range: {weights.min():.3f} - {weights.max():.3f}")
+        print(
+            f"    Chunk weights range: {weights.min():.3f} - {weights.max():.3f}"
+        )
 
         # Find common autocorr size (use smallest)
-        autocorr_sizes = [r['autocorr'].shape[0] for r in chunk_results]
+        autocorr_sizes = [r["autocorr"].shape[0] for r in chunk_results]
         min_size = min(autocorr_sizes)
 
         # Combine weighted autocorrelations
         combined_autocorr = np.zeros((min_size, min_size), dtype=np.float64)
 
         for i, result in enumerate(chunk_results):
-            chunk_autocorr = result['autocorr']
+            chunk_autocorr = result["autocorr"]
 
             # Crop to common size if needed
             if chunk_autocorr.shape[0] > min_size:
                 center = chunk_autocorr.shape[0] // 2
                 half_min = min_size // 2
                 chunk_autocorr = chunk_autocorr[
-                    center - half_min:center - half_min + min_size,
-                    center - half_min:center - half_min + min_size
+                    center - half_min : center - half_min + min_size,
+                    center - half_min : center - half_min + min_size,
                 ]
 
             combined_autocorr += weights[i] * chunk_autocorr
@@ -4863,9 +4911,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Calculate radial profile
         def compute_radial_profile(autocorr_map, sampling_resolution):
             center = np.array(autocorr_map.shape) // 2
-            y, x = np.ogrid[:autocorr_map.shape[0], :autocorr_map.shape[1]]
+            y, x = np.ogrid[: autocorr_map.shape[0], : autocorr_map.shape[1]]
 
-            distances = np.sqrt((x - center[1])**2 + (y - center[0])**2) * sampling_resolution
+            distances = (
+                np.sqrt((x - center[1]) ** 2 + (y - center[0]) ** 2)
+                * sampling_resolution
+            )
             max_radius = min(center) * sampling_resolution
             radial_bins = np.linspace(0, max_radius, min(center))
 
@@ -4881,23 +4932,33 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             return radial_profile, radial_distances
 
-        radial_profile, radial_distances = compute_radial_profile(autocorr_2d, sampling_res)
+        radial_profile, radial_distances = compute_radial_profile(
+            autocorr_2d, sampling_res
+        )
 
         # Fit Gaussian to extract resolution
         def gaussian_1d(x, amplitude, sigma):
-            return amplitude * np.exp(-(x)**2 / (2 * sigma**2))
+            return amplitude * np.exp(-((x) ** 2) / (2 * sigma**2))
 
         def gaussian_2d_fit(xy, amplitude, x0, y0, sigma_x, sigma_y):
             x, y = xy
-            return (amplitude * np.exp(-((x - x0)**2 / (2 * sigma_x**2) +
-                                       (y - y0)**2 / (2 * sigma_y**2)))).ravel()
+            return (
+                amplitude
+                * np.exp(
+                    -(
+                        (x - x0) ** 2 / (2 * sigma_x**2)
+                        + (y - y0) ** 2 / (2 * sigma_y**2)
+                    )
+                )
+            ).ravel()
 
         # Fit 1D Gaussian to radial profile
         try:
             center_peak = radial_profile[0]
             # background_est = np.mean(radial_profile[-5:]) if len(radial_profile) > 5 else 0
+            # p0_radial = [center_peak - background_est, 0, 1.0, background_est]
             background_est = 0
-            p0_radial = [center_peak - background_est, 0, 1.0]#, background_est]
+            p0_radial = [center_peak - background_est, 1.0]
 
             fit_range = radial_distances < max_shift / 2
             if np.sum(fit_range) < 3:
@@ -4908,14 +4969,18 @@ class AutoPicasso(util.AbstractModuleCollection):
                 radial_distances[fit_range],
                 radial_profile[fit_range],
                 p0=p0_radial,
-                maxfev=2000
+                maxfev=2000,
             )
-            print(f"  radial_distances {radial_distances[fit_range]}, popt_radial {popt_radial}")
+            print(
+                f"  radial_distances {radial_distances[fit_range]}, popt_radial {popt_radial}"
+            )
 
             sigma_radial = abs(popt_radial[2])
             resolution_radial = sigma_radial * 2.355
             radial_fit_success = True
-            print(f"  Radial fit: σ = {sigma_radial:.2f} nm, FWHM = {resolution_radial:.2f} nm")
+            print(
+                f"  Radial fit: σ = {sigma_radial:.2f} nm, FWHM = {resolution_radial:.2f} nm"
+            )
 
         except Exception as e:
             print(f"  Radial fit failed: {e}")
@@ -4934,7 +4999,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             peak_val = autocorr_2d.max()
             # background_2d = np.mean(autocorr_2d[autocorr_2d < peak_val * 0.1])
             background_2d = 0
-            p0_2d = [peak_val - background_2d, 0, 0, 1.0, 1.0]#, background_2d]
+            p0_2d = [
+                peak_val - background_2d,
+                0,
+                0,
+                1.0,
+                1.0,
+            ]  # , background_2d]
 
             fit_size = min(autocorr_2d.shape[0] // 3, 15)
             center_2d = autocorr_2d.shape[0] // 2
@@ -4945,7 +5016,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 (X_2d[fit_region, fit_region], Y_2d[fit_region, fit_region]),
                 autocorr_2d[fit_region, fit_region].ravel(),
                 p0=p0_2d,
-                maxfev=2000
+                maxfev=2000,
             )
 
             sigma_x = abs(popt_2d[3])
@@ -4954,7 +5025,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             fwhm_y = sigma_y * 2.355
             resolution_2d = np.sqrt(fwhm_x * fwhm_y)
             fit_2d_success = True
-            print(f"  2D fit: σx = {sigma_x:.2f}, σy = {sigma_y:.2f} nm, resolution = {resolution_2d:.2f} nm")
+            print(
+                f"  2D fit: σx = {sigma_x:.2f}, σy = {sigma_y:.2f} nm, resolution = {resolution_2d:.2f} nm"
+            )
 
         except Exception as e:
             print(f"  2D fit failed: {e}")
@@ -4993,46 +5066,60 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Plot 1: 2D autocorrelation
         extent_nm = (min_size // 2) * sampling_res
-        im1 = ax1.imshow(autocorr_2d, extent=[-extent_nm, extent_nm, -extent_nm, extent_nm],
-                       origin='lower', cmap='hot')
-        ax1.set_xlabel('Δx (nm)')
-        ax1.set_ylabel('Δy (nm)')
-        ax1.set_title('2D Autocorrelation')
+        im1 = ax1.imshow(
+            autocorr_2d,
+            extent=[-extent_nm, extent_nm, -extent_nm, extent_nm],
+            origin="lower",
+            cmap="hot",
+        )
+        ax1.set_xlabel("Δx (nm)")
+        ax1.set_ylabel("Δy (nm)")
+        ax1.set_title("2D Autocorrelation")
         plt.colorbar(im1, ax=ax1, shrink=0.8)
 
         # Plot 2: Radial profile
-        ax2.plot(radial_distances, radial_profile, 'b-', linewidth=2, label='Data')
+        ax2.plot(
+            radial_distances, radial_profile, "b-", linewidth=2, label="Data"
+        )
         if radial_fit_success:
             radial_fit = gaussian_1d(radial_distances, *popt_radial)
-            ax2.plot(radial_distances, radial_fit, 'r--', linewidth=2, label='Fit')
-            ax2.set_title(f'Radial Profile (FWHM: {resolution_radial:.2f} nm)')
+            ax2.plot(
+                radial_distances, radial_fit, "r--", linewidth=2, label="Fit"
+            )
+            ax2.set_title(f"Radial Profile (FWHM: {resolution_radial:.2f} nm)")
         else:
-            ax2.set_title('Radial Profile')
+            ax2.set_title("Radial Profile")
 
-        ax2.set_xlabel('Distance (nm)')
-        ax2.set_ylabel('Autocorrelation')
+        ax2.set_xlabel("Distance (nm)")
+        ax2.set_ylabel("Autocorrelation")
         ax2.legend()
         ax2.grid(True, alpha=0.3)
 
         plt.tight_layout()
 
         # Save plots
-        plot_path_2d = os.path.join(results["folder"], "resolution_autocorr_2d.png")
+        plot_path_2d = os.path.join(
+            results["folder"], "resolution_autocorr_2d.png"
+        )
         plt.savefig(plot_path_2d, dpi=300, bbox_inches="tight")
         plt.close()
 
         # Simple radial plot
         fig, ax = plt.subplots(figsize=(6, 4))
-        ax.plot(radial_distances, radial_profile, 'b-', linewidth=2)
+        ax.plot(radial_distances, radial_profile, "b-", linewidth=2)
         if radial_fit_success:
             radial_fit = gaussian_1d(radial_distances, *popt_radial)
-            ax.plot(radial_distances, radial_fit, 'r--', linewidth=2)
-            ax.set_title(f'Radial Autocorr (Resolution: {resolution_radial:.2f} nm FWHM)')
-        ax.set_xlabel('Distance (nm)')
-        ax.set_ylabel('Autocorrelation')
+            ax.plot(radial_distances, radial_fit, "r--", linewidth=2)
+            ax.set_title(
+                f"Radial Autocorr (Resolution: {resolution_radial:.2f} nm FWHM)"
+            )
+        ax.set_xlabel("Distance (nm)")
+        ax.set_ylabel("Autocorrelation")
         ax.grid(True, alpha=0.3)
 
-        plot_path_radial = os.path.join(results["folder"], "resolution_autocorr_radial.png")
+        plot_path_radial = os.path.join(
+            results["folder"], "resolution_autocorr_radial.png"
+        )
         plt.savefig(plot_path_radial, dpi=300, bbox_inches="tight")
         plt.close()
 
