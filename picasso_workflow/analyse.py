@@ -4604,8 +4604,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         (
             chunk_bounds,
-            x_coords,
-            y_coords,
+            chunk_x, # x_coords,
+            chunk_y, #y_coords,
             sampling_res,
             max_shift_pixels,
             min_locs_per_chunk,
@@ -4613,16 +4613,16 @@ class AutoPicasso(util.AbstractModuleCollection):
         ) = chunk_data
         x_min, x_max, y_min, y_max = chunk_bounds
 
-        # Extract localizations in this chunk
-        mask = (
-            (x_coords >= x_min)
-            & (x_coords < x_max)
-            & (y_coords >= y_min)
-            & (y_coords < y_max)
-        )
+        # # Extract localizations in this chunk
+        # mask = (
+        #     (x_coords >= x_min)
+        #     & (x_coords < x_max)
+        #     & (y_coords >= y_min)
+        #     & (y_coords < y_max)
+        # )
 
-        chunk_x = x_coords[mask]
-        chunk_y = y_coords[mask]
+        # chunk_x = x_coords[mask]
+        # chunk_y = y_coords[mask]
         n_locs = len(chunk_x)
 
         if n_locs < min_locs_per_chunk:
@@ -4787,6 +4787,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             print(
                 f"  ⚠ Reducing chunk size to {chunk_size_nm/1000:.1f} μm to fit memory"
             )
+            n_chunks_x = max(1, int(np.ceil(x_range / chunk_size_nm)))
+            n_chunks_y = max(1, int(np.ceil(y_range / chunk_size_nm)))
+            total_chunks = n_chunks_x * n_chunks_y
+
+            print(
+                f"  Using {n_chunks_x} × {n_chunks_y} = {total_chunks} spatial chunks"
+            )
 
         # Determine number of processes
         n_processes = parameters.get("n_processes", min(mp.cpu_count(), 8))
@@ -4815,10 +4822,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                     y_chunk_min,
                     y_chunk_max,
                 )
+                # Extract localizations in this chunk
+                mask = (
+                    (x_coords >= x_min)
+                    & (x_coords < x_max)
+                    & (y_coords >= y_min)
+                    & (y_coords < y_max)
+                )
+                chunk_x = x_coords[mask]
+                chunk_y = y_coords[mask]
+
                 chunk_data = (
                     chunk_bounds,
-                    x_coords,
-                    y_coords,
+                    chunk_x,
+                    chunk_y,
                     sampling_res,
                     max_shift_pixels,
                     min_locs_per_chunk,
