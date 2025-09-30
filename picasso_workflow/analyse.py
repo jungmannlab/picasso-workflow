@@ -4937,10 +4937,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         # Fit Gaussian to extract resolution
-        def gaussian_1d(x, amplitude, sigma):
-            return amplitude * np.exp(-((x) ** 2) / (2 * sigma**2))
+        def gaussian_1d(x, amplitude, sigma, background):
+            return amplitude * np.exp(-((x) ** 2) / (2 * sigma**2)) + background
 
-        def gaussian_2d_fit(xy, amplitude, x0, y0, sigma_x, sigma_y):
+        def gaussian_2d_fit(xy, amplitude, x0, y0, sigma_x, sigma_y, background):
             x, y = xy
             return (
                 amplitude
@@ -4949,16 +4949,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                         (x - x0) ** 2 / (2 * sigma_x**2)
                         + (y - y0) ** 2 / (2 * sigma_y**2)
                     )
-                )
+                ) + background
             ).ravel()
 
         # Fit 1D Gaussian to radial profile
         try:
             center_peak = radial_profile[0]
-            # background_est = np.mean(radial_profile[-5:]) if len(radial_profile) > 5 else 0
+            background_est = np.mean(radial_profile[-5:]) if len(radial_profile) > 5 else 0
             # p0_radial = [center_peak - background_est, 0, 1.0, background_est]
-            background_est = 0
-            p0_radial = [center_peak - background_est, 1.0]
+            p0_radial = [center_peak - background_est, 1.0, background_est]
 
             fit_range = radial_distances < max_shift / 2
             if np.sum(fit_range) < 3:
@@ -4997,15 +4996,16 @@ class AutoPicasso(util.AbstractModuleCollection):
             X_2d, Y_2d = np.meshgrid(x_2d, y_2d)
 
             peak_val = autocorr_2d.max()
-            # background_2d = np.mean(autocorr_2d[autocorr_2d < peak_val * 0.1])
-            background_2d = 0
+            background_2d = np.quantile(autocorr_2d, 0.1)
+            # background_2d = 0
             p0_2d = [
                 peak_val - background_2d,
                 0,
                 0,
                 1.0,
                 1.0,
-            ]  # , background_2d]
+                background_2d
+            ]
 
             fit_size = min(autocorr_2d.shape[0] // 3, 15)
             center_2d = autocorr_2d.shape[0] // 2
