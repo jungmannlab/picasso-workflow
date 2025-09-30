@@ -4938,16 +4938,22 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Fit Gaussian to extract resolution
         def gaussian_1d(x, amplitude, sigma, background):
-            return amplitude * np.exp(-((x) ** 2) / (2 * sigma**2)) + background
+            return (
+                amplitude * np.exp(-((x) ** 2) / (2 * sigma**2)) + background
+            )
 
         # Fit double Gaussian to extract resolution
-        def dblgaussian_1d(x, amplitude_1, amplitude_2, sigma_1, sigma_2, background):
+        def dblgaussian_1d(
+            x, amplitude_1, amplitude_2, sigma_1, sigma_2, background
+        ):
             return (
                 amplitude_1 * np.exp(-((x) ** 2) / (2 * sigma_1**2))
                 + amplitude_2 * np.exp(-((x) ** 2) / (2 * sigma_2**2))
-                ) + background
+            ) + background
 
-        def gaussian_2d_fit(xy, amplitude, x0, y0, sigma_x, sigma_y, background):
+        def gaussian_2d_fit(
+            xy, amplitude, x0, y0, sigma_x, sigma_y, background
+        ):
             x, y = xy
             return (
                 amplitude
@@ -4956,13 +4962,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                         (x - x0) ** 2 / (2 * sigma_x**2)
                         + (y - y0) ** 2 / (2 * sigma_y**2)
                     )
-                ) + background
+                )
+                + background
             ).ravel()
 
         # Fit 1D Gaussian to radial profile
         try:
             center_peak = radial_profile[0]
-            background_est = np.mean(radial_profile[-5:]) if len(radial_profile) > 5 else 0
+            background_est = (
+                np.mean(radial_profile[-5:]) if len(radial_profile) > 5 else 0
+            )
             # p0_radial = [center_peak - background_est, 0, 1.0, background_est]
             p0_radial = [center_peak - background_est, 1.0, background_est]
 
@@ -4998,12 +5007,26 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Fit 1D double Gaussian to radial profile
         try:
             center_peak = radial_profile[0]
-            background_est = np.mean(radial_profile[-5:]) if len(radial_profile) > 5 else 0
+            background_est = (
+                np.mean(radial_profile[-5:]) if len(radial_profile) > 5 else 0
+            )
             # p0_radial = [center_peak - background_est, 0, 1.0, background_est]
             total_amp = center_peak - background_est
-            p0_dblradial = [0.8 * total_amp, 0.2 * total_amp, 1.0, 10, background_est]
+            p0_dblradial = [
+                0.8 * total_amp,
+                0.2 * total_amp,
+                1.0,
+                10,
+                background_est,
+            ]
             bounds_lo = [0.5 * total_amp, 0, 0.5, 4, 0]
-            bounds_hi = [1.1 * total_amp, 0.5 * total_amp, 10, 50, 5 * background_est]
+            bounds_hi = [
+                1.1 * total_amp,
+                0.5 * total_amp,
+                10,
+                50,
+                5 * background_est,
+            ]
 
             fit_range = radial_distances < max_shift / 2
             if np.sum(fit_range) < 3:
@@ -5021,8 +5044,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 f"  radial_distances {radial_distances[fit_range]}, popt_radial {popt_dblradial}"
             )
 
-            sigma_dblradial = abs(popt_radial[2])
-            resolution_dblradial = sigma_radial * 2.355
+            sigma_dblradial = abs(popt_dblradial[2])
+            resolution_dblradial = sigma_dblradial * 2.355
             dblradial_fit_success = True
             print(
                 f"  Double Radial fit: σ = {sigma_dblradial:.2f} nm, FWHM = {resolution_dblradial:.2f} nm"
@@ -5045,14 +5068,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             peak_val = autocorr_2d.max()
             background_2d = np.quantile(autocorr_2d, 0.1)
             # background_2d = 0
-            p0_2d = [
-                peak_val - background_2d,
-                0,
-                0,
-                1.0,
-                1.0,
-                background_2d
-            ]
+            p0_2d = [peak_val - background_2d, 0, 0, 1.0, 1.0, background_2d]
 
             fit_size = min(autocorr_2d.shape[0] // 3, 15)
             center_2d = autocorr_2d.shape[0] // 2
@@ -5137,13 +5153,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             ax2.set_title("Radial Profile")
         if dblradial_fit_success:
-            dblradial_fit = gaussian_1d(radial_distances, *popt_dblradial)
+            dblradial_fit = dblgaussian_1d(radial_distances, *popt_dblradial)
             ax2.plot(
-                radial_distances, dblradial_fit, "r--", linewidth=2, label="Fit"
+                radial_distances,
+                dblradial_fit,
+                "m--",
+                linewidth=2,
+                label="Double Fit",
             )
             ax2.set_title(
                 f"Radial Profile (FWHM: {resolution_radial:.2f} nm \
-                | {resolution_dblradial:.2f})")
+                | {resolution_dblradial:.2f})"
+            )
         else:
             ax2.set_title("Radial Profile")
 
