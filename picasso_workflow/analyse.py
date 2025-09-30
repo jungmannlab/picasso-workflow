@@ -4940,6 +4940,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         def gaussian_1d(x, amplitude, sigma, background):
             return amplitude * np.exp(-((x) ** 2) / (2 * sigma**2)) + background
 
+        # Fit double Gaussian to extract resolution
+        def dblgaussian_1d(x, amplitude_1, amplitude_2, sigma_1, sigma_2, background):
+            return (
+                amplitude_1 * np.exp(-((x) ** 2) / (2 * sigma_1**2))
+                + amplitude_2 * np.exp(-((x) ** 2) / (2 * sigma_2**2))
+                ) + background
+
         def gaussian_2d_fit(xy, amplitude, x0, y0, sigma_x, sigma_y, background):
             x, y = xy
             return (
@@ -4979,6 +4986,46 @@ class AutoPicasso(util.AbstractModuleCollection):
             radial_fit_success = True
             print(
                 f"  Radial fit: σ = {sigma_radial:.2f} nm, FWHM = {resolution_radial:.2f} nm"
+            )
+
+        except Exception as e:
+            print(f"  Radial fit failed: {e}")
+            radial_fit_success = False
+            sigma_radial = np.nan
+            resolution_radial = np.nan
+            popt_radial = [np.nan] * 3
+
+        # Fit 1D double Gaussian to radial profile
+        try:
+            center_peak = radial_profile[0]
+            background_est = np.mean(radial_profile[-5:]) if len(radial_profile) > 5 else 0
+            # p0_radial = [center_peak - background_est, 0, 1.0, background_est]
+            total_amp = center_peak - background_est
+            p0_dblradial = [0.8 * total_amp, 0.2 * total_amp, 1.0, 10, background_est]
+            bounds_lo = [0.5 * total_amp, 0, 0.5, 4, 0]
+            bounds_hi = [1.1 * total_amp, 0.5 * total_amp, 10, 50, 5 * background_est]
+
+            fit_range = radial_distances < max_shift / 2
+            if np.sum(fit_range) < 3:
+                fit_range = slice(min(8, len(radial_distances)))
+
+            popt_dblradial, _ = curve_fit(
+                dblgaussian_1d,
+                radial_distances[fit_range],
+                radial_profile[fit_range],
+                p0=p0_dblradial,
+                bounds=(bounds_lo, bounds_hi),
+                maxfev=2000,
+            )
+            print(
+                f"  radial_distances {radial_distances[fit_range]}, popt_radial {popt_dblradial}"
+            )
+
+            sigma_dblradial = abs(popt_radial[2])
+            resolution_dblradial = sigma_radial * 2.355
+            dblradial_fit_success = True
+            print(
+                f"  Double Radial fit: σ = {sigma_dblradial:.2f} nm, FWHM = {resolution_dblradial:.2f} nm"
             )
 
         except Exception as e:
@@ -5087,6 +5134,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 radial_distances, radial_fit, "r--", linewidth=2, label="Fit"
             )
             ax2.set_title(f"Radial Profile (FWHM: {resolution_radial:.2f} nm)")
+        else:
+            ax2.set_title("Radial Profile")
+        if dblradial_fit_success:
+            dblradial_fit = gaussian_1d(radial_distances, *popt_dblradial)
+            ax2.plot(
+                radial_distances, dblradial_fit, "r--", linewidth=2, label="Fit"
+            )
+            ax2.set_title(
+                f"Radial Profile (FWHM: {resolution_radial:.2f} nm \
+                | {resolution_dblradial:.2f})")
         else:
             ax2.set_title("Radial Profile")
 
