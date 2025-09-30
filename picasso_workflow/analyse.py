@@ -4952,7 +4952,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ) + background
 
         def gaussian_2d_fit(
-            xy, amplitude, x0, y0, sigma_x, sigma_y, background
+            xy, amplitude, x0, y0, sigma_x, sigma_y#, background
         ):
             x, y = xy
             return (
@@ -4963,7 +4963,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         + (y - y0) ** 2 / (2 * sigma_y**2)
                     )
                 )
-                + background
+                #+ background
             ).ravel()
 
         # Fit 1D Gaussian to radial profile
@@ -5013,16 +5013,16 @@ class AutoPicasso(util.AbstractModuleCollection):
             # p0_radial = [center_peak - background_est, 0, 1.0, background_est]
             total_amp = center_peak - background_est
             p0_dblradial = [
-                0.8 * total_amp,
-                0.2 * total_amp,
+                0.9 * total_amp,
+                0.1 * total_amp,
                 1.0,
                 20,
                 background_est,
             ]
-            bounds_lo = [0.5 * total_amp, 0, 0.5, 10, 0]
+            bounds_lo = [0.6 * total_amp, 0, 0.5, 15, 0]
             bounds_hi = [
                 1.1 * total_amp,
-                0.5 * total_amp,
+                0.4 * total_amp,
                 10,
                 50,
                 1.5 * background_est,
@@ -5067,8 +5067,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             peak_val = autocorr_2d.max()
             background_2d = np.quantile(autocorr_2d, 0.1)
-            # background_2d = 0
-            p0_2d = [peak_val - background_2d, 0, 0, 1.0, 1.0, background_2d]
+            background_2d = 0
+            p0_2d = [peak_val - background_2d, 0, 0, 1.0, 1.0]#, background_2d]
 
             fit_size = min(autocorr_2d.shape[0] // 3, 15)
             center_2d = autocorr_2d.shape[0] // 2
