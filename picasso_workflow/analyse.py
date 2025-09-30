@@ -4975,7 +4975,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 f"  radial_distances {radial_distances[fit_range]}, popt_radial {popt_radial}"
             )
 
-            sigma_radial = abs(popt_radial[2])
+            sigma_radial = abs(popt_radial[1])
             resolution_radial = sigma_radial * 2.355
             radial_fit_success = True
             print(
