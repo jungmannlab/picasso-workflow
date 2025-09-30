@@ -5016,16 +5016,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 0.8 * total_amp,
                 0.2 * total_amp,
                 1.0,
-                10,
+                20,
                 background_est,
             ]
-            bounds_lo = [0.5 * total_amp, 0, 0.5, 4, 0]
+            bounds_lo = [0.5 * total_amp, 0, 0.5, 10, 0]
             bounds_hi = [
                 1.1 * total_amp,
                 0.5 * total_amp,
                 10,
                 50,
-                5 * background_est,
+                1.5 * background_est,
             ]
 
             fit_range = radial_distances < max_shift / 2
