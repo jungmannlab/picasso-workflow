@@ -3603,13 +3603,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 if enable_multiprocessing and n_processes > 1:
                     with mp.Pool(processes=n_processes) as pool:
                         chunk_results = pool.map(
-                            _compute_frame_to_dataset_shift_memory_efficient,
+                            self._compute_frame_to_dataset_shift_memory_efficient,
                             chunk_frame_data,
                         )
                 else:
                     # Sequential processing for very memory-constrained environments
                     chunk_results = [
-                        _compute_frame_to_dataset_shift_memory_efficient(
+                        self._compute_frame_to_dataset_shift_memory_efficient(
                             frame_data
                         )
                         for frame_data in chunk_frame_data
