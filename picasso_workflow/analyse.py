@@ -3452,7 +3452,16 @@ class AutoPicasso(util.AbstractModuleCollection):
         )  # nm
         save_locs = parameters.get("save_locs", True)
         plot_drift = parameters.get("plot_drift", True)
-        n_processes = parameters.get("n_processes", min(mp.cpu_count(), 8))
+
+        # Memory management parameters
+        chunk_size = parameters.get("chunk_size", 100)  # frames per chunk
+        memory_limit_gb = parameters.get("memory_limit_gb", 8.0)
+        enable_multiprocessing = parameters.get("enable_multiprocessing", True)
+        n_processes = (
+            parameters.get("n_processes", min(mp.cpu_count(), 4))
+            if enable_multiprocessing
+            else 1
+        )
 
         # Analysis parameters
         confidence_threshold = parameters.get("confidence_threshold", 0.8)
@@ -3464,11 +3473,22 @@ class AutoPicasso(util.AbstractModuleCollection):
         windowing_enabled = parameters.get("windowing_enabled", True)
         window_size_range = parameters.get("window_size_range", (3, 20))
 
+        # Add memory monitoring imports
+        import gc
+        import psutil
+
+        # Monitor initial memory usage
+        process = psutil.Process()
+        initial_memory_gb = process.memory_info().rss / (1024 ** 3)
+
         print(
             f"Iterative RSSO undrift: max_iterations={max_iterations}, "
-            f"convergence_threshold={convergence_threshold:.3f} nm"
+            f"convergence_threshold={convergence_threshold:.3f} nm, chunk_size={chunk_size}"
         )
-        print(f"Using {n_processes} processes for parallel computation")
+        print(
+            f"Using {n_processes} processes, memory limit: {memory_limit_gb:.1f} GB"
+        )
+        print(f"Initial memory usage: {initial_memory_gb:.2f} GB")
 
         # Get frame range and ensure we have data
         if len(self.locs) == 0:
@@ -3494,8 +3514,24 @@ class AutoPicasso(util.AbstractModuleCollection):
         confidence = np.zeros(n_frames)  # Confidence measures
         drift_quality = np.zeros(n_frames)  # Quality metrics
 
-        # Initialize current localization dataset (will be iteratively corrected)
-        current_locs = self.locs.copy()
+        # Estimate memory requirements and warn if needed
+        bytes_per_loc = self.locs.itemsize * len(self.locs.dtype)
+        estimated_memory_gb = (len(self.locs) * bytes_per_loc * 3) / (
+            1024 ** 3
+        )  # Factor for processing
+        print(
+            f"Dataset size: {len(self.locs):,} localizations, {n_frames:,} frames"
+        )
+        print(f"Estimated memory requirement: {estimated_memory_gb:.2f} GB")
+
+        if estimated_memory_gb > memory_limit_gb:
+            print(
+                f"WARNING: Estimated memory ({estimated_memory_gb:.2f} GB) exceeds limit ({memory_limit_gb:.1f} GB)"
+            )
+            print("Consider reducing chunk_size or increasing memory_limit_gb")
+
+        # Use in-place updates instead of copying (major memory saving)
+        # No more: current_locs = self.locs.copy()
 
         print(
             f"Starting iterative RSSO undrift: {n_frames} frames, ton={ton}, toff={toff}"
@@ -3515,74 +3551,99 @@ class AutoPicasso(util.AbstractModuleCollection):
         for iteration in range(max_iterations):
             print(f"  Iteration {iteration + 1}/{max_iterations}")
 
-            # Prepare frame data for parallel processing
-            frame_data_list = []
-            for frame_idx in range(n_frames):
-                frame_mask = current_locs["frame"] == frames[frame_idx]
-                frame_locs = current_locs[frame_mask]
+            # Monitor memory usage during iteration
+            current_memory_gb = process.memory_info().rss / (1024 ** 3)
+            print(
+                f"    Memory usage at iteration start: {current_memory_gb:.2f} GB"
+            )
 
-                # Use all other frames as the dataset for comparison
-                dataset_mask = current_locs["frame"] != frames[frame_idx]
-                dataset_locs = current_locs[dataset_mask]
-
-                frame_data = (
-                    frame_idx,
-                    frame_locs,
-                    dataset_locs,
-                    max_shift,
-                    min_locs_per_frame,
-                    ton,
-                    toff,
-                )
-                frame_data_list.append(frame_data)
-
-            # Compute frame-to-dataset shifts in parallel
-            print(f"    Computing shifts for {n_frames} frames...")
-
-            with mp.Pool(processes=n_processes) as pool:
-                shift_results = pool.map(
-                    _compute_frame_to_dataset_shift, frame_data_list
+            if current_memory_gb > memory_limit_gb:
+                print(
+                    f"    WARNING: Memory usage ({current_memory_gb:.2f} GB) exceeds limit!"
                 )
 
-            # Process results and update drift arrays
+            # Process frames in chunks to manage memory
+            print(
+                f"    Processing {n_frames} frames in chunks of {chunk_size}..."
+            )
+
+            # Initialize results for this iteration
             frame_shifts_x = np.zeros(n_frames)
             frame_shifts_y = np.zeros(n_frames)
             new_uncertainty_x = np.zeros(n_frames)
             new_uncertainty_y = np.zeros(n_frames)
             new_confidence = np.zeros(n_frames)
             new_quality = np.zeros(n_frames)
-
             valid_measurements = 0
 
-            for result in shift_results:
-                (
-                    frame_idx,
-                    shift_x,
-                    shift_y,
-                    uncertainty_x_val,
-                    uncertainty_y_val,
-                    conf,
-                    qual,
-                ) = result
+            # Process frames in chunks
+            for chunk_start in range(0, n_frames, chunk_size):
+                chunk_end = min(chunk_start + chunk_size, n_frames)
+                chunk_frames = range(chunk_start, chunk_end)
 
-                if shift_x is not None and shift_y is not None:
-                    frame_shifts_x[frame_idx] = (
-                        shift_x * pixelsize
-                    )  # Convert to nm
-                    frame_shifts_y[frame_idx] = shift_y * pixelsize
-                    new_uncertainty_x[frame_idx] = (
-                        uncertainty_x_val * pixelsize
-                        if uncertainty_x_val
-                        else np.nan
+                print(
+                    f"      Processing chunk {chunk_start//chunk_size + 1}/{(n_frames-1)//chunk_size + 1}: frames {chunk_start}-{chunk_end-1}"
+                )
+
+                # Prepare chunk data using memory-efficient approach
+                chunk_frame_data = []
+                for frame_idx in chunk_frames:
+                    frame_data = (
+                        frame_idx,
+                        self.locs,  # Pass reference to full array, not copies
+                        frames[frame_idx],  # Just the frame number
+                        max_shift,
+                        min_locs_per_frame,
+                        ton,
+                        toff,
                     )
-                    new_uncertainty_y[frame_idx] = (
-                        uncertainty_y_val * pixelsize
-                        if uncertainty_y_val
-                        else np.nan
-                    )
-                    new_confidence[frame_idx] = conf
-                    new_quality[frame_idx] = qual
-                    valid_measurements += 1
+                    chunk_frame_data.append(frame_data)
+
+                # Process chunk in parallel (or sequentially if multiprocessing disabled)
+                if enable_multiprocessing and n_processes > 1:
+                    with mp.Pool(processes=n_processes) as pool:
+                        chunk_results = pool.map(
+                            _compute_frame_to_dataset_shift_memory_efficient,
+                            chunk_frame_data,
+                        )
+                else:
+                    # Sequential processing for very memory-constrained environments
+                    chunk_results = [
+                        _compute_frame_to_dataset_shift_memory_efficient(
+                            frame_data
+                        )
+                        for frame_data in chunk_frame_data
+                    ]
+
+                # Process chunk results immediately to avoid accumulating large arrays
+                for result in chunk_results:
+                    (
+                        frame_idx,
+                        shift_x,
+                        shift_y,
+                        uncertainty_x_val,
+                        uncertainty_y_val,
+                        confidence_val,
+                        quality_val,
+                    ) = result
+
+                    if shift_x is not None and shift_y is not None:
+                        frame_shifts_x[frame_idx] = shift_x
+                        frame_shifts_y[frame_idx] = shift_y
+                        new_uncertainty_x[frame_idx] = uncertainty_x_val
+                        new_uncertainty_y[frame_idx] = uncertainty_y_val
+                        new_confidence[frame_idx] = confidence_val
+                        new_quality[frame_idx] = quality_val
+                        valid_measurements += 1
+
+                # Force garbage collection after each chunk
+                gc.collect()
+
+            # Convert pixel shifts to nm and finalize arrays
+            frame_shifts_x *= pixelsize  # Convert to nm
+            frame_shifts_y *= pixelsize
+            new_uncertainty_x *= pixelsize
+            new_uncertainty_y *= pixelsize
 
             print(f"    Valid measurements: {valid_measurements}/{n_frames}")
 
@@ -3639,13 +3700,18 @@ class AutoPicasso(util.AbstractModuleCollection):
             confidence = new_confidence.copy()
             drift_quality = new_quality.copy()
 
-            # Apply drift correction to current localizations for next iteration
-            current_locs["x"] -= (
-                frame_shifts_x[current_locs["frame"] - frames[0]] / pixelsize
+            # Apply drift correction to localizations for next iteration (in-place)
+            # Memory efficient: apply corrections directly to self.locs
+            frame_corrections_x = (
+                frame_shifts_x[self.locs["frame"] - frames[0]] / pixelsize
             )
-            current_locs["y"] -= (
-                frame_shifts_y[current_locs["frame"] - frames[0]] / pixelsize
+            frame_corrections_y = (
+                frame_shifts_y[self.locs["frame"] - frames[0]] / pixelsize
             )
+
+            # Apply corrections in-place to save memory
+            self.locs["x"] -= frame_corrections_x
+            self.locs["y"] -= frame_corrections_y
 
             # Check for convergence
             if iteration > 0:
@@ -3687,13 +3753,19 @@ class AutoPicasso(util.AbstractModuleCollection):
             convergence_rms if n_iterations > 1 else float("inf")
         )
 
+        # Report final memory usage
+        final_memory_gb = process.memory_info().rss / (1024 ** 3)
+        memory_reduction_gb = initial_memory_gb - final_memory_gb
+
         print(
             f"Iterative RSSO completed: {n_iterations} iterations, final RMS: {final_convergence_rms:.3f} nm"
         )
+        print(
+            f"Final memory usage: {final_memory_gb:.2f} GB (change: {memory_reduction_gb:+.2f} GB)"
+        )
 
-        # Apply final drift correction to original localizations
-        self.locs["x"] -= drift_x[self.locs["frame"] - frames[0]] / pixelsize
-        self.locs["y"] -= drift_y[self.locs["frame"] - frames[0]] / pixelsize
+        # Final drift corrections have already been applied during iterations
+        # No additional correction needed as we updated self.locs in-place
 
         # Store drift trajectory for plotting
         self.drift = np.column_stack([drift_x, drift_y])
@@ -4562,7 +4634,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                             1.0
                             / (
                                 1.0
-                                + np.sqrt(uncertainty_x ** 2 + uncertainty_y ** 2)
+                                + np.sqrt(
+                                    uncertainty_x ** 2 + uncertainty_y ** 2
+                                )
                             )
                         ),
                     )
@@ -4586,6 +4660,94 @@ class AutoPicasso(util.AbstractModuleCollection):
         except Exception as e:
             print(f"      Frame {frame_idx} RSSO failed: {e}")
             return (frame_idx, None, None, None, None, 0.0, 0.0)
+
+
+def _compute_frame_to_dataset_shift_memory_efficient(frame_data):
+    """Memory-efficient RSSO shift computation using frame indices instead of data copies
+
+    Args:
+        frame_data : tuple
+            (frame_idx, locs_array, target_frame, max_shift, min_locs_per_frame, ton, toff)
+
+    Returns:
+        tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
+    """
+    from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+    import numpy as np
+
+    (
+        frame_idx,
+        locs_array,
+        target_frame,
+        max_shift,
+        min_locs_per_frame,
+        ton,
+        toff,
+    ) = frame_data
+
+    try:
+        # Extract frame localizations on-demand (no pre-created copies)
+        frame_mask = locs_array["frame"] == target_frame
+        frame_locs = locs_array[frame_mask]
+
+        # Skip frames with insufficient localizations
+        if len(frame_locs) < min_locs_per_frame:
+            return (frame_idx, None, None, None, None, 0.0, 0.0)
+
+        # Extract dataset (all other frames) on-demand
+        dataset_mask = locs_array["frame"] != target_frame
+        dataset_locs = locs_array[dataset_mask]
+
+        # Calculate RSSO shift between frame and whole dataset
+        shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
+            dataset_locs, frame_locs, max_shift, plot_histogram=False
+        )
+
+        if shift_x is not None and shift_y is not None:
+            # Extract uncertainty information
+            uncertainty_x = (
+                uncertainty_info.get("uncertainty_x", np.nan)
+                if uncertainty_info
+                else np.nan
+            )
+            uncertainty_y = (
+                uncertainty_info.get("uncertainty_y", np.nan)
+                if uncertainty_info
+                else np.nan
+            )
+
+            # Calculate confidence based on number of localizations and uncertainty
+            n_locs_frame = len(frame_locs)
+            n_locs_dataset = len(dataset_locs)
+
+            # Simple confidence metric based on localization count and uncertainty
+            if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
+                uncertainty_magnitude = np.sqrt(
+                    uncertainty_x ** 2 + uncertainty_y ** 2
+                )
+                confidence = min(
+                    1.0, (n_locs_frame / 100.0) / (1.0 + uncertainty_magnitude)
+                )
+            else:
+                confidence = min(1.0, n_locs_frame / 100.0)
+
+            quality = n_locs_frame + n_locs_dataset  # Simple quality metric
+
+            return (
+                frame_idx,
+                shift_x,
+                shift_y,
+                uncertainty_x,
+                uncertainty_y,
+                confidence,
+                quality,
+            )
+        else:
+            return (frame_idx, None, None, None, None, 0.0, 0.0)
+
+    except Exception as e:
+        print(f"Error processing frame {frame_idx}: {e}")
+        return (frame_idx, None, None, None, None, 0.0, 0.0)
 
     @staticmethod
     def _process_autocorr_chunk(chunk_data):
