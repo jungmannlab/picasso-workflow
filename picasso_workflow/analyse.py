@@ -6,7 +6,7 @@ Initial Date: March 7, 2024
 Description: This is the picasso interface of picasso-workflow
 """
 from picasso import lib, io, localize, gausslq, postprocess, clusterer
-from picasso import aim, spinna  # , g5m
+from picasso import aim, spinna, g5m
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import os
@@ -2722,126 +2722,126 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    # @profile_resource_usage
-    # @module_decorator
-    # def gaussian_mixture_cluster(self, i, parameters, results):
-    #     """Perform clustering using gaussian mixture modelsAfter this module,
-    #     the standard locs will be the Gaussian centers.
-    #     Args:
-    #         i : int
-    #             the index of the module
-    #         parameters: dict
-    #             with required keys:
-    #                 locs : np.recarray
-    #                     Localizations.
-    #                 info : list
-    #                     Information dictionaries.
-    #                 min_locs : int
-    #                     Minimum number of localizations per component. Used
-    #                     to filter out components with too few localizations
-    #                     that likely represent background.
-    #             and optional keys:
-    #                 save_locs : bool
-    #                     whether to save the locs into the results folder
-    #                 max_rounds_without_best_bic : int
-    #                     (default=3)
-    #                     Maximum number of rounds without BIC improvement to
-    #                     terminate the optimal GMM search.
-    #                 bootstrap_check : bool (default=False)
-    #                     If True, the standard error of the means (SEM) is
-    #                     calculated using bootstrapping. If False, the
-    #                     standard, single Gaussian SEM is used as
-    #                     approximation.
-    #                 calibration : dict (default=None)
-    #                     Calibration dictionary with x and y coefficients, z
-    #                     step size and the number of frames. Only required for
-    #                     3D data.
-    #                 asynch : bool (default=True)
-    #                     If True, the GMM search is run in parallel using
-    #                     multiprocessing. If False, the GMM search is run
-    #                     without multiprocessing.
-    #                 callback_parent : function (default='silent')
-    #                     Callback function's parent object for displaying
-    #                     progress bar. If None, the progress bar displayed
-    #                     directly to the console. If 'silent', no progress
-    #                     is displayed
-    #                 sigma_bounds : float (not recommended)
-    #                     Minimum standard deviation of the Gaussian components
-    #                     in nanometers. Useful for avoiding overfitting within
-    #                     a single localization cloud. Now using individual
-    #                     loc precision, so min_sigma is not recommended.
-    #                 loc_prec_handle : Literal["local", "global", "abs"]
-    #                     default: local
-    #         results : dict
-    #             the results this function generates. This is created
-    #             in the decorator wrapper
-    #     """
-    #     pixelsize = self.pixelsize
-    #     required_args = ["min_locs"]
-    #     optional_args = [
-    #         ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
-    #         ("bootstrap_check", False),
-    #         ("calibration", None),
-    #         ("pixelsize", pixelsize),
-    #         ("asynch", True),
-    #         ("callback_parent", "silent"),
-    #         ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
-    #         ("loc_prec_handle", "local"),
-    #     ]
-    #     try:
-    #         kwargs = {k: parameters[k] for k in required_args}
-    #     except KeyError as e:
-    #         logger.error(
-    #             f"""All of the following arguments are required for
-    #             picasso.g5m.run_g5m: {required_args}"""
-    #         )
-    #         raise e
-    #     # sigma values are given in nm in parameters but px in gmm
-    #     if "min_sigma" in kwargs.keys():
-    #         kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
-    #         kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
-    #     for oa, default in optional_args:
-    #         kwargs[oa] = parameters.get(oa, default)
+    @profile_resource_usage
+    @module_decorator
+    def gaussian_mixture_cluster(self, i, parameters, results):
+        """Perform clustering using gaussian mixture modelsAfter this module,
+        the standard locs will be the Gaussian centers.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    locs : np.recarray
+                        Localizations.
+                    info : list
+                        Information dictionaries.
+                    min_locs : int
+                        Minimum number of localizations per component. Used
+                        to filter out components with too few localizations
+                        that likely represent background.
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+                    max_rounds_without_best_bic : int
+                        (default=3)
+                        Maximum number of rounds without BIC improvement to
+                        terminate the optimal GMM search.
+                    bootstrap_check : bool (default=False)
+                        If True, the standard error of the means (SEM) is
+                        calculated using bootstrapping. If False, the
+                        standard, single Gaussian SEM is used as
+                        approximation.
+                    calibration : dict (default=None)
+                        Calibration dictionary with x and y coefficients, z
+                        step size and the number of frames. Only required for
+                        3D data.
+                    asynch : bool (default=True)
+                        If True, the GMM search is run in parallel using
+                        multiprocessing. If False, the GMM search is run
+                        without multiprocessing.
+                    callback_parent : function (default='silent')
+                        Callback function's parent object for displaying
+                        progress bar. If None, the progress bar displayed
+                        directly to the console. If 'silent', no progress
+                        is displayed
+                    sigma_bounds : float (not recommended)
+                        Minimum standard deviation of the Gaussian components
+                        in nanometers. Useful for avoiding overfitting within
+                        a single localization cloud. Now using individual
+                        loc precision, so min_sigma is not recommended.
+                    loc_prec_handle : Literal["local", "global", "abs"]
+                        default: local
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        pixelsize = self.pixelsize
+        required_args = ["min_locs"]
+        optional_args = [
+            ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
+            ("bootstrap_check", False),
+            ("calibration", None),
+            ("pixelsize", pixelsize),
+            ("asynch", True),
+            ("callback_parent", "silent"),
+            ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
+            ("loc_prec_handle", "local"),
+        ]
+        try:
+            kwargs = {k: parameters[k] for k in required_args}
+        except KeyError as e:
+            logger.error(
+                f"""All of the following arguments are required for
+                picasso.g5m.run_g5m: {required_args}"""
+            )
+            raise e
+        # sigma values are given in nm in parameters but px in gmm
+        if "min_sigma" in kwargs.keys():
+            kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
+            kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
+        for oa, default in optional_args:
+            kwargs[oa] = parameters.get(oa, default)
 
-    #     results["g5m_args"] = str(kwargs)
+        results["g5m_args"] = str(kwargs)
 
-    #     center_locs, clustered_locs, gmm_info = g5m.run_g5m(
-    #         self.locs, self.info, **kwargs
-    #     )
+        center_locs, clustered_locs, gmm_info = g5m.run_g5m(
+            self.locs, self.info, **kwargs
+        )
 
-    #     if parameters.get("save_locs"):
-    #         fp_centers = os.path.join(results["folder"], "gmm_centers.hdf5")
-    #         io.save_locs(fp_centers, center_locs, gmm_info)
-    #         fp_centers = os.path.join(
-    #             results["folder"], "gmm_clustered_locs.hdf5"
-    #         )
-    #         io.save_locs(fp_centers, clustered_locs, gmm_info)
+        if parameters.get("save_locs"):
+            fp_centers = os.path.join(results["folder"], "gmm_centers.hdf5")
+            io.save_locs(fp_centers, center_locs, gmm_info)
+            fp_centers = os.path.join(
+                results["folder"], "gmm_clustered_locs.hdf5"
+            )
+            io.save_locs(fp_centers, clustered_locs, gmm_info)
 
-    #     # plot: histogram of cluster sizes
-    #     fig, ax = plt.subplots()
-    #     maxbin = int(np.quantile(center_locs["n"], 0.95))
-    #     ax.hist(center_locs["n"], bins=np.arange(maxbin))
-    #     ax.set_xlabel("cluster size [locs]")
-    #     ax.set_ylabel("Frequency")
-    #     results["fp_fig_clustersizes"] = os.path.join(
-    #         results["folder"], "fig_gmm_clustersize.png"
-    #     )
-    #     fig.savefig(results["fp_fig_clustersizes"])
+        # plot: histogram of cluster sizes
+        fig, ax = plt.subplots()
+        maxbin = int(np.quantile(center_locs["n"], 0.95))
+        ax.hist(center_locs["n"], bins=np.arange(maxbin))
+        ax.set_xlabel("cluster size [locs]")
+        ax.set_ylabel("Frequency")
+        results["fp_fig_clustersizes"] = os.path.join(
+            results["folder"], "fig_gmm_clustersize.png"
+        )
+        fig.savefig(results["fp_fig_clustersizes"])
 
-    #     # test for subclustering
-    #     results["fp_fig_subclustering"] = os.path.join(
-    #         results["folder"], "subcluster_test.png"
-    #     )
-    #     g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
+        # test for subclustering
+        results["fp_fig_subclustering"] = os.path.join(
+            results["folder"], "subcluster_test.png"
+        )
+        g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
 
-    #     results["n_locs_in"] = len(self.locs)
-    #     results["n_locs_clustered"] = len(clustered_locs)
-    #     results["n_centers"] = len(center_locs)
+        results["n_locs_in"] = len(self.locs)
+        results["n_locs_clustered"] = len(clustered_locs)
+        results["n_centers"] = len(center_locs)
 
-    #     self.locs = copy.copy(center_locs)
-    #     self.info = gmm_info
+        self.locs = copy.copy(center_locs)
+        self.info = gmm_info
 
-    #     return parameters, results
+        return parameters, results
 
     @profile_resource_usage
     @module_decorator
