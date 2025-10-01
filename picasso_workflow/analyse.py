@@ -4503,180 +4503,180 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    @staticmethod
+    def _compute_frame_to_dataset_shift(frame_data):
+        """Compute RSSO shift of single frame against whole dataset (multiprocessing worker)
 
-def _compute_frame_to_dataset_shift(frame_data):
-    """Compute RSSO shift of single frame against whole dataset (multiprocessing worker)
+        Args:
+            frame_data : tuple
+                (frame_idx, frame_locs, dataset_locs, max_shift, min_locs_per_frame, ton, toff)
 
-    Args:
-        frame_data : tuple
-            (frame_idx, frame_locs, dataset_locs, max_shift, min_locs_per_frame, ton, toff)
+        Returns:
+            tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
+        """
+        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
 
-    Returns:
-        tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
-    """
-    from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+        (
+            frame_idx,
+            frame_locs,
+            dataset_locs,
+            max_shift,
+            min_locs_per_frame,
+            ton,
+            toff,
+        ) = frame_data
 
-    (
-        frame_idx,
-        frame_locs,
-        dataset_locs,
-        max_shift,
-        min_locs_per_frame,
-        ton,
-        toff,
-    ) = frame_data
-
-    # Skip frames with insufficient localizations
-    if len(frame_locs) < min_locs_per_frame:
-        return (frame_idx, None, None, None, None, 0.0, 0.0)
-
-    try:
-        # Calculate RSSO shift between frame and whole dataset
-        shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-            dataset_locs, frame_locs, max_shift, plot_histogram=False
-        )
-
-        if shift_x is not None and shift_y is not None:
-            # Extract uncertainty information
-            uncertainty_x = (
-                uncertainty_info.get("uncertainty_x", np.nan)
-                if uncertainty_info
-                else np.nan
-            )
-            uncertainty_y = (
-                uncertainty_info.get("uncertainty_y", np.nan)
-                if uncertainty_info
-                else np.nan
-            )
-
-            # Calculate confidence based on number of localizations and uncertainty
-            n_locs_frame = len(frame_locs)
-            n_locs_dataset = len(dataset_locs)
-
-            # Simple confidence metric based on localization count and uncertainty
-            if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
-                confidence = min(
-                    1.0,
-                    (n_locs_frame / 50.0)
-                    * (
-                        1.0
-                        / (
-                            1.0
-                            + np.sqrt(uncertainty_x ** 2 + uncertainty_y ** 2)
-                        )
-                    ),
-                )
-            else:
-                confidence = min(1.0, n_locs_frame / 50.0)
-
-            quality = n_locs_frame * confidence
-
-            return (
-                frame_idx,
-                shift_x,
-                shift_y,
-                uncertainty_x,
-                uncertainty_y,
-                confidence,
-                quality,
-            )
-        else:
+        # Skip frames with insufficient localizations
+        if len(frame_locs) < min_locs_per_frame:
             return (frame_idx, None, None, None, None, 0.0, 0.0)
 
-    except Exception as e:
-        print(f"      Frame {frame_idx} RSSO failed: {e}")
-        return (frame_idx, None, None, None, None, 0.0, 0.0)
+        try:
+            # Calculate RSSO shift between frame and whole dataset
+            shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
+                dataset_locs, frame_locs, max_shift, plot_histogram=False
+            )
 
+            if shift_x is not None and shift_y is not None:
+                # Extract uncertainty information
+                uncertainty_x = (
+                    uncertainty_info.get("uncertainty_x", np.nan)
+                    if uncertainty_info
+                    else np.nan
+                )
+                uncertainty_y = (
+                    uncertainty_info.get("uncertainty_y", np.nan)
+                    if uncertainty_info
+                    else np.nan
+                )
 
-def _process_autocorr_chunk(chunk_data):
-    """Process a single spatial chunk for autocorrelation analysis (multiprocessing worker)
+                # Calculate confidence based on number of localizations and uncertainty
+                n_locs_frame = len(frame_locs)
+                n_locs_dataset = len(dataset_locs)
 
-    Args:
-        chunk_data : tuple
-            (chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx)
+                # Simple confidence metric based on localization count and uncertainty
+                if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
+                    confidence = min(
+                        1.0,
+                        (n_locs_frame / 50.0)
+                        * (
+                            1.0
+                            / (
+                                1.0
+                                + np.sqrt(uncertainty_x ** 2 + uncertainty_y ** 2)
+                            )
+                        ),
+                    )
+                else:
+                    confidence = min(1.0, n_locs_frame / 50.0)
 
-    Returns:
-        dict or None : Chunk result with autocorr, n_locs, bounds, and chunk_idx
-    """
-    (
-        chunk_bounds,
-        chunk_x,  # x_coords,
-        chunk_y,  # y_coords,
-        sampling_res,
-        max_shift_pixels,
-        min_locs_per_chunk,
-        chunk_idx,
-    ) = chunk_data
-    x_min, x_max, y_min, y_max = chunk_bounds
+                quality = n_locs_frame * confidence
 
-    # # Extract localizations in this chunk
-    # mask = (
-    #     (x_coords >= x_min)
-    #     & (x_coords < x_max)
-    #     & (y_coords >= y_min)
-    #     & (y_coords < y_max)
-    # )
+                return (
+                    frame_idx,
+                    shift_x,
+                    shift_y,
+                    uncertainty_x,
+                    uncertainty_y,
+                    confidence,
+                    quality,
+                )
+            else:
+                return (frame_idx, None, None, None, None, 0.0, 0.0)
 
-    # chunk_x = x_coords[mask]
-    # chunk_y = y_coords[mask]
-    n_locs = len(chunk_x)
+        except Exception as e:
+            print(f"      Frame {frame_idx} RSSO failed: {e}")
+            return (frame_idx, None, None, None, None, 0.0, 0.0)
 
-    if n_locs < min_locs_per_chunk:
-        return None
+    @staticmethod
+    def _process_autocorr_chunk(chunk_data):
+        """Process a single spatial chunk for autocorrelation analysis (multiprocessing worker)
 
-    try:
-        # Create histogram for this chunk
-        x_bins = np.arange(x_min, x_max + sampling_res, sampling_res)
-        y_bins = np.arange(y_min, y_max + sampling_res, sampling_res)
+        Args:
+            chunk_data : tuple
+                (chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx)
 
-        chunk_hist, _, _ = np.histogram2d(
-            chunk_x, chunk_y, bins=[x_bins, y_bins]
-        )
-        chunk_hist = chunk_hist.astype(np.float32)
+        Returns:
+            dict or None : Chunk result with autocorr, n_locs, bounds, and chunk_idx
+        """
+        (
+            chunk_bounds,
+            chunk_x,  # x_coords,
+            chunk_y,  # y_coords,
+            sampling_res,
+            max_shift_pixels,
+            min_locs_per_chunk,
+            chunk_idx,
+        ) = chunk_data
+        x_min, x_max, y_min, y_max = chunk_bounds
 
-        if np.sum(chunk_hist) == 0:
+        # # Extract localizations in this chunk
+        # mask = (
+        #     (x_coords >= x_min)
+        #     & (x_coords < x_max)
+        #     & (y_coords >= y_min)
+        #     & (y_coords < y_max)
+        # )
+
+        # chunk_x = x_coords[mask]
+        # chunk_y = y_coords[mask]
+        n_locs = len(chunk_x)
+
+        if n_locs < min_locs_per_chunk:
             return None
 
-        # Compute autocorrelation using efficient FFT
-        F_hist = np.fft.fft2(chunk_hist)
-        autocorr_full = np.fft.fftshift(
-            np.real(np.fft.ifft2(F_hist * np.conj(F_hist)))
-        )
+        try:
+            # Create histogram for this chunk
+            x_bins = np.arange(x_min, x_max + sampling_res, sampling_res)
+            y_bins = np.arange(y_min, y_max + sampling_res, sampling_res)
 
-        # Extract central autocorr region
-        center = np.array(autocorr_full.shape) // 2
-        safe_shift = min(max_shift_pixels, min(center))
-
-        autocorr_chunk = autocorr_full[
-            center[0] - safe_shift : center[0] + safe_shift + 1,
-            center[1] - safe_shift : center[1] + safe_shift + 1,
-        ].copy()
-
-        # Normalize
-        if autocorr_chunk.max() > 0:
-            autocorr_chunk = autocorr_chunk / autocorr_chunk.max()
-            # remove center point
-            center = np.array(autocorr_chunk.shape) // 2
-            meanmax = np.mean(
-                [
-                    autocorr_chunk[center[0], center[1] - 1],
-                    autocorr_chunk[center[0] - 1, center[1]],
-                    autocorr_chunk[center[0], center[1] + 1],
-                    autocorr_chunk[center[0] + 1, center[1]],
-                ]
+            chunk_hist, _, _ = np.histogram2d(
+                chunk_x, chunk_y, bins=[x_bins, y_bins]
             )
-            autocorr_chunk[center[0], center[1]] = meanmax
+            chunk_hist = chunk_hist.astype(np.float32)
 
-        return {
-            "autocorr": autocorr_chunk,
-            "n_locs": n_locs,
-            "bounds": (x_min, x_max, y_min, y_max),
-            "chunk_idx": chunk_idx,
-        }
+            if np.sum(chunk_hist) == 0:
+                return None
 
-    except Exception as e:
-        print(f"      Chunk {chunk_idx} failed: {e}")
-        return None
+            # Compute autocorrelation using efficient FFT
+            F_hist = np.fft.fft2(chunk_hist)
+            autocorr_full = np.fft.fftshift(
+                np.real(np.fft.ifft2(F_hist * np.conj(F_hist)))
+            )
+
+            # Extract central autocorr region
+            center = np.array(autocorr_full.shape) // 2
+            safe_shift = min(max_shift_pixels, min(center))
+
+            autocorr_chunk = autocorr_full[
+                center[0] - safe_shift : center[0] + safe_shift + 1,
+                center[1] - safe_shift : center[1] + safe_shift + 1,
+            ].copy()
+
+            # Normalize
+            if autocorr_chunk.max() > 0:
+                autocorr_chunk = autocorr_chunk / autocorr_chunk.max()
+                # remove center point
+                center = np.array(autocorr_chunk.shape) // 2
+                meanmax = np.mean(
+                    [
+                        autocorr_chunk[center[0], center[1] - 1],
+                        autocorr_chunk[center[0] - 1, center[1]],
+                        autocorr_chunk[center[0], center[1] + 1],
+                        autocorr_chunk[center[0] + 1, center[1]],
+                    ]
+                )
+                autocorr_chunk[center[0], center[1]] = meanmax
+
+            return {
+                "autocorr": autocorr_chunk,
+                "n_locs": n_locs,
+                "bounds": (x_min, x_max, y_min, y_max),
+                "chunk_idx": chunk_idx,
+            }
+
+        except Exception as e:
+            print(f"      Chunk {chunk_idx} failed: {e}")
+            return None
 
     @profile_resource_usage
     @module_decorator
