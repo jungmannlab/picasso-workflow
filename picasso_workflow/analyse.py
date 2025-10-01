@@ -4661,93 +4661,93 @@ class AutoPicasso(util.AbstractModuleCollection):
             print(f"      Frame {frame_idx} RSSO failed: {e}")
             return (frame_idx, None, None, None, None, 0.0, 0.0)
 
+    @staticmethod
+    def _compute_frame_to_dataset_shift_memory_efficient(frame_data):
+        """Memory-efficient RSSO shift computation using frame indices instead of data copies
 
-def _compute_frame_to_dataset_shift_memory_efficient(frame_data):
-    """Memory-efficient RSSO shift computation using frame indices instead of data copies
+        Args:
+            frame_data : tuple
+                (frame_idx, locs_array, target_frame, max_shift, min_locs_per_frame, ton, toff)
 
-    Args:
-        frame_data : tuple
-            (frame_idx, locs_array, target_frame, max_shift, min_locs_per_frame, ton, toff)
+        Returns:
+            tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
+        """
+        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+        import numpy as np
 
-    Returns:
-        tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
-    """
-    from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-    import numpy as np
+        (
+            frame_idx,
+            locs_array,
+            target_frame,
+            max_shift,
+            min_locs_per_frame,
+            ton,
+            toff,
+        ) = frame_data
 
-    (
-        frame_idx,
-        locs_array,
-        target_frame,
-        max_shift,
-        min_locs_per_frame,
-        ton,
-        toff,
-    ) = frame_data
+        try:
+            # Extract frame localizations on-demand (no pre-created copies)
+            frame_mask = locs_array["frame"] == target_frame
+            frame_locs = locs_array[frame_mask]
 
-    try:
-        # Extract frame localizations on-demand (no pre-created copies)
-        frame_mask = locs_array["frame"] == target_frame
-        frame_locs = locs_array[frame_mask]
+            # Skip frames with insufficient localizations
+            if len(frame_locs) < min_locs_per_frame:
+                return (frame_idx, None, None, None, None, 0.0, 0.0)
 
-        # Skip frames with insufficient localizations
-        if len(frame_locs) < min_locs_per_frame:
-            return (frame_idx, None, None, None, None, 0.0, 0.0)
+            # Extract dataset (all other frames) on-demand
+            dataset_mask = locs_array["frame"] != target_frame
+            dataset_locs = locs_array[dataset_mask]
 
-        # Extract dataset (all other frames) on-demand
-        dataset_mask = locs_array["frame"] != target_frame
-        dataset_locs = locs_array[dataset_mask]
-
-        # Calculate RSSO shift between frame and whole dataset
-        shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-            dataset_locs, frame_locs, max_shift, plot_histogram=False
-        )
-
-        if shift_x is not None and shift_y is not None:
-            # Extract uncertainty information
-            uncertainty_x = (
-                uncertainty_info.get("uncertainty_x", np.nan)
-                if uncertainty_info
-                else np.nan
-            )
-            uncertainty_y = (
-                uncertainty_info.get("uncertainty_y", np.nan)
-                if uncertainty_info
-                else np.nan
+            # Calculate RSSO shift between frame and whole dataset
+            shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
+                dataset_locs, frame_locs, max_shift, plot_histogram=False
             )
 
-            # Calculate confidence based on number of localizations and uncertainty
-            n_locs_frame = len(frame_locs)
-            n_locs_dataset = len(dataset_locs)
-
-            # Simple confidence metric based on localization count and uncertainty
-            if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
-                uncertainty_magnitude = np.sqrt(
-                    uncertainty_x ** 2 + uncertainty_y ** 2
+            if shift_x is not None and shift_y is not None:
+                # Extract uncertainty information
+                uncertainty_x = (
+                    uncertainty_info.get("uncertainty_x", np.nan)
+                    if uncertainty_info
+                    else np.nan
                 )
-                confidence = min(
-                    1.0, (n_locs_frame / 100.0) / (1.0 + uncertainty_magnitude)
+                uncertainty_y = (
+                    uncertainty_info.get("uncertainty_y", np.nan)
+                    if uncertainty_info
+                    else np.nan
+                )
+
+                # Calculate confidence based on number of localizations and uncertainty
+                n_locs_frame = len(frame_locs)
+                n_locs_dataset = len(dataset_locs)
+
+                # Simple confidence metric based on localization count and uncertainty
+                if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
+                    uncertainty_magnitude = np.sqrt(
+                        uncertainty_x ** 2 + uncertainty_y ** 2
+                    )
+                    confidence = min(
+                        1.0, (n_locs_frame / 100.0) / (1.0 + uncertainty_magnitude)
+                    )
+                else:
+                    confidence = min(1.0, n_locs_frame / 100.0)
+
+                quality = n_locs_frame + n_locs_dataset  # Simple quality metric
+
+                return (
+                    frame_idx,
+                    shift_x,
+                    shift_y,
+                    uncertainty_x,
+                    uncertainty_y,
+                    confidence,
+                    quality,
                 )
             else:
-                confidence = min(1.0, n_locs_frame / 100.0)
+                return (frame_idx, None, None, None, None, 0.0, 0.0)
 
-            quality = n_locs_frame + n_locs_dataset  # Simple quality metric
-
-            return (
-                frame_idx,
-                shift_x,
-                shift_y,
-                uncertainty_x,
-                uncertainty_y,
-                confidence,
-                quality,
-            )
-        else:
+        except Exception as e:
+            print(f"Error processing frame {frame_idx}: {e}")
             return (frame_idx, None, None, None, None, 0.0, 0.0)
-
-    except Exception as e:
-        print(f"Error processing frame {frame_idx}: {e}")
-        return (frame_idx, None, None, None, None, 0.0, 0.0)
 
     @staticmethod
     def _process_autocorr_chunk(chunk_data):
