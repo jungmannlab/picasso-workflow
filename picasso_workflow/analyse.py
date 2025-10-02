@@ -11897,25 +11897,47 @@ def _validate_numba_implementation():
     import numpy as np
     from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
 
-    # Create test data
+    # Create test data with realistic RSSO structure
     np.random.seed(42)
-    n_frame = 100  # Increase for better statistics
-    n_ref = 300
+    n_common = 80  # Points that appear in both datasets (with shift)
+    n_frame_extra = 20  # Extra points only in frame
+    n_ref_extra = 50   # Extra points only in reference
 
-    # Create synthetic localizations with known shift
-    # The shift should represent: shift = reference_position - frame_position
     true_shift_x, true_shift_y = 2.5, -1.8
 
-    # Create overlapping datasets where most points have correspondences within max_shift
+    # Create common structure that appears in both datasets
     center_x, center_y = 50, 50
-    spread = 3.0  # Reduced spread for better overlap
+    noise_level = 0.3  # Small noise for realistic localization precision
 
-    frame_x = np.random.normal(center_x, spread, n_frame).astype(np.float32)
-    frame_y = np.random.normal(center_y, spread, n_frame).astype(np.float32)
+    # Generate base pattern that will appear in both datasets
+    np.random.seed(123)  # Different seed for base pattern
+    base_x = np.random.normal(center_x, 4.0, n_common).astype(np.float32)
+    base_y = np.random.normal(center_y, 4.0, n_common).astype(np.float32)
 
-    # Reference is shifted by true_shift relative to frame
-    ref_x = np.random.normal(center_x + true_shift_x, spread, n_ref).astype(np.float32)
-    ref_y = np.random.normal(center_y + true_shift_y, spread, n_ref).astype(np.float32)
+    # Frame dataset: base pattern + noise + extra points
+    frame_x = base_x + np.random.normal(0, noise_level, n_common).astype(np.float32)
+    frame_y = base_y + np.random.normal(0, noise_level, n_common).astype(np.float32)
+
+    # Add some extra points only in frame
+    if n_frame_extra > 0:
+        extra_frame_x = np.random.uniform(45, 55, n_frame_extra).astype(np.float32)
+        extra_frame_y = np.random.uniform(45, 55, n_frame_extra).astype(np.float32)
+        frame_x = np.concatenate([frame_x, extra_frame_x])
+        frame_y = np.concatenate([frame_y, extra_frame_y])
+
+    # Reference dataset: shifted base pattern + noise + extra points
+    ref_x = (base_x + true_shift_x) + np.random.normal(0, noise_level, n_common).astype(np.float32)
+    ref_y = (base_y + true_shift_y) + np.random.normal(0, noise_level, n_common).astype(np.float32)
+
+    # Add some extra points only in reference
+    if n_ref_extra > 0:
+        extra_ref_x = np.random.uniform(45, 60, n_ref_extra).astype(np.float32)
+        extra_ref_y = np.random.uniform(45, 55, n_ref_extra).astype(np.float32)
+        ref_x = np.concatenate([ref_x, extra_ref_x])
+        ref_y = np.concatenate([ref_y, extra_ref_y])
+
+    n_frame = len(frame_x)
+    n_ref = len(ref_x)
 
     # Create recarray format for standard implementation
     frame_locs = np.rec.fromarrays([frame_x, frame_y], names=['x', 'y'])
@@ -11958,6 +11980,7 @@ def _validate_numba_implementation():
         # Debug: Print number of pairs processed
         if numba_info:
             print(f"    Numba processed {numba_info.get('total_pairs', 'unknown')} pairs")
+            print(f"    Numba histogram peak: {numba_info.get('peak_value', 'unknown')}")
         print(f"    Max shift limit: {max_shift_pixels} pixels")
 
         # Compare results
@@ -11973,7 +11996,7 @@ def _validate_numba_implementation():
             print(f"    Numba:    ({numba_shift_x:.3f}, {numba_shift_y:.3f}), error=({abs(numba_shift_x-true_shift_x):.3f}, {abs(numba_shift_y-true_shift_y):.3f})")
 
             if numba_info:
-                print(f"    Numba pairs processed: {numba_info.get('n_pairs', 'unknown')}")
+                print(f"    Numba pairs processed: {numba_info.get('total_pairs', 'unknown')}")
 
             if diff_x < tolerance and diff_y < tolerance:
                 print(f"    Numba validation PASSED: shifts agree within {tolerance} pixels")
@@ -12161,17 +12184,22 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             import time
             start_time = time.time()
 
+            # Initialize uncertainty_info to avoid "referenced before assignment" error
+            uncertainty_info = {}
+
             if enable_numba_optimization:
                 # Use Numba-optimized RSSO computation
-                shift_x, shift_y, uncertainty_info = _compute_rsso_shift_numba_optimized(
+                shift_x, shift_y, numba_info = _compute_rsso_shift_numba_optimized(
                     dataset_locs, frame_locs, max_shift
                 )
+                uncertainty_info = numba_info if numba_info is not None else {}
                 computation_type = "Numba-optimized"
             else:
                 # Use standard RSSO computation
-                shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
+                shift_x, shift_y, _, std_info = _calculate_pairwise_shift(
                     dataset_locs, frame_locs, max_shift, plot_histogram=False
                 )
+                uncertainty_info = std_info if std_info is not None else {}
                 computation_type = "Standard"
 
             computation_time = time.time() - start_time
