@@ -11899,15 +11899,23 @@ def _validate_numba_implementation():
 
     # Create test data
     np.random.seed(42)
-    n_frame = 50
-    n_ref = 200
+    n_frame = 100  # Increase for better statistics
+    n_ref = 300
 
     # Create synthetic localizations with known shift
+    # The shift should represent: shift = reference_position - frame_position
     true_shift_x, true_shift_y = 2.5, -1.8
-    frame_x = np.random.normal(50, 5, n_frame).astype(np.float32)
-    frame_y = np.random.normal(50, 5, n_frame).astype(np.float32)
-    ref_x = np.random.normal(50 + true_shift_x, 5, n_ref).astype(np.float32)
-    ref_y = np.random.normal(50 + true_shift_y, 5, n_ref).astype(np.float32)
+
+    # Create overlapping datasets where most points have correspondences within max_shift
+    center_x, center_y = 50, 50
+    spread = 3.0  # Reduced spread for better overlap
+
+    frame_x = np.random.normal(center_x, spread, n_frame).astype(np.float32)
+    frame_y = np.random.normal(center_y, spread, n_frame).astype(np.float32)
+
+    # Reference is shifted by true_shift relative to frame
+    ref_x = np.random.normal(center_x + true_shift_x, spread, n_ref).astype(np.float32)
+    ref_y = np.random.normal(center_y + true_shift_y, spread, n_ref).astype(np.float32)
 
     # Create recarray format for standard implementation
     frame_locs = np.rec.fromarrays([frame_x, frame_y], names=['x', 'y'])
@@ -11915,7 +11923,28 @@ def _validate_numba_implementation():
 
     max_shift_pixels = 10.0
 
+    # Quick manual test: single point shift calculation
+    # Standard: dx = coord_j[0] - coord_i[0] where locs_i=ref, locs_j=frame
+    # So: dx = frame_x - ref_x
+    # If ref at (50, 50) and frame at (52.5, 48.2), then shift = (52.5-50, 48.2-50) = (2.5, -1.8)
+    manual_ref_x = np.array([50.0], dtype=np.float32)    # i_x in Numba function
+    manual_ref_y = np.array([50.0], dtype=np.float32)    # i_y in Numba function
+    manual_frame_x = np.array([52.5], dtype=np.float32)  # j_x in Numba function
+    manual_frame_y = np.array([48.2], dtype=np.float32)  # j_y in Numba function
+
+    # Call: _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y)
+    manual_shifts_x, manual_shifts_y = _compute_pairwise_shifts_numba(
+        manual_ref_x, manual_ref_y, manual_frame_x, manual_frame_y, max_shift_pixels
+    )
+    print(f"    Manual test: expected shift (2.5, -1.8), got ({manual_shifts_x[0]:.1f}, {manual_shifts_y[0]:.1f})")
+
     try:
+        # Debug: Print test data statistics
+        print(f"    Test data: {n_frame} frame locs, {n_ref} ref locs")
+        print(f"    Frame center: ({np.mean(frame_x):.1f}, {np.mean(frame_y):.1f})")
+        print(f"    Ref center: ({np.mean(ref_x):.1f}, {np.mean(ref_y):.1f})")
+        print(f"    Expected center shift: ({np.mean(ref_x) - np.mean(frame_x):.3f}, {np.mean(ref_y) - np.mean(frame_y):.3f})")
+
         # Test Numba implementation
         numba_shift_x, numba_shift_y, numba_info = _compute_rsso_shift_numba_optimized(
             ref_locs, frame_locs, max_shift_pixels
@@ -11925,6 +11954,11 @@ def _validate_numba_implementation():
         std_shift_x, std_shift_y, _, std_info = _calculate_pairwise_shift(
             ref_locs, frame_locs, max_shift_pixels, plot_histogram=False
         )
+
+        # Debug: Print number of pairs processed
+        if numba_info:
+            print(f"    Numba processed {numba_info.get('total_pairs', 'unknown')} pairs")
+        print(f"    Max shift limit: {max_shift_pixels} pixels")
 
         # Compare results
         if numba_shift_x is not None and std_shift_x is not None:
