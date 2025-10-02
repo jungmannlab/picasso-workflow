@@ -5265,571 +5265,6 @@ class AutoPicasso(util.AbstractModuleCollection):
             print(f"      Frame {frame_idx} RSSO failed: {e}")
             return (frame_idx, None, None, None, None, 0.0, 0.0, None)
 
-
-# =============================================================================
-# NUMBA-OPTIMIZED RSSO FUNCTIONS
-# =============================================================================
-
-try:
-    import numba
-    NUMBA_AVAILABLE = True
-except ImportError:
-    NUMBA_AVAILABLE = False
-    print("Warning: Numba not available. RSSO computations will use standard NumPy (slower).")
-
-
-if NUMBA_AVAILABLE:
-    @numba.jit(nopython=True, parallel=True, cache=True)
-    def _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y):
-        """Numba-optimized pairwise shift computation (Phase 1)
-
-        Args:
-            frame_x, frame_y : ndarray
-                Frame localization coordinates
-            ref_x, ref_y : ndarray
-                Reference dataset coordinates
-
-        Returns:
-            shifts_x, shifts_y : ndarray
-                All pairwise shift vectors
-        """
-        n_frame = len(frame_x)
-        n_ref = len(ref_x)
-        total_pairs = n_frame * n_ref
-
-        # Pre-allocate output arrays
-        shifts_x = np.empty(total_pairs, dtype=numba.float32)
-        shifts_y = np.empty(total_pairs, dtype=numba.float32)
-
-        # Parallel computation of all pairwise shifts
-        for i in numba.prange(n_frame):  # Parallel outer loop
-            frame_x_i = frame_x[i]
-            frame_y_i = frame_y[i]
-
-            for j in range(n_ref):
-                idx = i * n_ref + j
-                shifts_x[idx] = ref_x[j] - frame_x_i
-                shifts_y[idx] = ref_y[j] - frame_y_i
-
-        return shifts_x, shifts_y
-
-    @numba.jit(nopython=True, parallel=False, cache=True)  # Sequential for thread safety in binning
-    def _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges):
-        """Numba-optimized 2D histogram binning (Phase 2)
-
-        Args:
-            shifts_x, shifts_y : ndarray
-                Shift vectors to bin
-            x_edges, y_edges : ndarray
-                Bin edges for histogram
-
-        Returns:
-            hist : ndarray
-                2D histogram counts
-        """
-        nx_bins = len(x_edges) - 1
-        ny_bins = len(y_edges) - 1
-        hist = np.zeros((nx_bins, ny_bins), dtype=numba.int32)
-
-        n_points = len(shifts_x)
-
-        # Custom binning loop
-        for i in range(n_points):
-            x_val = shifts_x[i]
-            y_val = shifts_y[i]
-
-            # Find bins using binary search equivalent
-            x_bin = -1
-            y_bin = -1
-
-            # Simple linear search for bin (could be optimized further)
-            for j in range(nx_bins):
-                if x_edges[j] <= x_val < x_edges[j+1]:
-                    x_bin = j
-                    break
-
-            for j in range(ny_bins):
-                if y_edges[j] <= y_val < y_edges[j+1]:
-                    y_bin = j
-                    break
-
-            # Increment histogram bin if valid
-            if 0 <= x_bin < nx_bins and 0 <= y_bin < ny_bins:
-                hist[x_bin, y_bin] += 1
-
-        return hist
-
-    @numba.jit(nopython=True, cache=True)
-    def _find_histogram_peak_numba(hist):
-        """Numba-optimized peak finding with sub-pixel refinement
-
-        Args:
-            hist : ndarray
-                2D histogram
-
-        Returns:
-            peak_x, peak_y : float
-                Peak location with sub-pixel precision
-            peak_value : int
-                Peak histogram value
-        """
-        max_val = 0
-        max_i = 0
-        max_j = 0
-
-        # Find maximum value and location
-        for i in range(hist.shape[0]):
-            for j in range(hist.shape[1]):
-                if hist[i, j] > max_val:
-                    max_val = hist[i, j]
-                    max_i = i
-                    max_j = j
-
-        # Sub-pixel refinement using parabolic interpolation
-        peak_x = numba.float32(max_i)
-        peak_y = numba.float32(max_j)
-
-        # Parabolic refinement in x-direction
-        if 0 < max_i < hist.shape[0] - 1:
-            left = hist[max_i - 1, max_j]
-            center = hist[max_i, max_j]
-            right = hist[max_i + 1, max_j]
-
-            # Parabolic peak formula: offset = (left - right) / (2 * (left - 2*center + right))
-            denominator = 2 * (left - 2 * center + right)
-            if abs(denominator) > 1e-6:  # Avoid division by zero
-                offset_x = (left - right) / denominator
-                peak_x = max_i + offset_x
-
-        # Parabolic refinement in y-direction
-        if 0 < max_j < hist.shape[1] - 1:
-            bottom = hist[max_i, max_j - 1]
-            center = hist[max_i, max_j]
-            top = hist[max_i, max_j + 1]
-
-            denominator = 2 * (bottom - 2 * center + top)
-            if abs(denominator) > 1e-6:
-                offset_y = (bottom - top) / denominator
-                peak_y = max_j + offset_y
-
-        return peak_x, peak_y, max_val
-
-else:
-    # Fallback implementations when Numba is not available
-    def _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y):
-        """Fallback NumPy implementation"""
-        frame_coords = np.column_stack([frame_x, frame_y])
-        ref_coords = np.column_stack([ref_x, ref_y])
-
-        shifts_x = []
-        shifts_y = []
-        for frame_coord in frame_coords:
-            dx = ref_coords[:, 0] - frame_coord[0]
-            dy = ref_coords[:, 1] - frame_coord[1]
-            shifts_x.extend(dx)
-            shifts_y.extend(dy)
-
-        return np.array(shifts_x, dtype=np.float32), np.array(shifts_y, dtype=np.float32)
-
-    def _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges):
-        """Fallback NumPy implementation"""
-        hist, _, _ = np.histogram2d(shifts_x, shifts_y, bins=[x_edges, y_edges])
-        return hist.astype(np.int32)
-
-    def _find_histogram_peak_numba(hist):
-        """Fallback NumPy implementation"""
-        max_idx = np.unravel_index(hist.argmax(), hist.shape)
-        return float(max_idx[0]), float(max_idx[1]), hist[max_idx]
-
-
-def _compute_rsso_shift_numba_optimized(frame_locs, reference_locs, max_shift_pixels, enable_numba=True):
-    """Numba-optimized RSSO shift computation combining Phases 1 and 2
-
-    Args:
-        frame_locs : ndarray
-            Frame localizations
-        reference_locs : ndarray
-            Reference dataset localizations
-        max_shift_pixels : float
-            Maximum expected shift in pixels
-        enable_numba : bool
-            Whether to use Numba optimization
-
-    Returns:
-        shift_x, shift_y : float
-            Detected shift in pixels
-        quality_metrics : dict
-            Quality and uncertainty information
-    """
-    import time
-
-    if len(frame_locs) == 0 or len(reference_locs) == 0:
-        return None, None, {"success": False, "reason": "insufficient_data"}
-
-    start_time = time.time()
-
-    # Extract coordinates
-    frame_x = frame_locs['x'].astype(np.float32)
-    frame_y = frame_locs['y'].astype(np.float32)
-    ref_x = reference_locs['x'].astype(np.float32)
-    ref_y = reference_locs['y'].astype(np.float32)
-
-    phase1_start = time.time()
-
-    # Phase 1: Compute all pairwise shifts (Numba optimized)
-    if enable_numba and NUMBA_AVAILABLE:
-        shifts_x, shifts_y = _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y)
-    else:
-        shifts_x, shifts_y = _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y)  # Uses fallback
-
-    phase1_time = time.time() - phase1_start
-    phase2_start = time.time()
-
-    # Create histogram bins
-    n_bins = min(100, int(2 * max_shift_pixels))  # Adaptive bin count
-    x_edges = np.linspace(-max_shift_pixels, max_shift_pixels, n_bins + 1).astype(np.float32)
-    y_edges = np.linspace(-max_shift_pixels, max_shift_pixels, n_bins + 1).astype(np.float32)
-
-    # Phase 2: Create histogram (Numba optimized)
-    if enable_numba and NUMBA_AVAILABLE:
-        hist = _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges)
-    else:
-        hist = _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges)  # Uses fallback
-
-    phase2_time = time.time() - phase2_start
-    phase3_start = time.time()
-
-    # Phase 3: Find peak with sub-pixel precision
-    peak_x_bin, peak_y_bin, peak_value = _find_histogram_peak_numba(hist)
-
-    # Convert bin indices to shift values
-    if n_bins > 1:
-        bin_size_x = (x_edges[1] - x_edges[0])
-        bin_size_y = (y_edges[1] - y_edges[0])
-        shift_x = x_edges[0] + peak_x_bin * bin_size_x
-        shift_y = y_edges[0] + peak_y_bin * bin_size_y
-    else:
-        shift_x, shift_y = 0.0, 0.0
-
-    phase3_time = time.time() - phase3_start
-    total_time = time.time() - start_time
-
-    # Quality metrics
-    quality_metrics = {
-        "success": True,
-        "peak_value": int(peak_value),
-        "total_pairs": len(shifts_x),
-        "n_frame_locs": len(frame_locs),
-        "n_reference_locs": len(reference_locs),
-        "numba_enabled": enable_numba and NUMBA_AVAILABLE,
-        "timing": {
-            "phase1_pairwise": phase1_time,
-            "phase2_histogram": phase2_time,
-            "phase3_peak": phase3_time,
-            "total": total_time
-        }
-    }
-
-    return shift_x, shift_y, quality_metrics
-
-
-def _validate_numba_implementation():
-    """Validate that Numba implementation produces equivalent results to standard implementation"""
-    import numpy as np
-    from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-
-    # Create test data
-    np.random.seed(42)
-    n_frame = 50
-    n_ref = 200
-
-    # Create synthetic localizations with known shift
-    true_shift_x, true_shift_y = 2.5, -1.8
-    frame_x = np.random.normal(50, 5, n_frame).astype(np.float32)
-    frame_y = np.random.normal(50, 5, n_frame).astype(np.float32)
-    ref_x = np.random.normal(50 + true_shift_x, 5, n_ref).astype(np.float32)
-    ref_y = np.random.normal(50 + true_shift_y, 5, n_ref).astype(np.float32)
-
-    # Create recarray format for standard implementation
-    frame_locs = np.rec.fromarrays([frame_x, frame_y], names=['x', 'y'])
-    ref_locs = np.rec.fromarrays([ref_x, ref_y], names=['x', 'y'])
-
-    max_shift_pixels = 10.0
-
-    try:
-        # Test Numba implementation
-        numba_shift_x, numba_shift_y, numba_info = _compute_rsso_shift_numba_optimized(
-            ref_locs, frame_locs, max_shift_pixels
-        )
-
-        # Test standard implementation
-        std_shift_x, std_shift_y, _, std_info = _calculate_pairwise_shift(
-            ref_locs, frame_locs, max_shift_pixels, plot_histogram=False
-        )
-
-        # Compare results
-        if numba_shift_x is not None and std_shift_x is not None:
-            diff_x = abs(numba_shift_x - std_shift_x)
-            diff_y = abs(numba_shift_y - std_shift_y)
-
-            tolerance = 0.1  # pixels
-
-            if diff_x < tolerance and diff_y < tolerance:
-                print(f"    Numba validation PASSED: shifts agree within {tolerance} pixels")
-                print(f"    Standard: ({std_shift_x:.3f}, {std_shift_y:.3f}), Numba: ({numba_shift_x:.3f}, {numba_shift_y:.3f})")
-                if numba_info and 'computation_time' in numba_info:
-                    print(f"    Numba computation time: {numba_info['computation_time']:.4f}s")
-                return True
-            else:
-                print(f"    Numba validation FAILED: shifts differ by ({diff_x:.3f}, {diff_y:.3f}) pixels")
-                print(f"    Standard: ({std_shift_x:.3f}, {std_shift_y:.3f}), Numba: ({numba_shift_x:.3f}, {numba_shift_y:.3f})")
-                return False
-        else:
-            print("    Numba validation FAILED: one or both implementations returned None")
-            return False
-
-    except Exception as e:
-        print(f"    Numba validation FAILED: {e}")
-        return False
-
-
-def _estimate_subsampling_uncertainty(
-    frame_locs, reference_dataset, max_shift, subsampling_fraction, n_trials=3, enable_numba_optimization=True
-):
-    """Estimate uncertainty added by subsampling via multiple subset trials
-
-    Args:
-        frame_locs : ndarray
-            Localizations from single frame
-        reference_dataset : ndarray
-            Full reference dataset (already subsampled from self.locs)
-        max_shift : float
-            Maximum shift for RSSO computation
-        subsampling_fraction : float
-            Fraction to further subsample reference dataset
-        n_trials : int
-            Number of different subsets to test
-        enable_numba_optimization : bool
-            Whether to use Numba-optimized RSSO computation
-
-    Returns:
-        tuple : (mean_shift_x, mean_shift_y, uncertainty_x, uncertainty_y, confidence)
-    """
-    from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-    import numpy as np
-
-    if len(reference_dataset) == 0 or len(frame_locs) == 0:
-        return None, None, np.inf, np.inf, 0.0
-
-    shift_estimates = []
-    n_subset = max(1000, int(len(reference_dataset) * subsampling_fraction))
-    n_subset = min(
-        n_subset, len(reference_dataset)
-    )  # Don't exceed available data
-
-    for trial in range(n_trials):
-        # Different random subset for each trial
-        np.random.seed(1000 + trial)
-        if n_subset < len(reference_dataset):
-            subset_indices = np.random.choice(
-                len(reference_dataset), n_subset, replace=False
-            )
-            subset_dataset = reference_dataset[subset_indices]
-        else:
-            subset_dataset = reference_dataset
-
-        # Calculate RSSO shift with this subset
-        if enable_numba_optimization:
-            # Use Numba-optimized RSSO computation
-            shift_x, shift_y, uncertainty_info = _compute_rsso_shift_numba_optimized(
-                subset_dataset, frame_locs, max_shift
-            )
-        else:
-            # Use standard RSSO computation
-            shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-                subset_dataset, frame_locs, max_shift, plot_histogram=False
-            )
-
-        if shift_x is not None and shift_y is not None:
-            shift_estimates.append((shift_x, shift_y))
-
-    if len(shift_estimates) >= 2:
-        shifts_array = np.array(shift_estimates)
-
-        # Calculate uncertainty as standard deviation across trials
-        uncertainty_x = np.std(shifts_array[:, 0])
-        uncertainty_y = np.std(shifts_array[:, 1])
-
-        # Mean estimate
-        mean_shift_x = np.mean(shifts_array[:, 0])
-        mean_shift_y = np.mean(shifts_array[:, 1])
-
-        # Confidence based on consistency and number of localizations
-        uncertainty_magnitude = np.sqrt(
-            uncertainty_x ** 2 + uncertainty_y ** 2
-        )
-        consistency_confidence = 1.0 / (
-            1.0 + uncertainty_magnitude * 10
-        )  # Penalize inconsistency
-        size_confidence = min(1.0, len(frame_locs) / 100.0)
-        confidence = consistency_confidence * size_confidence
-
-        return (
-            mean_shift_x,
-            mean_shift_y,
-            uncertainty_x,
-            uncertainty_y,
-            confidence,
-        )
-    elif len(shift_estimates) == 1:
-        # Only one successful estimate
-        shift_x, shift_y = shift_estimates[0]
-        return (
-            shift_x,
-            shift_y,
-            np.nan,
-            np.nan,
-            min(1.0, len(frame_locs) / 100.0),
-        )
-    else:
-        return None, None, np.inf, np.inf, 0.0
-
-
-def _compute_frame_to_reference_shift_optimized(frame_data):
-    """Optimized RSSO shift computation using per-iteration reference dataset
-
-    Args:
-        frame_data : tuple
-            (frame_idx, reference_dataset, target_frame, max_shift, min_locs_per_frame,
-             enable_uncertainty_estimation, n_uncertainty_trials, subsampling_fraction,
-             enable_numba_optimization)
-
-    Returns:
-        tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
-    """
-    from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-    import numpy as np
-
-    (
-        frame_idx,
-        reference_dataset,
-        target_frame,
-        max_shift,
-        min_locs_per_frame,
-        enable_uncertainty_estimation,
-        n_uncertainty_trials,
-        subsampling_fraction,
-        enable_numba_optimization,
-    ) = frame_data
-
-    try:
-        # Extract frame localizations from reference dataset
-        frame_mask = reference_dataset["frame"] == target_frame
-        frame_locs = reference_dataset[frame_mask]
-
-        # Skip frames with insufficient localizations
-        if len(frame_locs) < min_locs_per_frame:
-            return (frame_idx, None, None, None, None, 0.0, 0.0, None)
-
-        # Create dataset by excluding current frame
-        dataset_mask = reference_dataset["frame"] != target_frame
-        dataset_locs = reference_dataset[dataset_mask]
-
-        if len(dataset_locs) == 0:
-            return (frame_idx, None, None, None, None, 0.0, 0.0, None)
-
-        # Choose computation method based on uncertainty estimation setting
-        if enable_uncertainty_estimation and n_uncertainty_trials > 1:
-            # Use uncertainty estimation with multiple subsets
-            (
-                shift_x,
-                shift_y,
-                uncertainty_x,
-                uncertainty_y,
-                confidence,
-            ) = _estimate_subsampling_uncertainty(
-                frame_locs,
-                dataset_locs,
-                max_shift,
-                subsampling_fraction,
-                n_uncertainty_trials,
-                enable_numba_optimization,
-            )
-            quality = len(frame_locs) + len(dataset_locs)
-
-        else:
-            # Standard single computation (faster)
-            import time
-            start_time = time.time()
-
-            if enable_numba_optimization:
-                # Use Numba-optimized RSSO computation
-                shift_x, shift_y, uncertainty_info = _compute_rsso_shift_numba_optimized(
-                    dataset_locs, frame_locs, max_shift
-                )
-                computation_type = "Numba-optimized"
-            else:
-                # Use standard RSSO computation
-                shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-                    dataset_locs, frame_locs, max_shift, plot_histogram=False
-                )
-                computation_type = "Standard"
-
-            computation_time = time.time() - start_time
-
-            # Add timing info to uncertainty_info
-            if uncertainty_info is None:
-                uncertainty_info = {}
-            uncertainty_info["computation_time"] = computation_time
-            uncertainty_info["computation_type"] = computation_type
-            uncertainty_info["n_dataset_locs"] = len(dataset_locs)
-            uncertainty_info["n_frame_locs"] = len(frame_locs)
-
-            if shift_x is not None and shift_y is not None:
-                # Extract uncertainty from RSSO calculation
-                uncertainty_x = (
-                    uncertainty_info.get("uncertainty_x", np.nan)
-                    if uncertainty_info
-                    else np.nan
-                )
-                uncertainty_y = (
-                    uncertainty_info.get("uncertainty_y", np.nan)
-                    if uncertainty_info
-                    else np.nan
-                )
-
-                # Calculate confidence
-                n_locs_frame = len(frame_locs)
-                if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
-                    uncertainty_magnitude = np.sqrt(
-                        uncertainty_x ** 2 + uncertainty_y ** 2
-                    )
-                    confidence = min(
-                        1.0,
-                        (n_locs_frame / 100.0) / (1.0 + uncertainty_magnitude),
-                    )
-                else:
-                    confidence = min(1.0, n_locs_frame / 100.0)
-
-                quality = len(frame_locs) + len(dataset_locs)
-            else:
-                return (frame_idx, None, None, None, None, 0.0, 0.0, None)
-
-        return (
-            frame_idx,
-            shift_x,
-            shift_y,
-            uncertainty_x,
-            uncertainty_y,
-            confidence,
-            quality,
-            uncertainty_info,  # Include performance metrics
-        )
-
-    except Exception as e:
-        print(f"Error processing frame {frame_idx}: {e}")
-        return (frame_idx, None, None, None, None, 0.0, 0.0, None)
-
     @staticmethod
     def _compute_frame_to_dataset_shift_memory_efficient(frame_data):
         """Memory-efficient RSSO shift computation using frame indices instead of data copies
@@ -12087,3 +11522,568 @@ class ManualInputLackingError(AutoPicassoError):
 
 class PicassoConfigError(AutoPicassoError):
     pass
+
+
+# =============================================================================
+# NUMBA-OPTIMIZED RSSO FUNCTIONS
+# =============================================================================
+
+try:
+    import numba
+    NUMBA_AVAILABLE = True
+except ImportError:
+    NUMBA_AVAILABLE = False
+    print("Warning: Numba not available. RSSO computations will use standard NumPy (slower).")
+
+
+if NUMBA_AVAILABLE:
+    @numba.jit(nopython=True, parallel=True, cache=True)
+    def _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y):
+        """Numba-optimized pairwise shift computation (Phase 1)
+
+        Args:
+            frame_x, frame_y : ndarray
+                Frame localization coordinates
+            ref_x, ref_y : ndarray
+                Reference dataset coordinates
+
+        Returns:
+            shifts_x, shifts_y : ndarray
+                All pairwise shift vectors
+        """
+        n_frame = len(frame_x)
+        n_ref = len(ref_x)
+        total_pairs = n_frame * n_ref
+
+        # Pre-allocate output arrays
+        shifts_x = np.empty(total_pairs, dtype=numba.float32)
+        shifts_y = np.empty(total_pairs, dtype=numba.float32)
+
+        # Parallel computation of all pairwise shifts
+        for i in numba.prange(n_frame):  # Parallel outer loop
+            frame_x_i = frame_x[i]
+            frame_y_i = frame_y[i]
+
+            for j in range(n_ref):
+                idx = i * n_ref + j
+                shifts_x[idx] = ref_x[j] - frame_x_i
+                shifts_y[idx] = ref_y[j] - frame_y_i
+
+        return shifts_x, shifts_y
+
+    @numba.jit(nopython=True, parallel=False, cache=True)  # Sequential for thread safety in binning
+    def _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges):
+        """Numba-optimized 2D histogram binning (Phase 2)
+
+        Args:
+            shifts_x, shifts_y : ndarray
+                Shift vectors to bin
+            x_edges, y_edges : ndarray
+                Bin edges for histogram
+
+        Returns:
+            hist : ndarray
+                2D histogram counts
+        """
+        nx_bins = len(x_edges) - 1
+        ny_bins = len(y_edges) - 1
+        hist = np.zeros((nx_bins, ny_bins), dtype=numba.int32)
+
+        n_points = len(shifts_x)
+
+        # Custom binning loop
+        for i in range(n_points):
+            x_val = shifts_x[i]
+            y_val = shifts_y[i]
+
+            # Find bins using binary search equivalent
+            x_bin = -1
+            y_bin = -1
+
+            # Simple linear search for bin (could be optimized further)
+            for j in range(nx_bins):
+                if x_edges[j] <= x_val < x_edges[j+1]:
+                    x_bin = j
+                    break
+
+            for j in range(ny_bins):
+                if y_edges[j] <= y_val < y_edges[j+1]:
+                    y_bin = j
+                    break
+
+            # Increment histogram bin if valid
+            if 0 <= x_bin < nx_bins and 0 <= y_bin < ny_bins:
+                hist[x_bin, y_bin] += 1
+
+        return hist
+
+    @numba.jit(nopython=True, cache=True)
+    def _find_histogram_peak_numba(hist):
+        """Numba-optimized peak finding with sub-pixel refinement
+
+        Args:
+            hist : ndarray
+                2D histogram
+
+        Returns:
+            peak_x, peak_y : float
+                Peak location with sub-pixel precision
+            peak_value : int
+                Peak histogram value
+        """
+        max_val = 0
+        max_i = 0
+        max_j = 0
+
+        # Find maximum value and location
+        for i in range(hist.shape[0]):
+            for j in range(hist.shape[1]):
+                if hist[i, j] > max_val:
+                    max_val = hist[i, j]
+                    max_i = i
+                    max_j = j
+
+        # Sub-pixel refinement using parabolic interpolation
+        peak_x = numba.float32(max_i)
+        peak_y = numba.float32(max_j)
+
+        # Parabolic refinement in x-direction
+        if 0 < max_i < hist.shape[0] - 1:
+            left = hist[max_i - 1, max_j]
+            center = hist[max_i, max_j]
+            right = hist[max_i + 1, max_j]
+
+            # Parabolic peak formula: offset = (left - right) / (2 * (left - 2*center + right))
+            denominator = 2 * (left - 2 * center + right)
+            if abs(denominator) > 1e-6:  # Avoid division by zero
+                offset_x = (left - right) / denominator
+                peak_x = max_i + offset_x
+
+        # Parabolic refinement in y-direction
+        if 0 < max_j < hist.shape[1] - 1:
+            bottom = hist[max_i, max_j - 1]
+            center = hist[max_i, max_j]
+            top = hist[max_i, max_j + 1]
+
+            denominator = 2 * (bottom - 2 * center + top)
+            if abs(denominator) > 1e-6:
+                offset_y = (bottom - top) / denominator
+                peak_y = max_j + offset_y
+
+        return peak_x, peak_y, max_val
+
+else:
+    # Fallback implementations when Numba is not available
+    def _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y):
+        """Fallback NumPy implementation"""
+        frame_coords = np.column_stack([frame_x, frame_y])
+        ref_coords = np.column_stack([ref_x, ref_y])
+
+        shifts_x = []
+        shifts_y = []
+        for frame_coord in frame_coords:
+            dx = ref_coords[:, 0] - frame_coord[0]
+            dy = ref_coords[:, 1] - frame_coord[1]
+            shifts_x.extend(dx)
+            shifts_y.extend(dy)
+
+        return np.array(shifts_x, dtype=np.float32), np.array(shifts_y, dtype=np.float32)
+
+    def _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges):
+        """Fallback NumPy implementation"""
+        hist, _, _ = np.histogram2d(shifts_x, shifts_y, bins=[x_edges, y_edges])
+        return hist.astype(np.int32)
+
+    def _find_histogram_peak_numba(hist):
+        """Fallback NumPy implementation"""
+        max_idx = np.unravel_index(hist.argmax(), hist.shape)
+        return float(max_idx[0]), float(max_idx[1]), hist[max_idx]
+
+
+def _compute_rsso_shift_numba_optimized(frame_locs, reference_locs, max_shift_pixels, enable_numba=True):
+    """Numba-optimized RSSO shift computation combining Phases 1 and 2
+
+    Args:
+        frame_locs : ndarray
+            Frame localizations
+        reference_locs : ndarray
+            Reference dataset localizations
+        max_shift_pixels : float
+            Maximum expected shift in pixels
+        enable_numba : bool
+            Whether to use Numba optimization
+
+    Returns:
+        shift_x, shift_y : float
+            Detected shift in pixels
+        quality_metrics : dict
+            Quality and uncertainty information
+    """
+    import time
+
+    if len(frame_locs) == 0 or len(reference_locs) == 0:
+        return None, None, {"success": False, "reason": "insufficient_data"}
+
+    start_time = time.time()
+
+    # Extract coordinates
+    frame_x = frame_locs['x'].astype(np.float32)
+    frame_y = frame_locs['y'].astype(np.float32)
+    ref_x = reference_locs['x'].astype(np.float32)
+    ref_y = reference_locs['y'].astype(np.float32)
+
+    phase1_start = time.time()
+
+    # Phase 1: Compute all pairwise shifts (Numba optimized)
+    if enable_numba and NUMBA_AVAILABLE:
+        shifts_x, shifts_y = _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y)
+    else:
+        shifts_x, shifts_y = _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y)  # Uses fallback
+
+    phase1_time = time.time() - phase1_start
+    phase2_start = time.time()
+
+    # Create histogram bins
+    n_bins = min(100, int(2 * max_shift_pixels))  # Adaptive bin count
+    x_edges = np.linspace(-max_shift_pixels, max_shift_pixels, n_bins + 1).astype(np.float32)
+    y_edges = np.linspace(-max_shift_pixels, max_shift_pixels, n_bins + 1).astype(np.float32)
+
+    # Phase 2: Create histogram (Numba optimized)
+    if enable_numba and NUMBA_AVAILABLE:
+        hist = _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges)
+    else:
+        hist = _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges)  # Uses fallback
+
+    phase2_time = time.time() - phase2_start
+    phase3_start = time.time()
+
+    # Phase 3: Find peak with sub-pixel precision
+    peak_x_bin, peak_y_bin, peak_value = _find_histogram_peak_numba(hist)
+
+    # Convert bin indices to shift values
+    if n_bins > 1:
+        bin_size_x = (x_edges[1] - x_edges[0])
+        bin_size_y = (y_edges[1] - y_edges[0])
+        shift_x = x_edges[0] + peak_x_bin * bin_size_x
+        shift_y = y_edges[0] + peak_y_bin * bin_size_y
+    else:
+        shift_x, shift_y = 0.0, 0.0
+
+    phase3_time = time.time() - phase3_start
+    total_time = time.time() - start_time
+
+    # Quality metrics
+    quality_metrics = {
+        "success": True,
+        "peak_value": int(peak_value),
+        "total_pairs": len(shifts_x),
+        "n_frame_locs": len(frame_locs),
+        "n_reference_locs": len(reference_locs),
+        "numba_enabled": enable_numba and NUMBA_AVAILABLE,
+        "timing": {
+            "phase1_pairwise": phase1_time,
+            "phase2_histogram": phase2_time,
+            "phase3_peak": phase3_time,
+            "total": total_time
+        }
+    }
+
+    return shift_x, shift_y, quality_metrics
+
+
+def _validate_numba_implementation():
+    """Validate that Numba implementation produces equivalent results to standard implementation"""
+    import numpy as np
+    from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+
+    # Create test data
+    np.random.seed(42)
+    n_frame = 50
+    n_ref = 200
+
+    # Create synthetic localizations with known shift
+    true_shift_x, true_shift_y = 2.5, -1.8
+    frame_x = np.random.normal(50, 5, n_frame).astype(np.float32)
+    frame_y = np.random.normal(50, 5, n_frame).astype(np.float32)
+    ref_x = np.random.normal(50 + true_shift_x, 5, n_ref).astype(np.float32)
+    ref_y = np.random.normal(50 + true_shift_y, 5, n_ref).astype(np.float32)
+
+    # Create recarray format for standard implementation
+    frame_locs = np.rec.fromarrays([frame_x, frame_y], names=['x', 'y'])
+    ref_locs = np.rec.fromarrays([ref_x, ref_y], names=['x', 'y'])
+
+    max_shift_pixels = 10.0
+
+    try:
+        # Test Numba implementation
+        numba_shift_x, numba_shift_y, numba_info = _compute_rsso_shift_numba_optimized(
+            ref_locs, frame_locs, max_shift_pixels
+        )
+
+        # Test standard implementation
+        std_shift_x, std_shift_y, _, std_info = _calculate_pairwise_shift(
+            ref_locs, frame_locs, max_shift_pixels, plot_histogram=False
+        )
+
+        # Compare results
+        if numba_shift_x is not None and std_shift_x is not None:
+            diff_x = abs(numba_shift_x - std_shift_x)
+            diff_y = abs(numba_shift_y - std_shift_y)
+
+            tolerance = 0.1  # pixels
+
+            if diff_x < tolerance and diff_y < tolerance:
+                print(f"    Numba validation PASSED: shifts agree within {tolerance} pixels")
+                print(f"    Standard: ({std_shift_x:.3f}, {std_shift_y:.3f}), Numba: ({numba_shift_x:.3f}, {numba_shift_y:.3f})")
+                if numba_info and 'computation_time' in numba_info:
+                    print(f"    Numba computation time: {numba_info['computation_time']:.4f}s")
+                return True
+            else:
+                print(f"    Numba validation FAILED: shifts differ by ({diff_x:.3f}, {diff_y:.3f}) pixels")
+                print(f"    Standard: ({std_shift_x:.3f}, {std_shift_y:.3f}), Numba: ({numba_shift_x:.3f}, {numba_shift_y:.3f})")
+                return False
+        else:
+            print("    Numba validation FAILED: one or both implementations returned None")
+            return False
+
+    except Exception as e:
+        print(f"    Numba validation FAILED: {e}")
+        return False
+
+
+def _estimate_subsampling_uncertainty(
+    frame_locs, reference_dataset, max_shift, subsampling_fraction, n_trials=3, enable_numba_optimization=True
+):
+    """Estimate uncertainty added by subsampling via multiple subset trials
+
+    Args:
+        frame_locs : ndarray
+            Localizations from single frame
+        reference_dataset : ndarray
+            Full reference dataset (already subsampled from self.locs)
+        max_shift : float
+            Maximum shift for RSSO computation
+        subsampling_fraction : float
+            Fraction to further subsample reference dataset
+        n_trials : int
+            Number of different subsets to test
+        enable_numba_optimization : bool
+            Whether to use Numba-optimized RSSO computation
+
+    Returns:
+        tuple : (mean_shift_x, mean_shift_y, uncertainty_x, uncertainty_y, confidence)
+    """
+    from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+    import numpy as np
+
+    if len(reference_dataset) == 0 or len(frame_locs) == 0:
+        return None, None, np.inf, np.inf, 0.0
+
+    shift_estimates = []
+    n_subset = max(1000, int(len(reference_dataset) * subsampling_fraction))
+    n_subset = min(
+        n_subset, len(reference_dataset)
+    )  # Don't exceed available data
+
+    for trial in range(n_trials):
+        # Different random subset for each trial
+        np.random.seed(1000 + trial)
+        if n_subset < len(reference_dataset):
+            subset_indices = np.random.choice(
+                len(reference_dataset), n_subset, replace=False
+            )
+            subset_dataset = reference_dataset[subset_indices]
+        else:
+            subset_dataset = reference_dataset
+
+        # Calculate RSSO shift with this subset
+        if enable_numba_optimization:
+            # Use Numba-optimized RSSO computation
+            shift_x, shift_y, uncertainty_info = _compute_rsso_shift_numba_optimized(
+                subset_dataset, frame_locs, max_shift
+            )
+        else:
+            # Use standard RSSO computation
+            shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
+                subset_dataset, frame_locs, max_shift, plot_histogram=False
+            )
+
+        if shift_x is not None and shift_y is not None:
+            shift_estimates.append((shift_x, shift_y))
+
+    if len(shift_estimates) >= 2:
+        shifts_array = np.array(shift_estimates)
+
+        # Calculate uncertainty as standard deviation across trials
+        uncertainty_x = np.std(shifts_array[:, 0])
+        uncertainty_y = np.std(shifts_array[:, 1])
+
+        # Mean estimate
+        mean_shift_x = np.mean(shifts_array[:, 0])
+        mean_shift_y = np.mean(shifts_array[:, 1])
+
+        # Confidence based on consistency and number of localizations
+        uncertainty_magnitude = np.sqrt(
+            uncertainty_x ** 2 + uncertainty_y ** 2
+        )
+        consistency_confidence = 1.0 / (
+            1.0 + uncertainty_magnitude * 10
+        )  # Penalize inconsistency
+        size_confidence = min(1.0, len(frame_locs) / 100.0)
+        confidence = consistency_confidence * size_confidence
+
+        return (
+            mean_shift_x,
+            mean_shift_y,
+            uncertainty_x,
+            uncertainty_y,
+            confidence,
+        )
+    elif len(shift_estimates) == 1:
+        # Only one successful estimate
+        shift_x, shift_y = shift_estimates[0]
+        return (
+            shift_x,
+            shift_y,
+            np.nan,
+            np.nan,
+            min(1.0, len(frame_locs) / 100.0),
+        )
+    else:
+        return None, None, np.inf, np.inf, 0.0
+
+
+def _compute_frame_to_reference_shift_optimized(frame_data):
+    """Optimized RSSO shift computation using per-iteration reference dataset
+
+    Args:
+        frame_data : tuple
+            (frame_idx, reference_dataset, target_frame, max_shift, min_locs_per_frame,
+             enable_uncertainty_estimation, n_uncertainty_trials, subsampling_fraction,
+             enable_numba_optimization)
+
+    Returns:
+        tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
+    """
+    from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+    import numpy as np
+
+    (
+        frame_idx,
+        reference_dataset,
+        target_frame,
+        max_shift,
+        min_locs_per_frame,
+        enable_uncertainty_estimation,
+        n_uncertainty_trials,
+        subsampling_fraction,
+        enable_numba_optimization,
+    ) = frame_data
+
+    try:
+        # Extract frame localizations from reference dataset
+        frame_mask = reference_dataset["frame"] == target_frame
+        frame_locs = reference_dataset[frame_mask]
+
+        # Skip frames with insufficient localizations
+        if len(frame_locs) < min_locs_per_frame:
+            return (frame_idx, None, None, None, None, 0.0, 0.0, None)
+
+        # Create dataset by excluding current frame
+        dataset_mask = reference_dataset["frame"] != target_frame
+        dataset_locs = reference_dataset[dataset_mask]
+
+        if len(dataset_locs) == 0:
+            return (frame_idx, None, None, None, None, 0.0, 0.0, None)
+
+        # Choose computation method based on uncertainty estimation setting
+        if enable_uncertainty_estimation and n_uncertainty_trials > 1:
+            # Use uncertainty estimation with multiple subsets
+            (
+                shift_x,
+                shift_y,
+                uncertainty_x,
+                uncertainty_y,
+                confidence,
+            ) = _estimate_subsampling_uncertainty(
+                frame_locs,
+                dataset_locs,
+                max_shift,
+                subsampling_fraction,
+                n_uncertainty_trials,
+                enable_numba_optimization,
+            )
+            quality = len(frame_locs) + len(dataset_locs)
+
+        else:
+            # Standard single computation (faster)
+            import time
+            start_time = time.time()
+
+            if enable_numba_optimization:
+                # Use Numba-optimized RSSO computation
+                shift_x, shift_y, uncertainty_info = _compute_rsso_shift_numba_optimized(
+                    dataset_locs, frame_locs, max_shift
+                )
+                computation_type = "Numba-optimized"
+            else:
+                # Use standard RSSO computation
+                shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
+                    dataset_locs, frame_locs, max_shift, plot_histogram=False
+                )
+                computation_type = "Standard"
+
+            computation_time = time.time() - start_time
+
+            # Add timing info to uncertainty_info
+            if uncertainty_info is None:
+                uncertainty_info = {}
+            uncertainty_info["computation_time"] = computation_time
+            uncertainty_info["computation_type"] = computation_type
+            uncertainty_info["n_dataset_locs"] = len(dataset_locs)
+            uncertainty_info["n_frame_locs"] = len(frame_locs)
+
+            if shift_x is not None and shift_y is not None:
+                # Extract uncertainty from RSSO calculation
+                uncertainty_x = (
+                    uncertainty_info.get("uncertainty_x", np.nan)
+                    if uncertainty_info
+                    else np.nan
+                )
+                uncertainty_y = (
+                    uncertainty_info.get("uncertainty_y", np.nan)
+                    if uncertainty_info
+                    else np.nan
+                )
+
+                # Calculate confidence
+                n_locs_frame = len(frame_locs)
+                if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
+                    uncertainty_magnitude = np.sqrt(
+                        uncertainty_x ** 2 + uncertainty_y ** 2
+                    )
+                    confidence = min(
+                        1.0,
+                        (n_locs_frame / 100.0) / (1.0 + uncertainty_magnitude),
+                    )
+                else:
+                    confidence = min(1.0, n_locs_frame / 100.0)
+
+                quality = len(frame_locs) + len(dataset_locs)
+            else:
+                return (frame_idx, None, None, None, None, 0.0, 0.0, None)
+
+        return (
+            frame_idx,
+            shift_x,
+            shift_y,
+            uncertainty_x,
+            uncertainty_y,
+            confidence,
+            quality,
+            uncertainty_info,  # Include performance metrics
+        )
+
+    except Exception as e:
+        print(f"Error processing frame {frame_idx}: {e}")
+        return (frame_idx, None, None, None, None, 0.0, 0.0, None)
