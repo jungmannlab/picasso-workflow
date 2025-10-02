@@ -11598,6 +11598,8 @@ if NUMBA_AVAILABLE:
         Computes shifts from i to j: j - i (matches standard implementation)
         Only includes pairs within max_shift distance (like standard KDTree approach)
 
+        Note: Uses parallel=True with fixed-size arrays for optimal performance
+
         Args:
             i_x, i_y : ndarray
                 First set of coordinates (reference in standard call)
@@ -11612,38 +11614,49 @@ if NUMBA_AVAILABLE:
         """
         n_i = len(i_x)
         n_j = len(j_x)
+        max_shift_sq = max_shift * max_shift if max_shift is not None else np.inf
 
-        # First pass: count valid pairs (within max_shift distance)
-        valid_count = 0
-        for i in range(n_i):  # Sequential to avoid race conditions in counting
+        # Pre-allocate maximum possible size
+        max_pairs = n_i * n_j
+        all_shifts_x = np.empty(max_pairs, dtype=numba.float32)
+        all_shifts_y = np.empty(max_pairs, dtype=numba.float32)
+        valid_mask = np.zeros(max_pairs, dtype=numba.boolean)
+
+        # Parallel computation over pairs
+        for idx in numba.prange(max_pairs):  # Parallel over all potential pairs
+            i = idx // n_j  # Convert flat index to i,j coordinates
+            j = idx % n_j
+
             i_x_val = i_x[i]
             i_y_val = i_y[i]
 
-            for j in range(n_j):
-                dx = j_x[j] - i_x_val
-                dy = j_y[j] - i_y_val
+            dx = j_x[j] - i_x_val
+            dy = j_y[j] - i_y_val
 
-                if max_shift is None or (dx*dx + dy*dy) <= (max_shift * max_shift):
-                    valid_count += 1
+            if max_shift is None or (dx*dx + dy*dy) <= max_shift_sq:
+                all_shifts_x[idx] = dx
+                all_shifts_y[idx] = dy
+                valid_mask[idx] = True
+            else:
+                valid_mask[idx] = False
 
-        # Allocate arrays for valid pairs only
-        shifts_x = np.empty(valid_count, dtype=numba.float32)
-        shifts_y = np.empty(valid_count, dtype=numba.float32)
+        # Count valid pairs sequentially (avoid race conditions)
+        n_valid = 0
+        for k in range(max_pairs):
+            if valid_mask[k]:
+                n_valid += 1
 
-        # Second pass: store valid shifts
-        idx = 0
-        for i in range(n_i):  # Sequential to maintain order
-            i_x_val = i_x[i]
-            i_y_val = i_y[i]
+        # Create compact output arrays
+        shifts_x = np.empty(n_valid, dtype=numba.float32)
+        shifts_y = np.empty(n_valid, dtype=numba.float32)
 
-            for j in range(n_j):
-                dx = j_x[j] - i_x_val
-                dy = j_y[j] - i_y_val
-
-                if max_shift is None or (dx*dx + dy*dy) <= (max_shift * max_shift):
-                    shifts_x[idx] = dx
-                    shifts_y[idx] = dy
-                    idx += 1
+        # Copy valid pairs sequentially
+        valid_idx = 0
+        for k in range(max_pairs):
+            if valid_mask[k]:
+                shifts_x[valid_idx] = all_shifts_x[k]
+                shifts_y[valid_idx] = all_shifts_y[k]
+                valid_idx += 1
 
         return shifts_x, shifts_y
 
@@ -11865,8 +11878,8 @@ def _compute_rsso_shift_numba_optimized(locs_i, locs_j, max_shift_pixels, enable
         "success": True,
         "peak_value": int(peak_value),
         "total_pairs": len(shifts_x),
-        "n_frame_locs": len(frame_locs),
-        "n_reference_locs": len(reference_locs),
+        "n_frame_locs": len(locs_j),  # locs_j is frame in standard call pattern
+        "n_reference_locs": len(locs_i),  # locs_i is reference in standard call pattern
         "numba_enabled": enable_numba and NUMBA_AVAILABLE,
         "timing": {
             "phase1_pairwise": phase1_time,
