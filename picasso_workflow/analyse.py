@@ -11899,9 +11899,9 @@ def _validate_numba_implementation():
 
     # Create test data with realistic RSSO structure
     np.random.seed(42)
-    n_common = 80  # Points that appear in both datasets (with shift)
-    n_frame_extra = 20  # Extra points only in frame
-    n_ref_extra = 50   # Extra points only in reference
+    n_common = 800  # Points that appear in both datasets (with shift)
+    n_frame_extra = 200  # Extra points only in frame
+    n_ref_extra = 500   # Extra points only in reference
 
     true_shift_x, true_shift_y = 2.5, -1.8
 
@@ -12145,6 +12145,9 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
     ) = frame_data
 
     try:
+        # Initialize uncertainty_info at the start to avoid "referenced before assignment" error
+        uncertainty_info = {}
+
         # Extract frame localizations from reference dataset
         frame_mask = reference_dataset["frame"] == target_frame
         frame_locs = reference_dataset[frame_mask]
@@ -12183,9 +12186,6 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             # Standard single computation (faster)
             import time
             start_time = time.time()
-
-            # Initialize uncertainty_info to avoid "referenced before assignment" error
-            uncertainty_info = {}
 
             if enable_numba_optimization:
                 # Use Numba-optimized RSSO computation
