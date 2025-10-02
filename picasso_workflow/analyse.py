@@ -11592,36 +11592,58 @@ except ImportError:
 
 if NUMBA_AVAILABLE:
     @numba.jit(nopython=True, parallel=True, cache=True)
-    def _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y):
+    def _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y, max_shift=None):
         """Numba-optimized pairwise shift computation (Phase 1)
 
+        Computes shifts from i to j: j - i (matches standard implementation)
+        Only includes pairs within max_shift distance (like standard KDTree approach)
+
         Args:
-            frame_x, frame_y : ndarray
-                Frame localization coordinates
-            ref_x, ref_y : ndarray
-                Reference dataset coordinates
+            i_x, i_y : ndarray
+                First set of coordinates (reference in standard call)
+            j_x, j_y : ndarray
+                Second set of coordinates (frame in standard call)
+            max_shift : float, optional
+                Maximum distance to consider pairs (matches standard implementation)
 
         Returns:
             shifts_x, shifts_y : ndarray
-                All pairwise shift vectors
+                Valid pairwise shift vectors from i to j
         """
-        n_frame = len(frame_x)
-        n_ref = len(ref_x)
-        total_pairs = n_frame * n_ref
+        n_i = len(i_x)
+        n_j = len(j_x)
 
-        # Pre-allocate output arrays
-        shifts_x = np.empty(total_pairs, dtype=numba.float32)
-        shifts_y = np.empty(total_pairs, dtype=numba.float32)
+        # First pass: count valid pairs (within max_shift distance)
+        valid_count = 0
+        for i in range(n_i):  # Sequential to avoid race conditions in counting
+            i_x_val = i_x[i]
+            i_y_val = i_y[i]
 
-        # Parallel computation of all pairwise shifts
-        for i in numba.prange(n_frame):  # Parallel outer loop
-            frame_x_i = frame_x[i]
-            frame_y_i = frame_y[i]
+            for j in range(n_j):
+                dx = j_x[j] - i_x_val
+                dy = j_y[j] - i_y_val
 
-            for j in range(n_ref):
-                idx = i * n_ref + j
-                shifts_x[idx] = ref_x[j] - frame_x_i
-                shifts_y[idx] = ref_y[j] - frame_y_i
+                if max_shift is None or (dx*dx + dy*dy) <= (max_shift * max_shift):
+                    valid_count += 1
+
+        # Allocate arrays for valid pairs only
+        shifts_x = np.empty(valid_count, dtype=numba.float32)
+        shifts_y = np.empty(valid_count, dtype=numba.float32)
+
+        # Second pass: store valid shifts
+        idx = 0
+        for i in range(n_i):  # Sequential to maintain order
+            i_x_val = i_x[i]
+            i_y_val = i_y[i]
+
+            for j in range(n_j):
+                dx = j_x[j] - i_x_val
+                dy = j_y[j] - i_y_val
+
+                if max_shift is None or (dx*dx + dy*dy) <= (max_shift * max_shift):
+                    shifts_x[idx] = dx
+                    shifts_y[idx] = dy
+                    idx += 1
 
         return shifts_x, shifts_y
 
@@ -11728,16 +11750,25 @@ if NUMBA_AVAILABLE:
 
 else:
     # Fallback implementations when Numba is not available
-    def _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y):
+    def _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y, max_shift=None):
         """Fallback NumPy implementation"""
-        frame_coords = np.column_stack([frame_x, frame_y])
-        ref_coords = np.column_stack([ref_x, ref_y])
+        i_coords = np.column_stack([i_x, i_y])
+        j_coords = np.column_stack([j_x, j_y])
 
         shifts_x = []
         shifts_y = []
-        for frame_coord in frame_coords:
-            dx = ref_coords[:, 0] - frame_coord[0]
-            dy = ref_coords[:, 1] - frame_coord[1]
+        for i_coord in i_coords:
+            # Calculate shift from i to j: j - i (matches standard)
+            dx = j_coords[:, 0] - i_coord[0]
+            dy = j_coords[:, 1] - i_coord[1]
+
+            # Filter by max_shift distance like standard implementation
+            if max_shift is not None:
+                distances_sq = dx*dx + dy*dy
+                valid_mask = distances_sq <= (max_shift * max_shift)
+                dx = dx[valid_mask]
+                dy = dy[valid_mask]
+
             shifts_x.extend(dx)
             shifts_y.extend(dy)
 
@@ -11754,14 +11785,14 @@ else:
         return float(max_idx[0]), float(max_idx[1]), hist[max_idx]
 
 
-def _compute_rsso_shift_numba_optimized(frame_locs, reference_locs, max_shift_pixels, enable_numba=True):
+def _compute_rsso_shift_numba_optimized(locs_i, locs_j, max_shift_pixels, enable_numba=True):
     """Numba-optimized RSSO shift computation combining Phases 1 and 2
 
     Args:
-        frame_locs : ndarray
-            Frame localizations
-        reference_locs : ndarray
-            Reference dataset localizations
+        locs_i : ndarray
+            First set of localizations (reference in standard call)
+        locs_j : ndarray
+            Second set of localizations (frame in standard call)
         max_shift_pixels : float
             Maximum expected shift in pixels
         enable_numba : bool
@@ -11769,30 +11800,33 @@ def _compute_rsso_shift_numba_optimized(frame_locs, reference_locs, max_shift_pi
 
     Returns:
         shift_x, shift_y : float
-            Detected shift in pixels
+            Detected shift from locs_i to locs_j (same as standard)
         quality_metrics : dict
             Quality and uncertainty information
     """
     import time
 
-    if len(frame_locs) == 0 or len(reference_locs) == 0:
+    if len(locs_i) == 0 or len(locs_j) == 0:
         return None, None, {"success": False, "reason": "insufficient_data"}
 
     start_time = time.time()
 
-    # Extract coordinates
-    frame_x = frame_locs['x'].astype(np.float32)
-    frame_y = frame_locs['y'].astype(np.float32)
-    ref_x = reference_locs['x'].astype(np.float32)
-    ref_y = reference_locs['y'].astype(np.float32)
+    # Extract coordinates - match standard implementation naming
+    # locs_i is reference, locs_j is frame in standard call pattern
+    i_x = locs_i['x'].astype(np.float32)
+    i_y = locs_i['y'].astype(np.float32)
+    j_x = locs_j['x'].astype(np.float32)
+    j_y = locs_j['y'].astype(np.float32)
 
     phase1_start = time.time()
 
     # Phase 1: Compute all pairwise shifts (Numba optimized)
+    # Standard calculation: dx = coord_j[0] - coord_i[0] (j - i)
+    # Only consider pairs within max_shift distance (like standard KDTree approach)
     if enable_numba and NUMBA_AVAILABLE:
-        shifts_x, shifts_y = _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y)
+        shifts_x, shifts_y = _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y, max_shift_pixels)
     else:
-        shifts_x, shifts_y = _compute_pairwise_shifts_numba(frame_x, frame_y, ref_x, ref_y)  # Uses fallback
+        shifts_x, shifts_y = _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y, max_shift_pixels)  # Uses fallback
 
     phase1_time = time.time() - phase1_start
     phase2_start = time.time()
@@ -11886,15 +11920,21 @@ def _validate_numba_implementation():
 
             tolerance = 0.1  # pixels
 
+            # Debug output for troubleshooting
+            print(f"    Debug: True shift was ({true_shift_x:.3f}, {true_shift_y:.3f})")
+            print(f"    Standard: ({std_shift_x:.3f}, {std_shift_y:.3f}), error=({abs(std_shift_x-true_shift_x):.3f}, {abs(std_shift_y-true_shift_y):.3f})")
+            print(f"    Numba:    ({numba_shift_x:.3f}, {numba_shift_y:.3f}), error=({abs(numba_shift_x-true_shift_x):.3f}, {abs(numba_shift_y-true_shift_y):.3f})")
+
+            if numba_info:
+                print(f"    Numba pairs processed: {numba_info.get('n_pairs', 'unknown')}")
+
             if diff_x < tolerance and diff_y < tolerance:
                 print(f"    Numba validation PASSED: shifts agree within {tolerance} pixels")
-                print(f"    Standard: ({std_shift_x:.3f}, {std_shift_y:.3f}), Numba: ({numba_shift_x:.3f}, {numba_shift_y:.3f})")
                 if numba_info and 'computation_time' in numba_info:
                     print(f"    Numba computation time: {numba_info['computation_time']:.4f}s")
                 return True
             else:
                 print(f"    Numba validation FAILED: shifts differ by ({diff_x:.3f}, {diff_y:.3f}) pixels")
-                print(f"    Standard: ({std_shift_x:.3f}, {std_shift_y:.3f}), Numba: ({numba_shift_x:.3f}, {numba_shift_y:.3f})")
                 return False
         else:
             print("    Numba validation FAILED: one or both implementations returned None")
