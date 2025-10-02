@@ -3903,6 +3903,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     "iteration": iteration + 1,
                     "drift_x": drift_x.copy(),
                     "drift_y": drift_y.copy(),
+                    "uncertainty_x": new_uncertainty_x.copy(),
+                    "uncertainty_y": new_uncertainty_y.copy(),
+                    "confidence": new_confidence.copy(),
                     "convergence_rms": convergence_rms,
                     "valid_measurements": valid_measurements,
                 }
@@ -4029,51 +4032,129 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Create drift plots with confidence intervals
         if plot_drift:
             print("Creating drift plots...")
-
-            # Plot drift trajectory with confidence intervals
             import matplotlib.pyplot as plt
+            import matplotlib.colors as mcolors
 
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+            # Create comprehensive drift plots showing all iterations
+            fig = plt.figure(figsize=(15, 12))
+
+            # Create subplot layout: 2x2 grid
+            ax1 = plt.subplot(2, 2, 1)  # X drift with intermediate iterations
+            ax2 = plt.subplot(2, 2, 2)  # Y drift with intermediate iterations
+            ax3 = plt.subplot(2, 2, 3)  # X drift final with confidence
+            ax4 = plt.subplot(2, 2, 4)  # Y drift final with confidence
 
             frame_indices = np.arange(n_frames)
 
-            # X drift plot
-            ax1.plot(
-                frame_indices, drift_x, "b-", linewidth=2, label="X drift"
-            )
-            if not np.all(np.isnan(uncertainty_x)):
-                ax1.fill_between(
+            # Define colors for iterations (gradient from light to dark)
+            if len(iteration_history) > 1:
+                colors_x = plt.cm.Blues(np.linspace(0.3, 1.0, len(iteration_history)))
+                colors_y = plt.cm.Reds(np.linspace(0.3, 1.0, len(iteration_history)))
+            else:
+                colors_x = ['blue']
+                colors_y = ['red']
+
+            # Plot 1: X drift - all iterations
+            for i, history in enumerate(iteration_history):
+                alpha = 0.4 if i < len(iteration_history) - 1 else 1.0  # Final iteration is solid
+                linewidth = 1.0 if i < len(iteration_history) - 1 else 2.0
+                label = f"Iteration {history['iteration']}" if len(iteration_history) > 1 else "X drift"
+
+                ax1.plot(
+                    frame_indices,
+                    history['drift_x'],
+                    color=colors_x[i],
+                    linewidth=linewidth,
+                    alpha=alpha,
+                    label=label
+                )
+
+            ax1.set_ylabel("X Drift (nm)")
+            ax1.set_title(f"X Drift Evolution ({n_iterations} iterations)")
+            ax1.grid(True, alpha=0.3)
+            if len(iteration_history) > 1:
+                ax1.legend(fontsize=8, loc='best')
+
+            # Plot 2: Y drift - all iterations
+            for i, history in enumerate(iteration_history):
+                alpha = 0.4 if i < len(iteration_history) - 1 else 1.0
+                linewidth = 1.0 if i < len(iteration_history) - 1 else 2.0
+                label = f"Iteration {history['iteration']}" if len(iteration_history) > 1 else "Y drift"
+
+                ax2.plot(
+                    frame_indices,
+                    history['drift_y'],
+                    color=colors_y[i],
+                    linewidth=linewidth,
+                    alpha=alpha,
+                    label=label
+                )
+
+            ax2.set_ylabel("Y Drift (nm)")
+            ax2.set_title(f"Y Drift Evolution ({n_iterations} iterations)")
+            ax2.grid(True, alpha=0.3)
+            if len(iteration_history) > 1:
+                ax2.legend(fontsize=8, loc='best')
+
+            # Plot 3: Final X drift with confidence intervals
+            ax3.plot(frame_indices, drift_x, "b-", linewidth=2, label="Final X drift")
+
+            # Add confidence intervals if available
+            if not np.all(np.isnan(uncertainty_x)) and np.any(uncertainty_x > 0):
+                ax3.fill_between(
                     frame_indices,
                     drift_x - uncertainty_x,
                     drift_x + uncertainty_x,
                     alpha=0.3,
                     color="blue",
-                    label="X uncertainty",
+                    label="±1σ uncertainty"
                 )
-            ax1.set_ylabel("X Drift (nm)")
-            ax1.set_title(
-                f"Iterative RSSO Drift Correction ({n_iterations} iterations)"
-            )
-            ax1.grid(True, alpha=0.3)
-            ax1.legend()
 
-            # Y drift plot
-            ax2.plot(
-                frame_indices, drift_y, "r-", linewidth=2, label="Y drift"
-            )
-            if not np.all(np.isnan(uncertainty_y)):
-                ax2.fill_between(
+                # Add 2σ confidence interval if uncertainty is meaningful
+                ax3.fill_between(
+                    frame_indices,
+                    drift_x - 2*uncertainty_x,
+                    drift_x + 2*uncertainty_x,
+                    alpha=0.15,
+                    color="blue",
+                    label="±2σ confidence"
+                )
+
+            ax3.set_xlabel("Frame")
+            ax3.set_ylabel("X Drift (nm)")
+            ax3.set_title("Final X Drift with Confidence Intervals")
+            ax3.grid(True, alpha=0.3)
+            ax3.legend(fontsize=8)
+
+            # Plot 4: Final Y drift with confidence intervals
+            ax4.plot(frame_indices, drift_y, "r-", linewidth=2, label="Final Y drift")
+
+            # Add confidence intervals if available
+            if not np.all(np.isnan(uncertainty_y)) and np.any(uncertainty_y > 0):
+                ax4.fill_between(
                     frame_indices,
                     drift_y - uncertainty_y,
                     drift_y + uncertainty_y,
                     alpha=0.3,
                     color="red",
-                    label="Y uncertainty",
+                    label="±1σ uncertainty"
                 )
-            ax2.set_xlabel("Frame")
-            ax2.set_ylabel("Y Drift (nm)")
-            ax2.grid(True, alpha=0.3)
-            ax2.legend()
+
+                # Add 2σ confidence interval if uncertainty is meaningful
+                ax4.fill_between(
+                    frame_indices,
+                    drift_y - 2*uncertainty_y,
+                    drift_y + 2*uncertainty_y,
+                    alpha=0.15,
+                    color="red",
+                    label="±2σ confidence"
+                )
+
+            ax4.set_xlabel("Frame")
+            ax4.set_ylabel("Y Drift (nm)")
+            ax4.set_title("Final Y Drift with Confidence Intervals")
+            ax4.grid(True, alpha=0.3)
+            ax4.legend(fontsize=8)
 
             plt.tight_layout()
 
@@ -4085,39 +4166,127 @@ class AutoPicasso(util.AbstractModuleCollection):
             plt.close()
             results["drift_plot"] = drift_plot_path
 
-            # Create convergence plot if multiple iterations
+            # Create convergence and statistics plots if multiple iterations
             if n_iterations > 1:
-                fig, ax = plt.subplots(figsize=(8, 5))
-                iterations = [
-                    h["iteration"] for h in iteration_history[1:]
-                ]  # Skip first iteration
-                rms_values = [
-                    h["convergence_rms"] for h in iteration_history[1:]
-                ]
+                fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
 
-                ax.plot(
-                    iterations, rms_values, "g-o", linewidth=2, markersize=6
-                )
-                ax.axhline(
+                iterations = [h["iteration"] for h in iteration_history[1:]]  # Skip first iteration
+                rms_values = [h["convergence_rms"] for h in iteration_history[1:]]
+                valid_measurements = [h["valid_measurements"] for h in iteration_history]
+
+                # Plot 1: RMS Convergence
+                ax1.plot(iterations, rms_values, "g-o", linewidth=2, markersize=8, label="RMS Change")
+                ax1.axhline(
                     y=convergence_threshold,
                     color="r",
                     linestyle="--",
                     label=f"Convergence threshold ({convergence_threshold:.3f} nm)",
                 )
-                ax.set_xlabel("Iteration")
-                ax.set_ylabel("RMS Change (nm)")
-                ax.set_title("RSSO Convergence History")
-                ax.grid(True, alpha=0.3)
-                ax.legend()
+                ax1.set_xlabel("Iteration")
+                ax1.set_ylabel("RMS Change (nm)")
+                ax1.set_title("RSSO Convergence History")
+                ax1.grid(True, alpha=0.3)
+                ax1.legend()
+                ax1.set_yscale('log')  # Log scale often better for convergence
+
+                # Plot 2: Valid measurements per iteration
+                all_iterations = [h["iteration"] for h in iteration_history]
+                ax2.plot(all_iterations, valid_measurements, "b-s", linewidth=2, markersize=6)
+                ax2.set_xlabel("Iteration")
+                ax2.set_ylabel("Valid Measurements")
+                ax2.set_title("Valid Frame Measurements per Iteration")
+                ax2.grid(True, alpha=0.3)
+
+                # Plot 3: Mean uncertainty evolution
+                mean_uncertainty_x = []
+                mean_uncertainty_y = []
+                for hist in iteration_history:
+                    unc_x = hist.get('uncertainty_x', np.array([]))
+                    unc_y = hist.get('uncertainty_y', np.array([]))
+                    if len(unc_x) > 0 and not np.all(np.isnan(unc_x)):
+                        mean_uncertainty_x.append(np.nanmean(unc_x))
+                    else:
+                        mean_uncertainty_x.append(np.nan)
+                    if len(unc_y) > 0 and not np.all(np.isnan(unc_y)):
+                        mean_uncertainty_y.append(np.nanmean(unc_y))
+                    else:
+                        mean_uncertainty_y.append(np.nan)
+
+                ax3.plot(all_iterations, mean_uncertainty_x, "b-o", label="X uncertainty", linewidth=2, markersize=6)
+                ax3.plot(all_iterations, mean_uncertainty_y, "r-o", label="Y uncertainty", linewidth=2, markersize=6)
+                ax3.set_xlabel("Iteration")
+                ax3.set_ylabel("Mean Uncertainty (nm)")
+                ax3.set_title("Uncertainty Evolution")
+                ax3.grid(True, alpha=0.3)
+                ax3.legend()
+
+                # Plot 4: Mean confidence evolution
+                mean_confidence = []
+                for hist in iteration_history:
+                    conf = hist.get('confidence', np.array([]))
+                    if len(conf) > 0 and not np.all(np.isnan(conf)):
+                        mean_confidence.append(np.nanmean(conf))
+                    else:
+                        mean_confidence.append(np.nan)
+
+                ax4.plot(all_iterations, mean_confidence, "purple", marker="D", linewidth=2, markersize=6)
+                ax4.set_xlabel("Iteration")
+                ax4.set_ylabel("Mean Confidence")
+                ax4.set_title("Confidence Evolution")
+                ax4.grid(True, alpha=0.3)
+                ax4.set_ylim(0, 1)
+
+                plt.tight_layout()
 
                 convergence_plot_path = os.path.join(
                     results["folder"], "convergence_rsso_iterative.png"
                 )
-                plt.savefig(
-                    convergence_plot_path, dpi=300, bbox_inches="tight"
-                )
+                plt.savefig(convergence_plot_path, dpi=300, bbox_inches="tight")
                 plt.close()
                 results["convergence_plot"] = convergence_plot_path
+
+                # Create a summary statistics plot for robustness assessment
+                fig, ax = plt.subplots(figsize=(12, 8))
+
+                # Show drift range evolution for robustness check
+                drift_ranges_x = []
+                drift_ranges_y = []
+                for hist in iteration_history:
+                    drift_x_hist = hist['drift_x']
+                    drift_y_hist = hist['drift_y']
+                    # Calculate 95th percentile range (robust measure)
+                    range_x = np.percentile(drift_x_hist, 95) - np.percentile(drift_x_hist, 5)
+                    range_y = np.percentile(drift_y_hist, 95) - np.percentile(drift_y_hist, 5)
+                    drift_ranges_x.append(range_x)
+                    drift_ranges_y.append(range_y)
+
+                ax.plot(all_iterations, drift_ranges_x, "b-o", label="X drift range (90%ile)", linewidth=2, markersize=6)
+                ax.plot(all_iterations, drift_ranges_y, "r-o", label="Y drift range (90%ile)", linewidth=2, markersize=6)
+                ax.set_xlabel("Iteration")
+                ax.set_ylabel("Drift Range (nm)")
+                ax.set_title("Drift Range Evolution (Robustness Assessment)")
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+
+                robustness_plot_path = os.path.join(
+                    results["folder"], "robustness_rsso_iterative.png"
+                )
+                plt.savefig(robustness_plot_path, dpi=300, bbox_inches="tight")
+                plt.close()
+                results["robustness_plot"] = robustness_plot_path
+
+            # Print summary of generated plots
+            print("Generated drift analysis plots:")
+            print(f"  - Main drift plot: {drift_plot_path}")
+            if n_iterations > 1:
+                print(f"  - Convergence analysis: {convergence_plot_path}")
+                print(f"  - Robustness assessment: {robustness_plot_path}")
+                print("  Plot features:")
+                print("    • Intermediate iterations shown with color gradients")
+                print("    • Final iteration with ±1σ and ±2σ confidence intervals")
+                print("    • Convergence history on log scale")
+                print("    • Uncertainty and confidence evolution")
+                print("    • Drift range evolution for robustness assessment")
 
         # Save final undrifted localizations
         if save_locs:
