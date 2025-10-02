@@ -33,6 +33,39 @@ import copy
 import gc
 import multiprocessing as mp
 
+def _configure_openmp_for_multiprocessing():
+    """Configure OpenMP environment to avoid conflicts with multiprocessing
+
+    This fixes the error: "Terminating: fork() called from a process already
+    using GNU OpenMP, this is unsafe."
+
+    The issue occurs when NumPy/SciPy compiled with OpenMP are used in
+    combination with multiprocessing fork(). Setting these environment
+    variables disables OpenMP threading in worker processes.
+    """
+    import os
+    # Set OpenMP to use single thread in worker processes
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+def _setup_multiprocessing_context():
+    """Setup multiprocessing context to avoid OpenMP conflicts"""
+    try:
+        # Try to set multiprocessing start method to 'spawn' to avoid fork() issues
+        if mp.get_start_method(allow_none=True) != 'spawn':
+            mp.set_start_method('spawn', force=True)
+        return mp.get_context('spawn')
+    except RuntimeError:
+        # If already set or unavailable, use default context
+        try:
+            return mp.get_context('spawn')
+        except ValueError:
+            # 'spawn' not available, fall back to default
+            return mp.get_context()
+
 from scipy.ndimage import label
 from scipy.stats import poisson, norm, kstest
 
@@ -3440,6 +3473,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                         path to drift visualization plots
         """
         import time
+        import os
+
+        # Fix OpenMP + multiprocessing conflict
+        # Set OpenMP to use single thread before any numpy operations
+        _configure_openmp_for_multiprocessing()
 
         pixelsize = self.pixelsize
         ton = parameters["ton"]
@@ -3463,6 +3501,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             if enable_multiprocessing
             else 1
         )
+
+        # Check for potential OpenMP conflicts
+        if enable_multiprocessing and n_processes > 1:
+            print("  Configuring multiprocessing environment...")
+            print("  Note: OpenMP threading disabled to avoid fork() conflicts")
 
         # Performance optimization parameters
         subsampling_fraction = parameters.get(
@@ -3715,11 +3758,22 @@ class AutoPicasso(util.AbstractModuleCollection):
 
                 # Process chunk in parallel (or sequentially if multiprocessing disabled)
                 if enable_multiprocessing and n_processes > 1:
-                    with mp.Pool(processes=n_processes) as pool:
-                        chunk_results = pool.map(
-                            _compute_frame_to_reference_shift_optimized,
-                            chunk_frame_data,
-                        )
+                    try:
+                        # Use safer multiprocessing context to avoid OpenMP conflicts
+                        ctx = _setup_multiprocessing_context()
+                        with ctx.Pool(processes=n_processes) as pool:
+                            chunk_results = pool.map(
+                                _compute_frame_to_reference_shift_optimized,
+                                chunk_frame_data,
+                            )
+                        print(f"    ✓ Parallel processing successful with {n_processes} processes")
+                    except (OSError, RuntimeError, AttributeError) as e:
+                        print(f"    ⚠ Multiprocessing failed ({e}), falling back to sequential processing")
+                        enable_multiprocessing = False  # Disable for remaining chunks
+                        chunk_results = [
+                            _compute_frame_to_reference_shift_optimized(frame_data)
+                            for frame_data in chunk_frame_data
+                        ]
                 else:
                     # Sequential processing for very memory-constrained environments
                     chunk_results = [
