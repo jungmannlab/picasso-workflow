@@ -3558,24 +3558,24 @@ class AutoPicasso(util.AbstractModuleCollection):
         process = psutil.Process()
         initial_memory_gb = process.memory_info().rss / (1024 ** 3)
 
-        print(
+        logger.debug(
             f"Iterative RSSO undrift: max_iterations={max_iterations}, "
             f"convergence_threshold={convergence_threshold:.3f} nm, chunk_size={chunk_size}"
         )
-        print(
+        logger.debug(
             f"Using {n_processes} processes, memory limit: {memory_limit_gb:.1f} GB"
         )
         if progressive_subsampling:
-            print(
+            logger.debug(
                 f"Progressive subsampling enabled: {progressive_subsampling_schedule}"
             )
         else:
-            print(f"Fixed subsampling: {subsampling_fraction:.1%} of dataset")
+            logger.debug(f"Fixed subsampling: {subsampling_fraction:.1%} of dataset")
 
-        print(
+        logger.debug(
             f"Uncertainty estimation: {enable_uncertainty_estimation}, final iteration full dataset: {final_iteration_full_dataset}"
         )
-        print(f"Initial memory usage: {initial_memory_gb:.2f} GB")
+        logger.debug(f"Initial memory usage: {initial_memory_gb:.2f} GB")
 
         # Get frame range and ensure we have data
         if len(self.locs) == 0:
@@ -3612,27 +3612,27 @@ class AutoPicasso(util.AbstractModuleCollection):
         estimated_memory_gb = (len(self.locs) * bytes_per_loc * 3) / (
             1024 ** 3
         )  # Factor for processing
-        print(
+        logger.debug(
             f"Dataset size: {len(self.locs):,} localizations, {n_frames:,} frames"
         )
-        print(f"Estimated memory requirement: {estimated_memory_gb:.2f} GB")
+        logger.debug(f"Estimated memory requirement: {estimated_memory_gb:.2f} GB")
 
         if estimated_memory_gb > memory_limit_gb:
-            print(
+            logger.debug(
                 f"WARNING: Estimated memory ({estimated_memory_gb:.2f} GB) exceeds limit ({memory_limit_gb:.1f} GB)"
             )
-            print("Consider reducing chunk_size or increasing memory_limit_gb")
+            logger.debug("Consider reducing chunk_size or increasing memory_limit_gb")
 
         # Use in-place updates instead of copying (major memory saving)
         # No more: current_locs = self.locs.copy()
 
-        print(
+        logger.debug(
             f"Starting iterative RSSO undrift: {n_frames} frames, ton={ton}, toff={toff}"
         )
 
         # Validate Numba implementation if enabled
         if enable_numba_optimization:
-            print("  Validating Numba optimization...")
+            logger.debug("  Validating Numba optimization...")
             enable_numba_optimization = _validate_numba_implementation()
 
         # Save original localizations if requested
@@ -3647,17 +3647,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         convergence_rms = float("inf")
 
         for iteration in range(max_iterations):
-            print(f"  Iteration {iteration + 1}/{max_iterations}")
-            print(f"    Numba optimization: {'enabled' if enable_numba_optimization else 'disabled'}")
+            logger.debug(f"  Iteration {iteration + 1}/{max_iterations}")
+            logger.debug(f"    Numba optimization: {'enabled' if enable_numba_optimization else 'disabled'}")
 
             # Monitor memory usage during iteration
             current_memory_gb = process.memory_info().rss / (1024 ** 3)
-            print(
+            logger.debug(
                 f"    Memory usage at iteration start: {current_memory_gb:.2f} GB"
             )
 
             if current_memory_gb > memory_limit_gb:
-                print(
+                logger.debug(
                     f"    WARNING: Memory usage ({current_memory_gb:.2f} GB) exceeds limit!"
                 )
 
@@ -3668,7 +3668,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ):
                 # Final iteration: always use full dataset for maximum accuracy
                 current_subsampling_fraction = 1.0
-                print(f"    Final iteration: using full dataset (100%)")
+                logger.debug(f"    Final iteration: using full dataset (100%)")
             elif progressive_subsampling:
                 # Progressive subsampling: use schedule
                 if iteration < len(progressive_subsampling_schedule):
@@ -3680,13 +3680,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                     current_subsampling_fraction = progressive_subsampling_schedule[
                         -1
                     ]
-                print(
+                logger.debug(
                     f"    Progressive subsampling: {current_subsampling_fraction:.1%} of dataset"
                 )
             else:
                 # Fixed subsampling fraction
                 current_subsampling_fraction = subsampling_fraction
-                print(
+                logger.debug(
                     f"    Fixed subsampling: {current_subsampling_fraction:.1%} of dataset"
                 )
 
@@ -3712,17 +3712,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 reference_dataset = current_locs[reference_indices]
 
-                print(
+                logger.debug(
                     f"    Created reference dataset: {len(reference_dataset):,} locs ({current_subsampling_fraction:.1%} of full dataset)"
                 )
             else:
                 reference_dataset = current_locs
-                print(
+                logger.debug(
                     f"    Using full dataset as reference: {len(reference_dataset):,} locs"
                 )
 
             # Process frames in chunks using same reference dataset
-            print(
+            logger.debug(
                 f"    Processing {n_frames} frames in chunks of {chunk_size}..."
             )
 
@@ -3747,7 +3747,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 chunk_end = min(chunk_start + chunk_size, n_frames)
                 chunk_frames = range(chunk_start, chunk_end)
 
-                print(
+                logger.debug(
                     f"      Processing chunk {chunk_start//chunk_size + 1}/{(n_frames-1)//chunk_size + 1}: frames {chunk_start}-{chunk_end-1}"
                 )
 
@@ -3835,12 +3835,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             new_uncertainty_x *= pixelsize
             new_uncertainty_y *= pixelsize
 
-            print(f"    Valid measurements: {valid_measurements}/{n_frames}")
+            logger.debug(f"    Valid measurements: {valid_measurements}/{n_frames}")
 
             # Report subsampling performance
             if current_subsampling_fraction < 1.0:
                 speedup_estimate = 1.0 / current_subsampling_fraction
-                print(
+                logger.debug(
                     f"    Estimated speedup from subsampling: {speedup_estimate:.1f}x"
                 )
 
@@ -3849,7 +3849,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 valid_uncertainties = new_uncertainty_x[new_uncertainty_x > 0]
                 if len(valid_uncertainties) > 0:
                     mean_uncertainty = np.mean(valid_uncertainties)
-                    print(
+                    logger.debug(
                         f"    Mean subsampling uncertainty: {mean_uncertainty:.3f} nm"
                     )
 
@@ -3861,7 +3861,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         suggested_fraction = min(
                             1.0, current_subsampling_fraction * 1.5
                         )
-                        print(
+                        logger.debug(
                             f"    High uncertainty detected - consider increasing subsampling_fraction to {suggested_fraction:.2f}"
                         )
                     elif (
@@ -3871,7 +3871,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         suggested_fraction = max(
                             0.05, current_subsampling_fraction * 0.8
                         )
-                        print(
+                        logger.debug(
                             f"    Low uncertainty detected - could reduce subsampling_fraction to {suggested_fraction:.2f} for speed"
                         )
 
@@ -3881,7 +3881,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 low_confidence_mask = new_confidence < confidence_threshold
                 n_low_conf = np.sum(low_confidence_mask)
                 if n_low_conf > 0:
-                    print(
+                    logger.debug(
                         f"    Applying windowing to {n_low_conf} low-confidence frames"
                     )
                     # For low-confidence frames, use windowed averaging (simplified approach)
@@ -3912,7 +3912,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     outliers = z_scores > outlier_z_threshold
                     n_outliers = np.sum(outliers)
                     if n_outliers > 0:
-                        print(
+                        logger.debug(
                             f"    Detected and filtered {n_outliers} outliers"
                         )
                         # Set outlier shifts to zero
@@ -3954,10 +3954,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                     rms_change_x ** 2 + rms_change_y ** 2
                 )
 
-                print(f"    RMS change: {convergence_rms:.3f} nm")
+                logger.debug(f"    RMS change: {convergence_rms:.3f} nm")
 
                 if convergence_rms < convergence_threshold:
-                    print(
+                    logger.debug(
                         f"    ✓ Converged after {iteration + 1} iterations (RMS change < {convergence_threshold:.3f} nm)"
                     )
                     break
@@ -3980,25 +3980,25 @@ class AutoPicasso(util.AbstractModuleCollection):
             iteration_end_time = time.time()
             iteration_duration = iteration_end_time - iteration_start_time
 
-            print(f"    Iteration {iteration + 1} completed")
-            print(f"    Total iteration time: {iteration_duration:.1f}s")
+            logger.debug(f"    Iteration {iteration + 1} completed")
+            logger.debug(f"    Total iteration time: {iteration_duration:.1f}s")
 
             # Report Numba vs Standard performance
             if enable_numba_optimization and numba_computation_times:
                 avg_numba_time = np.mean(numba_computation_times)
                 total_numba_time = np.sum(numba_computation_times)
-                print(f"    Numba computations: {n_numba_computations}, avg {avg_numba_time:.4f}s, total {total_numba_time:.1f}s")
+                logger.debug(f"    Numba computations: {n_numba_computations}, avg {avg_numba_time:.4f}s, total {total_numba_time:.1f}s")
 
                 if standard_computation_times:
                     avg_standard_time = np.mean(standard_computation_times)
                     total_standard_time = np.sum(standard_computation_times)
                     speedup = avg_standard_time / avg_numba_time if avg_numba_time > 0 else 0
-                    print(f"    Standard computations: {n_standard_computations}, avg {avg_standard_time:.4f}s, total {total_standard_time:.1f}s")
-                    print(f"    Numba speedup: {speedup:.1f}x")
+                    logger.debug(f"    Standard computations: {n_standard_computations}, avg {avg_standard_time:.4f}s, total {total_standard_time:.1f}s")
+                    logger.debug(f"    Numba speedup: {speedup:.1f}x")
             elif not enable_numba_optimization and standard_computation_times:
                 avg_standard_time = np.mean(standard_computation_times)
                 total_standard_time = np.sum(standard_computation_times)
-                print(f"    Standard computations: {n_standard_computations}, avg {avg_standard_time:.4f}s, total {total_standard_time:.1f}s")
+                logger.debug(f"    Standard computations: {n_standard_computations}, avg {avg_standard_time:.4f}s, total {total_standard_time:.1f}s")
 
         # Finalize results
         n_iterations = len(iteration_history)
@@ -4010,10 +4010,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         final_memory_gb = process.memory_info().rss / (1024 ** 3)
         memory_reduction_gb = initial_memory_gb - final_memory_gb
 
-        print(
+        logger.debug(
             f"Iterative RSSO completed: {n_iterations} iterations, final RMS: {final_convergence_rms:.3f} nm"
         )
-        print(
+        logger.debug(
             f"Final memory usage: {final_memory_gb:.2f} GB (change: {memory_reduction_gb:+.2f} GB)"
         )
 
@@ -4090,14 +4090,14 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Store iteration history
         results["iteration_history"] = iteration_history
 
-        print(
+        logger.debug(
             f"Final drift: X={drift_magnitude_x:.1f} nm, Y={drift_magnitude_y:.1f} nm, Total={total_drift:.1f} nm"
         )
-        print(f"Mean quality: {mean_drift_quality:.2f}")
+        logger.debug(f"Mean quality: {mean_drift_quality:.2f}")
 
         # Create drift plots with confidence intervals
         if plot_drift:
-            print("Creating drift plots...")
+            logger.debug("Creating drift plots...")
             import matplotlib.pyplot as plt
             import matplotlib.colors as mcolors
 
@@ -12240,6 +12240,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 computation_type = "Standard"
 
             computation_time = time.time() - start_time
+            logger.debug(f"{computation_type} - shift x: {shift_x}")
 
             # Add timing info to uncertainty_info
             if uncertainty_info is None:
