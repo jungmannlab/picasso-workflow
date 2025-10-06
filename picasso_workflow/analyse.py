@@ -3633,7 +3633,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Validate Numba implementation if enabled
         if enable_numba_optimization:
             print("  Validating Numba optimization...")
-            _validate_numba_implementation()
+            enable_numba_optimization = _validate_numba_implementation()
 
         # Save original localizations if requested
         if save_locs:
