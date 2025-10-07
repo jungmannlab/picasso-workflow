@@ -3727,7 +3727,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             if not enable_numba_optimization:
                 from scipy.spatial import cKDTree
-                reference_dataset = cKDTree(reference_dataset)
+                reference_dataset = cKDTree(
+                    np.column_stack([reference_dataset.x, reference_dataset.y]))
 
             # Process frames in chunks using same reference dataset
             logger.debug(
