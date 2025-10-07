@@ -12244,10 +12244,12 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         if not isinstance(reference_dataset, cKDTree):
             dataset_mask = ~np.isin(reference_dataset["frame"], target_frames)
             dataset_locs = reference_dataset[dataset_mask]
+            len_dataset = len(dataset_locs)
         else:
             dataset_locs = reference_dataset
+            len_dataset = reference_dataset.n
 
-        if len(dataset_locs) == 0:
+        if len_dataset == 0:
             logger.debug(f"No locs left in reference after masking out frame group {target_frames}")
             return (frame_indices, None, None, None, None, 0.0, 0.0, None)
 
@@ -12268,7 +12270,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 n_uncertainty_trials,
                 enable_numba_optimization,
             )
-            quality = len(frame_locs) + len(dataset_locs)
+            quality = len(frame_locs) + len_dataset
 
         else:
             # Standard single computation (faster)
@@ -12299,7 +12301,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 uncertainty_info = {}
             uncertainty_info["computation_time"] = computation_time
             uncertainty_info["computation_type"] = computation_type
-            uncertainty_info["n_dataset_locs"] = len(dataset_locs)
+            uncertainty_info["n_dataset_locs"] = len_dataset
             uncertainty_info["n_frame_locs"] = len(frame_locs)
 
             if shift_x is not None and shift_y is not None:
@@ -12337,7 +12339,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 else:
                     confidence = min(1.0, n_locs_frame / 100.0)
 
-                quality = len(frame_locs) + len(dataset_locs)
+                quality = len(frame_locs) + len_dataset
             else:
                 logger.debug(f"shift x or y is None.")
                 return (frame_indices, None, None, None, None, 0.0, 0.0, None)
