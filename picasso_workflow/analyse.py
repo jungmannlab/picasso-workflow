@@ -5320,14 +5320,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
 
             if shift_x is not None and shift_y is not None:
-                # Extract uncertainty information
+                # Extract uncertainty information from _calculate_pairwise_shift
                 uncertainty_x = (
-                    uncertainty_info.get("uncertainty_x", np.nan)
+                    uncertainty_info.get("shift_x_error", np.nan)
                     if uncertainty_info
                     else np.nan
                 )
                 uncertainty_y = (
-                    uncertainty_info.get("uncertainty_y", np.nan)
+                    uncertainty_info.get("shift_y_error", np.nan)
                     if uncertainty_info
                     else np.nan
                 )
@@ -5415,14 +5415,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
 
             if shift_x is not None and shift_y is not None:
-                # Extract uncertainty information
+                # Extract uncertainty information from _calculate_pairwise_shift
                 uncertainty_x = (
-                    uncertainty_info.get("uncertainty_x", np.nan)
+                    uncertainty_info.get("shift_x_error", np.nan)
                     if uncertainty_info
                     else np.nan
                 )
                 uncertainty_y = (
-                    uncertainty_info.get("uncertainty_y", np.nan)
+                    uncertainty_info.get("shift_y_error", np.nan)
                     if uncertainty_info
                     else np.nan
                 )
@@ -12291,17 +12291,26 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             uncertainty_info["n_frame_locs"] = len(frame_locs)
 
             if shift_x is not None and shift_y is not None:
-                # Extract uncertainty from RSSO calculation
-                uncertainty_x = (
-                    uncertainty_info.get("uncertainty_x", np.nan)
-                    if uncertainty_info
-                    else np.nan
-                )
-                uncertainty_y = (
-                    uncertainty_info.get("uncertainty_y", np.nan)
-                    if uncertainty_info
-                    else np.nan
-                )
+                # Extract uncertainty from RSSO calculation based on computation method
+                if computation_type == "Numba-optimized":
+                    # Numba implementation doesn't provide uncertainty estimates
+                    uncertainty_x = np.nan
+                    uncertainty_y = np.nan
+                elif computation_type == "Standard":
+                    # Standard implementation provides shift_x_error and shift_y_error
+                    uncertainty_x = (
+                        uncertainty_info.get("shift_x_error", np.nan)
+                        if uncertainty_info
+                        else np.nan
+                    )
+                    uncertainty_y = (
+                        uncertainty_info.get("shift_y_error", np.nan)
+                        if uncertainty_info
+                        else np.nan
+                    )
+                else:
+                    uncertainty_x = np.nan
+                    uncertainty_y = np.nan
 
                 # Calculate confidence
                 n_locs_frame = len(frame_locs)
