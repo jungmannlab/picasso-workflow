@@ -3475,6 +3475,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         import time
         import os
 
+        logger.debug("Cropping data to 5000 for debug reasons")
+        self.locs = self.locs[:5000]
+
         # Fix OpenMP + multiprocessing conflict
         # Set OpenMP to use single thread before any numpy operations
         _configure_openmp_for_multiprocessing()
@@ -3804,6 +3807,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         quality_val,
                         performance_info,
                     ) = result
+                    logger.debug(f"chunk results: {result}")
 
                     # Collect performance statistics
                     if performance_info and "computation_time" in performance_info:
@@ -12240,7 +12244,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 computation_type = "Standard"
 
             computation_time = time.time() - start_time
-            logger.debug(f"{computation_type} - shift x: {shift_x}")
+            # logger.debug(f"{computation_type} - shift x: {shift_x}")
 
             # Add timing info to uncertainty_info
             if uncertainty_info is None:
