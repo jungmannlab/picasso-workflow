@@ -12196,6 +12196,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
         # Skip frames with insufficient localizations
         if len(frame_locs) < min_locs_per_frame:
+            logger.debug(f"Too few locs in frame: {len(frame_locs)} < {min_locs_per_frame}")
             return (frame_idx, None, None, None, None, 0.0, 0.0, None)
 
         # Create dataset by excluding current frame
@@ -12203,6 +12204,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         dataset_locs = reference_dataset[dataset_mask]
 
         if len(dataset_locs) == 0:
+            logger.debug(f"No locs left in reference after masking out curr frame")
             return (frame_idx, None, None, None, None, 0.0, 0.0, None)
 
         # Choose computation method based on uncertainty estimation setting
@@ -12243,9 +12245,9 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 )
                 uncertainty_info = std_info if std_info is not None else {}
                 computation_type = "Standard"
+                logger.debug(f"{computation_type} - shift x: {shift_x} - shift y: {shift_y} - std_info: {std_info}")
 
             computation_time = time.time() - start_time
-            # logger.debug(f"{computation_type} - shift x: {shift_x}")
 
             # Add timing info to uncertainty_info
             if uncertainty_info is None:
@@ -12283,6 +12285,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
                 quality = len(frame_locs) + len(dataset_locs)
             else:
+                logger.debug(f"shift x or y is None.")
                 return (frame_idx, None, None, None, None, 0.0, 0.0, None)
 
         return (
