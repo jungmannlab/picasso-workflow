@@ -509,22 +509,27 @@ def _calculate_pairwise_shift(
         )
         fit_successful = True
     except (RuntimeError, ValueError) as e:
+        # logger.warning(
+        #     f"2D Gaussian fitting failed: {e}. "
+        #     "Falling back to histogram maximum."
+        # )
+        # # Fallback to histogram maximum method
+        # peak_idx = np.unravel_index(np.argmax(hist), hist.shape)
+        # x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+        # y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+        # shift_x = x_centers[peak_idx[0]]
+        # shift_y = y_centers[peak_idx[1]]
+        # # Set uncertainty estimates for fallback method
+        # sigma_x = bin_size  # Use bin size as rough uncertainty estimate
+        # sigma_y = bin_size
+        # shift_x_error = bin_size / 2  # Conservative error estimate
+        # shift_y_error = bin_size / 2
+        # fit_successful = False
         logger.warning(
             f"2D Gaussian fitting failed: {e}. "
-            "Falling back to histogram maximum."
+            "Returning None results."
         )
-        # Fallback to histogram maximum method
-        peak_idx = np.unravel_index(np.argmax(hist), hist.shape)
-        x_centers = (x_edges[:-1] + x_edges[1:]) / 2
-        y_centers = (y_edges[:-1] + y_edges[1:]) / 2
-        shift_x = x_centers[peak_idx[0]]
-        shift_y = y_centers[peak_idx[1]]
-        # Set uncertainty estimates for fallback method
-        sigma_x = bin_size  # Use bin size as rough uncertainty estimate
-        sigma_y = bin_size
-        shift_x_error = bin_size / 2  # Conservative error estimate
-        shift_y_error = bin_size / 2
-        fit_successful = False
+        return None, None, None, None, None, None
 
     # Create and save histogram plot if requested
     plot_filepath = None

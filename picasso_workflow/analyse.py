@@ -4120,11 +4120,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 results["mean_subsampling_uncertainty_nm"] = 0.0
                 results["max_subsampling_uncertainty_nm"] = 0.0
 
+        results["uncertainty_x-mean"] = np.mean(uncertainty_x)
+        results["uncertainty_y-mean"] = np.mean(uncertainty_y)
         # Store drift trajectories and uncertainties
         results["drift_x"] = drift_x
         results["drift_y"] = drift_y
-        results["uncertainty_x"] = uncertainty_x
-        results["uncertainty_y"] = uncertainty_y
+        results["uncertainty_x"] = list(uncertainty_x)
+        results["uncertainty_y"] = list(uncertainty_y)
         results["confidence"] = confidence
         results["drift_quality"] = drift_quality
 
@@ -12147,7 +12149,7 @@ def _estimate_subsampling_uncertainty(
         else:
             # Use standard RSSO computation
             shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-                subset_dataset, frame_locs, max_shift, plot_histogram=False
+                subset_dataset, frame_locs, max_shift, plot_histogram=False,
             )
 
         if shift_x is not None and shift_y is not None:
@@ -12274,7 +12276,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             else:
                 # Use standard RSSO computation
                 shift_x, shift_y, _, std_info = _calculate_pairwise_shift(
-                    dataset_locs, frame_locs, max_shift, plot_histogram=False
+                    dataset_locs, frame_locs, max_shift, plot_histogram=False,
                 )
                 uncertainty_info = std_info if std_info is not None else {}
                 computation_type = "Standard"
