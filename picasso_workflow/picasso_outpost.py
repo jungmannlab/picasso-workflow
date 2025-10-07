@@ -433,6 +433,7 @@ def _calculate_pairwise_shift(
     plot_histogram=False,
     plot_dir=None,
     channel_pair=None,
+    remove_zeroshift=False,
 ):
     """
     Calculate shift between two channels using histogram peak finding.
@@ -450,6 +451,8 @@ def _calculate_pairwise_shift(
             Directory to save plots
         channel_pair : tuple, optional
             (i, j) channel indices for filename
+        remove_zeroshift : bool, default False
+            in case locs_j are part of locs_i, this may be useful
 
     Returns:
         shift_x, shift_y, plot_filepath : float, float, str or None
@@ -484,6 +487,8 @@ def _calculate_pairwise_shift(
             coord_i = coords_i[i_idx]
             dx = coord_j[0] - coord_i[0]  # x shift from i to j
             dy = coord_j[1] - coord_i[1]  # y shift from i to j
+            if remove_zeroshift and dx ==0 and dy ==0:
+                continue
             valid_shifts_x.append(dx)
             valid_shifts_y.append(dy)
 

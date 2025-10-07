@@ -3725,6 +3725,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                     f"    Using full dataset as reference: {len(reference_dataset):,} locs"
                 )
 
+            if not enable_numba_optimization:
+                from scipy.spatial import cKDTree
+                reference_dataset = cKDTree(reference_dataset)
+
             # Process frames in chunks using same reference dataset
             logger.debug(
                 f"    Processing {n_frames} frames in chunks of {chunk_size}..."
@@ -12235,8 +12239,12 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             return (frame_indices, None, None, None, None, 0.0, 0.0, None)
 
         # Create dataset by excluding all target frames
-        dataset_mask = ~np.isin(reference_dataset["frame"], target_frames)
-        dataset_locs = reference_dataset[dataset_mask]
+        from scipy.spatial import cKDTree
+        if not isinstance(reference_dataset, cKDTree):
+            dataset_mask = ~np.isin(reference_dataset["frame"], target_frames)
+            dataset_locs = reference_dataset[dataset_mask]
+        else:
+            dataset_locs = reference_dataset
 
         if len(dataset_locs) == 0:
             logger.debug(f"No locs left in reference after masking out frame group {target_frames}")
@@ -12277,6 +12285,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 # Use standard RSSO computation
                 shift_x, shift_y, _, std_info = _calculate_pairwise_shift(
                     dataset_locs, frame_locs, max_shift, plot_histogram=False,
+                    remove_zeroshift=True
                 )
                 uncertainty_info = std_info if std_info is not None else {}
                 computation_type = "Standard"
