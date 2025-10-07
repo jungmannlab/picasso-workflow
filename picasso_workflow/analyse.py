@@ -3780,10 +3780,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                         group_frame_numbers = [frames[idx] for idx in current_group]
                         frame_groups.append((current_group.copy(), group_frame_numbers))
 
-                        logger.debug(
-                            f"        Created frame group: indices {current_group} "
-                            f"(frames {group_frame_numbers}), {current_locs_count} locs"
-                        )
+                        # logger.debug(
+                        #     f"        Created frame group: indices {current_group} "
+                        #     f"(frames {group_frame_numbers}), {current_locs_count} locs"
+                        # )
 
                         # Start new group
                         current_group = []
@@ -3847,7 +3847,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         quality_val,
                         performance_info,
                     ) = result
-                    logger.debug(f"chunk results: {result}")
+                    # logger.debug(f"chunk results: {result}")
 
                     # Collect performance statistics
                     if performance_info and "computation_time" in performance_info:
