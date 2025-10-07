@@ -3762,7 +3762,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
                 for frame_idx in chunk_frames:
                     frame_number = frames[frame_idx]
-                    frame_locs_count = np.sum(reference_dataset["frame"] == frame_number)
+                    frame_locs_count = np.sum(current_locs["frame"] == frame_number)
 
                     current_group.append(frame_idx)
                     current_locs_count += frame_locs_count
@@ -3787,10 +3787,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # Prepare chunk data using frame groups
                 chunk_frame_data = []
                 for group_indices, group_frame_numbers in frame_groups:
+                    # Extract frame localizations from reference dataset (combine multiple frames)
+                    frame_mask = np.isin(current_locs["frame"], group_frame_numbers)
+                    frame_locs = current_locs[frame_mask]
+
                     frame_data = (
                         group_indices,  # List of frame indices this result applies to
                         reference_dataset,  # SAME reference dataset for all frames
                         group_frame_numbers,  # List of frame numbers to process together
+                        frame_locs,
                         max_shift,
                         min_locs_per_frame,
                         enable_uncertainty_estimation,
@@ -12209,6 +12214,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         frame_indices,
         reference_dataset,
         target_frames,
+        frame_locs,
         max_shift,
         min_locs_per_frame,
         enable_uncertainty_estimation,
@@ -12220,10 +12226,6 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
     try:
         # Initialize uncertainty_info at the start to avoid "referenced before assignment" error
         uncertainty_info = {}
-
-        # Extract frame localizations from reference dataset (combine multiple frames)
-        frame_mask = np.isin(reference_dataset["frame"], target_frames)
-        frame_locs = reference_dataset[frame_mask]
 
         # Skip frames with insufficient localizations
         if len(frame_locs) < min_locs_per_frame:
