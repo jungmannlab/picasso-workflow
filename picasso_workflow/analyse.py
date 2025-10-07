@@ -3475,8 +3475,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         import time
         import os
 
-        logger.debug("Cropping data to 5000 for debug reasons")
-        self.locs = self.locs[:5000]
+        max_frames = parameters.get("max_frames", np.inf)
+        logger.debug(f"Cropping data to {max_frames} for debug reasons")
+        self.locs = self.locs[self.locs["frame"] < max_frames]
 
         # Fix OpenMP + multiprocessing conflict
         # Set OpenMP to use single thread before any numpy operations
