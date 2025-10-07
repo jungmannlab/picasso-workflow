@@ -464,16 +464,19 @@ def _calculate_pairwise_shift(
         shift_x_error, shift_y_error : float, float
             Parameter errors from covariance matrix fitting
     """
-    if len(locs_i) == 0 or len(locs_j) == 0:
-        return None, None, None, None, None, None
-    # Calculate all pairwise distances and shifts
-    coords_i = np.column_stack([locs_i.x, locs_i.y])
-    coords_j = np.column_stack([locs_j.x, locs_j.y])
-
     # Use KDTree for efficient nearest neighbor search
     from scipy.spatial import cKDTree
+    if not isinstance(locs_i, cKDTree):
+        tree_i = cKDTree(
+            np.column_stack([locs_i.x, locs_i.y]))
 
-    tree_i = cKDTree(coords_i)
+    if tree_i.n == 0 or len(locs_j) == 0:
+        return None, None, None, None, None, None
+    # Calculate all pairwise distances and shifts
+    coords_j = np.column_stack([locs_j.x, locs_j.y])
+
+
+    
 
     # Find all j points within max_shift of any i point
     valid_shifts_x = []
@@ -484,7 +487,7 @@ def _calculate_pairwise_shift(
         indices = tree_i.query_ball_point(coord_j, max_shift)
 
         for i_idx in indices:
-            coord_i = coords_i[i_idx]
+            coord_i = tree_i.data[i_idx]
             dx = coord_j[0] - coord_i[0]  # x shift from i to j
             dy = coord_j[1] - coord_i[1]  # y shift from i to j
             if remove_zeroshift and dx ==0 and dy ==0:
