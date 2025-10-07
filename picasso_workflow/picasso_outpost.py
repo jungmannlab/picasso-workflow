@@ -469,6 +469,8 @@ def _calculate_pairwise_shift(
     if not isinstance(locs_i, cKDTree):
         tree_i = cKDTree(
             np.column_stack([locs_i.x, locs_i.y]))
+    else:
+        tree_i = locs_i
 
     if tree_i.n == 0 or len(locs_j) == 0:
         return None, None, None, None, None, None
