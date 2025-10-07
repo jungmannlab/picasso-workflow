@@ -3755,13 +3755,42 @@ class AutoPicasso(util.AbstractModuleCollection):
                     f"      Processing chunk {chunk_start//chunk_size + 1}/{(n_frames-1)//chunk_size + 1}: frames {chunk_start}-{chunk_end-1}"
                 )
 
-                # Prepare chunk data using reference dataset (SAME for all frames)
-                chunk_frame_data = []
+                # Evaluate frame sizes and create frame groups to ensure min_locs_per_frame
+                frame_groups = []  # List of (frame_indices, combined_frame_numbers)
+                current_group = []
+                current_locs_count = 0
+
                 for frame_idx in chunk_frames:
+                    frame_number = frames[frame_idx]
+                    frame_locs_count = np.sum(reference_dataset["frame"] == frame_number)
+
+                    current_group.append(frame_idx)
+                    current_locs_count += frame_locs_count
+
+                    # If we have enough locs or this is the last frame in chunk, finalize group
+                    if (current_locs_count >= min_locs_per_frame or
+                        frame_idx == chunk_frames[-1]):
+
+                        # Get all frame numbers in this group
+                        group_frame_numbers = [frames[idx] for idx in current_group]
+                        frame_groups.append((current_group.copy(), group_frame_numbers))
+
+                        logger.debug(
+                            f"        Created frame group: indices {current_group} "
+                            f"(frames {group_frame_numbers}), {current_locs_count} locs"
+                        )
+
+                        # Start new group
+                        current_group = []
+                        current_locs_count = 0
+
+                # Prepare chunk data using frame groups
+                chunk_frame_data = []
+                for group_indices, group_frame_numbers in frame_groups:
                     frame_data = (
-                        frame_idx,
+                        group_indices,  # List of frame indices this result applies to
                         reference_dataset,  # SAME reference dataset for all frames
-                        frames[frame_idx],  # Just the frame number
+                        group_frame_numbers,  # List of frame numbers to process together
                         max_shift,
                         min_locs_per_frame,
                         enable_uncertainty_estimation,
@@ -3799,7 +3828,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # Process chunk results immediately to avoid accumulating large arrays
                 for result in chunk_results:
                     (
-                        frame_idx,
+                        frame_indices,  # Now a list of frame indices
                         shift_x,
                         shift_y,
                         uncertainty_x_val,
@@ -3823,13 +3852,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                             n_standard_computations += 1
 
                     if shift_x is not None and shift_y is not None:
-                        frame_shifts_x[frame_idx] = shift_x
-                        frame_shifts_y[frame_idx] = shift_y
-                        new_uncertainty_x[frame_idx] = uncertainty_x_val
-                        new_uncertainty_y[frame_idx] = uncertainty_y_val
-                        new_confidence[frame_idx] = confidence_val
-                        new_quality[frame_idx] = quality_val
-                        valid_measurements += 1
+                        # Apply the same shift to all frames in the group
+                        for frame_idx in frame_indices:
+                            frame_shifts_x[frame_idx] = shift_x
+                            frame_shifts_y[frame_idx] = shift_y
+                            new_uncertainty_x[frame_idx] = uncertainty_x_val
+                            new_uncertainty_y[frame_idx] = uncertainty_y_val
+                            new_confidence[frame_idx] = confidence_val
+                            new_quality[frame_idx] = quality_val
+                            valid_measurements += 1
 
                 # Force garbage collection after each chunk
                 gc.collect()
@@ -12164,20 +12195,20 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
     Args:
         frame_data : tuple
-            (frame_idx, reference_dataset, target_frame, max_shift, min_locs_per_frame,
+            (frame_indices, reference_dataset, target_frames, max_shift, min_locs_per_frame,
              enable_uncertainty_estimation, n_uncertainty_trials, subsampling_fraction,
              enable_numba_optimization)
 
     Returns:
-        tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
+        tuple : (frame_indices, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
     """
     from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
     import numpy as np
 
     (
-        frame_idx,
+        frame_indices,
         reference_dataset,
-        target_frame,
+        target_frames,
         max_shift,
         min_locs_per_frame,
         enable_uncertainty_estimation,
@@ -12190,22 +12221,22 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         # Initialize uncertainty_info at the start to avoid "referenced before assignment" error
         uncertainty_info = {}
 
-        # Extract frame localizations from reference dataset
-        frame_mask = reference_dataset["frame"] == target_frame
+        # Extract frame localizations from reference dataset (combine multiple frames)
+        frame_mask = np.isin(reference_dataset["frame"], target_frames)
         frame_locs = reference_dataset[frame_mask]
 
         # Skip frames with insufficient localizations
         if len(frame_locs) < min_locs_per_frame:
-            logger.debug(f"Too few locs in frame: {len(frame_locs)} < {min_locs_per_frame}")
-            return (frame_idx, None, None, None, None, 0.0, 0.0, None)
+            logger.debug(f"Too few locs in frame group {target_frames}: {len(frame_locs)} < {min_locs_per_frame}")
+            return (frame_indices, None, None, None, None, 0.0, 0.0, None)
 
-        # Create dataset by excluding current frame
-        dataset_mask = reference_dataset["frame"] != target_frame
+        # Create dataset by excluding all target frames
+        dataset_mask = ~np.isin(reference_dataset["frame"], target_frames)
         dataset_locs = reference_dataset[dataset_mask]
 
         if len(dataset_locs) == 0:
-            logger.debug(f"No locs left in reference after masking out curr frame")
-            return (frame_idx, None, None, None, None, 0.0, 0.0, None)
+            logger.debug(f"No locs left in reference after masking out frame group {target_frames}")
+            return (frame_indices, None, None, None, None, 0.0, 0.0, None)
 
         # Choose computation method based on uncertainty estimation setting
         if enable_uncertainty_estimation and n_uncertainty_trials > 1:
@@ -12286,10 +12317,10 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 quality = len(frame_locs) + len(dataset_locs)
             else:
                 logger.debug(f"shift x or y is None.")
-                return (frame_idx, None, None, None, None, 0.0, 0.0, None)
+                return (frame_indices, None, None, None, None, 0.0, 0.0, None)
 
         return (
-            frame_idx,
+            frame_indices,
             shift_x,
             shift_y,
             uncertainty_x,
@@ -12300,5 +12331,5 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         )
 
     except Exception as e:
-        print(f"Error processing frame {frame_idx}: {e}")
-        return (frame_idx, None, None, None, None, 0.0, 0.0, None)
+        print(f"Error processing frame group {frame_indices}: {e}")
+        return (frame_indices, None, None, None, None, 0.0, 0.0, None)
