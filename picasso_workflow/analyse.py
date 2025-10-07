@@ -12292,7 +12292,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 )
                 uncertainty_info = std_info if std_info is not None else {}
                 computation_type = "Standard"
-                logger.debug(f"{computation_type} - shift x: {shift_x} - shift y: {shift_y} - std_info: {std_info}")
+                # logger.debug(f"{computation_type} - shift x: {shift_x} - shift y: {shift_y} - std_info: {std_info}")
 
             computation_time = time.time() - start_time
 
