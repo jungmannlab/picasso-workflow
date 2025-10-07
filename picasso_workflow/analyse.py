@@ -4007,6 +4007,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                         f"    ✓ Converged after {iteration + 1} iterations (RMS change < {convergence_threshold:.3f} nm)"
                     )
                     break
+            else:
+                rms_change_x = np.sqrt(np.mean((drift_x) ** 2))
+                rms_change_y = np.sqrt(np.mean((drift_y) ** 2))
+                convergence_rms = np.sqrt(
+                    rms_change_x ** 2 + rms_change_y ** 2
+                )
+
+                logger.debug(f"    RMS drift: {convergence_rms:.3f} nm")
+
+                if convergence_rms < convergence_threshold:
+                    logger.debug(
+                        f"    ✓ Converged after {iteration + 1} iterations (RMS change < {convergence_threshold:.3f} nm)"
+                    )
+                    break
 
             # Store iteration history
             iteration_history.append(
@@ -4284,8 +4298,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             if n_iterations > 1:
                 fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
 
-                iterations = [h["iteration"] for h in iteration_history[1:]]  # Skip first iteration
-                rms_values = [h["convergence_rms"] for h in iteration_history[1:]]
+                iterations = [h["iteration"] for h in iteration_history]
+                rms_values = [h["convergence_rms"] for h in iteration_history]
                 valid_measurements = [h["valid_measurements"] for h in iteration_history]
 
                 # Plot 1: RMS Convergence
@@ -6107,6 +6121,160 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fig_radial"] = plot_path_radial
 
         gc.collect()
+        return parameters, results
+
+    @profile_resource_usage
+    @module_decorator
+    def resolution_frc(self, i, parameters, results):
+        """Calculate resolution using Fourier Ring Correlation (FRC)
+
+        This method splits localizations into two random subsets, renders them
+        into images, and computes their Fourier ring correlation to estimate
+        spatial resolution.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with optional keys:
+                    pixelsize_render : float
+                        pixel size for rendered images in nm (default: 5 nm)
+                    smoothing_sigma : float or None
+                        Gaussian smoothing sigma in pixels (default: None)
+                    threshold : float
+                        FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
+                    seed : int or None
+                        random seed for reproducibility (default: None)
+
+        Results:
+            resolution_frc : float
+                FRC-based resolution in nm
+            cutoff_frequency : float
+                spatial frequency at resolution cutoff (1/nm)
+            frc_curve : ndarray
+                FRC values as function of spatial frequency
+            spatial_frequencies : ndarray
+                spatial frequency values (1/nm)
+            threshold : float
+                threshold used
+            fig_frc : str
+                path to FRC curve plot
+            fig_images : str
+                path to split images comparison plot
+        """
+        from picasso_workflow.outpost_modules.resolution_frc import (
+            compute_frc_resolution
+        )
+
+        # Get parameters with defaults
+        pixelsize_render = parameters.get("pixelsize_render", 5.0)
+        smoothing_sigma = parameters.get("smoothing_sigma", None)
+        threshold = parameters.get("threshold", 1.0 / 7.0)
+        seed = parameters.get("seed", None)
+
+        # Compute FRC resolution
+        frc_results = compute_frc_resolution(
+            self.locs,
+            self.pixelsize,
+            pixelsize_render=pixelsize_render,
+            smoothing_sigma=smoothing_sigma,
+            threshold=threshold,
+            seed=seed
+        )
+
+        # Store results
+        results["resolution_frc"] = frc_results["resolution"]
+        results["cutoff_frequency"] = frc_results["cutoff_frequency"]
+        results["frc_curve"] = frc_results["frc_curve"]
+        results["spatial_frequencies"] = frc_results["spatial_frequencies"]
+        results["threshold"] = frc_results["threshold"]
+
+        # Create plots
+        # Plot 1: FRC curve
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        # Plot FRC curve
+        ax.plot(
+            frc_results["spatial_frequencies"],
+            frc_results["frc_curve"],
+            "b-",
+            linewidth=2,
+            label="FRC"
+        )
+
+        # Plot threshold line
+        ax.axhline(
+            y=threshold,
+            color="r",
+            linestyle="--",
+            linewidth=1.5,
+            label=f"Threshold ({threshold:.3f})"
+        )
+
+        # Plot resolution point
+        if not np.isnan(frc_results["resolution"]):
+            ax.axvline(
+                x=frc_results["cutoff_frequency"],
+                color="g",
+                linestyle="--",
+                linewidth=1.5,
+                label=f"Resolution: {frc_results['resolution']:.1f} nm"
+            )
+
+        ax.set_xlabel("Spatial Frequency (1/nm)")
+        ax.set_ylabel("FRC")
+        ax.set_title("Fourier Ring Correlation")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([-0.1, 1.1])
+
+        plt.tight_layout()
+
+        # Save FRC plot
+        plot_path_frc = os.path.join(results["folder"], "resolution_frc.png")
+        plt.savefig(plot_path_frc, dpi=300, bbox_inches="tight")
+        plt.close()
+
+        results["fig_frc"] = plot_path_frc
+
+        # Plot 2: Split images comparison
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+        image_1 = frc_results["image_1"]
+        image_2 = frc_results["image_2"]
+        bounds = frc_results["bounds"]
+
+        extent = [bounds[0], bounds[1], bounds[2], bounds[3]]
+
+        # Plot image 1
+        im1 = ax1.imshow(
+            image_1.T, extent=extent, origin="lower", cmap="hot"
+        )
+        ax1.set_xlabel("x (nm)")
+        ax1.set_ylabel("y (nm)")
+        ax1.set_title(f"Image 1 ({len(self.locs)//2} locs)")
+        plt.colorbar(im1, ax=ax1, shrink=0.8)
+
+        # Plot image 2
+        im2 = ax2.imshow(
+            image_2.T, extent=extent, origin="lower", cmap="hot"
+        )
+        ax2.set_xlabel("x (nm)")
+        ax2.set_ylabel("y (nm)")
+        ax2.set_title(f"Image 2 ({len(self.locs)//2} locs)")
+        plt.colorbar(im2, ax=ax2, shrink=0.8)
+
+        plt.tight_layout()
+
+        # Save images plot
+        plot_path_images = os.path.join(
+            results["folder"], "resolution_frc_images.png"
+        )
+        plt.savefig(plot_path_images, dpi=300, bbox_inches="tight")
+        plt.close()
+
+        results["fig_images"] = plot_path_images
+
         return parameters, results
 
     @profile_resource_usage
