@@ -643,15 +643,30 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
             smoothing_sigma=smoothing_sigma
         )
 
+    # Determine bounds from full dataset to ensure consistent image size
+    if use_chunking:
+        first_image, common_bounds = render_image_chunked_parallel(
+            locs, pixelsize, pixelsize_render, bounds=None,
+            smoothing_sigma=smoothing_sigma, chunk_size_nm=chunk_size_nm,
+            n_processes=n_processes
+        )
+    else:
+        first_image, common_bounds = render_image_histogram(
+            locs, pixelsize, pixelsize_render, bounds=None,
+            smoothing_sigma=smoothing_sigma
+        )
+
+    logger.debug(f"  Using common bounds: {common_bounds}")
+
     for split_idx in range(n_splits):
         logger.debug(f"  Processing split {split_idx + 1}/{n_splits}...")
 
         # Split localizations
         locs_1, locs_2 = split_localizations_random(locs, seed=split_idx)
 
-        # Render images
-        image_1, bounds = render_func(locs_1, None)
-        image_2, _ = render_func(locs_2, bounds)
+        # Render images with common bounds to ensure same size
+        image_1, _ = render_func(locs_1, common_bounds)
+        image_2, _ = render_func(locs_2, common_bounds)
 
         # Compute FFTs
         fft_1 = compute_fft(image_1)
@@ -672,7 +687,7 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
         resolutions.append(resolution)
         cutoff_frequencies.append(cutoff_frequency)
 
-    # Compute statistics
+    # Compute statistics - now all arrays have same length
     frc_curves = np.array(frc_curves)
     resolutions = np.array(resolutions)
 
