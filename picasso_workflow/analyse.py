@@ -6136,6 +6136,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         - use_chunking: Enables memory-efficient chunked rendering for large FOVs
         - n_splits: Averages over multiple random splits for robustness
         - max_frc_range_nm: Limit FRC calculation range for speedup
+        - parallel_splits: Parallelize split processing (best when use_chunking=False)
 
         Args:
             i : int
@@ -6157,10 +6158,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                     n_splits : int
                         number of splits to average (default: 1, set >1 for robustness)
                     n_processes : int
-                        number of parallel processes (default: 4, deprecated)
+                        number of parallel processes (default: 4)
                     max_frc_range_nm : float or None
                         maximum range to compute in nm (default: None = full range)
                         Setting this (e.g., 25 nm) speeds up FRC calculation
+                    parallel_splits : bool
+                        process splits in parallel (default: False)
+                        Only beneficial when use_chunking=False
 
         Results:
             resolution_frc : float
@@ -6197,6 +6201,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         n_splits = parameters.get("n_splits", 1)
         n_processes = parameters.get("n_processes", 4)
         max_frc_range_nm = parameters.get("max_frc_range_nm", None)
+        parallel_splits = parameters.get("parallel_splits", False)
 
         # Choose pipeline based on n_splits
         if n_splits > 1:
@@ -6212,7 +6217,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 n_processes=n_processes,
                 use_chunking=use_chunking,
                 chunk_size_nm=chunk_size_nm,
-                max_frc_range_nm=max_frc_range_nm
+                max_frc_range_nm=max_frc_range_nm,
+                parallel_splits=parallel_splits
             )
         else:
             # Use single-split pipeline

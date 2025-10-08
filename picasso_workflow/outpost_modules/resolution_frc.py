@@ -656,11 +656,17 @@ def compute_frc_curve_parallel(fft1, fft2, pixelsize_render, n_processes=4):
 def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
                         smoothing_sigma=None, threshold=1/7,
                         n_splits=5, n_processes=4, use_chunking=False,
-                        chunk_size_nm=10000, max_frc_range_nm=None):
+                        chunk_size_nm=10000, max_frc_range_nm=None,
+                        parallel_splits=False):
     """Compute FRC resolution averaged over multiple random splits
 
     This provides more robust resolution estimates by averaging over multiple
     random data splits, with standard deviation as uncertainty estimate.
+
+    Performance notes:
+    - If use_chunking=True: Rendering is already parallelized, so parallel_splits
+      should typically be False to avoid oversubscription
+    - If use_chunking=False: Set parallel_splits=True for speedup with multiple cores
 
     Args:
         locs : structured array
@@ -676,7 +682,8 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
         n_splits : int
             Number of random splits to average (default: 5)
         n_processes : int
-            Number of parallel processes for rendering/FRC (deprecated)
+            Number of parallel processes for rendering chunks (if use_chunking=True)
+            or for parallel splits (if parallel_splits=True)
         use_chunking : bool
             Use chunked rendering for large images (default: False)
         chunk_size_nm : float
@@ -685,6 +692,9 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
             Maximum range to compute (in nm). If specified, only compute
             FRC up to this resolution. Useful for speeding up computation.
             Default: None (compute full curve)
+        parallel_splits : bool
+            Process splits in parallel (default: False). Only beneficial when
+            use_chunking=False. If True and use_chunking=True, a warning is issued.
 
     Returns:
         results : dict
@@ -717,53 +727,86 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
             smoothing_sigma=smoothing_sigma
         )
 
-    # Determine bounds from full dataset to ensure consistent image size
-    if use_chunking:
-        first_image, common_bounds = render_image_chunked_parallel(
-            locs, pixelsize, pixelsize_render, bounds=None,
-            smoothing_sigma=smoothing_sigma, chunk_size_nm=chunk_size_nm,
-            n_processes=n_processes
-        )
-    else:
-        first_image, common_bounds = render_image_histogram(
-            locs, pixelsize, pixelsize_render, bounds=None,
-            smoothing_sigma=smoothing_sigma
-        )
+    # Determine bounds from full dataset (without rendering)
+    # This is much faster than rendering the full image
+    x_nm = locs['x'] * pixelsize
+    y_nm = locs['y'] * pixelsize
+    x_min, x_max = x_nm.min(), x_nm.max()
+    y_min, y_max = y_nm.min(), y_nm.max()
 
+    # Add small margin
+    margin = 10 * pixelsize_render
+    x_min -= margin
+    x_max += margin
+    y_min -= margin
+    y_max += margin
+
+    common_bounds = (x_min, x_max, y_min, y_max)
     logger.debug(f"  Using common bounds: {common_bounds}")
 
-    for split_idx in range(n_splits):
-        logger.debug(f"  Processing split {split_idx + 1}/{n_splits}...")
+    # Warn about potential oversubscription
+    if parallel_splits and use_chunking:
+        import warnings
+        warnings.warn(
+            "parallel_splits=True with use_chunking=True may cause CPU oversubscription. "
+            "Consider using parallel_splits=False when chunked rendering is enabled.",
+            stacklevel=2
+        )
 
+    # Define worker function for a single split
+    def process_single_split(split_idx):
+        """Process one split: render, FFT, FRC"""
         # Split localizations
         locs_1, locs_2 = split_localizations_random(locs, seed=split_idx)
 
-        # Render images with common bounds to ensure same size
-        logger.debug(f"  Rendering images")
+        # Render images with common bounds
         image_1, _ = render_func(locs_1, common_bounds)
         image_2, _ = render_func(locs_2, common_bounds)
 
         # Compute FFTs
-        logger.debug(f"  Computing 2 FFTs")
         fft_1 = compute_fft(image_1)
         fft_2 = compute_fft(image_2)
 
-        logger.debug(f"  Computing FRC Curve")
-        # Compute FRC curve (use vectorized version)
+        # Compute FRC curve
         frc_curve, spatial_frequencies = compute_frc_curve_vectorized(
             fft_1, fft_2, pixelsize_render, max_frc_range_nm=max_frc_range_nm
         )
 
         # Extract resolution
-        logger.debug(f"  Extracting Resolution")
         resolution, cutoff_frequency = extract_resolution(
             frc_curve, spatial_frequencies, threshold
         )
 
-        # Store results
-        frc_curves.append(frc_curve)
-        resolutions.append(resolution)
-        cutoff_frequencies.append(cutoff_frequency)
+        return frc_curve, spatial_frequencies, resolution, cutoff_frequency
+
+    # Process splits (parallel or sequential)
+    if parallel_splits and n_splits > 1:
+        from concurrent.futures import ProcessPoolExecutor
+        import os
+
+        # Limit processes to avoid oversubscription
+        max_workers = min(n_processes, n_splits)
+        logger.debug(f"  Processing {n_splits} splits in parallel ({max_workers} workers)...")
+
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            split_results = list(executor.map(process_single_split, range(n_splits)))
+
+        # Unpack results
+        for frc_curve, spatial_frequencies, resolution, cutoff_frequency in split_results:
+            frc_curves.append(frc_curve)
+            resolutions.append(resolution)
+            cutoff_frequencies.append(cutoff_frequency)
+    else:
+        # Sequential processing
+        for split_idx in range(n_splits):
+            logger.debug(f"  Processing split {split_idx + 1}/{n_splits}...")
+
+            frc_curve, spatial_frequencies, resolution, cutoff_frequency = \
+                process_single_split(split_idx)
+
+            frc_curves.append(frc_curve)
+            resolutions.append(resolution)
+            cutoff_frequencies.append(cutoff_frequency)
 
     # Compute statistics - now all arrays have same length
     frc_curves = np.array(frc_curves)
