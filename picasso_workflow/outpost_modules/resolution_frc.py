@@ -108,8 +108,8 @@ def render_image_histogram(locs, pixelsize, pixelsize_render, bounds=None,
     if smoothing_sigma is not None:
         image = gaussian_filter(image, sigma=smoothing_sigma)
 
-    logger.debug(f"  Rendered image: {image.shape[0]}×{image.shape[1]} pixels")
-    logger.debug(f"  Pixel size: {pixelsize_render:.2f} nm")
+    # logger.debug(f"  Rendered image: {image.shape[0]}×{image.shape[1]} pixels")
+    # logger.debug(f"  Pixel size: {pixelsize_render:.2f} nm")
 
     bounds = (x_min, x_max, y_min, y_max)
 
