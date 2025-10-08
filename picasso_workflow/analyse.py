@@ -3966,6 +3966,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                         frame_shifts_y[outliers] = 0
                         new_confidence[outliers] = 0
 
+            # mean frame shift should be 0 to keep the image in place
+            frame_shifts_x -= np.mean(frame_shifts_x)
+            frame_shifts_x -= np.mean(frame_shifts_x)
             # Update cumulative drift arrays (convert pixels to nm for drift tracking)
             drift_x += frame_shifts_x * pixelsize
             drift_y += frame_shifts_y * pixelsize
