@@ -6132,6 +6132,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         into images, and computes their Fourier ring correlation to estimate
         spatial resolution.
 
+        Phase 2 optimizations:
+        - use_chunking: Enables memory-efficient chunked rendering for large FOVs
+        - n_splits: Averages over multiple random splits for robustness
+        - n_processes: Parallel processing for rendering and FRC computation
+
         Args:
             i : int
                 the index of the module
@@ -6145,14 +6150,26 @@ class AutoPicasso(util.AbstractModuleCollection):
                         FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
                     seed : int or None
                         random seed for reproducibility (default: None)
+                    use_chunking : bool
+                        use chunked rendering for large images (default: False)
+                    chunk_size_nm : float
+                        chunk size in nm for chunked rendering (default: 10000)
+                    n_splits : int
+                        number of splits to average (default: 1, set >1 for robustness)
+                    n_processes : int
+                        number of parallel processes (default: 4)
 
         Results:
             resolution_frc : float
                 FRC-based resolution in nm
+            resolution_std : float
+                standard deviation (only if n_splits > 1)
             cutoff_frequency : float
                 spatial frequency at resolution cutoff (1/nm)
             frc_curve : ndarray
                 FRC values as function of spatial frequency
+            frc_curve_std : ndarray
+                std of FRC curve (only if n_splits > 1)
             spatial_frequencies : ndarray
                 spatial frequency values (1/nm)
             threshold : float
@@ -6160,10 +6177,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             fig_frc : str
                 path to FRC curve plot
             fig_images : str
-                path to split images comparison plot
+                path to split images comparison plot (only if n_splits=1)
         """
         from picasso_workflow.outpost_modules.resolution_frc import (
-            compute_frc_resolution
+            compute_frc_resolution,
+            compute_frc_averaged
         )
 
         # Get parameters with defaults
@@ -6171,36 +6189,91 @@ class AutoPicasso(util.AbstractModuleCollection):
         smoothing_sigma = parameters.get("smoothing_sigma", None)
         threshold = parameters.get("threshold", 1.0 / 7.0)
         seed = parameters.get("seed", None)
+        use_chunking = parameters.get("use_chunking", False)
+        chunk_size_nm = parameters.get("chunk_size_nm", 10000)
+        n_splits = parameters.get("n_splits", 1)
+        n_processes = parameters.get("n_processes", 4)
 
-        # Compute FRC resolution
-        frc_results = compute_frc_resolution(
-            self.locs,
-            self.pixelsize,
-            pixelsize_render=pixelsize_render,
-            smoothing_sigma=smoothing_sigma,
-            threshold=threshold,
-            seed=seed
-        )
+        # Choose pipeline based on n_splits
+        if n_splits > 1:
+            # Use averaging pipeline
+            logger.debug(f"Using averaged FRC with {n_splits} splits")
+            frc_results = compute_frc_averaged(
+                self.locs,
+                self.pixelsize,
+                pixelsize_render=pixelsize_render,
+                smoothing_sigma=smoothing_sigma,
+                threshold=threshold,
+                n_splits=n_splits,
+                n_processes=n_processes,
+                use_chunking=use_chunking,
+                chunk_size_nm=chunk_size_nm
+            )
+        else:
+            # Use single-split pipeline
+            frc_results = compute_frc_resolution(
+                self.locs,
+                self.pixelsize,
+                pixelsize_render=pixelsize_render,
+                smoothing_sigma=smoothing_sigma,
+                threshold=threshold,
+                seed=seed
+            )
 
         # Store results
         results["resolution_frc"] = frc_results["resolution"]
-        results["cutoff_frequency"] = frc_results["cutoff_frequency"]
-        results["frc_curve"] = frc_results["frc_curve"]
+        results["cutoff_frequency"] = frc_results.get("cutoff_frequency", np.nan)
         results["spatial_frequencies"] = frc_results["spatial_frequencies"]
         results["threshold"] = frc_results["threshold"]
+
+        # Store multi-split specific results
+        if n_splits > 1:
+            results["resolution_std"] = frc_results["resolution_std"]
+            results["frc_curve"] = frc_results["frc_curve_mean"]
+            results["frc_curve_std"] = frc_results["frc_curve_std"]
+            results["resolutions_per_split"] = frc_results["resolutions_per_split"]
+        else:
+            results["frc_curve"] = frc_results["frc_curve"]
 
         # Create plots
         # Plot 1: FRC curve
         fig, ax = plt.subplots(figsize=(8, 6))
 
-        # Plot FRC curve
-        ax.plot(
-            frc_results["spatial_frequencies"],
-            frc_results["frc_curve"],
-            "b-",
-            linewidth=2,
-            label="FRC"
-        )
+        # Determine which FRC curve to plot
+        if n_splits > 1:
+            frc_curve = frc_results["frc_curve_mean"]
+            frc_curve_std = frc_results["frc_curve_std"]
+
+            # Plot with error band
+            ax.plot(
+                frc_results["spatial_frequencies"],
+                frc_curve,
+                "b-",
+                linewidth=2,
+                label=f"FRC (mean, n={n_splits})"
+            )
+            ax.fill_between(
+                frc_results["spatial_frequencies"],
+                frc_curve - frc_curve_std,
+                frc_curve + frc_curve_std,
+                alpha=0.3,
+                color="b",
+                label="±1 std"
+            )
+
+            resolution_label = f"Resolution: {frc_results['resolution']:.1f} ± {frc_results['resolution_std']:.1f} nm"
+        else:
+            frc_curve = frc_results["frc_curve"]
+
+            ax.plot(
+                frc_results["spatial_frequencies"],
+                frc_curve,
+                "b-",
+                linewidth=2,
+                label="FRC"
+            )
+
+            resolution_label = f"Resolution: {frc_results['resolution']:.1f} nm"
 
         # Plot threshold line
         ax.axhline(
@@ -6213,13 +6286,20 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Plot resolution point
         if not np.isnan(frc_results["resolution"]):
-            ax.axvline(
-                x=frc_results["cutoff_frequency"],
-                color="g",
-                linestyle="--",
-                linewidth=1.5,
-                label=f"Resolution: {frc_results['resolution']:.1f} nm"
-            )
+            cutoff_freq = frc_results.get("cutoff_frequency")
+            if cutoff_freq is None and n_splits > 1:
+                # Calculate mean cutoff frequency
+                cutoff_freqs = frc_results.get("cutoff_frequencies", [])
+                cutoff_freq = np.nanmean([c for c in cutoff_freqs if not np.isnan(c)])
+
+            if cutoff_freq is not None and not np.isnan(cutoff_freq):
+                ax.axvline(
+                    x=cutoff_freq,
+                    color="g",
+                    linestyle="--",
+                    linewidth=1.5,
+                    label=resolution_label
+                )
 
         ax.set_xlabel("Spatial Frequency (1/nm)")
         ax.set_ylabel("FRC")
@@ -6237,43 +6317,44 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         results["fig_frc"] = plot_path_frc
 
-        # Plot 2: Split images comparison
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        # Plot 2: Split images comparison (only for single split)
+        if n_splits == 1 and "image_1" in frc_results:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
-        image_1 = frc_results["image_1"]
-        image_2 = frc_results["image_2"]
-        bounds = frc_results["bounds"]
+            image_1 = frc_results["image_1"]
+            image_2 = frc_results["image_2"]
+            bounds = frc_results["bounds"]
 
-        extent = [bounds[0], bounds[1], bounds[2], bounds[3]]
+            extent = [bounds[0], bounds[1], bounds[2], bounds[3]]
 
-        # Plot image 1
-        im1 = ax1.imshow(
-            image_1.T, extent=extent, origin="lower", cmap="hot"
-        )
-        ax1.set_xlabel("x (nm)")
-        ax1.set_ylabel("y (nm)")
-        ax1.set_title(f"Image 1 ({len(self.locs)//2} locs)")
-        plt.colorbar(im1, ax=ax1, shrink=0.8)
+            # Plot image 1
+            im1 = ax1.imshow(
+                image_1.T, extent=extent, origin="lower", cmap="hot"
+            )
+            ax1.set_xlabel("x (nm)")
+            ax1.set_ylabel("y (nm)")
+            ax1.set_title(f"Image 1 ({len(self.locs)//2} locs)")
+            plt.colorbar(im1, ax=ax1, shrink=0.8)
 
-        # Plot image 2
-        im2 = ax2.imshow(
-            image_2.T, extent=extent, origin="lower", cmap="hot"
-        )
-        ax2.set_xlabel("x (nm)")
-        ax2.set_ylabel("y (nm)")
-        ax2.set_title(f"Image 2 ({len(self.locs)//2} locs)")
-        plt.colorbar(im2, ax=ax2, shrink=0.8)
+            # Plot image 2
+            im2 = ax2.imshow(
+                image_2.T, extent=extent, origin="lower", cmap="hot"
+            )
+            ax2.set_xlabel("x (nm)")
+            ax2.set_ylabel("y (nm)")
+            ax2.set_title(f"Image 2 ({len(self.locs)//2} locs)")
+            plt.colorbar(im2, ax=ax2, shrink=0.8)
 
-        plt.tight_layout()
+            plt.tight_layout()
 
-        # Save images plot
-        plot_path_images = os.path.join(
-            results["folder"], "resolution_frc_images.png"
-        )
-        plt.savefig(plot_path_images, dpi=300, bbox_inches="tight")
-        plt.close()
+            # Save images plot
+            plot_path_images = os.path.join(
+                results["folder"], "resolution_frc_images.png"
+            )
+            plt.savefig(plot_path_images, dpi=300, bbox_inches="tight")
+            plt.close()
 
-        results["fig_images"] = plot_path_images
+            results["fig_images"] = plot_path_images
 
         return parameters, results
 
