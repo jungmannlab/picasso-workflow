@@ -6135,7 +6135,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         Phase 2 optimizations:
         - use_chunking: Enables memory-efficient chunked rendering for large FOVs
         - n_splits: Averages over multiple random splits for robustness
-        - n_processes: Parallel processing for rendering and FRC computation
+        - max_frc_range_nm: Limit FRC calculation range for speedup
 
         Args:
             i : int
@@ -6157,7 +6157,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                     n_splits : int
                         number of splits to average (default: 1, set >1 for robustness)
                     n_processes : int
-                        number of parallel processes (default: 4)
+                        number of parallel processes (default: 4, deprecated)
+                    max_frc_range_nm : float or None
+                        maximum range to compute in nm (default: None = full range)
+                        Setting this (e.g., 25 nm) speeds up FRC calculation
 
         Results:
             resolution_frc : float
@@ -6193,6 +6196,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         chunk_size_nm = parameters.get("chunk_size_nm", 10000)
         n_splits = parameters.get("n_splits", 1)
         n_processes = parameters.get("n_processes", 4)
+        max_frc_range_nm = parameters.get("max_frc_range_nm", None)
 
         # Choose pipeline based on n_splits
         if n_splits > 1:
@@ -6207,7 +6211,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 n_splits=n_splits,
                 n_processes=n_processes,
                 use_chunking=use_chunking,
-                chunk_size_nm=chunk_size_nm
+                chunk_size_nm=chunk_size_nm,
+                max_frc_range_nm=max_frc_range_nm
             )
         else:
             # Use single-split pipeline
@@ -6217,7 +6222,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 pixelsize_render=pixelsize_render,
                 smoothing_sigma=smoothing_sigma,
                 threshold=threshold,
-                seed=seed
+                seed=seed,
+                max_frc_range_nm=max_frc_range_nm
             )
 
         # Store results
