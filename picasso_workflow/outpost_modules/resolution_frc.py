@@ -1080,9 +1080,9 @@ def _process_tile_worker_minimal(tile_task):
 
 def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
                        smoothing_sigma=None, threshold=1/7,
-                       n_regions_x=2, n_regions_y=2,
-                       min_locs_per_region=500, max_frc_range_nm=None,
-                       n_processes=4):
+                       region_size=10.0, min_locs_per_region=500,
+                       max_frc_range_nm=None, n_processes=4,
+                       smoothing_window=0.005):
     """Compute FRC resolution using spatial tiling approach
 
     Divides the field-of-view into spatial regions, computes FRC for each
@@ -1103,33 +1103,36 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
             Gaussian smoothing sigma in pixels
         threshold : float
             FRC threshold (default: 1/7)
-        n_regions_x : int
-            Number of regions along x-axis (default: 2)
-        n_regions_y : int
-            Number of regions along y-axis (default: 2)
+        region_size : float
+            Size of each spatial region in micrometers (default: 10.0 µm)
         min_locs_per_region : int
             Minimum localizations per region (skip sparse regions, default: 500)
         max_frc_range_nm : float or None
             Maximum FRC range to compute in nm (default: None = full range)
         n_processes : int
             Number of parallel processes (default: 4)
+        smoothing_window : float
+            Moving average window size in spatial frequency units (1/nm)
+            for smoothing the averaged FRC curve (default: 0.005 1/nm)
 
     Returns:
         results : dict
             Dictionary containing:
-                - resolution : float (mean resolution in nm)
+                - resolution : float (final resolution from smoothed curve in nm)
                 - resolution_std : float (standard deviation)
+                - resolution_unsmoothed : float (resolution from raw mean curve)
                 - resolutions_per_region : list (resolution for each region)
                 - frc_curve_mean : ndarray (mean FRC curve)
+                - frc_curve_smoothed : ndarray (smoothed mean FRC curve)
                 - frc_curve_std : ndarray (std of FRC curves)
                 - spatial_frequencies : ndarray
                 - threshold : float
                 - n_regions : int (number of valid regions used)
                 - n_regions_total : int (total regions attempted)
+                - n_regions_x : int (number of regions along x)
+                - n_regions_y : int (number of regions along y)
     """
     from concurrent.futures import ProcessPoolExecutor
-
-    logger.debug(f"Computing spatial FRC with {n_regions_x}×{n_regions_y} regions...")
 
     # Convert to physical coordinates
     x_nm = locs['x'] * pixelsize
@@ -1143,11 +1146,22 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
     x_range = x_max - x_min
     y_range = y_max - y_min
 
+    # Convert region_size from micrometers to nanometers
+    region_size_nm = region_size * 1000.0
+
+    # Calculate number of regions based on FOV and region size
+    n_regions_x = max(1, int(np.ceil(x_range / region_size_nm)))
+    n_regions_y = max(1, int(np.ceil(y_range / region_size_nm)))
+
+    # Recalculate actual region dimensions
     region_width = x_range / n_regions_x
     region_height = y_range / n_regions_y
 
+    logger.debug(f"Computing spatial FRC with {n_regions_x}×{n_regions_y} regions "
+                f"(target size: {region_size:.1f} µm)...")
     logger.debug(f"  FOV: {x_range:.1f} × {y_range:.1f} nm")
-    logger.debug(f"  Region size: {region_width:.1f} × {region_height:.1f} nm")
+    logger.debug(f"  Actual region size: {region_width:.1f} × {region_height:.1f} nm "
+                f"({region_width/1000:.2f} × {region_height/1000:.2f} µm)")
 
     # Pre-calculate consistent tile dimensions in pixels
     # All tiles will have exactly the same pixel dimensions
@@ -1286,20 +1300,63 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
     frc_curve_mean = np.nanmean(frc_curves, axis=0)
     frc_curve_std = np.nanstd(frc_curves, axis=0)
 
+    # Apply moving average smoothing to mean FRC curve
+    if smoothing_window > 0:
+        # Calculate spatial frequency spacing
+        freq_spacing = spatial_frequencies[1] - spatial_frequencies[0]
+
+        # Calculate window size in array indices
+        window_size = int(np.round(smoothing_window / freq_spacing))
+        window_size = max(1, window_size)  # At least 1
+
+        # Ensure odd window size for symmetric smoothing
+        if window_size % 2 == 0:
+            window_size += 1
+
+        logger.debug(f"  Smoothing FRC curve with window size {window_size} points "
+                    f"({smoothing_window:.4f} 1/nm)")
+
+        # Apply moving average using convolution
+        window = np.ones(window_size) / window_size
+        frc_curve_smoothed = np.convolve(frc_curve_mean, window, mode='same')
+
+        # Handle edges where convolution is less accurate
+        half_window = window_size // 2
+        for i in range(half_window):
+            # Left edge
+            frc_curve_smoothed[i] = np.nanmean(frc_curve_mean[:i+half_window+1])
+            # Right edge
+            frc_curve_smoothed[-(i+1)] = np.nanmean(frc_curve_mean[-(i+half_window+1):])
+
+        # Extract resolution from smoothed curve
+        resolution_smoothed = extract_resolution(
+            spatial_frequencies, frc_curve_smoothed, threshold
+        )
+
+        logger.debug(f"  Smoothed resolution: {resolution_smoothed:.2f} nm "
+                    f"(unsmoothed: {resolution_mean:.2f} nm)")
+    else:
+        frc_curve_smoothed = frc_curve_mean.copy()
+        resolution_smoothed = resolution_mean
+
     logger.debug(f"  Mean resolution: {resolution_mean:.2f} ± {resolution_std:.2f} nm")
     logger.debug(f"  Resolution range: {np.nanmin(resolutions):.2f} - {np.nanmax(resolutions):.2f} nm")
 
     # Package results
     results = {
-        'resolution': resolution_mean,
+        'resolution': resolution_smoothed,
+        'resolution_unsmoothed': resolution_mean,
         'resolution_std': resolution_std,
         'resolutions_per_region': resolutions.tolist(),
         'frc_curve_mean': frc_curve_mean,
+        'frc_curve_smoothed': frc_curve_smoothed,
         'frc_curve_std': frc_curve_std,
         'spatial_frequencies': spatial_frequencies,
         'threshold': threshold,
         'n_regions': n_success,
         'n_regions_total': n_total,
+        'n_regions_x': n_regions_x,
+        'n_regions_y': n_regions_y,
         'n_failed': n_failed,
         'tile_info': [(r['tile_id'], r['n_locs'], r['resolution'])
                       for r in successful_results],  # For debugging

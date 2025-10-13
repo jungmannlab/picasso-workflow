@@ -6396,16 +6396,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                         Gaussian smoothing sigma in pixels (default: None)
                     threshold : float
                         FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
-                    n_regions_x : int
-                        number of regions along x-axis (default: 2)
-                    n_regions_y : int
-                        number of regions along y-axis (default: 2)
+                    region_size : float
+                        size of each spatial region in micrometers (default: 10.0 µm)
                     min_locs_per_region : int
                         minimum localizations per region to process (default: 500)
                     max_frc_range_nm : float or None
                         maximum FRC range in nm (default: None = full range)
                     n_processes : int
                         number of parallel processes (default: 4)
+                    smoothing_window : float
+                        moving average window size for FRC smoothing in 1/nm
+                        (default: 0.005)
 
         Results:
             resolution_frc_spatial : float
@@ -6433,11 +6434,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize_render = parameters.get("pixelsize_render", 5.0)
         smoothing_sigma = parameters.get("smoothing_sigma", None)
         threshold = parameters.get("threshold", 1.0 / 7.0)
-        n_regions_x = parameters.get("n_regions_x", 2)
-        n_regions_y = parameters.get("n_regions_y", 2)
+        region_size = parameters.get("region_size", 10.0)
         min_locs_per_region = parameters.get("min_locs_per_region", 500)
         max_frc_range_nm = parameters.get("max_frc_range_nm", None)
         n_processes = parameters.get("n_processes", 4)
+        smoothing_window = parameters.get("smoothing_window", 0.005)
 
         # Compute spatial FRC
         logger.debug("Using spatial FRC approach")
@@ -6447,19 +6448,21 @@ class AutoPicasso(util.AbstractModuleCollection):
             pixelsize_render=pixelsize_render,
             smoothing_sigma=smoothing_sigma,
             threshold=threshold,
-            n_regions_x=n_regions_x,
-            n_regions_y=n_regions_y,
+            region_size=region_size,
             min_locs_per_region=min_locs_per_region,
             max_frc_range_nm=max_frc_range_nm,
-            n_processes=n_processes
+            n_processes=n_processes,
+            smoothing_window=smoothing_window
         )
 
         # Store results
         results["resolution_frc_spatial"] = frc_results["resolution"]
+        results["resolution_unsmoothed"] = frc_results["resolution_unsmoothed"]
         results["resolution_std"] = frc_results["resolution_std"]
         results["n_regions"] = frc_results["n_regions"]
         results["n_regions_total"] = frc_results["n_regions_total"]
         results["frc_curve_mean"] = frc_results["frc_curve_mean"]
+        results["frc_curve_smoothed"] = frc_results["frc_curve_smoothed"]
         results["frc_curve_std"] = frc_results["frc_curve_std"]
         results["spatial_frequencies"] = frc_results["spatial_frequencies"]
         results["threshold"] = frc_results["threshold"]
@@ -6470,30 +6473,46 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Plot mean FRC curve with error band
         frc_curve_mean = frc_results["frc_curve_mean"]
+        frc_curve_smoothed = frc_results["frc_curve_smoothed"]
         frc_curve_std = frc_results["frc_curve_std"]
         spatial_frequencies = frc_results["spatial_frequencies"]
 
-        ax.plot(spatial_frequencies, frc_curve_mean, 'b-', linewidth=2, label='Mean FRC')
+        ax.plot(spatial_frequencies, frc_curve_mean, 'b-', linewidth=1.5,
+                alpha=0.5, label='Mean FRC (unsmoothed)')
         ax.fill_between(
             spatial_frequencies,
             frc_curve_mean - frc_curve_std,
             frc_curve_mean + frc_curve_std,
-            alpha=0.3, color='blue', label=f'±1 SD ({frc_results["n_regions"]} regions)'
+            alpha=0.2, color='blue', label=f'±1 SD ({frc_results["n_regions"]} regions)'
         )
+
+        # Plot smoothed curve
+        ax.plot(spatial_frequencies, frc_curve_smoothed, 'b-', linewidth=2.5,
+                label='Smoothed FRC')
 
         # Plot threshold line
         ax.axhline(y=threshold, color='r', linestyle='--', linewidth=2,
                   label=f'Threshold (1/7)')
 
-        # Mark resolution
+        # Mark smoothed resolution
         resolution = frc_results["resolution"]
+        resolution_unsmoothed = frc_results["resolution_unsmoothed"]
         if not np.isnan(resolution):
             resolution_freq = 1.0 / resolution
             ax.axvline(x=resolution_freq, color='g', linestyle=':', linewidth=2,
-                      label=f'Resolution: {resolution:.1f} nm')
+                      label=f'Resolution (smoothed): {resolution:.1f} nm')
+
+        # Optionally mark unsmoothed resolution if different
+        if not np.isnan(resolution_unsmoothed) and abs(resolution - resolution_unsmoothed) > 1.0:
+            resolution_freq_unsmoothed = 1.0 / resolution_unsmoothed
+            ax.axvline(x=resolution_freq_unsmoothed, color='orange', linestyle=':',
+                      linewidth=1.5, alpha=0.7,
+                      label=f'Resolution (unsmoothed): {resolution_unsmoothed:.1f} nm')
 
         ax.set_xlabel('Spatial Frequency (1/nm)', fontsize=12)
         ax.set_ylabel('FRC', fontsize=12)
+        n_regions_x = frc_results["n_regions_x"]
+        n_regions_y = frc_results["n_regions_y"]
         ax.set_title(f'Spatial FRC Analysis ({n_regions_x}×{n_regions_y} regions)', fontsize=14)
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
