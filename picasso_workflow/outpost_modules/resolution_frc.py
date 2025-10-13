@@ -1330,10 +1330,10 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
 
         # Extract resolution from smoothed curve
         resolution_smoothed = extract_resolution(
-            spatial_frequencies, frc_curve_smoothed, threshold
+            frc_curve_smoothed, spatial_frequencies, threshold
         )
         resolution_mean_fromcurve = extract_resolution(
-            spatial_frequencies, frc_curve_mean, threshold
+            frc_curve_mean, spatial_frequencies, threshold
         )
 
         logger.debug(f"  Smoothed resolution: {resolution_smoothed[0]:.2f} nm "
