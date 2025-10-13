@@ -1328,7 +1328,7 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
             # Right edge
             frc_curve_smoothed[-(i+1)] = np.nanmean(frc_curve_mean[-(i+half_window+1):])
 
-        Extract resolution from smoothed curve
+        # Extract resolution from smoothed curve
         resolution_smoothed = extract_resolution(
             spatial_frequencies, frc_curve_smoothed, threshold
         )
@@ -1338,7 +1338,7 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
 
         logger.debug(f"  Smoothed resolution: {resolution_smoothed[0]:.2f} nm "
                     f"(unsmoothed: {resolution_mean:.2f} nm)"
-                    f"(mean from curve: {resolution_mean_fromcurve:.2f} nm)")
+                    f"(mean from curve: {resolution_mean_fromcurve[0]:.2f} nm)")
     else:
         frc_curve_smoothed = frc_curve_mean.copy()
         resolution_smoothed = resolution_mean
