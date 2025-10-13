@@ -1194,7 +1194,7 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
 
     n_success = len(successful_results)
     n_failed = len(failed_results)
-    n_total = len(tiles)
+    n_total = n_regions_x * n_regions_y
 
     logger.debug(f"  Successful tiles: {n_success}/{n_total}")
 
