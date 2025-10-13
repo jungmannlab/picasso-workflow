@@ -1333,7 +1333,7 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
             spatial_frequencies, frc_curve_smoothed, threshold
         )
 
-        logger.debug(f"  Smoothed resolution: {resolution_smoothed:.2f} nm "
+        logger.debug(f"  Smoothed resolution: {resolution_smoothed[0]:.2f} nm "
                     f"(unsmoothed: {resolution_mean:.2f} nm)")
     else:
         frc_curve_smoothed = frc_curve_mean.copy()
