@@ -843,74 +843,24 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
     return results
 
 
-def _process_tile_worker_wrapper(tile_task, locs, x_nm, y_nm, pixelsize,
-                                 pixelsize_render, smoothing_sigma, threshold,
-                                 min_locs_per_region, max_frc_range_nm):
-    """Wrapper for worker function that receives data via functools.partial
-
-    This approach serializes the data arrays (locs, x_nm, y_nm) ONCE via the
-    partial function closure, rather than N times in each tile dict.
-
-    Args:
-        tile_task : dict
-            Tile information containing only id and bounds (not data)
-        locs : structured array
-            Full localization data (passed via partial)
-        x_nm : ndarray
-            X coordinates in nm (passed via partial)
-        y_nm : ndarray
-            Y coordinates in nm (passed via partial)
-        pixelsize : float
-            Camera pixel size in nm
-        pixelsize_render : float
-            Rendered pixel size in nm
-        smoothing_sigma : float or None
-            Gaussian smoothing sigma
-        threshold : float
-            FRC threshold
-        min_locs_per_region : int
-            Minimum localizations required
-        max_frc_range_nm : float or None
-            Maximum FRC range
-
-    Returns:
-        dict : Processing results with success flag
-    """
-    return _process_tile_worker(
-        tile_task, locs, x_nm, y_nm, pixelsize, pixelsize_render,
-        smoothing_sigma, threshold, min_locs_per_region, max_frc_range_nm
-    )
-
-
-def _process_tile_worker(tile_task, locs, x_nm, y_nm, pixelsize,
-                        pixelsize_render, smoothing_sigma, threshold,
-                        min_locs_per_region, max_frc_range_nm):
+def _process_tile_worker_minimal(tile_task):
     """Worker function for processing a single spatial tile
 
-    This is a module-level function (not a closure) to avoid serialization
-    issues with ProcessPoolExecutor.
+    This worker receives pre-filtered localizations for just this tile,
+    minimizing serialization overhead.
 
     Args:
         tile_task : dict
-            Tile information containing id and bounds (not data)
-        locs : structured array
-            Full localization data
-        x_nm : ndarray
-            X coordinates in nm
-        y_nm : ndarray
-            Y coordinates in nm
-        pixelsize : float
-            Camera pixel size in nm
-        pixelsize_render : float
-            Rendered pixel size in nm
-        smoothing_sigma : float or None
-            Gaussian smoothing sigma
-        threshold : float
-            FRC threshold
-        min_locs_per_region : int
-            Minimum localizations required
-        max_frc_range_nm : float or None
-            Maximum FRC range
+            Contains:
+                - id : tuple (i, j)
+                - bounds : tuple (x_min, x_max, y_min, y_max)
+                - locs : structured array (pre-filtered to this tile, or None)
+                - pixelsize : float
+                - pixelsize_render : float
+                - smoothing_sigma : float or None
+                - threshold : float
+                - min_locs_per_region : int
+                - max_frc_range_nm : float or None
 
     Returns:
         dict : Processing results with success flag
@@ -918,13 +868,22 @@ def _process_tile_worker(tile_task, locs, x_nm, y_nm, pixelsize,
     try:
         tile_id = tile_task['id']
         tile_bounds = tile_task['bounds']
+        tile_locs = tile_task['locs']
+        pixelsize = tile_task['pixelsize']
+        pixelsize_render = tile_task['pixelsize_render']
+        smoothing_sigma = tile_task['smoothing_sigma']
+        threshold = tile_task['threshold']
+        min_locs_per_region = tile_task['min_locs_per_region']
+        max_frc_range_nm = tile_task['max_frc_range_nm']
 
-        tile_x_min, tile_x_max, tile_y_min, tile_y_max = tile_bounds
-
-        # Filter localizations to tile
-        mask = ((x_nm >= tile_x_min) & (x_nm < tile_x_max) &
-                (y_nm >= tile_y_min) & (y_nm < tile_y_max))
-        tile_locs = locs[mask]
+        # Handle empty tile
+        if tile_locs is None or len(tile_locs) == 0:
+            return {
+                'tile_id': tile_id,
+                'error': 'empty_tile',
+                'n_locs': 0,
+                'success': False
+            }
 
         # Validate: enough localizations
         if len(tile_locs) < min_locs_per_region:
@@ -1099,8 +1058,11 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
 
     logger.debug(f"  Tile dimensions: {tile_width_pixels}×{tile_height_pixels} pixels")
 
-    # Generate spatial tiles with exact bounds to produce consistent pixel sizes
-    # Only store bounds - data will be passed separately to avoid massive serialization
+    # Generate spatial tiles with pre-filtered localizations
+    # This approach: filter locs for each tile BEFORE serialization
+    # Memory: N_tiles × (locs_per_tile) instead of N_workers × (total_locs)
+    logger.debug(f"  Pre-filtering localizations for each tile...")
+
     tile_tasks = []
     for i in range(n_regions_x):
         for j in range(n_regions_y):
@@ -1111,35 +1073,51 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
             tile_y_min = y_min + j * region_height
             tile_y_max = tile_y_min + tile_height_pixels * pixelsize_render
 
-            tile_tasks.append({
-                'id': (i, j),
-                'bounds': (tile_x_min, tile_x_max, tile_y_min, tile_y_max),
-            })
+            # Pre-filter localizations to this tile
+            mask = ((x_nm >= tile_x_min) & (x_nm < tile_x_max) &
+                    (y_nm >= tile_y_min) & (y_nm < tile_y_max))
+            tile_locs = locs[mask]
+
+            # Only create task if tile has any localizations
+            if len(tile_locs) > 0:
+                tile_tasks.append({
+                    'id': (i, j),
+                    'bounds': (tile_x_min, tile_x_max, tile_y_min, tile_y_max),
+                    'locs': tile_locs,  # Only localizations in this tile
+                    'pixelsize': pixelsize,
+                    'pixelsize_render': pixelsize_render,
+                    'smoothing_sigma': smoothing_sigma,
+                    'threshold': threshold,
+                    'min_locs_per_region': min_locs_per_region,
+                    'max_frc_range_nm': max_frc_range_nm
+                })
+            else:
+                # Create failed result for empty tile
+                tile_tasks.append({
+                    'id': (i, j),
+                    'bounds': (tile_x_min, tile_x_max, tile_y_min, tile_y_max),
+                    'locs': None,  # Marker for empty tile
+                    'pixelsize': pixelsize,
+                    'pixelsize_render': pixelsize_render,
+                    'smoothing_sigma': smoothing_sigma,
+                    'threshold': threshold,
+                    'min_locs_per_region': min_locs_per_region,
+                    'max_frc_range_nm': max_frc_range_nm
+                })
 
     logger.debug(f"  Generated {len(tile_tasks)} spatial tiles")
 
+    # Log memory footprint
+    total_locs_in_tiles = sum(len(t['locs']) if t['locs'] is not None else 0
+                               for t in tile_tasks)
+    logger.debug(f"  Total localizations across tiles: {total_locs_in_tiles} "
+                f"(vs {len(locs)} original)")
+
     # Process tiles in parallel
-    # Use functools.partial to avoid passing data arrays in tile dict
     logger.debug(f"  Processing tiles with {n_processes} workers...")
 
-    from functools import partial
-
-    # Create worker function with data pre-bound
-    worker_with_data = partial(
-        _process_tile_worker_wrapper,
-        locs=locs,
-        x_nm=x_nm,
-        y_nm=y_nm,
-        pixelsize=pixelsize,
-        pixelsize_render=pixelsize_render,
-        smoothing_sigma=smoothing_sigma,
-        threshold=threshold,
-        min_locs_per_region=min_locs_per_region,
-        max_frc_range_nm=max_frc_range_nm
-    )
-
     with ProcessPoolExecutor(max_workers=n_processes) as executor:
-        tile_results = list(executor.map(worker_with_data, tile_tasks))
+        tile_results = list(executor.map(_process_tile_worker_minimal, tile_tasks))
 
     # Separate successful and failed tiles
     successful_results = [r for r in tile_results if r.get('success', False)]
