@@ -141,42 +141,53 @@ def compute_decorr_single(image, pixelsize_render, r_min=0.0, r_max=1.0,
 
     logger.debug(f"    Computing decorrelation for {n_r} radii × {n_gauss} filters...")
 
-    # Compute decorrelation for each Gaussian filter strength
-    for g_idx, g in enumerate(g_values):
-        # Apply Gaussian high-pass filter
-        gauss_filter = 1.0 - np.exp(-2 * g**2 * R_normalized**2)
-        fft_filtered = fft_normalized * gauss_filter
+    # Vectorized computation: pre-compute all Gaussian filters
+    # Shape: (n_gauss, height, width)
+    g_grid = g_values[:, np.newaxis, np.newaxis]  # Shape: (n_gauss, 1, 1)
+    gauss_filters = 1.0 - np.exp(-2 * g_grid**2 * R_normalized**2)  # Broadcasting
 
-        # Normalization for filtered image
-        c_filtered = np.sqrt(np.sum(np.abs(fft_filtered)**2))
+    # Apply all filters at once
+    # fft_normalized shape: (height, width)
+    # gauss_filters shape: (n_gauss, height, width)
+    fft_filtered_all = fft_normalized[np.newaxis, :, :] * gauss_filters  # (n_gauss, h, w)
 
-        if c_filtered < 1e-10:
-            continue
+    # Compute normalizations for all filtered images
+    c_filtered_all = np.sqrt(np.sum(np.abs(fft_filtered_all)**2, axis=(1, 2)))  # (n_gauss,)
 
-        # Compute correlation for each radius
-        for r_idx, r in enumerate(r_values):
-            if r <= 0:
-                decorr_matrix[r_idx, g_idx] = 1.0
-                continue
+    # Pre-compute all bandpass masks
+    # Shape: (n_r, height, width)
+    r_squared = r_values**2
+    bandpass_masks = (R_normalized**2)[np.newaxis, :, :] < r_squared[:, np.newaxis, np.newaxis]
+    bandpass_masks = bandpass_masks.astype(float)
 
-            # Bandpass mask (frequencies below r)
-            bandpass_mask = (R_normalized**2 < r**2).astype(float)
+    # Apply all bandpass masks
+    fft_bandpass_all = fft_normalized[np.newaxis, :, :] * bandpass_masks  # (n_r, h, w)
 
-            # Apply mask
-            fft_bandpass = fft_normalized * bandpass_mask
+    # Compute normalizations for all bandpass images
+    c_bandpass_all = np.sqrt(np.sum(np.abs(fft_bandpass_all)**2, axis=(1, 2)))  # (n_r,)
 
-            # Normalization for bandpass
-            c_bandpass = np.sqrt(np.sum(np.abs(fft_bandpass)**2))
+    # Compute cross-products for all combinations
+    # fft_filtered_all: (n_gauss, h, w)
+    # fft_bandpass_all: (n_r, h, w)
+    # Need: (n_r, n_gauss, h, w)
+    fft_filtered_expanded = fft_filtered_all[np.newaxis, :, :, :]  # (1, n_gauss, h, w)
+    fft_bandpass_expanded = fft_bandpass_all[:, np.newaxis, :, :]  # (n_r, 1, h, w)
 
-            if c_bandpass < 1e-10:
-                decorr_matrix[r_idx, g_idx] = 0.0
-                continue
+    # Compute all cross products at once
+    cross_products = fft_filtered_expanded * np.conj(fft_bandpass_expanded)  # (n_r, n_gauss, h, w)
+    cross_sums = np.real(np.sum(cross_products, axis=(2, 3)))  # (n_r, n_gauss)
 
-            # Compute correlation coefficient
-            cross_product = fft_filtered * np.conj(fft_bandpass)
-            corr = np.real(np.sum(cross_product)) / (c_filtered * c_bandpass)
+    # Compute all correlation coefficients
+    # c_bandpass_all: (n_r,) -> (n_r, 1)
+    # c_filtered_all: (n_gauss,) -> (1, n_gauss)
+    denominators = c_bandpass_all[:, np.newaxis] * c_filtered_all[np.newaxis, :]  # (n_r, n_gauss)
 
-            decorr_matrix[r_idx, g_idx] = corr
+    # Avoid division by zero
+    valid_mask = denominators > 1e-10
+    decorr_matrix[valid_mask] = cross_sums[valid_mask] / denominators[valid_mask]
+
+    # Handle special cases
+    decorr_matrix[r_values <= 0, :] = 1.0
 
     # Average across filter strengths
     decorr_curve = np.mean(decorr_matrix, axis=1)
