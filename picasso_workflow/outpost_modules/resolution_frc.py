@@ -232,7 +232,7 @@ def extract_resolution(frc_values, spatial_frequencies, threshold=1/7):
         logger.warning("  FRC never drops below threshold")
         return np.nan, np.nan
 
-    cutoff_idx = np.argmax(below_threshold)
+    cutoff_idx = np.argmin(below_threshold)
 
     # Linear interpolation for better accuracy
     if cutoff_idx > 0:
