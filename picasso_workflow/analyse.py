@@ -6495,7 +6495,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                   label=f'Threshold (1/7)')
 
         # Mark smoothed resolution
-        resolution = frc_results["resolution"]
+        resolution = frc_results["resolution"][0]
         resolution_unsmoothed = frc_results["resolution_unsmoothed"]
         if not np.isnan(resolution):
             resolution_freq = 1.0 / resolution
