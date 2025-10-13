@@ -841,3 +841,394 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
     }
 
     return results
+
+
+def _process_tile_worker_wrapper(tile_task, locs, x_nm, y_nm, pixelsize,
+                                 pixelsize_render, smoothing_sigma, threshold,
+                                 min_locs_per_region, max_frc_range_nm):
+    """Wrapper for worker function that receives data via functools.partial
+
+    This approach serializes the data arrays (locs, x_nm, y_nm) ONCE via the
+    partial function closure, rather than N times in each tile dict.
+
+    Args:
+        tile_task : dict
+            Tile information containing only id and bounds (not data)
+        locs : structured array
+            Full localization data (passed via partial)
+        x_nm : ndarray
+            X coordinates in nm (passed via partial)
+        y_nm : ndarray
+            Y coordinates in nm (passed via partial)
+        pixelsize : float
+            Camera pixel size in nm
+        pixelsize_render : float
+            Rendered pixel size in nm
+        smoothing_sigma : float or None
+            Gaussian smoothing sigma
+        threshold : float
+            FRC threshold
+        min_locs_per_region : int
+            Minimum localizations required
+        max_frc_range_nm : float or None
+            Maximum FRC range
+
+    Returns:
+        dict : Processing results with success flag
+    """
+    return _process_tile_worker(
+        tile_task, locs, x_nm, y_nm, pixelsize, pixelsize_render,
+        smoothing_sigma, threshold, min_locs_per_region, max_frc_range_nm
+    )
+
+
+def _process_tile_worker(tile_task, locs, x_nm, y_nm, pixelsize,
+                        pixelsize_render, smoothing_sigma, threshold,
+                        min_locs_per_region, max_frc_range_nm):
+    """Worker function for processing a single spatial tile
+
+    This is a module-level function (not a closure) to avoid serialization
+    issues with ProcessPoolExecutor.
+
+    Args:
+        tile_task : dict
+            Tile information containing id and bounds (not data)
+        locs : structured array
+            Full localization data
+        x_nm : ndarray
+            X coordinates in nm
+        y_nm : ndarray
+            Y coordinates in nm
+        pixelsize : float
+            Camera pixel size in nm
+        pixelsize_render : float
+            Rendered pixel size in nm
+        smoothing_sigma : float or None
+            Gaussian smoothing sigma
+        threshold : float
+            FRC threshold
+        min_locs_per_region : int
+            Minimum localizations required
+        max_frc_range_nm : float or None
+            Maximum FRC range
+
+    Returns:
+        dict : Processing results with success flag
+    """
+    try:
+        tile_id = tile_task['id']
+        tile_bounds = tile_task['bounds']
+
+        tile_x_min, tile_x_max, tile_y_min, tile_y_max = tile_bounds
+
+        # Filter localizations to tile
+        mask = ((x_nm >= tile_x_min) & (x_nm < tile_x_max) &
+                (y_nm >= tile_y_min) & (y_nm < tile_y_max))
+        tile_locs = locs[mask]
+
+        # Validate: enough localizations
+        if len(tile_locs) < min_locs_per_region:
+            return {
+                'tile_id': tile_id,
+                'error': 'insufficient_locs',
+                'n_locs': len(tile_locs),
+                'success': False
+            }
+
+        # Random split within tile
+        locs_1, locs_2 = split_localizations_random(
+            tile_locs, seed=tile_id[0] * 1000 + tile_id[1]
+        )
+
+        # Validate: balanced split (at least 20% each)
+        n_locs_1 = len(locs_1)
+        n_locs_2 = len(locs_2)
+        split_ratio = min(n_locs_1, n_locs_2) / max(n_locs_1, n_locs_2)
+
+        if split_ratio < 0.2:
+            return {
+                'tile_id': tile_id,
+                'error': 'unbalanced_split',
+                'n_locs': len(tile_locs),
+                'split_ratio': split_ratio,
+                'success': False
+            }
+
+        # Render images (use tile bounds for consistent sizing)
+        image_1, _ = render_image_histogram(
+            locs_1, pixelsize, pixelsize_render,
+            bounds=tile_bounds, smoothing_sigma=smoothing_sigma
+        )
+        image_2, _ = render_image_histogram(
+            locs_2, pixelsize, pixelsize_render,
+            bounds=tile_bounds, smoothing_sigma=smoothing_sigma
+        )
+
+        # Validate: non-empty images
+        if image_1.sum() == 0 or image_2.sum() == 0:
+            return {
+                'tile_id': tile_id,
+                'error': 'empty_image',
+                'n_locs': len(tile_locs),
+                'success': False
+            }
+
+        # Compute FFTs
+        fft_1 = compute_fft(image_1)
+        fft_2 = compute_fft(image_2)
+
+        # Compute FRC curve
+        frc_curve, spatial_frequencies = compute_frc_curve_vectorized(
+            fft_1, fft_2, pixelsize_render, max_frc_range_nm=max_frc_range_nm
+        )
+
+        # Validate: FRC curve has valid values
+        if np.all(np.isnan(frc_curve)):
+            return {
+                'tile_id': tile_id,
+                'error': 'invalid_frc',
+                'n_locs': len(tile_locs),
+                'success': False
+            }
+
+        # Extract resolution
+        resolution, cutoff_frequency = extract_resolution(
+            frc_curve, spatial_frequencies, threshold
+        )
+
+        # Success - return results
+        return {
+            'tile_id': tile_id,
+            'n_locs': len(tile_locs),
+            'n_locs_1': n_locs_1,
+            'n_locs_2': n_locs_2,
+            'frc_curve': frc_curve,
+            'spatial_frequencies': spatial_frequencies,
+            'resolution': resolution,
+            'cutoff_frequency': cutoff_frequency,
+            'image_shape': image_1.shape,
+            'success': True
+        }
+
+    except Exception as e:
+        # Catch any unexpected errors
+        return {
+            'tile_id': tile_task.get('id', 'unknown'),
+            'error': 'exception',
+            'error_message': str(e),
+            'error_type': type(e).__name__,
+            'success': False
+        }
+
+
+def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
+                       smoothing_sigma=None, threshold=1/7,
+                       n_regions_x=2, n_regions_y=2,
+                       min_locs_per_region=500, max_frc_range_nm=None,
+                       n_processes=4):
+    """Compute FRC resolution using spatial tiling approach
+
+    Divides the field-of-view into spatial regions, computes FRC for each
+    region independently, and averages the FRC curves. This approach:
+    - Reduces memory requirements (smaller images per region)
+    - Provides better statistics through spatial averaging
+    - Preserves high spatial frequencies within each region
+    - Enables efficient multiprocessing
+
+    Args:
+        locs : structured array
+            Localization data with 'x' and 'y' fields
+        pixelsize : float
+            Camera pixel size in nm
+        pixelsize_render : float
+            Rendered pixel size in nm (default: 5 nm)
+        smoothing_sigma : float or None
+            Gaussian smoothing sigma in pixels
+        threshold : float
+            FRC threshold (default: 1/7)
+        n_regions_x : int
+            Number of regions along x-axis (default: 2)
+        n_regions_y : int
+            Number of regions along y-axis (default: 2)
+        min_locs_per_region : int
+            Minimum localizations per region (skip sparse regions, default: 500)
+        max_frc_range_nm : float or None
+            Maximum FRC range to compute in nm (default: None = full range)
+        n_processes : int
+            Number of parallel processes (default: 4)
+
+    Returns:
+        results : dict
+            Dictionary containing:
+                - resolution : float (mean resolution in nm)
+                - resolution_std : float (standard deviation)
+                - resolutions_per_region : list (resolution for each region)
+                - frc_curve_mean : ndarray (mean FRC curve)
+                - frc_curve_std : ndarray (std of FRC curves)
+                - spatial_frequencies : ndarray
+                - threshold : float
+                - n_regions : int (number of valid regions used)
+                - n_regions_total : int (total regions attempted)
+    """
+    from concurrent.futures import ProcessPoolExecutor
+
+    logger.debug(f"Computing spatial FRC with {n_regions_x}×{n_regions_y} regions...")
+
+    # Convert to physical coordinates
+    x_nm = locs['x'] * pixelsize
+    y_nm = locs['y'] * pixelsize
+
+    # Determine overall bounds
+    x_min, x_max = x_nm.min(), x_nm.max()
+    y_min, y_max = y_nm.min(), y_nm.max()
+
+    # Calculate region size (no overlap)
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+
+    region_width = x_range / n_regions_x
+    region_height = y_range / n_regions_y
+
+    logger.debug(f"  FOV: {x_range:.1f} × {y_range:.1f} nm")
+    logger.debug(f"  Region size: {region_width:.1f} × {region_height:.1f} nm")
+
+    # Pre-calculate consistent tile dimensions in pixels
+    # All tiles will have exactly the same pixel dimensions
+    tile_width_pixels = int(np.ceil(region_width / pixelsize_render))
+    tile_height_pixels = int(np.ceil(region_height / pixelsize_render))
+
+    logger.debug(f"  Tile dimensions: {tile_width_pixels}×{tile_height_pixels} pixels")
+
+    # Generate spatial tiles with exact bounds to produce consistent pixel sizes
+    # Only store bounds - data will be passed separately to avoid massive serialization
+    tile_tasks = []
+    for i in range(n_regions_x):
+        for j in range(n_regions_y):
+            # Calculate tile bounds (no overlap, non-clamped)
+            # Use exact pixel-aligned bounds to ensure consistent sizes
+            tile_x_min = x_min + i * region_width
+            tile_x_max = tile_x_min + tile_width_pixels * pixelsize_render
+            tile_y_min = y_min + j * region_height
+            tile_y_max = tile_y_min + tile_height_pixels * pixelsize_render
+
+            tile_tasks.append({
+                'id': (i, j),
+                'bounds': (tile_x_min, tile_x_max, tile_y_min, tile_y_max),
+            })
+
+    logger.debug(f"  Generated {len(tile_tasks)} spatial tiles")
+
+    # Process tiles in parallel
+    # Use functools.partial to avoid passing data arrays in tile dict
+    logger.debug(f"  Processing tiles with {n_processes} workers...")
+
+    from functools import partial
+
+    # Create worker function with data pre-bound
+    worker_with_data = partial(
+        _process_tile_worker_wrapper,
+        locs=locs,
+        x_nm=x_nm,
+        y_nm=y_nm,
+        pixelsize=pixelsize,
+        pixelsize_render=pixelsize_render,
+        smoothing_sigma=smoothing_sigma,
+        threshold=threshold,
+        min_locs_per_region=min_locs_per_region,
+        max_frc_range_nm=max_frc_range_nm
+    )
+
+    with ProcessPoolExecutor(max_workers=n_processes) as executor:
+        tile_results = list(executor.map(worker_with_data, tile_tasks))
+
+    # Separate successful and failed tiles
+    successful_results = [r for r in tile_results if r.get('success', False)]
+    failed_results = [r for r in tile_results if not r.get('success', False)]
+
+    n_success = len(successful_results)
+    n_failed = len(failed_results)
+    n_total = len(tiles)
+
+    logger.debug(f"  Successful tiles: {n_success}/{n_total}")
+
+    # Log failures with details
+    if n_failed > 0:
+        error_counts = {}
+        for r in failed_results:
+            error_type = r.get('error', 'unknown')
+            error_counts[error_type] = error_counts.get(error_type, 0) + 1
+
+        logger.warning(f"  Failed tiles: {n_failed}/{n_total}")
+        for error_type, count in error_counts.items():
+            logger.warning(f"    {error_type}: {count} tiles")
+
+    if n_success == 0:
+        logger.error("  No successful tiles found!")
+        return {
+            'resolution': np.nan,
+            'resolution_std': np.nan,
+            'resolutions_per_region': [],
+            'frc_curve_mean': np.array([]),
+            'frc_curve_std': np.array([]),
+            'spatial_frequencies': np.array([]),
+            'threshold': threshold,
+            'n_regions': n_success,
+            'n_regions_total': n_total,
+            'n_failed': n_failed,
+            'failed_tiles': failed_results
+        }
+
+    # Validate: all successful tiles have same frequency array length
+    freq_lengths = [len(r['spatial_frequencies']) for r in successful_results]
+    if len(set(freq_lengths)) > 1:
+        logger.error(f"  Inconsistent FRC curve lengths: {set(freq_lengths)}")
+        logger.error("  This indicates inconsistent tile sizes - implementation bug!")
+        raise RuntimeError(
+            f"Inconsistent FRC curve lengths across tiles: {set(freq_lengths)}. "
+            "This should not happen with pixel-aligned bounds."
+        )
+
+    # Extract data from successful results
+    frc_curves = [r['frc_curve'] for r in successful_results]
+    resolutions = [r['resolution'] for r in successful_results]
+    spatial_frequencies = successful_results[0]['spatial_frequencies']  # Same for all
+
+    # Compute statistics
+    frc_curves = np.array(frc_curves)
+    resolutions = np.array(resolutions)
+
+    # Filter out NaN resolutions
+    valid_resolutions = resolutions[~np.isnan(resolutions)]
+
+    if len(valid_resolutions) > 0:
+        resolution_mean = np.mean(valid_resolutions)
+        resolution_std = np.std(valid_resolutions) if len(valid_resolutions) > 1 else 0.0
+    else:
+        resolution_mean = np.nan
+        resolution_std = np.nan
+
+    frc_curve_mean = np.nanmean(frc_curves, axis=0)
+    frc_curve_std = np.nanstd(frc_curves, axis=0)
+
+    logger.debug(f"  Mean resolution: {resolution_mean:.2f} ± {resolution_std:.2f} nm")
+    logger.debug(f"  Resolution range: {np.nanmin(resolutions):.2f} - {np.nanmax(resolutions):.2f} nm")
+
+    # Package results
+    results = {
+        'resolution': resolution_mean,
+        'resolution_std': resolution_std,
+        'resolutions_per_region': resolutions.tolist(),
+        'frc_curve_mean': frc_curve_mean,
+        'frc_curve_std': frc_curve_std,
+        'spatial_frequencies': spatial_frequencies,
+        'threshold': threshold,
+        'n_regions': n_success,
+        'n_regions_total': n_total,
+        'n_failed': n_failed,
+        'tile_info': [(r['tile_id'], r['n_locs'], r['resolution'])
+                      for r in successful_results],  # For debugging
+        'failed_tiles': [(r['tile_id'], r.get('error', 'unknown'))
+                        for r in failed_results] if n_failed > 0 else []
+    }
+
+    return results

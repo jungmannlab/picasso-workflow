@@ -6375,6 +6375,143 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @profile_resource_usage
     @module_decorator
+    def resolution_frc_spatial(self, i, parameters, results):
+        """Calculate resolution using spatial FRC approach
+
+        This method divides the FOV into spatial regions, computes FRC for each
+        region independently, and averages the results. Benefits:
+        - Lower memory usage (smaller images per region)
+        - Better statistics through spatial averaging
+        - Efficient multiprocessing (fully independent regions)
+        - Preserves high spatial frequencies
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with optional keys:
+                    pixelsize_render : float
+                        pixel size for rendered images in nm (default: 5 nm)
+                    smoothing_sigma : float or None
+                        Gaussian smoothing sigma in pixels (default: None)
+                    threshold : float
+                        FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
+                    n_regions_x : int
+                        number of regions along x-axis (default: 2)
+                    n_regions_y : int
+                        number of regions along y-axis (default: 2)
+                    min_locs_per_region : int
+                        minimum localizations per region to process (default: 500)
+                    max_frc_range_nm : float or None
+                        maximum FRC range in nm (default: None = full range)
+                    n_processes : int
+                        number of parallel processes (default: 4)
+
+        Results:
+            resolution_frc_spatial : float
+                mean FRC-based resolution in nm
+            resolution_std : float
+                standard deviation across regions
+            n_regions : int
+                number of valid regions processed
+            cutoff_frequency : float
+                mean spatial frequency at resolution cutoff (1/nm)
+            frc_curve_mean : ndarray
+                mean FRC curve across regions
+            frc_curve_std : ndarray
+                std of FRC curves
+            spatial_frequencies : ndarray
+                spatial frequency values (1/nm)
+            threshold : float
+                threshold used
+            fig_frc : str
+                path to FRC curve plot
+        """
+        from picasso_workflow.outpost_modules.resolution_frc import compute_frc_spatial
+
+        # Get parameters with defaults
+        pixelsize_render = parameters.get("pixelsize_render", 5.0)
+        smoothing_sigma = parameters.get("smoothing_sigma", None)
+        threshold = parameters.get("threshold", 1.0 / 7.0)
+        n_regions_x = parameters.get("n_regions_x", 2)
+        n_regions_y = parameters.get("n_regions_y", 2)
+        min_locs_per_region = parameters.get("min_locs_per_region", 500)
+        max_frc_range_nm = parameters.get("max_frc_range_nm", None)
+        n_processes = parameters.get("n_processes", 4)
+
+        # Compute spatial FRC
+        logger.debug("Using spatial FRC approach")
+        frc_results = compute_frc_spatial(
+            self.locs,
+            self.pixelsize,
+            pixelsize_render=pixelsize_render,
+            smoothing_sigma=smoothing_sigma,
+            threshold=threshold,
+            n_regions_x=n_regions_x,
+            n_regions_y=n_regions_y,
+            min_locs_per_region=min_locs_per_region,
+            max_frc_range_nm=max_frc_range_nm,
+            n_processes=n_processes
+        )
+
+        # Store results
+        results["resolution_frc_spatial"] = frc_results["resolution"]
+        results["resolution_std"] = frc_results["resolution_std"]
+        results["n_regions"] = frc_results["n_regions"]
+        results["n_regions_total"] = frc_results["n_regions_total"]
+        results["frc_curve_mean"] = frc_results["frc_curve_mean"]
+        results["frc_curve_std"] = frc_results["frc_curve_std"]
+        results["spatial_frequencies"] = frc_results["spatial_frequencies"]
+        results["threshold"] = frc_results["threshold"]
+        results["resolutions_per_region"] = frc_results["resolutions_per_region"]
+
+        # Create FRC curve plot
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        # Plot mean FRC curve with error band
+        frc_curve_mean = frc_results["frc_curve_mean"]
+        frc_curve_std = frc_results["frc_curve_std"]
+        spatial_frequencies = frc_results["spatial_frequencies"]
+
+        ax.plot(spatial_frequencies, frc_curve_mean, 'b-', linewidth=2, label='Mean FRC')
+        ax.fill_between(
+            spatial_frequencies,
+            frc_curve_mean - frc_curve_std,
+            frc_curve_mean + frc_curve_std,
+            alpha=0.3, color='blue', label=f'±1 SD ({frc_results["n_regions"]} regions)'
+        )
+
+        # Plot threshold line
+        ax.axhline(y=threshold, color='r', linestyle='--', linewidth=2,
+                  label=f'Threshold (1/7)')
+
+        # Mark resolution
+        resolution = frc_results["resolution"]
+        if not np.isnan(resolution):
+            resolution_freq = 1.0 / resolution
+            ax.axvline(x=resolution_freq, color='g', linestyle=':', linewidth=2,
+                      label=f'Resolution: {resolution:.1f} nm')
+
+        ax.set_xlabel('Spatial Frequency (1/nm)', fontsize=12)
+        ax.set_ylabel('FRC', fontsize=12)
+        ax.set_title(f'Spatial FRC Analysis ({n_regions_x}×{n_regions_y} regions)', fontsize=14)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([-0.1, 1.1])
+
+        plt.tight_layout()
+
+        # Save plot
+        plot_path = os.path.join(results["folder"], "resolution_frc_spatial.png")
+        plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+        plt.close()
+
+        results["fig_frc"] = plot_path
+
+        return parameters, results
+
+    @profile_resource_usage
+    @module_decorator
     def smlm_clusterer(self, i, parameters, results):
         """Perform smlm clustering. After this module, the standard
         locs will be the cluster centers.
