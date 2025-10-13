@@ -6478,7 +6478,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         spatial_frequencies = frc_results["spatial_frequencies"]
 
         ax.plot(spatial_frequencies, frc_curve_mean, 'b-', linewidth=1.5,
-                alpha=0.5, label='Mean FRC (unsmoothed)')
+                alpha=0.75, label='Mean FRC (unsmoothed)')
         ax.fill_between(
             spatial_frequencies,
             frc_curve_mean - frc_curve_std,
@@ -6487,7 +6487,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         # Plot smoothed curve
-        ax.plot(spatial_frequencies, frc_curve_smoothed, 'b-', linewidth=2.5,
+        ax.plot(spatial_frequencies, frc_curve_smoothed, 'g-', linewidth=0.5,
                 label='Smoothed FRC')
 
         # Plot threshold line
