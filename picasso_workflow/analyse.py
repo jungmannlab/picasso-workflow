@@ -6531,6 +6531,152 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @profile_resource_usage
     @module_decorator
+    def resolution_decorr_spatial(self, i, parameters, results):
+        """Calculate resolution using spatial image decorrelation approach
+
+        This method implements the image decorrelation analysis from
+        Descloux et al., Nature Methods 2019. It divides the FOV into spatial
+        regions and computes decorrelation-based resolution for each region.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with optional keys:
+                    pixelsize_render : float
+                        pixel size for rendered images in nm (default: 5 nm)
+                    smoothing_sigma : float or None
+                        Gaussian smoothing sigma in pixels (default: None)
+                    region_size : float
+                        size of each spatial region in micrometers (default: 10.0 µm)
+                    min_locs_per_region : int
+                        minimum localizations per region to process (default: 500)
+                    n_processes : int
+                        number of parallel processes (default: 4)
+                    r_min : float
+                        minimum normalized frequency (default: 0.0)
+                    r_max : float
+                        maximum normalized frequency (default: 1.0)
+                    n_r : int
+                        number of radial sampling points (default: 50)
+                    n_gauss : int
+                        number of Gaussian filter strengths (default: 10)
+                    apod_edge_width : int
+                        edge apodization width in pixels (default: 20)
+
+        Results:
+            resolution_decorr_spatial : float
+                mean decorrelation-based resolution in nm
+            resolution_std : float
+                standard deviation across regions
+            n_regions : int
+                number of valid regions processed
+            decorr_curve_mean : ndarray
+                mean decorrelation curve across regions
+            decorr_curve_std : ndarray
+                std of decorrelation curves
+            r_values : ndarray
+                normalized radius values
+            fig_decorr : str
+                path to decorrelation curve plot
+        """
+        from picasso_workflow.outpost_modules.resolution_decorrelation import (
+            compute_decorr_spatial
+        )
+
+        # Get parameters with defaults
+        pixelsize_render = parameters.get("pixelsize_render", 5.0)
+        smoothing_sigma = parameters.get("smoothing_sigma", None)
+        region_size = parameters.get("region_size", 10.0)
+        min_locs_per_region = parameters.get("min_locs_per_region", 500)
+        n_processes = parameters.get("n_processes", 4)
+        r_min = parameters.get("r_min", 0.0)
+        r_max = parameters.get("r_max", 1.0)
+        n_r = parameters.get("n_r", 50)
+        n_gauss = parameters.get("n_gauss", 10)
+        apod_edge_width = parameters.get("apod_edge_width", 20)
+
+        # Compute spatial decorrelation
+        logger.debug("Using spatial image decorrelation approach")
+        decorr_results = compute_decorr_spatial(
+            self.locs,
+            self.pixelsize,
+            pixelsize_render=pixelsize_render,
+            smoothing_sigma=smoothing_sigma,
+            region_size=region_size,
+            min_locs_per_region=min_locs_per_region,
+            n_processes=n_processes,
+            r_min=r_min,
+            r_max=r_max,
+            n_r=n_r,
+            n_gauss=n_gauss,
+            apod_edge_width=apod_edge_width
+        )
+
+        # Store results
+        results["resolution_decorr_spatial"] = decorr_results["resolution"]
+        results["resolution_std"] = decorr_results["resolution_std"]
+        results["n_regions"] = decorr_results["n_regions"]
+        results["n_regions_total"] = decorr_results["n_regions_total"]
+        results["decorr_curve_mean"] = decorr_results["decorr_curve_mean"]
+        results["decorr_curve_std"] = decorr_results["decorr_curve_std"]
+        results["r_values"] = decorr_results["r_values"]
+        results["resolutions_per_region"] = decorr_results["resolutions_per_region"]
+
+        # Create decorrelation curve plot
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        # Plot mean decorrelation curve with error band
+        decorr_curve_mean = decorr_results["decorr_curve_mean"]
+        decorr_curve_std = decorr_results["decorr_curve_std"]
+        r_values = decorr_results["r_values"]
+
+        ax.plot(r_values, decorr_curve_mean, 'b-', linewidth=2, label='Mean Decorrelation')
+        ax.fill_between(
+            r_values,
+            decorr_curve_mean - decorr_curve_std,
+            decorr_curve_mean + decorr_curve_std,
+            alpha=0.3, color='blue', label=f'±1 SD ({decorr_results["n_regions"]} regions)'
+        )
+
+        # Plot threshold line
+        ax.axhline(y=0.5, color='r', linestyle='--', linewidth=2,
+                  label='Threshold (0.5)')
+
+        # Mark resolution
+        resolution = decorr_results["resolution"]
+        if not np.isnan(resolution):
+            # Convert resolution to normalized frequency
+            # resolution = 2 * pixelsize / kc_max
+            # kc_max = 2 * pixelsize / resolution (in 1/nm)
+            # normalized kc = kc_max * pixelsize * 2 (since r=1 corresponds to Nyquist = 0.5/pixel)
+            r_cutoff = resolution / (4 * pixelsize_render)
+            ax.axvline(x=r_cutoff, color='g', linestyle=':', linewidth=2,
+                      label=f'Resolution: {resolution:.1f} nm')
+
+        ax.set_xlabel('Normalized Frequency', fontsize=12)
+        ax.set_ylabel('Decorrelation', fontsize=12)
+        n_regions_x = decorr_results["n_regions_x"]
+        n_regions_y = decorr_results["n_regions_y"]
+        ax.set_title(f'Image Decorrelation Analysis ({n_regions_x}×{n_regions_y} regions)',
+                    fontsize=14)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([-0.1, 1.1])
+
+        plt.tight_layout()
+
+        # Save plot
+        plot_path = os.path.join(results["folder"], "resolution_decorr_spatial.png")
+        plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+        plt.close()
+
+        results["fig_decorr"] = plot_path
+
+        return parameters, results
+
+    @profile_resource_usage
+    @module_decorator
     def smlm_clusterer(self, i, parameters, results):
         """Perform smlm clustering. After this module, the standard
         locs will be the cluster centers.
