@@ -965,6 +965,7 @@ def _process_tile_worker_minimal(tile_task):
             locs_1, pixelsize, pixelsize_render,
             bounds=tile_bounds, smoothing_sigma=smoothing_sigma
         )
+        image_shape = image_1.shape
         image_2, _ = render_image_histogram(
             locs_2, pixelsize, pixelsize_render,
             bounds=tile_bounds, smoothing_sigma=smoothing_sigma
@@ -994,6 +995,8 @@ def _process_tile_worker_minimal(tile_task):
         logger.debug(f"    Tile {tile_id}: After FFT, memory = {mem_after_fft:.1f} MB "
                     f"(+{mem_after_fft - mem_before_fft:.1f} MB)")
 
+        del image_1, image_2
+
         # Compute FRC curve
         mem_before_frc = _get_memory_usage_mb()
         logger.debug(f"    Tile {tile_id}: Before FRC computation, memory = {mem_before_frc:.1f} MB")
@@ -1005,6 +1008,8 @@ def _process_tile_worker_minimal(tile_task):
         mem_after_frc = _get_memory_usage_mb()
         logger.debug(f"    Tile {tile_id}: After FRC computation, memory = {mem_after_frc:.1f} MB "
                     f"(+{mem_after_frc - mem_before_frc:.1f} MB)")
+
+        del fft_1, fft_2
 
         # Validate: FRC curve has valid values
         if np.all(np.isnan(frc_curve)):
@@ -1034,7 +1039,7 @@ def _process_tile_worker_minimal(tile_task):
             'spatial_frequencies': spatial_frequencies,
             'resolution': resolution,
             'cutoff_frequency': cutoff_frequency,
-            'image_shape': image_1.shape,
+            'image_shape': image_shape,
             'success': True
         }
 
