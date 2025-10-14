@@ -6651,8 +6651,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             # kc_max = 2 * pixelsize / resolution (in 1/nm)
             # normalized kc = kc_max * pixelsize * 2 (since r=1 corresponds to Nyquist = 0.5/pixel)
             r_cutoff = resolution / (4 * pixelsize_render)
-            ax.axvline(x=r_cutoff, color='g', linestyle=':', linewidth=2,
-                      label=f'Resolution: {resolution:.1f} nm')
+            if np.any(r_cutoff < r_values):
+                ax.axvline(x=r_cutoff, color='g', linestyle=':', linewidth=2,
+                          label=f'Resolution: {resolution:.1f} nm')
 
         ax.set_xlabel('Normalized Frequency', fontsize=12)
         ax.set_ylabel('Decorrelation', fontsize=12)
