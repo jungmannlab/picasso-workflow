@@ -1684,8 +1684,14 @@ def create_frc_plot(frc_results, results_folder, threshold=1 / 7):
 
     plt.tight_layout()
 
-    # Save plot
-    plot_path = os.path.join(results_folder, "resolution_frc_spatial.png")
+    # Save plot with random code for unique filename
+    import random
+    import string
+
+    rcode = "".join(random.choices(string.ascii_letters, k=6))
+    plot_path = os.path.join(
+        results_folder, f"resolution_frc_spatial_{rcode}.png"
+    )
     plt.savefig(plot_path, dpi=300, bbox_inches="tight")
     plt.close()
 

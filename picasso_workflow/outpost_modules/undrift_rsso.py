@@ -28,15 +28,19 @@ logger = logging.getLogger(__name__)
 # Try to import Numba for acceleration
 try:
     import numba
+
     NUMBA_AVAILABLE = True
 except ImportError:
     NUMBA_AVAILABLE = False
-    print("Warning: Numba not available. RSSO computations will use standard NumPy (slower).")
+    print(
+        "Warning: Numba not available. RSSO computations will use standard NumPy (slower)."
+    )
 
 
 # ==============================================================================
 # Multiprocessing configuration
 # ==============================================================================
+
 
 def _configure_openmp_for_multiprocessing():
     """Configure OpenMP environment to avoid conflicts with multiprocessing
@@ -49,6 +53,7 @@ def _configure_openmp_for_multiprocessing():
     variables disables OpenMP threading in worker processes.
     """
     import os
+
     # Set OpenMP to use single thread in worker processes
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -61,13 +66,13 @@ def _setup_multiprocessing_context():
     """Setup multiprocessing context to avoid OpenMP conflicts"""
     try:
         # Try to set multiprocessing start method to 'spawn' to avoid fork() issues
-        if mp.get_start_method(allow_none=True) != 'spawn':
-            mp.set_start_method('spawn', force=True)
-        return mp.get_context('spawn')
+        if mp.get_start_method(allow_none=True) != "spawn":
+            mp.set_start_method("spawn", force=True)
+        return mp.get_context("spawn")
     except RuntimeError:
         # If already set or unavailable, use default context
         try:
-            return mp.get_context('spawn')
+            return mp.get_context("spawn")
         except ValueError:
             # 'spawn' not available, fall back to default
             return mp.get_context()
@@ -78,6 +83,7 @@ def _setup_multiprocessing_context():
 # ==============================================================================
 
 if NUMBA_AVAILABLE:
+
     @numba.jit(nopython=True, parallel=True, cache=True)
     def _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y, max_shift=None):
         """Numba-optimized pairwise shift computation (Phase 1)
@@ -101,7 +107,9 @@ if NUMBA_AVAILABLE:
         """
         n_i = len(i_x)
         n_j = len(j_x)
-        max_shift_sq = max_shift * max_shift if max_shift is not None else np.inf
+        max_shift_sq = (
+            max_shift * max_shift if max_shift is not None else np.inf
+        )
 
         # Pre-allocate maximum possible size
         max_pairs = n_i * n_j
@@ -110,7 +118,9 @@ if NUMBA_AVAILABLE:
         valid_mask = np.zeros(max_pairs, dtype=numba.boolean)
 
         # Parallel computation over pairs
-        for idx in numba.prange(max_pairs):  # Parallel over all potential pairs
+        for idx in numba.prange(
+            max_pairs
+        ):  # Parallel over all potential pairs
             i = idx // n_j  # Convert flat index to i,j coordinates
             j = idx % n_j
 
@@ -120,7 +130,7 @@ if NUMBA_AVAILABLE:
             dx = j_x[j] - i_x_val
             dy = j_y[j] - i_y_val
 
-            if max_shift is None or (dx*dx + dy*dy) <= max_shift_sq:
+            if max_shift is None or (dx * dx + dy * dy) <= max_shift_sq:
                 all_shifts_x[idx] = dx
                 all_shifts_y[idx] = dy
                 valid_mask[idx] = True
@@ -147,7 +157,9 @@ if NUMBA_AVAILABLE:
 
         return shifts_x, shifts_y
 
-    @numba.jit(nopython=True, parallel=False, cache=True)  # Sequential for thread safety in binning
+    @numba.jit(
+        nopython=True, parallel=False, cache=True
+    )  # Sequential for thread safety in binning
     def _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges):
         """Numba-optimized 2D histogram binning (Phase 2)
 
@@ -178,12 +190,12 @@ if NUMBA_AVAILABLE:
 
             # Simple linear search for bin (could be optimized further)
             for j in range(nx_bins):
-                if x_edges[j] <= x_val < x_edges[j+1]:
+                if x_edges[j] <= x_val < x_edges[j + 1]:
                     x_bin = j
                     break
 
             for j in range(ny_bins):
-                if y_edges[j] <= y_val < y_edges[j+1]:
+                if y_edges[j] <= y_val < y_edges[j + 1]:
                     y_bin = j
                     break
 
@@ -248,6 +260,7 @@ if NUMBA_AVAILABLE:
 
         return peak_x, peak_y, max_val
 
+
 else:
     # Fallback implementations when Numba is not available
     def _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y, max_shift=None):
@@ -264,7 +277,7 @@ else:
 
             # Filter by max_shift distance like standard implementation
             if max_shift is not None:
-                distances_sq = dx*dx + dy*dy
+                distances_sq = dx * dx + dy * dy
                 valid_mask = distances_sq <= (max_shift * max_shift)
                 dx = dx[valid_mask]
                 dy = dy[valid_mask]
@@ -272,11 +285,16 @@ else:
             shifts_x.extend(dx)
             shifts_y.extend(dy)
 
-        return np.array(shifts_x, dtype=np.float32), np.array(shifts_y, dtype=np.float32)
+        return (
+            np.array(shifts_x, dtype=np.float32),
+            np.array(shifts_y, dtype=np.float32),
+        )
 
     def _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges):
         """Fallback NumPy implementation"""
-        hist, _, _ = np.histogram2d(shifts_x, shifts_y, bins=[x_edges, y_edges])
+        hist, _, _ = np.histogram2d(
+            shifts_x, shifts_y, bins=[x_edges, y_edges]
+        )
         return hist.astype(np.int32)
 
     def _find_histogram_peak_numba(hist):
@@ -289,7 +307,10 @@ else:
 # Main RSSO shift computation
 # ==============================================================================
 
-def _compute_rsso_shift_numba_optimized(locs_i, locs_j, max_shift_pixels, enable_numba=True):
+
+def _compute_rsso_shift_numba_optimized(
+    locs_i, locs_j, max_shift_pixels, enable_numba=True
+):
     """Numba-optimized RSSO shift computation combining Phases 1 and 2
 
     Args:
@@ -317,10 +338,10 @@ def _compute_rsso_shift_numba_optimized(locs_i, locs_j, max_shift_pixels, enable
 
     # Extract coordinates - match standard implementation naming
     # locs_i is reference, locs_j is frame in standard call pattern
-    i_x = locs_i['x'].astype(np.float32)
-    i_y = locs_i['y'].astype(np.float32)
-    j_x = locs_j['x'].astype(np.float32)
-    j_y = locs_j['y'].astype(np.float32)
+    i_x = locs_i["x"].astype(np.float32)
+    i_y = locs_i["y"].astype(np.float32)
+    j_x = locs_j["x"].astype(np.float32)
+    j_y = locs_j["y"].astype(np.float32)
 
     phase1_start = time.time()
 
@@ -328,23 +349,33 @@ def _compute_rsso_shift_numba_optimized(locs_i, locs_j, max_shift_pixels, enable
     # Standard calculation: dx = coord_j[0] - coord_i[0] (j - i)
     # Only consider pairs within max_shift distance (like standard KDTree approach)
     if enable_numba and NUMBA_AVAILABLE:
-        shifts_x, shifts_y = _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y, max_shift_pixels)
+        shifts_x, shifts_y = _compute_pairwise_shifts_numba(
+            i_x, i_y, j_x, j_y, max_shift_pixels
+        )
     else:
-        shifts_x, shifts_y = _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y, max_shift_pixels)  # Uses fallback
+        shifts_x, shifts_y = _compute_pairwise_shifts_numba(
+            i_x, i_y, j_x, j_y, max_shift_pixels
+        )  # Uses fallback
 
     phase1_time = time.time() - phase1_start
     phase2_start = time.time()
 
     # Create histogram bins
     n_bins = min(100, int(2 * max_shift_pixels))  # Adaptive bin count
-    x_edges = np.linspace(-max_shift_pixels, max_shift_pixels, n_bins + 1).astype(np.float32)
-    y_edges = np.linspace(-max_shift_pixels, max_shift_pixels, n_bins + 1).astype(np.float32)
+    x_edges = np.linspace(
+        -max_shift_pixels, max_shift_pixels, n_bins + 1
+    ).astype(np.float32)
+    y_edges = np.linspace(
+        -max_shift_pixels, max_shift_pixels, n_bins + 1
+    ).astype(np.float32)
 
     # Phase 2: Create histogram (Numba optimized)
     if enable_numba and NUMBA_AVAILABLE:
         hist = _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges)
     else:
-        hist = _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges)  # Uses fallback
+        hist = _histogram2d_numba(
+            shifts_x, shifts_y, x_edges, y_edges
+        )  # Uses fallback
 
     phase2_time = time.time() - phase2_start
     phase3_start = time.time()
@@ -354,8 +385,8 @@ def _compute_rsso_shift_numba_optimized(locs_i, locs_j, max_shift_pixels, enable
 
     # Convert bin indices to shift values
     if n_bins > 1:
-        bin_size_x = (x_edges[1] - x_edges[0])
-        bin_size_y = (y_edges[1] - y_edges[0])
+        bin_size_x = x_edges[1] - x_edges[0]
+        bin_size_y = y_edges[1] - y_edges[0]
         shift_x = x_edges[0] + peak_x_bin * bin_size_x
         shift_y = y_edges[0] + peak_y_bin * bin_size_y
     else:
@@ -369,8 +400,12 @@ def _compute_rsso_shift_numba_optimized(locs_i, locs_j, max_shift_pixels, enable
         "success": True,
         "peak_value": int(peak_value),
         "total_pairs": len(shifts_x),
-        "n_frame_locs": len(locs_j),  # locs_j is frame in standard call pattern
-        "n_reference_locs": len(locs_i),  # locs_i is reference in standard call pattern
+        "n_frame_locs": len(
+            locs_j
+        ),  # locs_j is frame in standard call pattern
+        "n_reference_locs": len(
+            locs_i
+        ),  # locs_i is reference in standard call pattern
         "numba_enabled": enable_numba and NUMBA_AVAILABLE,
         "sigma_x": np.std(shifts_x),
         "sigma_y": np.std(shifts_y),
@@ -378,8 +413,8 @@ def _compute_rsso_shift_numba_optimized(locs_i, locs_j, max_shift_pixels, enable
             "phase1_pairwise": phase1_time,
             "phase2_histogram": phase2_time,
             "phase3_peak": phase3_time,
-            "total": total_time
-        }
+            "total": total_time,
+        },
     }
 
     return shift_x, shift_y, quality_metrics
@@ -393,7 +428,7 @@ def _validate_numba_implementation():
     np.random.seed(42)
     n_common = 800  # Points that appear in both datasets (with shift)
     n_frame_extra = 200  # Extra points only in frame
-    n_ref_extra = 500   # Extra points only in reference
+    n_ref_extra = 500  # Extra points only in reference
 
     true_shift_x, true_shift_y = 2.5, -1.8
 
@@ -407,19 +442,31 @@ def _validate_numba_implementation():
     base_y = np.random.normal(center_y, 4.0, n_common).astype(np.float32)
 
     # Frame dataset: base pattern + noise + extra points
-    frame_x = base_x + np.random.normal(0, noise_level, n_common).astype(np.float32)
-    frame_y = base_y + np.random.normal(0, noise_level, n_common).astype(np.float32)
+    frame_x = base_x + np.random.normal(0, noise_level, n_common).astype(
+        np.float32
+    )
+    frame_y = base_y + np.random.normal(0, noise_level, n_common).astype(
+        np.float32
+    )
 
     # Add some extra points only in frame
     if n_frame_extra > 0:
-        extra_frame_x = np.random.uniform(45, 55, n_frame_extra).astype(np.float32)
-        extra_frame_y = np.random.uniform(45, 55, n_frame_extra).astype(np.float32)
+        extra_frame_x = np.random.uniform(45, 55, n_frame_extra).astype(
+            np.float32
+        )
+        extra_frame_y = np.random.uniform(45, 55, n_frame_extra).astype(
+            np.float32
+        )
         frame_x = np.concatenate([frame_x, extra_frame_x])
         frame_y = np.concatenate([frame_y, extra_frame_y])
 
     # Reference dataset: shifted base pattern + noise + extra points
-    ref_x = (base_x + true_shift_x) + np.random.normal(0, noise_level, n_common).astype(np.float32)
-    ref_y = (base_y + true_shift_y) + np.random.normal(0, noise_level, n_common).astype(np.float32)
+    ref_x = (base_x + true_shift_x) + np.random.normal(
+        0, noise_level, n_common
+    ).astype(np.float32)
+    ref_y = (base_y + true_shift_y) + np.random.normal(
+        0, noise_level, n_common
+    ).astype(np.float32)
 
     # Add some extra points only in reference
     if n_ref_extra > 0:
@@ -429,8 +476,8 @@ def _validate_numba_implementation():
         ref_y = np.concatenate([ref_y, extra_ref_y])
 
     # Create recarray format for standard implementation
-    frame_locs = np.rec.fromarrays([frame_x, frame_y], names=['x', 'y'])
-    ref_locs = np.rec.fromarrays([ref_x, ref_y], names=['x', 'y'])
+    frame_locs = np.rec.fromarrays([frame_x, frame_y], names=["x", "y"])
+    ref_locs = np.rec.fromarrays([ref_x, ref_y], names=["x", "y"])
 
     max_shift_pixels = 10.0
 
@@ -441,19 +488,35 @@ def _validate_numba_implementation():
     manual_frame_y = np.array([48.2], dtype=np.float32)
 
     manual_shifts_x, manual_shifts_y = _compute_pairwise_shifts_numba(
-        manual_ref_x, manual_ref_y, manual_frame_x, manual_frame_y, max_shift_pixels
+        manual_ref_x,
+        manual_ref_y,
+        manual_frame_x,
+        manual_frame_y,
+        max_shift_pixels,
     )
-    print(f"    Manual test: expected shift (2.5, -1.8), got ({manual_shifts_x[0]:.1f}, {manual_shifts_y[0]:.1f})")
+    print(
+        f"    Manual test: expected shift (2.5, -1.8), got ({manual_shifts_x[0]:.1f}, {manual_shifts_y[0]:.1f})"
+    )
 
     try:
         # Debug: Print test data statistics
-        print(f"    Test data: {len(frame_locs)} frame locs, {len(ref_locs)} ref locs")
-        print(f"    Frame center: ({np.mean(frame_x):.1f}, {np.mean(frame_y):.1f})")
+        print(
+            f"    Test data: {len(frame_locs)} frame locs, {len(ref_locs)} ref locs"
+        )
+        print(
+            f"    Frame center: ({np.mean(frame_x):.1f}, {np.mean(frame_y):.1f})"
+        )
         print(f"    Ref center: ({np.mean(ref_x):.1f}, {np.mean(ref_y):.1f})")
-        print(f"    Expected center shift: ({np.mean(ref_x) - np.mean(frame_x):.3f}, {np.mean(ref_y) - np.mean(frame_y):.3f})")
+        print(
+            f"    Expected center shift: ({np.mean(ref_x) - np.mean(frame_x):.3f}, {np.mean(ref_y) - np.mean(frame_y):.3f})"
+        )
 
         # Test Numba implementation
-        numba_shift_x, numba_shift_y, numba_info = _compute_rsso_shift_numba_optimized(
+        (
+            numba_shift_x,
+            numba_shift_y,
+            numba_info,
+        ) = _compute_rsso_shift_numba_optimized(
             ref_locs, frame_locs, max_shift_pixels
         )
 
@@ -464,28 +527,49 @@ def _validate_numba_implementation():
 
         # Debug: Print number of pairs processed
         if numba_info:
-            print(f"    Numba processed {numba_info.get('total_pairs', 'unknown')} pairs")
-            print(f"    Numba histogram peak: {numba_info.get('peak_value', 'unknown')}")
+            print(
+                f"    Numba processed {numba_info.get('total_pairs', 'unknown')} pairs"
+            )
+            print(
+                f"    Numba histogram peak: {numba_info.get('peak_value', 'unknown')}"
+            )
         print(f"    Max shift limit: {max_shift_pixels} pixels")
 
         # Test with identical small dataset to isolate the difference
         print(f"    Testing with identical subset...")
         small_frame = frame_locs[:10]  # First 10 points
-        small_ref = ref_locs[:20]      # First 20 points
+        small_ref = ref_locs[:20]  # First 20 points
 
-        small_numba_x, small_numba_y, small_numba_info = _compute_rsso_shift_numba_optimized(
+        (
+            small_numba_x,
+            small_numba_y,
+            small_numba_info,
+        ) = _compute_rsso_shift_numba_optimized(
             small_ref, small_frame, max_shift_pixels
         )
-        small_std_x, small_std_y, _, small_std_info = _calculate_pairwise_shift(
+        (
+            small_std_x,
+            small_std_y,
+            _,
+            small_std_info,
+        ) = _calculate_pairwise_shift(
             small_ref, small_frame, max_shift_pixels, plot_histogram=False
         )
 
         if small_numba_x is not None and small_std_x is not None:
             small_diff_x = abs(small_numba_x - small_std_x)
             small_diff_y = abs(small_numba_y - small_std_y)
-            small_numba_pairs = small_numba_info.get('total_pairs', 0) if small_numba_info else 0
-            print(f"    Small test: Numba ({small_numba_x:.3f}, {small_numba_y:.3f}), Standard ({small_std_x:.3f}, {small_std_y:.3f})")
-            print(f"    Small test diff: ({small_diff_x:.3f}, {small_diff_y:.3f}), pairs: {small_numba_pairs}")
+            small_numba_pairs = (
+                small_numba_info.get("total_pairs", 0)
+                if small_numba_info
+                else 0
+            )
+            print(
+                f"    Small test: Numba ({small_numba_x:.3f}, {small_numba_y:.3f}), Standard ({small_std_x:.3f}, {small_std_y:.3f})"
+            )
+            print(
+                f"    Small test diff: ({small_diff_x:.3f}, {small_diff_y:.3f}), pairs: {small_numba_pairs}"
+            )
         else:
             print(f"    Small test failed - one implementation returned None")
 
@@ -497,23 +581,39 @@ def _validate_numba_implementation():
             tolerance = 1.0  # pixels (temporarily relaxed for debugging)
 
             # Debug output for troubleshooting
-            print(f"    Debug: True shift was ({true_shift_x:.3f}, {true_shift_y:.3f})")
-            print(f"    Standard: ({std_shift_x:.3f}, {std_shift_y:.3f}), error=({abs(std_shift_x-true_shift_x):.3f}, {abs(std_shift_y-true_shift_y):.3f})")
-            print(f"    Numba:    ({numba_shift_x:.3f}, {numba_shift_y:.3f}), error=({abs(numba_shift_x-true_shift_x):.3f}, {abs(numba_shift_y-true_shift_y):.3f})")
+            print(
+                f"    Debug: True shift was ({true_shift_x:.3f}, {true_shift_y:.3f})"
+            )
+            print(
+                f"    Standard: ({std_shift_x:.3f}, {std_shift_y:.3f}), error=({abs(std_shift_x-true_shift_x):.3f}, {abs(std_shift_y-true_shift_y):.3f})"
+            )
+            print(
+                f"    Numba:    ({numba_shift_x:.3f}, {numba_shift_y:.3f}), error=({abs(numba_shift_x-true_shift_x):.3f}, {abs(numba_shift_y-true_shift_y):.3f})"
+            )
 
             if numba_info:
-                print(f"    Numba pairs processed: {numba_info.get('total_pairs', 'unknown')}")
+                print(
+                    f"    Numba pairs processed: {numba_info.get('total_pairs', 'unknown')}"
+                )
 
             if diff_x < tolerance and diff_y < tolerance:
-                print(f"    Numba validation PASSED: shifts agree within {tolerance} pixels")
-                if numba_info and 'timing' in numba_info:
-                    print(f"    Numba computation time: {numba_info['timing']['total']:.4f}s")
+                print(
+                    f"    Numba validation PASSED: shifts agree within {tolerance} pixels"
+                )
+                if numba_info and "timing" in numba_info:
+                    print(
+                        f"    Numba computation time: {numba_info['timing']['total']:.4f}s"
+                    )
                 return True
             else:
-                print(f"    Numba validation FAILED: shifts differ by ({diff_x:.3f}, {diff_y:.3f}) pixels")
+                print(
+                    f"    Numba validation FAILED: shifts differ by ({diff_x:.3f}, {diff_y:.3f}) pixels"
+                )
                 return False
         else:
-            print("    Numba validation FAILED: one or both implementations returned None")
+            print(
+                "    Numba validation FAILED: one or both implementations returned None"
+            )
             return False
 
     except Exception as e:
@@ -522,7 +622,12 @@ def _validate_numba_implementation():
 
 
 def _estimate_subsampling_uncertainty(
-    frame_locs, reference_dataset, max_shift, subsampling_fraction, n_trials=3, enable_numba_optimization=True
+    frame_locs,
+    reference_dataset,
+    max_shift,
+    subsampling_fraction,
+    n_trials=3,
+    enable_numba_optimization=True,
 ):
     """Estimate uncertainty added by subsampling via multiple subset trials
 
@@ -568,7 +673,11 @@ def _estimate_subsampling_uncertainty(
         # Calculate RSSO shift with this subset
         if enable_numba_optimization:
             # Use Numba-optimized RSSO computation
-            shift_x, shift_y, uncertainty_info = _compute_rsso_shift_numba_optimized(
+            (
+                shift_x,
+                shift_y,
+                uncertainty_info,
+            ) = _compute_rsso_shift_numba_optimized(
                 subset_dataset, frame_locs, max_shift
             )
         else:
@@ -655,11 +764,14 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
         # Skip frames with insufficient localizations
         if len(frame_locs) < min_locs_per_frame:
-            logger.debug(f"Too few locs in frame group {target_frames}: {len(frame_locs)} < {min_locs_per_frame}")
+            logger.debug(
+                f"Too few locs in frame group {target_frames}: {len(frame_locs)} < {min_locs_per_frame}"
+            )
             return (frame_indices, None, None, None, None, 0.0, 0.0, None)
 
         # Create dataset by excluding all target frames
         from scipy.spatial import cKDTree
+
         if not isinstance(reference_dataset, cKDTree):
             dataset_mask = ~np.isin(reference_dataset["frame"], target_frames)
             dataset_locs = reference_dataset[dataset_mask]
@@ -669,7 +781,9 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             len_dataset = reference_dataset.n
 
         if len_dataset == 0:
-            logger.debug(f"No locs left in reference after masking out frame group {target_frames}")
+            logger.debug(
+                f"No locs left in reference after masking out frame group {target_frames}"
+            )
             return (frame_indices, None, None, None, None, 0.0, 0.0, None)
 
         # Choose computation method based on uncertainty estimation setting
@@ -694,11 +808,16 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         else:
             # Standard single computation (faster)
             import time
+
             start_time = time.time()
 
             if enable_numba_optimization:
                 # Use Numba-optimized RSSO computation
-                shift_x, shift_y, numba_info = _compute_rsso_shift_numba_optimized(
+                (
+                    shift_x,
+                    shift_y,
+                    numba_info,
+                ) = _compute_rsso_shift_numba_optimized(
                     dataset_locs, frame_locs, max_shift
                 )
                 uncertainty_info = numba_info if numba_info is not None else {}
@@ -706,8 +825,11 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             else:
                 # Use standard RSSO computation
                 shift_x, shift_y, _, std_info = _calculate_pairwise_shift(
-                    dataset_locs, frame_locs, max_shift, plot_histogram=False,
-                    remove_zeroshift=True
+                    dataset_locs,
+                    frame_locs,
+                    max_shift,
+                    plot_histogram=False,
+                    remove_zeroshift=True,
                 )
                 uncertainty_info = std_info if std_info is not None else {}
                 computation_type = "Standard"
@@ -782,6 +904,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 # Main computation function
 # ==============================================================================
 
+
 def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     """Compute iterative RSSO-based drift correction
     
@@ -813,15 +936,15 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     from picasso import io
     import matplotlib.pyplot as plt
     import matplotlib.colors as mcolors
-    
+
     # Configure OpenMP
     _configure_openmp_for_multiprocessing()
-    
+
     # Extract parameters with defaults
     max_frames = parameters.get("max_frames", np.inf)
     logger.debug(f"Cropping data to {max_frames} for debug reasons")
     locs = locs[locs["frame"] < max_frames]
-    
+
     ton = parameters["ton"]
     toff = parameters["toff"]
     max_shift = parameters["max_shift"]
@@ -830,7 +953,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     convergence_threshold = parameters.get("convergence_threshold", 0.1)
     save_locs = parameters.get("save_locs", True)
     plot_drift = parameters.get("plot_drift", True)
-    
+
     # Memory management parameters
     chunk_size = parameters.get("chunk_size", 100)
     memory_limit_gb = parameters.get("memory_limit_gb", 8.0)
@@ -840,39 +963,47 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         if enable_multiprocessing
         else 1
     )
-    
+
     # Check for potential OpenMP conflicts
     if enable_multiprocessing and n_processes > 1:
         print("  Configuring multiprocessing environment...")
         print("  Note: OpenMP threading disabled to avoid fork() conflicts")
-    
+
     # Performance optimization parameters
     subsampling_fraction = parameters.get("subsampling_fraction", 0.1)
-    enable_uncertainty_estimation = parameters.get("enable_uncertainty_estimation", True)
+    enable_uncertainty_estimation = parameters.get(
+        "enable_uncertainty_estimation", True
+    )
     n_uncertainty_trials = parameters.get("n_uncertainty_trials", 3)
     adaptive_subsampling = parameters.get("adaptive_subsampling", False)
     target_uncertainty_nm = parameters.get("target_uncertainty_nm", 0.05)
-    
+
     # Progressive subsampling parameters
-    final_iteration_full_dataset = parameters.get("final_iteration_full_dataset", True)
+    final_iteration_full_dataset = parameters.get(
+        "final_iteration_full_dataset", True
+    )
     progressive_subsampling = parameters.get("progressive_subsampling", False)
-    enable_numba_optimization = parameters.get("enable_numba_optimization", True)
+    enable_numba_optimization = parameters.get(
+        "enable_numba_optimization", True
+    )
     progressive_subsampling_schedule = parameters.get(
         "progressive_subsampling_schedule", [0.05, 0.1, 0.25, 0.5, 1.0]
     )
-    
+
     # Analysis parameters
     confidence_threshold = parameters.get("confidence_threshold", 0.8)
-    outlier_detection_enabled = parameters.get("outlier_detection_enabled", True)
+    outlier_detection_enabled = parameters.get(
+        "outlier_detection_enabled", True
+    )
     outlier_z_threshold = parameters.get("outlier_z_threshold", 3.5)
     min_signal_to_noise = parameters.get("min_signal_to_noise", 0.5)
     windowing_enabled = parameters.get("windowing_enabled", True)
     window_size_range = parameters.get("window_size_range", (3, 20))
-    
+
     # Monitor initial memory usage
     process = psutil.Process()
     initial_memory_gb = process.memory_info().rss / (1024 ** 3)
-    
+
     logger.debug(
         f"Iterative RSSO undrift: max_iterations={max_iterations}, "
         f"convergence_threshold={convergence_threshold:.3f} nm, chunk_size={chunk_size}"
@@ -885,16 +1016,18 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             f"Progressive subsampling enabled: {progressive_subsampling_schedule}"
         )
     else:
-        logger.debug(f"Fixed subsampling: {subsampling_fraction:.1%} of dataset")
-    
+        logger.debug(
+            f"Fixed subsampling: {subsampling_fraction:.1%} of dataset"
+        )
+
     logger.debug(
         f"Uncertainty estimation: {enable_uncertainty_estimation}, final iteration full dataset: {final_iteration_full_dataset}"
     )
     logger.debug(f"Initial memory usage: {initial_memory_gb:.2f} GB")
-    
+
     # Initialize results dictionary
     results = {}
-    
+
     # Get frame range and ensure we have data
     if len(locs) == 0:
         # Handle empty dataset
@@ -905,10 +1038,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         results["total_drift"] = 0.0
         results["mean_drift_quality"] = 0.0
         return locs, drift, results
-    
+
     frames = np.arange(locs["frame"].min(), locs["frame"].max() + 1)
     n_frames = len(frames)
-    
+
     # Initialize arrays for iterative approach
     drift_x = np.zeros(n_frames)  # Total drift per frame
     drift_y = np.zeros(n_frames)
@@ -937,7 +1070,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         logger.debug(
             f"WARNING: Estimated memory ({estimated_memory_gb:.2f} GB) exceeds limit ({memory_limit_gb:.1f} GB)"
         )
-        logger.debug("Consider reducing chunk_size or increasing memory_limit_gb")
+        logger.debug(
+            "Consider reducing chunk_size or increasing memory_limit_gb"
+        )
 
     # Use in-place updates instead of copying (major memory saving)
     # No more: current_locs = self.locs.copy()
@@ -953,9 +1088,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
     # Save original localizations if requested
     if save_locs:
-        fp_locs = os.path.join(
-            results_folder, "locs_original_input.hdf5"
-        )
+        fp_locs = os.path.join(results_folder, "locs_original_input.hdf5")
         io.save_locs(fp_locs, locs, info)
 
     # Start iterative refinement loop
@@ -964,7 +1097,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
     for iteration in range(max_iterations):
         logger.debug(f"  Iteration {iteration + 1}/{max_iterations}")
-        logger.debug(f"    Numba optimization: {'enabled' if enable_numba_optimization else 'disabled'}")
+        logger.debug(
+            f"    Numba optimization: {'enabled' if enable_numba_optimization else 'disabled'}"
+        )
 
         # Monitor memory usage during iteration
         current_memory_gb = process.memory_info().rss / (1024 ** 3)
@@ -978,10 +1113,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             )
 
         # Determine subsampling fraction for this iteration
-        if (
-            final_iteration_full_dataset
-            and iteration == max_iterations - 1
-        ):
+        if final_iteration_full_dataset and iteration == max_iterations - 1:
             # Final iteration: always use full dataset for maximum accuracy
             current_subsampling_fraction = 1.0
             logger.debug(f"    Final iteration: using full dataset (100%)")
@@ -1013,9 +1145,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         # OPTIMIZATION: Create reference dataset for this iteration
         if current_subsampling_fraction < 1.0:
-            np.random.seed(
-                42 + iteration
-            )  # Different subset each iteration
+            np.random.seed(42 + iteration)  # Different subset each iteration
             n_reference = max(
                 1000, int(len(current_locs) * current_subsampling_fraction)
             )
@@ -1039,8 +1169,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         if not enable_numba_optimization:
             from scipy.spatial import cKDTree
+
             reference_dataset = cKDTree(
-                np.column_stack([reference_dataset.x, reference_dataset.y]))
+                np.column_stack([reference_dataset.x, reference_dataset.y])
+            )
 
         # Process frames in chunks using same reference dataset
         logger.debug(
@@ -1075,24 +1207,34 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             )
 
             # Evaluate frame sizes and create frame groups to ensure min_locs_per_frame
-            frame_groups = []  # List of (frame_indices, combined_frame_numbers)
+            frame_groups = (
+                []
+            )  # List of (frame_indices, combined_frame_numbers)
             current_group = []
             current_locs_count = 0
 
             for frame_idx in chunk_frames:
                 frame_number = frames[frame_idx]
-                frame_locs_count = np.sum(current_locs["frame"] == frame_number)
+                frame_locs_count = np.sum(
+                    current_locs["frame"] == frame_number
+                )
 
                 current_group.append(frame_idx)
                 current_locs_count += frame_locs_count
 
                 # If we have enough locs or this is the last frame in chunk, finalize group
-                if (current_locs_count >= min_locs_per_frame or
-                    frame_idx == chunk_frames[-1]):
+                if (
+                    current_locs_count >= min_locs_per_frame
+                    or frame_idx == chunk_frames[-1]
+                ):
 
                     # Get all frame numbers in this group
-                    group_frame_numbers = [frames[idx] for idx in current_group]
-                    frame_groups.append((current_group.copy(), group_frame_numbers))
+                    group_frame_numbers = [
+                        frames[idx] for idx in current_group
+                    ]
+                    frame_groups.append(
+                        (current_group.copy(), group_frame_numbers)
+                    )
 
                     # logger.debug(
                     #     f"        Created frame group: indices {current_group} "
@@ -1107,7 +1249,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             chunk_frame_data = []
             for group_indices, group_frame_numbers in frame_groups:
                 # Extract frame localizations from reference dataset (combine multiple frames)
-                frame_mask = np.isin(current_locs["frame"], group_frame_numbers)
+                frame_mask = np.isin(
+                    current_locs["frame"], group_frame_numbers
+                )
                 frame_locs = current_locs[frame_mask]
 
                 frame_data = (
@@ -1134,10 +1278,16 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                             _compute_frame_to_reference_shift_optimized,
                             chunk_frame_data,
                         )
-                    print(f"    ✓ Parallel processing successful with {n_processes} processes")
+                    print(
+                        f"    ✓ Parallel processing successful with {n_processes} processes"
+                    )
                 except (OSError, RuntimeError, AttributeError) as e:
-                    print(f"    ⚠ Multiprocessing failed ({e}), falling back to sequential processing")
-                    enable_multiprocessing = False  # Disable for remaining chunks
+                    print(
+                        f"    ⚠ Multiprocessing failed ({e}), falling back to sequential processing"
+                    )
+                    enable_multiprocessing = (
+                        False  # Disable for remaining chunks
+                    )
                     chunk_results = [
                         _compute_frame_to_reference_shift_optimized(frame_data)
                         for frame_data in chunk_frame_data
@@ -1166,7 +1316,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 # Collect performance statistics
                 if performance_info and "computation_time" in performance_info:
                     comp_time = performance_info["computation_time"]
-                    comp_type = performance_info.get("computation_type", "Unknown")
+                    comp_type = performance_info.get(
+                        "computation_type", "Unknown"
+                    )
 
                     if comp_type == "Numba-optimized":
                         numba_computation_times.append(comp_time)
@@ -1182,8 +1334,8 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         frame_shifts_y[frame_idx] = shift_y
                         new_uncertainty_x[frame_idx] = uncertainty_x_val
                         new_uncertainty_y[frame_idx] = uncertainty_y_val
-                        new_sigma_x[frame_idx] = performance_info['sigma_x']
-                        new_sigma_y[frame_idx] = performance_info['sigma_y']
+                        new_sigma_x[frame_idx] = performance_info["sigma_x"]
+                        new_sigma_y[frame_idx] = performance_info["sigma_y"]
                         new_confidence[frame_idx] = confidence_val
                         new_quality[frame_idx] = quality_val
                         valid_measurements += 1
@@ -1199,7 +1351,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         new_sigma_x *= pixelsize
         new_sigma_y *= pixelsize
 
-        logger.debug(f"    Valid measurements: {valid_measurements}/{n_frames}")
+        logger.debug(
+            f"    Valid measurements: {valid_measurements}/{n_frames}"
+        )
 
         # Report subsampling performance
         if current_subsampling_fraction < 1.0:
@@ -1251,9 +1405,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 # For low-confidence frames, use windowed averaging (simplified approach)
                 min_window, max_window = window_size_range
                 for frame_idx in np.where(low_confidence_mask)[0]:
-                    if (
-                        frame_idx > 0
-                    ):  # Use previous frame's shift as fallback
+                    if frame_idx > 0:  # Use previous frame's shift as fallback
                         frame_shifts_x[frame_idx] = (
                             frame_shifts_x[frame_idx - 1] * 0.5
                         )
@@ -1319,9 +1471,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             )
             rms_change_x = np.sqrt(np.mean((drift_x - prev_drift_x) ** 2))
             rms_change_y = np.sqrt(np.mean((drift_y - prev_drift_y) ** 2))
-            convergence_rms = np.sqrt(
-                rms_change_x ** 2 + rms_change_y ** 2
-            )
+            convergence_rms = np.sqrt(rms_change_x ** 2 + rms_change_y ** 2)
 
             logger.debug(f"    RMS change: {convergence_rms:.3f} nm")
 
@@ -1333,9 +1483,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         else:
             rms_change_x = np.sqrt(np.mean((drift_x) ** 2))
             rms_change_y = np.sqrt(np.mean((drift_y) ** 2))
-            convergence_rms = np.sqrt(
-                rms_change_x ** 2 + rms_change_y ** 2
-            )
+            convergence_rms = np.sqrt(rms_change_x ** 2 + rms_change_y ** 2)
 
             logger.debug(f"    RMS drift: {convergence_rms:.3f} nm")
 
@@ -1372,18 +1520,28 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         if enable_numba_optimization and numba_computation_times:
             avg_numba_time = np.mean(numba_computation_times)
             total_numba_time = np.sum(numba_computation_times)
-            logger.debug(f"    Numba computations: {n_numba_computations}, avg {avg_numba_time:.4f}s, total {total_numba_time:.1f}s")
+            logger.debug(
+                f"    Numba computations: {n_numba_computations}, avg {avg_numba_time:.4f}s, total {total_numba_time:.1f}s"
+            )
 
             if standard_computation_times:
                 avg_standard_time = np.mean(standard_computation_times)
                 total_standard_time = np.sum(standard_computation_times)
-                speedup = avg_standard_time / avg_numba_time if avg_numba_time > 0 else 0
-                logger.debug(f"    Standard computations: {n_standard_computations}, avg {avg_standard_time:.4f}s, total {total_standard_time:.1f}s")
+                speedup = (
+                    avg_standard_time / avg_numba_time
+                    if avg_numba_time > 0
+                    else 0
+                )
+                logger.debug(
+                    f"    Standard computations: {n_standard_computations}, avg {avg_standard_time:.4f}s, total {total_standard_time:.1f}s"
+                )
                 logger.debug(f"    Numba speedup: {speedup:.1f}x")
         elif not enable_numba_optimization and standard_computation_times:
             avg_standard_time = np.mean(standard_computation_times)
             total_standard_time = np.sum(standard_computation_times)
-            logger.debug(f"    Standard computations: {n_standard_computations}, avg {avg_standard_time:.4f}s, total {total_standard_time:.1f}s")
+            logger.debug(
+                f"    Standard computations: {n_standard_computations}, avg {avg_standard_time:.4f}s, total {total_standard_time:.1f}s"
+            )
 
     # Finalize results
     n_iterations = len(iteration_history)
@@ -1444,13 +1602,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         results["estimated_avg_speedup"] = avg_speedup
     else:
         results["estimated_speedup"] = (
-            1.0 / subsampling_fraction
-            if subsampling_fraction < 1.0
-            else 1.0
+            1.0 / subsampling_fraction if subsampling_fraction < 1.0 else 1.0
         )
-    results[
-        "uncertainty_estimation_enabled"
-    ] = enable_uncertainty_estimation
+    results["uncertainty_estimation_enabled"] = enable_uncertainty_estimation
     if enable_uncertainty_estimation:
         valid_uncertainties = uncertainty_x[uncertainty_x > 0]
         if len(valid_uncertainties) > 0:
@@ -1501,56 +1655,72 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         # Define colors for iterations (gradient from light to dark)
         if len(iteration_history) > 1:
-            colors_x = plt.cm.Blues(np.linspace(0.3, 1.0, len(iteration_history)))
-            colors_y = plt.cm.Reds(np.linspace(0.3, 1.0, len(iteration_history)))
+            colors_x = plt.cm.Blues(
+                np.linspace(0.3, 1.0, len(iteration_history))
+            )
+            colors_y = plt.cm.Reds(
+                np.linspace(0.3, 1.0, len(iteration_history))
+            )
         else:
-            colors_x = ['blue']
-            colors_y = ['red']
+            colors_x = ["blue"]
+            colors_y = ["red"]
 
         # Plot 1: X drift - all iterations
         for i, history in enumerate(iteration_history):
-            alpha = 0.4 if i < len(iteration_history) - 1 else 1.0  # Final iteration is solid
+            alpha = (
+                0.4 if i < len(iteration_history) - 1 else 1.0
+            )  # Final iteration is solid
             linewidth = 1.0 if i < len(iteration_history) - 1 else 2.0
-            label = f"Iteration {history['iteration']}" if len(iteration_history) > 1 else "X drift"
+            label = (
+                f"Iteration {history['iteration']}"
+                if len(iteration_history) > 1
+                else "X drift"
+            )
 
             ax1.plot(
                 frame_indices,
-                history['drift_x'],
+                history["drift_x"],
                 color=colors_x[i],
                 linewidth=linewidth,
                 alpha=alpha,
-                label=label
+                label=label,
             )
 
         ax1.set_ylabel("X Drift (nm)")
         ax1.set_title(f"X Drift Evolution ({n_iterations} iterations)")
         ax1.grid(True, alpha=0.3)
         if len(iteration_history) > 1:
-            ax1.legend(fontsize=8, loc='best')
+            ax1.legend(fontsize=8, loc="best")
 
         # Plot 2: Y drift - all iterations
         for i, history in enumerate(iteration_history):
             alpha = 0.4 if i < len(iteration_history) - 1 else 1.0
             linewidth = 1.0 if i < len(iteration_history) - 1 else 2.0
-            label = f"Iteration {history['iteration']}" if len(iteration_history) > 1 else "Y drift"
+            label = (
+                f"Iteration {history['iteration']}"
+                if len(iteration_history) > 1
+                else "Y drift"
+            )
 
             ax2.plot(
                 frame_indices,
-                history['drift_y'],
+                history["drift_y"],
                 color=colors_y[i],
                 linewidth=linewidth,
                 alpha=alpha,
-                label=label
+                label=label,
             )
 
         ax2.set_ylabel("Y Drift (nm)")
         ax2.set_title(f"Y Drift Evolution ({n_iterations} iterations)")
         ax2.grid(True, alpha=0.3)
         if len(iteration_history) > 1:
-            ax2.legend(fontsize=8, loc='best')
+            ax2.legend(fontsize=8, loc="best")
 
         # Plot 3: Final X drift with confidence intervals
-        ax3.plot(frame_indices, drift_x, "b-", linewidth=2, label="Final X drift")
+        ax3.plot(
+            frame_indices, drift_x, "b-", linewidth=2, label="Final X drift"
+        )
 
         # Add confidence intervals if available
         if not np.all(np.isnan(uncertainty_x)) and np.any(uncertainty_x > 0):
@@ -1560,17 +1730,17 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 drift_x + uncertainty_x,
                 alpha=0.3,
                 color="blue",
-                label="±1σ uncertainty"
+                label="±1σ uncertainty",
             )
 
             # Add 2σ confidence interval if uncertainty is meaningful
             ax3.fill_between(
                 frame_indices,
-                drift_x - 2*uncertainty_x,
-                drift_x + 2*uncertainty_x,
+                drift_x - 2 * uncertainty_x,
+                drift_x + 2 * uncertainty_x,
                 alpha=0.15,
                 color="blue",
-                label="±2σ confidence"
+                label="±2σ confidence",
             )
 
         ax3.set_xlabel("Frame")
@@ -1580,7 +1750,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         ax3.legend(fontsize=8)
 
         # Plot 4: Final Y drift with confidence intervals
-        ax4.plot(frame_indices, drift_y, "r-", linewidth=2, label="Final Y drift")
+        ax4.plot(
+            frame_indices, drift_y, "r-", linewidth=2, label="Final Y drift"
+        )
 
         # Add confidence intervals if available
         if not np.all(np.isnan(uncertainty_y)) and np.any(uncertainty_y > 0):
@@ -1590,17 +1762,17 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 drift_y + uncertainty_y,
                 alpha=0.3,
                 color="red",
-                label="±1σ uncertainty"
+                label="±1σ uncertainty",
             )
 
             # Add 2σ confidence interval if uncertainty is meaningful
             ax4.fill_between(
                 frame_indices,
-                drift_y - 2*uncertainty_y,
-                drift_y + 2*uncertainty_y,
+                drift_y - 2 * uncertainty_y,
+                drift_y + 2 * uncertainty_y,
                 alpha=0.15,
                 color="red",
-                label="±2σ confidence"
+                label="±2σ confidence",
             )
 
         ax4.set_xlabel("Frame")
@@ -1611,9 +1783,13 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         plt.tight_layout()
 
-        # Save drift plot
+        # Save drift plot with random code for unique filename
+        import random
+        import string
+
+        rcode = "".join(random.choices(string.ascii_letters, k=6))
         drift_plot_path = os.path.join(
-            results_folder, "drift_rsso_iterative.png"
+            results_folder, f"drift_rsso_iterative_{rcode}.png"
         )
         plt.savefig(drift_plot_path, dpi=300, bbox_inches="tight")
         plt.close()
@@ -1621,14 +1797,25 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         # Create convergence and statistics plots if multiple iterations
         if n_iterations > 1:
-            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
+            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(
+                2, 2, figsize=(14, 10)
+            )
 
             iterations = [h["iteration"] for h in iteration_history]
             rms_values = [h["convergence_rms"] for h in iteration_history]
-            valid_measurements = [h["valid_measurements"] for h in iteration_history]
+            valid_measurements = [
+                h["valid_measurements"] for h in iteration_history
+            ]
 
             # Plot 1: RMS Convergence
-            ax1.plot(iterations, rms_values, "g-o", linewidth=2, markersize=8, label="RMS Change")
+            ax1.plot(
+                iterations,
+                rms_values,
+                "g-o",
+                linewidth=2,
+                markersize=8,
+                label="RMS Change",
+            )
             ax1.axhline(
                 y=convergence_threshold,
                 color="r",
@@ -1640,11 +1827,17 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             ax1.set_title("RSSO Convergence History")
             ax1.grid(True, alpha=0.3)
             ax1.legend()
-            ax1.set_yscale('log')  # Log scale often better for convergence
+            ax1.set_yscale("log")  # Log scale often better for convergence
 
             # Plot 2: Valid measurements per iteration
             all_iterations = [h["iteration"] for h in iteration_history]
-            ax2.plot(all_iterations, valid_measurements, "b-s", linewidth=2, markersize=6)
+            ax2.plot(
+                all_iterations,
+                valid_measurements,
+                "b-s",
+                linewidth=2,
+                markersize=6,
+            )
             ax2.set_xlabel("Iteration")
             ax2.set_ylabel("Valid Measurements")
             ax2.set_title("Valid Frame Measurements per Iteration")
@@ -1656,8 +1849,8 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             mean_sigma_x = []
             mean_sigma_y = []
             for hist in iteration_history:
-                unc_x = hist.get('uncertainty_x', np.array([]))
-                unc_y = hist.get('uncertainty_y', np.array([]))
+                unc_x = hist.get("uncertainty_x", np.array([]))
+                unc_y = hist.get("uncertainty_y", np.array([]))
                 if len(unc_x) > 0 and not np.all(np.isnan(unc_x)):
                     mean_uncertainty_x.append(np.nanmean(unc_x))
                 else:
@@ -1667,8 +1860,8 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 else:
                     mean_uncertainty_y.append(np.nan)
 
-                sig_x = hist.get('sigma_x', np.array([]))
-                sig_y = hist.get('sigma_y', np.array([]))
+                sig_x = hist.get("sigma_x", np.array([]))
+                sig_y = hist.get("sigma_y", np.array([]))
                 if len(sig_x) > 0 and not np.all(np.isnan(sig_x)):
                     mean_sigma_x.append(np.nanmean(sig_x))
                 else:
@@ -1678,13 +1871,41 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 else:
                     mean_sigma_y.append(np.nan)
 
-            line_ux, _ = ax3.plot(all_iterations, mean_uncertainty_x, "b-o", label="X fit uncertainty", linewidth=2, markersize=6)
-            line_uy, _ = ax3.plot(all_iterations, mean_uncertainty_y, "r-o", label="Y fit uncertainty", linewidth=2, markersize=6)
+            line_ux, _ = ax3.plot(
+                all_iterations,
+                mean_uncertainty_x,
+                "b-o",
+                label="X fit uncertainty",
+                linewidth=2,
+                markersize=6,
+            )
+            line_uy, _ = ax3.plot(
+                all_iterations,
+                mean_uncertainty_y,
+                "r-o",
+                label="Y fit uncertainty",
+                linewidth=2,
+                markersize=6,
+            )
             ax3.set_xlabel("Iteration")
             ax3.set_ylabel("Mean Uncertainty from fit (nm)")
             ax3_1 = ax3.twinx()
-            line_sx, _ = ax3_1.plot(all_iterations, mean_sigma_x, "b:x", label="X RSSO sigma", linewidth=2, markersize=6)
-            line_sy, _ = ax3_1.plot(all_iterations, mean_sigma_y, "r:x", label="Y RSSO sigma", linewidth=2, markersize=6)
+            line_sx, _ = ax3_1.plot(
+                all_iterations,
+                mean_sigma_x,
+                "b:x",
+                label="X RSSO sigma",
+                linewidth=2,
+                markersize=6,
+            )
+            line_sy, _ = ax3_1.plot(
+                all_iterations,
+                mean_sigma_y,
+                "r:x",
+                label="Y RSSO sigma",
+                linewidth=2,
+                markersize=6,
+            )
             ax3_1.set_ylabel("Mean RSSO Sigma (nm)")
             ax3.set_title("Uncertainty Evolution")
             ax3.set_yscale("log")
@@ -1696,13 +1917,20 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             # Plot 4: Mean confidence evolution
             mean_confidence = []
             for hist in iteration_history:
-                conf = hist.get('confidence', np.array([]))
+                conf = hist.get("confidence", np.array([]))
                 if len(conf) > 0 and not np.all(np.isnan(conf)):
                     mean_confidence.append(np.nanmean(conf))
                 else:
                     mean_confidence.append(np.nan)
 
-            ax4.plot(all_iterations, mean_confidence, "purple", marker="D", linewidth=2, markersize=6)
+            ax4.plot(
+                all_iterations,
+                mean_confidence,
+                "purple",
+                marker="D",
+                linewidth=2,
+                markersize=6,
+            )
             ax4.set_xlabel("Iteration")
             ax4.set_ylabel("Mean Confidence")
             ax4.set_title("Confidence Evolution")
@@ -1711,8 +1939,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
             plt.tight_layout()
 
+            rcode = "".join(random.choices(string.ascii_letters, k=6))
             convergence_plot_path = os.path.join(
-                results_folder, "convergence_rsso_iterative.png"
+                results_folder, f"convergence_rsso_iterative_{rcode}.png"
             )
             plt.savefig(convergence_plot_path, dpi=300, bbox_inches="tight")
             plt.close()
@@ -1725,24 +1954,43 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             drift_ranges_x = []
             drift_ranges_y = []
             for hist in iteration_history:
-                drift_x_hist = hist['drift_x']
-                drift_y_hist = hist['drift_y']
+                drift_x_hist = hist["drift_x"]
+                drift_y_hist = hist["drift_y"]
                 # Calculate 95th percentile range (robust measure)
-                range_x = np.percentile(drift_x_hist, 95) - np.percentile(drift_x_hist, 5)
-                range_y = np.percentile(drift_y_hist, 95) - np.percentile(drift_y_hist, 5)
+                range_x = np.percentile(drift_x_hist, 95) - np.percentile(
+                    drift_x_hist, 5
+                )
+                range_y = np.percentile(drift_y_hist, 95) - np.percentile(
+                    drift_y_hist, 5
+                )
                 drift_ranges_x.append(range_x)
                 drift_ranges_y.append(range_y)
 
-            ax.plot(all_iterations, drift_ranges_x, "b-o", label="X drift range (90%ile)", linewidth=2, markersize=6)
-            ax.plot(all_iterations, drift_ranges_y, "r-o", label="Y drift range (90%ile)", linewidth=2, markersize=6)
+            ax.plot(
+                all_iterations,
+                drift_ranges_x,
+                "b-o",
+                label="X drift range (90%ile)",
+                linewidth=2,
+                markersize=6,
+            )
+            ax.plot(
+                all_iterations,
+                drift_ranges_y,
+                "r-o",
+                label="Y drift range (90%ile)",
+                linewidth=2,
+                markersize=6,
+            )
             ax.set_xlabel("Iteration")
             ax.set_ylabel("Drift Range (nm)")
             ax.set_title("Drift Range Evolution (Robustness Assessment)")
             ax.grid(True, alpha=0.3)
             ax.legend()
 
+            rcode = "".join(random.choices(string.ascii_letters, k=6))
             robustness_plot_path = os.path.join(
-                results_folder, "robustness_rsso_iterative.png"
+                results_folder, f"robustness_rsso_iterative_{rcode}.png"
             )
             plt.savefig(robustness_plot_path, dpi=300, bbox_inches="tight")
             plt.close()
@@ -1756,7 +2004,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             print(f"  - Robustness assessment: {robustness_plot_path}")
             print("  Plot features:")
             print("    • Intermediate iterations shown with color gradients")
-            print("    • Final iteration with ±1σ and ±2σ confidence intervals")
+            print(
+                "    • Final iteration with ±1σ and ±2σ confidence intervals"
+            )
             print("    • Convergence history on log scale")
             print("    • Uncertainty and confidence evolution")
             print("    • Drift range evolution for robustness assessment")

@@ -3450,7 +3450,7 @@ class ConfluenceInterface:
         self, page_name, page_id, filename
     ):
         body_update = (
-            f'<ac:image><ri:attachment ri:filename="{filename}" />'
+            f'<ac:image ac:height="350"><ri:attachment ri:filename="{filename}" />'
             + "</ac:image>"
         )
         self.confluence.append_page(
