@@ -3740,6 +3740,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             frame_shifts_y = np.zeros(n_frames)
             new_uncertainty_x = np.zeros(n_frames)
             new_uncertainty_y = np.zeros(n_frames)
+            new_sigma_x = np.zeros(n_frames)
+            new_sigma_y = np.zeros(n_frames)
             new_confidence = np.zeros(n_frames)
             new_quality = np.zeros(n_frames)
             valid_measurements = 0
@@ -3868,6 +3870,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                             frame_shifts_y[frame_idx] = shift_y
                             new_uncertainty_x[frame_idx] = uncertainty_x_val
                             new_uncertainty_y[frame_idx] = uncertainty_y_val
+                            new_sigma_x[frame_idx] = performance_info['sigma_x']
+                            new_sigma_y[frame_idx] = performance_info['sigma_y']
                             new_confidence[frame_idx] = confidence_val
                             new_quality[frame_idx] = quality_val
                             valid_measurements += 1
@@ -3880,6 +3884,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             frame_shifts_y *= pixelsize
             new_uncertainty_x *= pixelsize
             new_uncertainty_y *= pixelsize
+            new_sigma_x *= pixelsize
+            new_sigma_y *= pixelsize
 
             logger.debug(f"    Valid measurements: {valid_measurements}/{n_frames}")
 
@@ -3974,6 +3980,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             drift_y += frame_shifts_y * pixelsize
             uncertainty_x = new_uncertainty_x.copy()
             uncertainty_y = new_uncertainty_y.copy()
+            sigma_x = new_sigma_x.copy()
+            sigma_y = new_sigma_y.copy()
             confidence = new_confidence.copy()
             drift_quality = new_quality.copy()
 
@@ -4033,6 +4041,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     "drift_y": drift_y.copy(),
                     "uncertainty_x": new_uncertainty_x.copy(),
                     "uncertainty_y": new_uncertainty_y.copy(),
+                    "sigma_x": new_sigma_x.copy(),
+                    "sigma_y": new_sigma_y.copy(),
                     "confidence": new_confidence.copy(),
                     "convergence_rms": convergence_rms,
                     "valid_measurements": valid_measurements,
@@ -4343,13 +4353,31 @@ class AutoPicasso(util.AbstractModuleCollection):
                     else:
                         mean_uncertainty_y.append(np.nan)
 
-                ax3.plot(all_iterations, mean_uncertainty_x, "b-o", label="X uncertainty", linewidth=2, markersize=6)
-                ax3.plot(all_iterations, mean_uncertainty_y, "r-o", label="Y uncertainty", linewidth=2, markersize=6)
+                    sig_x = hist.get('sigma_x', np.array([]))
+                    sig_y = hist.get('sigma_y', np.array([]))
+                    if len(sig_x) > 0 and not np.all(np.isnan(sig_x)):
+                        mean_sigma_x.append(np.nanmean(sig_x))
+                    else:
+                        mean_sigma_x.append(np.nan)
+                    if len(sig_y) > 0 and not np.all(np.isnan(sig_y)):
+                        mean_sigma_y.append(np.nanmean(sig_y))
+                    else:
+                        mean_sigma_y.append(np.nan)
+
+                line_ux, _ = ax3.plot(all_iterations, mean_uncertainty_x, "b-o", label="X fit uncertainty", linewidth=2, markersize=6)
+                line_uy, _ = ax3.plot(all_iterations, mean_uncertainty_y, "r-o", label="Y fit uncertainty", linewidth=2, markersize=6)
                 ax3.set_xlabel("Iteration")
-                ax3.set_ylabel("Mean Uncertainty (nm)")
+                ax3.set_ylabel("Mean Uncertainty from fit (nm)")
+                ax3_1 = ax3.twinx()
+                line_sx, _ = ax3_1.plot(all_iterations, mean_sigma_x, "b:x", label="X RSSO sigma", linewidth=2, markersize=6)
+                line_sy, _ = ax3_1.plot(all_iterations, mean_sigma_y, "r:x", label="Y RSSO sigma", linewidth=2, markersize=6)
+                ax3_1.set_ylabel("Mean RSSO Sigma (nm)")
                 ax3.set_title("Uncertainty Evolution")
+                ax3.set_yscale("log")
                 ax3.grid(True, alpha=0.3)
-                ax3.legend()
+                lines = [line_ux, line_uy, line_sx, line_sy]
+                labels = [line.get_label() fo rline in lines]
+                ax3.legend(lines, labels)
 
                 # Plot 4: Mean confidence evolution
                 mean_confidence = []
