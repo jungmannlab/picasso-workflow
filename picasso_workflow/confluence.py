@@ -868,6 +868,8 @@ class ConfluenceReporter(AbstractModuleCollection):
 
         resolution = results.get("resolution_frc_spatial", [np.nan])[0]
         resolution_unsmoothed = results.get("resolution_unsmoothed", np.nan)
+        if isinstance(resolution_unsmoothed, tuple):
+            resolution_unsmoothed = resolution_unsmoothed[0]
         resolution_std = results.get("resolution_std", np.nan)
         n_regions = results.get("n_regions", 0)
         n_regions_total = results.get("n_regions_total", 0)
