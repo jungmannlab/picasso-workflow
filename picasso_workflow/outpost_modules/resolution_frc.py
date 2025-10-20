@@ -1540,7 +1540,7 @@ def compute_frc_spatial(
     # Package results
     results = {
         "resolution": resolution_smoothed,
-        "resolution_unsmoothed": resolution_mean,
+        "resolution_unsmoothed": resolution_mean_fromcurve,
         "resolution_std": resolution_std,
         "resolutions_per_region": resolutions.tolist(),
         "frc_curve_mean": frc_curve_mean,
@@ -1652,23 +1652,24 @@ def create_frc_plot(frc_results, results_folder, threshold=1 / 7):
             color="g",
             linestyle=":",
             linewidth=2,
-            label=f"Resolution (smoothed): {resolution:.1f} nm",
+            # label=f"Resolution (smoothed): {resolution:.1f} nm",
+            label=f"Resolution: {resolution:.1f} nm",
         )
 
-    # Optionally mark unsmoothed resolution if different
-    if (
-        not np.isnan(resolution_unsmoothed)
-        and abs(resolution - resolution_unsmoothed) > 1.0
-    ):
-        resolution_freq_unsmoothed = 1.0 / resolution_unsmoothed
-        ax.axvline(
-            x=resolution_freq_unsmoothed,
-            color="orange",
-            linestyle=":",
-            linewidth=1.5,
-            alpha=0.7,
-            label=f"Resolution (unsmoothed): {resolution_unsmoothed:.1f} nm",
-        )
+    # # Optionally mark unsmoothed resolution if different
+    # if (
+    #     not np.isnan(resolution_unsmoothed)
+    #     and abs(resolution - resolution_unsmoothed) > 1.0
+    # ):
+    #     resolution_freq_unsmoothed = 1.0 / resolution_unsmoothed
+    #     ax.axvline(
+    #         x=resolution_freq_unsmoothed,
+    #         color="orange",
+    #         linestyle=":",
+    #         linewidth=1.5,
+    #         alpha=0.7,
+    #         label=f"Resolution (unsmoothed): {resolution_unsmoothed:.1f} nm",
+    #     )
 
     ax.set_xlabel("Spatial Frequency (1/nm)", fontsize=12)
     ax.set_ylabel("FRC", fontsize=12)

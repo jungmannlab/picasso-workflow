@@ -898,7 +898,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             text += f"""
             <p><strong>Spatial FRC Curve:</strong></p>
             <ac:image ac:align="center" ac:layout="center"
-                ac:original-height="400">
+                ac:height="400">
             <ri:attachment ri:filename="{os.path.basename(fig_frc)}" />
             </ac:image>
             """
