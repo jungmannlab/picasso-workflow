@@ -1369,3 +1369,93 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
     }
 
     return results
+
+
+def create_frc_plot(frc_results, results_folder, threshold=1/7):
+    """Create and save FRC curve plot
+
+    Args:
+        frc_results : dict
+            Results dictionary from compute_frc_spatial containing:
+                - frc_curve_mean : ndarray
+                - frc_curve_smoothed : ndarray
+                - frc_curve_std : ndarray
+                - spatial_frequencies : ndarray
+                - resolution : tuple or float
+                - resolution_unsmoothed : float
+                - n_regions : int
+                - n_regions_x : int
+                - n_regions_y : int
+        results_folder : str
+            Path to folder where plot should be saved
+        threshold : float
+            FRC threshold for resolution cutoff (default: 1/7)
+
+    Returns:
+        plot_path : str
+            Path to saved plot file
+    """
+    import matplotlib.pyplot as plt
+    import os
+
+    # Create FRC curve plot
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Plot mean FRC curve with error band
+    frc_curve_mean = frc_results["frc_curve_mean"]
+    frc_curve_smoothed = frc_results["frc_curve_smoothed"]
+    frc_curve_std = frc_results["frc_curve_std"]
+    spatial_frequencies = frc_results["spatial_frequencies"]
+
+    ax.plot(spatial_frequencies, frc_curve_mean, 'b-', linewidth=1.5,
+            alpha=0.75, label='Mean FRC (unsmoothed)')
+    ax.fill_between(
+        spatial_frequencies,
+        frc_curve_mean - frc_curve_std,
+        frc_curve_mean + frc_curve_std,
+        alpha=0.2, color='blue', label=f'±1 SD ({frc_results["n_regions"]} regions)'
+    )
+
+    # Plot smoothed curve
+    ax.plot(spatial_frequencies, frc_curve_smoothed, 'g-', linewidth=0.5,
+            label='Smoothed FRC')
+
+    # Plot threshold line
+    ax.axhline(y=threshold, color='r', linestyle='--', linewidth=2,
+              label=f'Threshold (1/7)')
+
+    # Mark smoothed resolution
+    resolution = frc_results["resolution"]
+    # Handle both tuple and float return values
+    if isinstance(resolution, tuple):
+        resolution = resolution[0]
+    resolution_unsmoothed = frc_results["resolution_unsmoothed"]
+    if not np.isnan(resolution):
+        resolution_freq = 1.0 / resolution
+        ax.axvline(x=resolution_freq, color='g', linestyle=':', linewidth=2,
+                  label=f'Resolution (smoothed): {resolution:.1f} nm')
+
+    # Optionally mark unsmoothed resolution if different
+    if not np.isnan(resolution_unsmoothed) and abs(resolution - resolution_unsmoothed) > 1.0:
+        resolution_freq_unsmoothed = 1.0 / resolution_unsmoothed
+        ax.axvline(x=resolution_freq_unsmoothed, color='orange', linestyle=':',
+                  linewidth=1.5, alpha=0.7,
+                  label=f'Resolution (unsmoothed): {resolution_unsmoothed:.1f} nm')
+
+    ax.set_xlabel('Spatial Frequency (1/nm)', fontsize=12)
+    ax.set_ylabel('FRC', fontsize=12)
+    n_regions_x = frc_results["n_regions_x"]
+    n_regions_y = frc_results["n_regions_y"]
+    ax.set_title(f'Spatial FRC Analysis ({n_regions_x}×{n_regions_y} regions)', fontsize=14)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim([-0.1, 1.1])
+
+    plt.tight_layout()
+
+    # Save plot
+    plot_path = os.path.join(results_folder, "resolution_frc_spatial.png")
+    plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    return plot_path

@@ -469,47 +469,48 @@ class ConfluenceReporter(AbstractModuleCollection):
         max_uncertainty_x = results.get("max_uncertainty_x", np.nan)
         max_uncertainty_y = results.get("max_uncertainty_y", np.nan)
 
+        # Get iterative RSSO specific metrics
+        n_iterations = results.get("n_iterations", 1)
+        converged = results.get("converged", False)
+        convergence_rms = results.get("convergence_rms", np.nan)
+        subsampling_fraction = results.get("subsampling_fraction", 1.0)
+        mean_uncertainty_x_new = results.get("uncertainty_x-mean", mean_uncertainty_x)
+        mean_uncertainty_y_new = results.get("uncertainty_y-mean", mean_uncertainty_y)
+
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: Undrifting via RSSO
-        (2-stage with confidence analysis)</strong></p>
+        <p><strong>Module {i:02d}: Undrifting via Iterative RSSO</strong></p>
         Summary:
         <ul>
         <li>t<sub>on</sub>: {parameters.get('ton')} frames</li>
         <li>t<sub>off</sub>: {parameters.get('toff')} frames</li>
         <li>Max shift per frame: {parameters.get('max_shift')} pixels</li>
-        <li>Processing chunk size:
-            {parameters.get('processing_chunk_size', 100)} frames</li>
+        <li>Processing chunk size: {parameters.get('chunk_size', 100)} frames</li>
         <li>Min locs per frame: {parameters.get('min_locs_per_frame', 10)}</li>
-        <li>Min locs per block:
-            {parameters.get('min_locs_per_block', 100)}</li>
+        <li>Max iterations: {parameters.get('max_iterations', 5)}</li>
+        <li>Subsampling fraction: {subsampling_fraction:.1%}</li>
+        <li>Numba optimization: {parameters.get('enable_numba_optimization', True)}</li>
+        </ul>
+
+        <p><strong>Convergence Results:</strong></p>
+        <ul>
+        <li><strong>Iterations performed:</strong> {n_iterations}</li>
+        <li><strong>Converged:</strong> {'Yes' if converged else 'No'}</li>
+        <li><strong>Final RMS change:</strong> {convergence_rms:.3f} nm</li>
         </ul>
 
         <p><strong>Drift Results:</strong></p>
         <ul>
-        <li><strong>Coarse drift (t<sub>off</sub>-scale):</strong>
-        X={coarse_drift_x:.2f} nm, Y={coarse_drift_y:.2f} nm</li>
-        <li><strong>Fine drift (frame-scale):</strong>
-        X={fine_drift_x:.2f} nm, Y={fine_drift_y:.2f} nm</li>
-        <li><strong>Total drift:</strong>
-        X={drift_mag_x:.2f} nm, Y={drift_mag_y:.2f} nm</li>
+        <li><strong>Total drift X:</strong> {drift_mag_x:.2f} nm</li>
+        <li><strong>Total drift Y:</strong> {drift_mag_y:.2f} nm</li>
         <li><strong>Total drift magnitude:</strong> {total_drift:.2f} nm</li>
         <li>Mean drift quality: {drift_quality:.1f} measurements/frame</li>
         </ul>
 
-        <p><strong>Confidence Analysis:</strong></p>
+        <p><strong>Uncertainty Analysis:</strong></p>
         <ul>
-        <li><strong>Mean uncertainty:</strong>
-        X={mean_uncertainty_x:.2f} nm, Y={mean_uncertainty_y:.2f} nm</li>
-        <li><strong>Max uncertainty:</strong>
-        X={max_uncertainty_x:.2f} nm, Y={max_uncertainty_y:.2f} nm</li>
-        <li><strong>95% confidence interval:</strong>
-        ±{confidence_95_x:.2f} nm (X), ±{confidence_95_y:.2f} nm (Y)</li>
-        <li><strong>Relative precision:</strong>
-        {(mean_uncertainty_x/drift_mag_x*100 if drift_mag_x > 0 else 0):.1f}%
-        (X),
-        {(mean_uncertainty_y/drift_mag_y*100 if drift_mag_y > 0 else 0):.1f}%
-        (Y)</li>
+        <li><strong>Mean uncertainty X:</strong> {mean_uncertainty_x_new:.3f} nm</li>
+        <li><strong>Mean uncertainty Y:</strong> {mean_uncertainty_y_new:.3f} nm</li>
         </ul>
 
         <ul>
@@ -521,16 +522,46 @@ class ConfluenceReporter(AbstractModuleCollection):
         """
 
         # Add drift plot if available
-        if fp_fig := results.get("fp_fig"):
+        # Try new key first, fall back to legacy key for compatibility
+        drift_plot = results.get("drift_plot") or results.get("fp_fig")
+        if drift_plot:
             try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
+                self.ci.upload_attachment(self.report_page_id, drift_plot)
             except ConfluenceInterfaceError:
                 pass
-            _, fp_fig_name = os.path.split(fp_fig)
+            _, drift_plot_name = os.path.split(drift_plot)
             text += f"""
             <p><strong>Drift Trajectory:</strong></p>
             <ac:image ac:align="center" ac:layout="center">
-            <ri:attachment ri:filename="{fp_fig_name}" />
+            <ri:attachment ri:filename="{drift_plot_name}" />
+            </ac:image>
+            """
+
+        # Add convergence plot if available (for iterative RSSO)
+        if convergence_plot := results.get("convergence_plot"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, convergence_plot)
+            except ConfluenceInterfaceError:
+                pass
+            _, convergence_plot_name = os.path.split(convergence_plot)
+            text += f"""
+            <p><strong>Convergence Analysis:</strong></p>
+            <ac:image ac:align="center" ac:layout="center">
+            <ri:attachment ri:filename="{convergence_plot_name}" />
+            </ac:image>
+            """
+
+        # Add robustness plot if available (for iterative RSSO)
+        if robustness_plot := results.get("robustness_plot"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, robustness_plot)
+            except ConfluenceInterfaceError:
+                pass
+            _, robustness_plot_name = os.path.split(robustness_plot)
+            text += f"""
+            <p><strong>Robustness Assessment:</strong></p>
+            <ac:image ac:align="center" ac:layout="center">
+            <ri:attachment ri:filename="{robustness_plot_name}" />
             </ac:image>
             """
 
@@ -814,6 +845,58 @@ class ConfluenceReporter(AbstractModuleCollection):
             </ac:image>
             """
             self.ci.upload_attachment(self.report_page_id, fig_resolution)
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    @module_decorator
+    def resolution_frc_spatial(
+        self, i, parameters, results, parameter_text, result_text
+    ):
+        """Report spatial FRC resolution analysis results to Confluence"""
+
+        resolution = results.get("resolution_frc_spatial", [np.nan])[0]
+        resolution_unsmoothed = results.get("resolution_unsmoothed", np.nan)
+        resolution_std = results.get("resolution_std", np.nan)
+        n_regions = results.get("n_regions", 0)
+        n_regions_total = results.get("n_regions_total", 0)
+        threshold = results.get("threshold", 1.0 / 7.0)
+
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Resolution Analysis
+        (Spatial FRC)</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Resolution (smoothed): {resolution:.1f} nm</li>
+        <li>Resolution (unsmoothed): {resolution_unsmoothed:.1f} nm</li>
+        <li>Resolution std (across regions): {resolution_std:.1f} nm</li>
+        <li>Valid regions: {n_regions} / {n_regions_total}</li>
+        <li>FRC threshold: {threshold:.3f} (1/7)</li>
+        <li>Render pixel size: {parameters.get('pixelsize_render', 5.0):.1f} nm</li>
+        <li>Region size: {parameters.get('region_size', 10.0):.1f} µm</li>
+        <li>Min locs per region: {parameters.get('min_locs_per_region', 500)}</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        # Add FRC plot if available
+        if fig_frc := results.get("fig_frc"):
+            text += f"""
+            <p><strong>Spatial FRC Curve:</strong></p>
+            <ac:image ac:align="center" ac:layout="center"
+                ac:original-height="400">
+            <ri:attachment ri:filename="{os.path.basename(fig_frc)}" />
+            </ac:image>
+            """
+            self.ci.upload_attachment(self.report_page_id, fig_frc)
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>

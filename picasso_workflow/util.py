@@ -205,6 +205,64 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
+    def resolution_frc_spatial(self):
+        """Calculate resolution using spatial FRC approach
+
+        This method divides the FOV into spatial regions, computes FRC for each
+        region independently, and averages the results. This provides better
+        memory efficiency and statistics through spatial averaging.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with optional keys:
+                    pixelsize_render : float
+                        pixel size for rendered images in nm (default: 5 nm)
+                    smoothing_sigma : float or None
+                        Gaussian smoothing sigma in pixels (default: None)
+                    threshold : float
+                        FRC threshold for resolution cutoff (default: 1/7)
+                    region_size : float
+                        size of each spatial region in micrometers (default: 10.0 µm)
+                    min_locs_per_region : int
+                        minimum localizations per region to process (default: 500)
+                    max_frc_range_nm : float or None
+                        maximum FRC range in nm (default: None = full range)
+                    n_processes : int
+                        number of parallel processes (default: 4)
+                    smoothing_window : float
+                        moving average window size for FRC smoothing in 1/nm
+                        (default: 0.005)
+
+        Results:
+            resolution_frc_spatial : float
+                mean FRC-based resolution in nm (smoothed)
+            resolution_unsmoothed : float
+                mean FRC-based resolution without smoothing
+            resolution_std : float
+                standard deviation across regions
+            n_regions : int
+                number of valid regions processed
+            n_regions_total : int
+                total number of regions attempted
+            frc_curve_mean : ndarray
+                mean FRC curve across regions
+            frc_curve_smoothed : ndarray
+                smoothed FRC curve
+            frc_curve_std : ndarray
+                std of FRC curves across regions
+            spatial_frequencies : ndarray
+                spatial frequency values (1/nm)
+            threshold : float
+                threshold used for resolution cutoff
+            resolutions_per_region : ndarray
+                resolution values for each individual region
+            fig_frc : str
+                path to FRC curve plot
+        """
+
+    @abc.abstractmethod
     def smlm_clusterer(self):
         """Perform clustering using the smlm clusterer"""
         pass
