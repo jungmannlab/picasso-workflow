@@ -5,17 +5,17 @@ Author: Heinrich Grabmayr
 Initial Date: March 7, 2024
 Description: Interaction with Confluence
 """
+import html
 import logging
-import traceback
 import os
+import traceback
+
 import numpy as np
 import pandas as pd
 from atlassian import Confluence as con
 from requests.exceptions import ConnectionError, HTTPError
-import html
 
 from picasso_workflow.util import AbstractModuleCollection
-
 
 logger = logging.getLogger(__name__)
 
@@ -474,8 +474,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         converged = results.get("converged", False)
         convergence_rms = results.get("convergence_rms", np.nan)
         subsampling_fraction = results.get("subsampling_fraction", 1.0)
-        mean_uncertainty_x_new = results.get("uncertainty_x-mean", mean_uncertainty_x)
-        mean_uncertainty_y_new = results.get("uncertainty_y-mean", mean_uncertainty_y)
+        mean_uncertainty_x_new = results.get(
+            "uncertainty_x-mean", mean_uncertainty_x
+        )
+        mean_uncertainty_y_new = results.get(
+            "uncertainty_y-mean", mean_uncertainty_y
+        )
 
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -540,7 +544,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         # Add convergence plot if available (for iterative RSSO)
         if convergence_plot := results.get("convergence_plot"):
             try:
-                self.ci.upload_attachment(self.report_page_id, convergence_plot)
+                self.ci.upload_attachment(
+                    self.report_page_id, convergence_plot
+                )
             except ConfluenceInterfaceError:
                 pass
             _, convergence_plot_name = os.path.split(convergence_plot)
@@ -3411,9 +3417,7 @@ class ConfluenceInterface:
             )
         else:
             status = self.confluence.update_page(
-                page_id=page_id,
-                title=page_name,
-                body=body_update,
+                page_id=page_id, title=page_name, body=body_update,
             )
         return status
 

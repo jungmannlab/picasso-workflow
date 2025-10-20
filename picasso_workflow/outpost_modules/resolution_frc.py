@@ -20,9 +20,10 @@ Algorithm:
 Author: Generated for picasso-workflow
 """
 
+import logging
+
 import numpy as np
 from scipy.ndimage import gaussian_filter
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +53,16 @@ def split_localizations_random(locs, seed=None):
     locs_1 = locs[indices[:split]]
     locs_2 = locs[indices[split:]]
 
-    logger.debug(f"  Split {n} localizations into {len(locs_1)} and {len(locs_2)}")
+    logger.debug(
+        f"  Split {n} localizations into {len(locs_1)} and {len(locs_2)}"
+    )
 
     return locs_1, locs_2
 
 
-def render_image_histogram(locs, pixelsize, pixelsize_render, bounds=None,
-                           smoothing_sigma=None):
+def render_image_histogram(
+    locs, pixelsize, pixelsize_render, bounds=None, smoothing_sigma=None
+):
     """Render localizations into a super-resolution image using histogram
 
     Args:
@@ -80,8 +84,8 @@ def render_image_histogram(locs, pixelsize, pixelsize_render, bounds=None,
             Actual bounds used (x_min, x_max, y_min, y_max) in nm
     """
     # Convert to physical coordinates (nm)
-    x_nm = locs['x'] * pixelsize
-    y_nm = locs['y'] * pixelsize
+    x_nm = locs["x"] * pixelsize
+    y_nm = locs["y"] * pixelsize
 
     # Calculate bounds if not provided
     if bounds is None:
@@ -160,8 +164,8 @@ def compute_frc_curve(fft1, fft2, pixelsize_render):
     center = np.array(shape) // 2
 
     # Compute distance matrix
-    y, x = np.ogrid[:shape[0], :shape[1]]
-    distances = np.sqrt((x - center[1])**2 + (y - center[0])**2)
+    y, x = np.ogrid[: shape[0], : shape[1]]
+    distances = np.sqrt((x - center[1]) ** 2 + (y - center[0]) ** 2)
 
     # Define radial bins
     max_radius = min(center)
@@ -181,8 +185,8 @@ def compute_frc_curve(fft1, fft2, pixelsize_render):
 
         # FRC formula: correlation normalized by intensities
         numerator = np.sum(fft1[mask] * np.conj(fft2[mask]))
-        denom1 = np.sum(np.abs(fft1[mask])**2)
-        denom2 = np.sum(np.abs(fft2[mask])**2)
+        denom1 = np.sum(np.abs(fft1[mask]) ** 2)
+        denom2 = np.sum(np.abs(fft2[mask]) ** 2)
 
         if denom1 > 0 and denom2 > 0:
             frc_values[i] = np.real(numerator) / np.sqrt(denom1 * denom2)
@@ -192,14 +196,16 @@ def compute_frc_curve(fft1, fft2, pixelsize_render):
     # Calculate spatial frequencies
     # Frequency spacing = 1 / (N * pixel_size)
     freq_spacing = 1.0 / (shape[0] * pixelsize_render)
-    spatial_frequencies = (radial_bins[:-1] + radial_bins[1:]) / 2 * freq_spacing
+    spatial_frequencies = (
+        (radial_bins[:-1] + radial_bins[1:]) / 2 * freq_spacing
+    )
 
     logger.debug(f"  Computed FRC curve: {n_bins} frequency bins")
 
     return frc_values, spatial_frequencies
 
 
-def extract_resolution(frc_values, spatial_frequencies, threshold=1/7):
+def extract_resolution(frc_values, spatial_frequencies, threshold=1 / 7):
     """Extract resolution from FRC curve
 
     Args:
@@ -241,7 +247,9 @@ def extract_resolution(frc_values, spatial_frequencies, threshold=1/7):
 
         # Interpolate to find exact crossing point
         if frc2 != frc1:
-            cutoff_frequency = f1 + (threshold - frc1) * (f2 - f1) / (frc2 - frc1)
+            cutoff_frequency = f1 + (threshold - frc1) * (f2 - f1) / (
+                frc2 - frc1
+            )
         else:
             cutoff_frequency = f1
     else:
@@ -250,14 +258,22 @@ def extract_resolution(frc_values, spatial_frequencies, threshold=1/7):
     # Resolution = 1 / spatial_frequency
     resolution = 1.0 / cutoff_frequency
 
-    logger.debug(f"  Resolution: {resolution:.2f} nm (cutoff: {cutoff_frequency:.4f} 1/nm)")
+    logger.debug(
+        f"  Resolution: {resolution:.2f} nm (cutoff: {cutoff_frequency:.4f} 1/nm)"
+    )
 
     return resolution, cutoff_frequency
 
 
-def compute_frc_resolution(locs, pixelsize, pixelsize_render=5.0,
-                           smoothing_sigma=None, threshold=1/7, seed=None,
-                           max_frc_range_nm=None):
+def compute_frc_resolution(
+    locs,
+    pixelsize,
+    pixelsize_render=5.0,
+    smoothing_sigma=None,
+    threshold=1 / 7,
+    seed=None,
+    max_frc_range_nm=None,
+):
     """Complete FRC resolution analysis pipeline
 
     Args:
@@ -303,8 +319,11 @@ def compute_frc_resolution(locs, pixelsize, pixelsize_render=5.0,
 
     logger.debug("  Rendering image 2...")
     image_2, _ = render_image_histogram(
-        locs_2, pixelsize, pixelsize_render, bounds=bounds,
-        smoothing_sigma=smoothing_sigma
+        locs_2,
+        pixelsize,
+        pixelsize_render,
+        bounds=bounds,
+        smoothing_sigma=smoothing_sigma,
     )
 
     # Step 3: Compute FFTs
@@ -326,15 +345,15 @@ def compute_frc_resolution(locs, pixelsize, pixelsize_render=5.0,
 
     # Package results
     results = {
-        'resolution': resolution,
-        'cutoff_frequency': cutoff_frequency,
-        'frc_curve': frc_curve,
-        'spatial_frequencies': spatial_frequencies,
-        'threshold': threshold,
-        'image_1': image_1,
-        'image_2': image_2,
-        'bounds': bounds,
-        'pixelsize_render': pixelsize_render,
+        "resolution": resolution,
+        "cutoff_frequency": cutoff_frequency,
+        "frc_curve": frc_curve,
+        "spatial_frequencies": spatial_frequencies,
+        "threshold": threshold,
+        "image_1": image_1,
+        "image_2": image_2,
+        "bounds": bounds,
+        "pixelsize_render": pixelsize_render,
     }
 
     return results
@@ -345,9 +364,16 @@ def compute_frc_resolution(locs, pixelsize, pixelsize_render=5.0,
 ########################################################################
 
 
-def render_image_chunked_parallel(locs, pixelsize, pixelsize_render, bounds=None,
-                                   smoothing_sigma=None, chunk_size_nm=10000,
-                                   overlap_nm=500, n_processes=4):
+def render_image_chunked_parallel(
+    locs,
+    pixelsize,
+    pixelsize_render,
+    bounds=None,
+    smoothing_sigma=None,
+    chunk_size_nm=10000,
+    overlap_nm=500,
+    n_processes=4,
+):
     """Render large image using overlapping spatial chunks (memory-efficient)
 
     This method divides the field-of-view into overlapping spatial tiles,
@@ -381,8 +407,8 @@ def render_image_chunked_parallel(locs, pixelsize, pixelsize_render, bounds=None
     from concurrent.futures import ThreadPoolExecutor
 
     # Convert to physical coordinates (nm)
-    x_nm = locs['x'] * pixelsize
-    y_nm = locs['y'] * pixelsize
+    x_nm = locs["x"] * pixelsize
+    y_nm = locs["y"] * pixelsize
 
     # Calculate bounds if not provided
     if bounds is None:
@@ -406,7 +432,9 @@ def render_image_chunked_parallel(locs, pixelsize, pixelsize_render, bounds=None
     n_chunks_y = max(1, int(np.ceil(y_range / chunk_size_nm)))
 
     logger.debug(f"  Using {n_chunks_x}×{n_chunks_y} spatial chunks")
-    logger.debug(f"  Chunk size: {chunk_size_nm/1000:.1f} μm, overlap: {overlap_nm} nm")
+    logger.debug(
+        f"  Chunk size: {chunk_size_nm/1000:.1f} μm, overlap: {overlap_nm} nm"
+    )
 
     # Calculate output image size
     n_pixels_x = int(np.ceil((x_max - x_min) / pixelsize_render))
@@ -433,20 +461,39 @@ def render_image_chunked_parallel(locs, pixelsize, pixelsize_render, bounds=None
             chunk_y_max = min(chunk_y_max, y_max)
 
             chunk_bounds = (chunk_x_min, chunk_x_max, chunk_y_min, chunk_y_max)
-            chunk_tasks.append((locs, pixelsize, pixelsize_render, chunk_bounds,
-                               smoothing_sigma, overlap_nm))
+            chunk_tasks.append(
+                (
+                    locs,
+                    pixelsize,
+                    pixelsize_render,
+                    chunk_bounds,
+                    smoothing_sigma,
+                    overlap_nm,
+                )
+            )
 
     # Render chunks in parallel
     def render_chunk_worker(task):
         """Worker function to render a single chunk"""
-        locs, pixelsize, pixelsize_render, chunk_bounds, smoothing_sigma, overlap_nm = task
+        (
+            locs,
+            pixelsize,
+            pixelsize_render,
+            chunk_bounds,
+            smoothing_sigma,
+            overlap_nm,
+        ) = task
 
         # Extract localizations in this chunk
-        x_nm = locs['x'] * pixelsize
-        y_nm = locs['y'] * pixelsize
+        x_nm = locs["x"] * pixelsize
+        y_nm = locs["y"] * pixelsize
 
-        mask = ((x_nm >= chunk_bounds[0]) & (x_nm < chunk_bounds[1]) &
-                (y_nm >= chunk_bounds[2]) & (y_nm < chunk_bounds[3]))
+        mask = (
+            (x_nm >= chunk_bounds[0])
+            & (x_nm < chunk_bounds[1])
+            & (y_nm >= chunk_bounds[2])
+            & (y_nm < chunk_bounds[3])
+        )
 
         chunk_locs = locs[mask]
 
@@ -455,13 +502,16 @@ def render_image_chunked_parallel(locs, pixelsize, pixelsize_render, bounds=None
 
         # Render chunk
         chunk_image, _ = render_image_histogram(
-            chunk_locs, pixelsize, pixelsize_render,
-            bounds=chunk_bounds, smoothing_sigma=smoothing_sigma
+            chunk_locs,
+            pixelsize,
+            pixelsize_render,
+            bounds=chunk_bounds,
+            smoothing_sigma=smoothing_sigma,
         )
 
         # Create feathering weight map (distance from edge)
         chunk_shape = chunk_image.shape
-        y_idx, x_idx = np.ogrid[:chunk_shape[0], :chunk_shape[1]]
+        y_idx, x_idx = np.ogrid[: chunk_shape[0], : chunk_shape[1]]
 
         # Distance to edges (in pixels)
         overlap_pixels = int(overlap_nm / pixelsize_render)
@@ -469,13 +519,18 @@ def render_image_chunked_parallel(locs, pixelsize, pixelsize_render, bounds=None
             dist_left = np.minimum(x_idx, overlap_pixels)
             dist_right = np.minimum(chunk_shape[1] - 1 - x_idx, overlap_pixels)
             dist_top = np.minimum(y_idx, overlap_pixels)
-            dist_bottom = np.minimum(chunk_shape[0] - 1 - y_idx, overlap_pixels)
+            dist_bottom = np.minimum(
+                chunk_shape[0] - 1 - y_idx, overlap_pixels
+            )
 
             # Weight is minimum distance to any edge, normalized
-            weight = np.minimum(
-                np.minimum(dist_left, dist_right),
-                np.minimum(dist_top, dist_bottom)
-            ).astype(np.float32) / overlap_pixels
+            weight = (
+                np.minimum(
+                    np.minimum(dist_left, dist_right),
+                    np.minimum(dist_top, dist_bottom),
+                ).astype(np.float32)
+                / overlap_pixels
+            )
         else:
             weight = np.ones(chunk_shape, dtype=np.float32)
 
@@ -517,7 +572,9 @@ def render_image_chunked_parallel(locs, pixelsize, pixelsize_render, bounds=None
     return image, bounds
 
 
-def compute_frc_curve_vectorized(fft1, fft2, pixelsize_render, max_frc_range_nm=None):
+def compute_frc_curve_vectorized(
+    fft1, fft2, pixelsize_render, max_frc_range_nm=None
+):
     """Compute Fourier Ring Correlation curve using vectorized operations
 
     This fully vectorized implementation uses np.bincount for radial averaging,
@@ -546,8 +603,8 @@ def compute_frc_curve_vectorized(fft1, fft2, pixelsize_render, max_frc_range_nm=
     center = np.array(shape) // 2
 
     # Precompute distance matrix
-    y, x = np.ogrid[:shape[0], :shape[1]]
-    distances = np.sqrt((x - center[1])**2 + (y - center[0])**2)
+    y, x = np.ogrid[: shape[0], : shape[1]]
+    distances = np.sqrt((x - center[1]) ** 2 + (y - center[0]) ** 2)
 
     # Define radial bins
     max_radius = min(center)
@@ -558,13 +615,17 @@ def compute_frc_curve_vectorized(fft1, fft2, pixelsize_render, max_frc_range_nm=
         min_frequency = 1.0 / max_frc_range_nm  # 1/nm
         max_radius_for_resolution = min_frequency / freq_spacing
         max_radius = min(max_radius, int(np.ceil(max_radius_for_resolution)))
-        logger.debug(f"  Limited FRC calculation to {max_frc_range_nm} nm "
-                    f"(max radius: {max_radius} pixels)")
+        logger.debug(
+            f"  Limited FRC calculation to {max_frc_range_nm} nm "
+            f"(max radius: {max_radius} pixels)"
+        )
 
     # Convert distances to integer bins and clip to max_radius
     mem_start_frc, avail_start_frc = _get_memory_usage_mb()
-    logger.debug(f"      FRC: Starting bincount operations, memory = {mem_start_frc:.1f} MB, "
-                f"available = {avail_start_frc:.1f} MB")
+    logger.debug(
+        f"      FRC: Starting bincount operations, memory = {mem_start_frc:.1f} MB, "
+        f"available = {avail_start_frc:.1f} MB"
+    )
 
     distance_bins = np.round(distances).astype(int)
     np.clip(distance_bins, 0, max_radius, out=distance_bins)  # In-place clip
@@ -580,24 +641,32 @@ def compute_frc_curve_vectorized(fft1, fft2, pixelsize_render, max_frc_range_nm=
     cross_product = fft1 * np.conj(fft2)
 
     mem_after_cross, avail_after_cross = _get_memory_usage_mb()
-    logger.debug(f"      FRC: After cross-product, memory = {mem_after_cross:.1f} MB "
-                f"(+{mem_after_cross - mem_start_frc:.1f} MB), "
-                f"available = {avail_after_cross:.1f} MB")
+    logger.debug(
+        f"      FRC: After cross-product, memory = {mem_after_cross:.1f} MB "
+        f"(+{mem_after_cross - mem_start_frc:.1f} MB), "
+        f"available = {avail_after_cross:.1f} MB"
+    )
 
     # Process real part
     cross_real = np.real(cross_product).ravel()
-    cross_real_sum = np.bincount(bins_flat, weights=cross_real, minlength=max_bin)
+    cross_real_sum = np.bincount(
+        bins_flat, weights=cross_real, minlength=max_bin
+    )
     del cross_real
 
     # Process imaginary part
     cross_imag = np.imag(cross_product).ravel()
-    cross_imag_sum = np.bincount(bins_flat, weights=cross_imag, minlength=max_bin)
+    cross_imag_sum = np.bincount(
+        bins_flat, weights=cross_imag, minlength=max_bin
+    )
     del cross_product, cross_imag
 
     mem_after_numerator, avail_after_numerator = _get_memory_usage_mb()
-    logger.debug(f"      FRC: After numerator, memory = {mem_after_numerator:.1f} MB "
-                f"(freed {mem_after_cross - mem_after_numerator:.1f} MB), "
-                f"available = {avail_after_numerator:.1f} MB")
+    logger.debug(
+        f"      FRC: After numerator, memory = {mem_after_numerator:.1f} MB "
+        f"(freed {mem_after_cross - mem_after_numerator:.1f} MB), "
+        f"available = {avail_after_numerator:.1f} MB"
+    )
 
     # Compute power spectra (denominators) - one at a time to minimize peak memory
     power1 = np.abs(fft1)
@@ -608,8 +677,10 @@ def compute_frc_curve_vectorized(fft1, fft2, pixelsize_render, max_frc_range_nm=
     del power1_flat
 
     mem_after_power1, avail_after_power1 = _get_memory_usage_mb()
-    logger.debug(f"      FRC: After power1, memory = {mem_after_power1:.1f} MB, "
-                f"available = {avail_after_power1:.1f} MB")
+    logger.debug(
+        f"      FRC: After power1, memory = {mem_after_power1:.1f} MB, "
+        f"available = {avail_after_power1:.1f} MB"
+    )
 
     power2 = np.abs(fft2)
     power2 *= power2  # In-place square
@@ -619,20 +690,24 @@ def compute_frc_curve_vectorized(fft1, fft2, pixelsize_render, max_frc_range_nm=
     del power2_flat
 
     mem_after_power2, avail_after_power2 = _get_memory_usage_mb()
-    logger.debug(f"      FRC: After power2, memory = {mem_after_power2:.1f} MB, "
-                f"available = {avail_after_power2:.1f} MB")
+    logger.debug(
+        f"      FRC: After power2, memory = {mem_after_power2:.1f} MB, "
+        f"available = {avail_after_power2:.1f} MB"
+    )
 
     pixel_counts = np.bincount(bins_flat, minlength=max_bin)
     del bins_flat
 
     mem_after_bincount, avail_after_bincount = _get_memory_usage_mb()
-    logger.debug(f"      FRC: After all bincount ops, memory = {mem_after_bincount:.1f} MB "
-                f"(total: +{mem_after_bincount - mem_start_frc:.1f} MB), "
-                f"available = {avail_after_bincount:.1f} MB")
+    logger.debug(
+        f"      FRC: After all bincount ops, memory = {mem_after_bincount:.1f} MB "
+        f"(total: +{mem_after_bincount - mem_start_frc:.1f} MB), "
+        f"available = {avail_after_bincount:.1f} MB"
+    )
 
     # Compute FRC for each ring (vectorized)
     # FRC = |sum(F1 * conj(F2))| / sqrt(sum(|F1|^2) * sum(|F2|^2))
-    numerator = np.sqrt(cross_real_sum**2 + cross_imag_sum**2)
+    numerator = np.sqrt(cross_real_sum ** 2 + cross_imag_sum ** 2)
     denominator = np.sqrt(power1_sum * power2_sum)
 
     # Avoid division by zero
@@ -649,7 +724,9 @@ def compute_frc_curve_vectorized(fft1, fft2, pixelsize_render, max_frc_range_nm=
     frc_values = frc_values[1:]
     spatial_frequencies = spatial_frequencies[1:]
 
-    logger.debug(f"  Computed FRC curve: {len(frc_values)} frequency bins (vectorized)")
+    logger.debug(
+        f"  Computed FRC curve: {len(frc_values)} frequency bins (vectorized)"
+    )
 
     return frc_values, spatial_frequencies
 
@@ -679,20 +756,29 @@ def compute_frc_curve_parallel(fft1, fft2, pixelsize_render, n_processes=4):
             Spatial frequencies in 1/nm
     """
     import warnings
+
     warnings.warn(
         "compute_frc_curve_parallel is deprecated. Use compute_frc_curve_vectorized "
         "for 10-100× better performance.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
     return compute_frc_curve_vectorized(fft1, fft2, pixelsize_render)
 
 
-def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
-                        smoothing_sigma=None, threshold=1/7,
-                        n_splits=5, n_processes=4, use_chunking=False,
-                        chunk_size_nm=10000, max_frc_range_nm=None,
-                        parallel_splits=False):
+def compute_frc_averaged(
+    locs,
+    pixelsize,
+    pixelsize_render=5.0,
+    smoothing_sigma=None,
+    threshold=1 / 7,
+    n_splits=5,
+    n_processes=4,
+    use_chunking=False,
+    chunk_size_nm=10000,
+    max_frc_range_nm=None,
+    parallel_splits=False,
+):
     """Compute FRC resolution averaged over multiple random splits
 
     This provides more robust resolution estimates by averaging over multiple
@@ -743,7 +829,9 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
                 - threshold : float
                 - n_splits : int
     """
-    logger.debug(f"Computing FRC resolution with {n_splits} splits averaging...")
+    logger.debug(
+        f"Computing FRC resolution with {n_splits} splits averaging..."
+    )
 
     frc_curves = []
     resolutions = []
@@ -752,20 +840,27 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
     # Determine rendering function
     if use_chunking:
         render_func = lambda locs_subset, bounds: render_image_chunked_parallel(
-            locs_subset, pixelsize, pixelsize_render, bounds=bounds,
-            smoothing_sigma=smoothing_sigma, chunk_size_nm=chunk_size_nm,
-            n_processes=n_processes
+            locs_subset,
+            pixelsize,
+            pixelsize_render,
+            bounds=bounds,
+            smoothing_sigma=smoothing_sigma,
+            chunk_size_nm=chunk_size_nm,
+            n_processes=n_processes,
         )
     else:
         render_func = lambda locs_subset, bounds: render_image_histogram(
-            locs_subset, pixelsize, pixelsize_render, bounds=bounds,
-            smoothing_sigma=smoothing_sigma
+            locs_subset,
+            pixelsize,
+            pixelsize_render,
+            bounds=bounds,
+            smoothing_sigma=smoothing_sigma,
         )
 
     # Determine bounds from full dataset (without rendering)
     # This is much faster than rendering the full image
-    x_nm = locs['x'] * pixelsize
-    y_nm = locs['y'] * pixelsize
+    x_nm = locs["x"] * pixelsize
+    y_nm = locs["y"] * pixelsize
     x_min, x_max = x_nm.min(), x_nm.max()
     y_min, y_max = y_nm.min(), y_nm.max()
 
@@ -782,10 +877,11 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
     # Warn about potential oversubscription
     if parallel_splits and use_chunking:
         import warnings
+
         warnings.warn(
             "parallel_splits=True with use_chunking=True may cause CPU oversubscription. "
             "Consider using parallel_splits=False when chunked rendering is enabled.",
-            stacklevel=2
+            stacklevel=2,
         )
 
     # Define worker function for a single split
@@ -816,18 +912,27 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
 
     # Process splits (parallel or sequential)
     if parallel_splits and n_splits > 1:
-        from concurrent.futures import ProcessPoolExecutor
         import os
+        from concurrent.futures import ProcessPoolExecutor
 
         # Limit processes to avoid oversubscription
         max_workers = min(n_processes, n_splits)
-        logger.debug(f"  Processing {n_splits} splits in parallel ({max_workers} workers)...")
+        logger.debug(
+            f"  Processing {n_splits} splits in parallel ({max_workers} workers)..."
+        )
 
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            split_results = list(executor.map(process_single_split, range(n_splits)))
+            split_results = list(
+                executor.map(process_single_split, range(n_splits))
+            )
 
         # Unpack results
-        for frc_curve, spatial_frequencies, resolution, cutoff_frequency in split_results:
+        for (
+            frc_curve,
+            spatial_frequencies,
+            resolution,
+            cutoff_frequency,
+        ) in split_results:
             frc_curves.append(frc_curve)
             resolutions.append(resolution)
             cutoff_frequencies.append(cutoff_frequency)
@@ -836,8 +941,12 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
         for split_idx in range(n_splits):
             logger.debug(f"  Processing split {split_idx + 1}/{n_splits}...")
 
-            frc_curve, spatial_frequencies, resolution, cutoff_frequency = \
-                process_single_split(split_idx)
+            (
+                frc_curve,
+                spatial_frequencies,
+                resolution,
+                cutoff_frequency,
+            ) = process_single_split(split_idx)
 
             frc_curves.append(frc_curve)
             resolutions.append(resolution)
@@ -852,7 +961,9 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
 
     if len(valid_resolutions) > 0:
         resolution_mean = np.mean(valid_resolutions)
-        resolution_std = np.std(valid_resolutions) if len(valid_resolutions) > 1 else 0.0
+        resolution_std = (
+            np.std(valid_resolutions) if len(valid_resolutions) > 1 else 0.0
+        )
     else:
         resolution_mean = np.nan
         resolution_std = np.nan
@@ -860,19 +971,21 @@ def compute_frc_averaged(locs, pixelsize, pixelsize_render=5.0,
     frc_curve_mean = np.nanmean(frc_curves, axis=0)
     frc_curve_std = np.nanstd(frc_curves, axis=0)
 
-    logger.debug(f"  Mean resolution: {resolution_mean:.2f} ± {resolution_std:.2f} nm")
+    logger.debug(
+        f"  Mean resolution: {resolution_mean:.2f} ± {resolution_std:.2f} nm"
+    )
 
     # Package results
     results = {
-        'resolution': resolution_mean,
-        'resolution_std': resolution_std,
-        'resolutions_per_split': resolutions.tolist(),
-        'frc_curve_mean': frc_curve_mean,
-        'frc_curve_std': frc_curve_std,
-        'spatial_frequencies': spatial_frequencies,
-        'threshold': threshold,
-        'n_splits': n_splits,
-        'cutoff_frequencies': cutoff_frequencies,
+        "resolution": resolution_mean,
+        "resolution_std": resolution_std,
+        "resolutions_per_split": resolutions.tolist(),
+        "frc_curve_mean": frc_curve_mean,
+        "frc_curve_std": frc_curve_std,
+        "spatial_frequencies": spatial_frequencies,
+        "threshold": threshold,
+        "n_splits": n_splits,
+        "cutoff_frequencies": cutoff_frequencies,
     }
 
     return results
@@ -884,8 +997,10 @@ def _get_memory_usage_mb():
     Returns:
         tuple: (process_rss_mb, available_mb)
     """
-    import psutil
     import os
+
+    import psutil
+
     try:
         process = psutil.Process(os.getpid())
         mem_info = process.memory_info()
@@ -923,36 +1038,38 @@ def _process_tile_worker_minimal(tile_task):
         dict : Processing results with success flag
     """
     try:
-        tile_id = tile_task['id']
-        tile_bounds = tile_task['bounds']
-        tile_locs = tile_task['locs']
-        pixelsize = tile_task['pixelsize']
-        pixelsize_render = tile_task['pixelsize_render']
-        smoothing_sigma = tile_task['smoothing_sigma']
-        threshold = tile_task['threshold']
-        min_locs_per_region = tile_task['min_locs_per_region']
-        max_frc_range_nm = tile_task['max_frc_range_nm']
+        tile_id = tile_task["id"]
+        tile_bounds = tile_task["bounds"]
+        tile_locs = tile_task["locs"]
+        pixelsize = tile_task["pixelsize"]
+        pixelsize_render = tile_task["pixelsize_render"]
+        smoothing_sigma = tile_task["smoothing_sigma"]
+        threshold = tile_task["threshold"]
+        min_locs_per_region = tile_task["min_locs_per_region"]
+        max_frc_range_nm = tile_task["max_frc_range_nm"]
 
         mem_start, avail_start = _get_memory_usage_mb()
-        logger.debug(f"    Tile {tile_id}: Starting, memory = {mem_start:.1f} MB, "
-                    f"available = {avail_start:.1f} MB")
+        logger.debug(
+            f"    Tile {tile_id}: Starting, memory = {mem_start:.1f} MB, "
+            f"available = {avail_start:.1f} MB"
+        )
 
         # Handle empty tile
         if tile_locs is None or len(tile_locs) == 0:
             return {
-                'tile_id': tile_id,
-                'error': 'empty_tile',
-                'n_locs': 0,
-                'success': False
+                "tile_id": tile_id,
+                "error": "empty_tile",
+                "n_locs": 0,
+                "success": False,
             }
 
         # Validate: enough localizations
         if len(tile_locs) < min_locs_per_region:
             return {
-                'tile_id': tile_id,
-                'error': 'insufficient_locs',
-                'n_locs': len(tile_locs),
-                'success': False
+                "tile_id": tile_id,
+                "error": "insufficient_locs",
+                "n_locs": len(tile_locs),
+                "success": False,
             }
 
         # Random split within tile
@@ -967,80 +1084,98 @@ def _process_tile_worker_minimal(tile_task):
 
         if split_ratio < 0.2:
             return {
-                'tile_id': tile_id,
-                'error': 'unbalanced_split',
-                'n_locs': len(tile_locs),
-                'split_ratio': split_ratio,
-                'success': False
+                "tile_id": tile_id,
+                "error": "unbalanced_split",
+                "n_locs": len(tile_locs),
+                "split_ratio": split_ratio,
+                "success": False,
             }
 
         # Render images (use tile bounds for consistent sizing)
         mem_before_render, avail_before_render = _get_memory_usage_mb()
-        logger.debug(f"    Tile {tile_id}: Before rendering, memory = {mem_before_render:.1f} MB, "
-                    f"available = {avail_before_render:.1f} MB")
+        logger.debug(
+            f"    Tile {tile_id}: Before rendering, memory = {mem_before_render:.1f} MB, "
+            f"available = {avail_before_render:.1f} MB"
+        )
 
         image_1, _ = render_image_histogram(
-            locs_1, pixelsize, pixelsize_render,
-            bounds=tile_bounds, smoothing_sigma=smoothing_sigma
+            locs_1,
+            pixelsize,
+            pixelsize_render,
+            bounds=tile_bounds,
+            smoothing_sigma=smoothing_sigma,
         )
         image_shape = image_1.shape
         image_2, _ = render_image_histogram(
-            locs_2, pixelsize, pixelsize_render,
-            bounds=tile_bounds, smoothing_sigma=smoothing_sigma
+            locs_2,
+            pixelsize,
+            pixelsize_render,
+            bounds=tile_bounds,
+            smoothing_sigma=smoothing_sigma,
         )
 
         mem_after_render, avail_after_render = _get_memory_usage_mb()
-        logger.debug(f"    Tile {tile_id}: After rendering, memory = {mem_after_render:.1f} MB "
-                    f"(+{mem_after_render - mem_before_render:.1f} MB), "
-                    f"available = {avail_after_render:.1f} MB")
+        logger.debug(
+            f"    Tile {tile_id}: After rendering, memory = {mem_after_render:.1f} MB "
+            f"(+{mem_after_render - mem_before_render:.1f} MB), "
+            f"available = {avail_after_render:.1f} MB"
+        )
 
         # Validate: non-empty images
         if image_1.sum() == 0 or image_2.sum() == 0:
             return {
-                'tile_id': tile_id,
-                'error': 'empty_image',
-                'n_locs': len(tile_locs),
-                'success': False
+                "tile_id": tile_id,
+                "error": "empty_image",
+                "n_locs": len(tile_locs),
+                "success": False,
             }
 
         # Compute FFTs
         mem_before_fft, avail_before_fft = _get_memory_usage_mb()
-        logger.debug(f"    Tile {tile_id}: Before FFT, memory = {mem_before_fft:.1f} MB, "
-                    f"available = {avail_before_fft:.1f} MB")
+        logger.debug(
+            f"    Tile {tile_id}: Before FFT, memory = {mem_before_fft:.1f} MB, "
+            f"available = {avail_before_fft:.1f} MB"
+        )
 
         fft_1 = compute_fft(image_1)
         fft_2 = compute_fft(image_2)
 
         mem_after_fft, avail_after_fft = _get_memory_usage_mb()
-        logger.debug(f"    Tile {tile_id}: After FFT, memory = {mem_after_fft:.1f} MB "
-                    f"(+{mem_after_fft - mem_before_fft:.1f} MB), "
-                    f"available = {avail_after_fft:.1f} MB")
+        logger.debug(
+            f"    Tile {tile_id}: After FFT, memory = {mem_after_fft:.1f} MB "
+            f"(+{mem_after_fft - mem_before_fft:.1f} MB), "
+            f"available = {avail_after_fft:.1f} MB"
+        )
 
         del image_1, image_2
 
         # Compute FRC curve
         mem_before_frc, avail_before_frc = _get_memory_usage_mb()
-        logger.debug(f"    Tile {tile_id}: Before FRC computation, memory = {mem_before_frc:.1f} MB, "
-                    f"available = {avail_before_frc:.1f} MB")
+        logger.debug(
+            f"    Tile {tile_id}: Before FRC computation, memory = {mem_before_frc:.1f} MB, "
+            f"available = {avail_before_frc:.1f} MB"
+        )
 
         frc_curve, spatial_frequencies = compute_frc_curve_vectorized(
             fft_1, fft_2, pixelsize_render, max_frc_range_nm=max_frc_range_nm
         )
 
         mem_after_frc, avail_after_frc = _get_memory_usage_mb()
-        logger.debug(f"    Tile {tile_id}: After FRC computation, memory = {mem_after_frc:.1f} MB "
-                    f"(+{mem_after_frc - mem_before_frc:.1f} MB), "
-                    f"available = {avail_after_frc:.1f} MB")
+        logger.debug(
+            f"    Tile {tile_id}: After FRC computation, memory = {mem_after_frc:.1f} MB "
+            f"(+{mem_after_frc - mem_before_frc:.1f} MB), "
+            f"available = {avail_after_frc:.1f} MB"
+        )
 
         del fft_1, fft_2
 
         # Validate: FRC curve has valid values
         if np.all(np.isnan(frc_curve)):
             return {
-                'tile_id': tile_id,
-                'error': 'invalid_frc',
-                'n_locs': len(tile_locs),
-                'success': False
+                "tile_id": tile_id,
+                "error": "invalid_frc",
+                "n_locs": len(tile_locs),
+                "success": False,
             }
 
         # Extract resolution
@@ -1049,40 +1184,49 @@ def _process_tile_worker_minimal(tile_task):
         )
 
         mem_end, avail_end = _get_memory_usage_mb()
-        logger.debug(f"    Tile {tile_id}: Completed, final memory = {mem_end:.1f} MB "
-                    f"(total delta: {mem_end - mem_start:.1f} MB), "
-                    f"available = {avail_end:.1f} MB")
+        logger.debug(
+            f"    Tile {tile_id}: Completed, final memory = {mem_end:.1f} MB "
+            f"(total delta: {mem_end - mem_start:.1f} MB), "
+            f"available = {avail_end:.1f} MB"
+        )
 
         # Success - return results
         return {
-            'tile_id': tile_id,
-            'n_locs': len(tile_locs),
-            'n_locs_1': n_locs_1,
-            'n_locs_2': n_locs_2,
-            'frc_curve': frc_curve,
-            'spatial_frequencies': spatial_frequencies,
-            'resolution': resolution,
-            'cutoff_frequency': cutoff_frequency,
-            'image_shape': image_shape,
-            'success': True
+            "tile_id": tile_id,
+            "n_locs": len(tile_locs),
+            "n_locs_1": n_locs_1,
+            "n_locs_2": n_locs_2,
+            "frc_curve": frc_curve,
+            "spatial_frequencies": spatial_frequencies,
+            "resolution": resolution,
+            "cutoff_frequency": cutoff_frequency,
+            "image_shape": image_shape,
+            "success": True,
         }
 
     except Exception as e:
         # Catch any unexpected errors
         return {
-            'tile_id': tile_task.get('id', 'unknown'),
-            'error': 'exception',
-            'error_message': str(e),
-            'error_type': type(e).__name__,
-            'success': False
+            "tile_id": tile_task.get("id", "unknown"),
+            "error": "exception",
+            "error_message": str(e),
+            "error_type": type(e).__name__,
+            "success": False,
         }
 
 
-def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
-                       smoothing_sigma=None, threshold=1/7,
-                       region_size=10.0, min_locs_per_region=500,
-                       max_frc_range_nm=None, n_processes=4,
-                       smoothing_window=0.005):
+def compute_frc_spatial(
+    locs,
+    pixelsize,
+    pixelsize_render=5.0,
+    smoothing_sigma=None,
+    threshold=1 / 7,
+    region_size=10.0,
+    min_locs_per_region=500,
+    max_frc_range_nm=None,
+    n_processes=4,
+    smoothing_window=0.005,
+):
     """Compute FRC resolution using spatial tiling approach
 
     Divides the field-of-view into spatial regions, computes FRC for each
@@ -1135,8 +1279,8 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
     from concurrent.futures import ProcessPoolExecutor
 
     # Convert to physical coordinates
-    x_nm = locs['x'] * pixelsize
-    y_nm = locs['y'] * pixelsize
+    x_nm = locs["x"] * pixelsize
+    y_nm = locs["y"] * pixelsize
 
     # Determine overall bounds
     x_min, x_max = x_nm.min(), x_nm.max()
@@ -1157,18 +1301,24 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
     region_width = x_range / n_regions_x
     region_height = y_range / n_regions_y
 
-    logger.debug(f"Computing spatial FRC with {n_regions_x}×{n_regions_y} regions "
-                f"(target size: {region_size:.1f} µm)...")
+    logger.debug(
+        f"Computing spatial FRC with {n_regions_x}×{n_regions_y} regions "
+        f"(target size: {region_size:.1f} µm)..."
+    )
     logger.debug(f"  FOV: {x_range:.1f} × {y_range:.1f} nm")
-    logger.debug(f"  Actual region size: {region_width:.1f} × {region_height:.1f} nm "
-                f"({region_width/1000:.2f} × {region_height/1000:.2f} µm)")
+    logger.debug(
+        f"  Actual region size: {region_width:.1f} × {region_height:.1f} nm "
+        f"({region_width/1000:.2f} × {region_height/1000:.2f} µm)"
+    )
 
     # Pre-calculate consistent tile dimensions in pixels
     # All tiles will have exactly the same pixel dimensions
     tile_width_pixels = int(np.ceil(region_width / pixelsize_render))
     tile_height_pixels = int(np.ceil(region_height / pixelsize_render))
 
-    logger.debug(f"  Tile dimensions: {tile_width_pixels}×{tile_height_pixels} pixels")
+    logger.debug(
+        f"  Tile dimensions: {tile_width_pixels}×{tile_height_pixels} pixels"
+    )
 
     # Generate spatial tiles with pre-filtered localizations
     # This approach: filter locs for each tile BEFORE serialization
@@ -1186,54 +1336,77 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
             tile_y_max = tile_y_min + tile_height_pixels * pixelsize_render
 
             # Pre-filter localizations to this tile
-            mask = ((x_nm >= tile_x_min) & (x_nm < tile_x_max) &
-                    (y_nm >= tile_y_min) & (y_nm < tile_y_max))
+            mask = (
+                (x_nm >= tile_x_min)
+                & (x_nm < tile_x_max)
+                & (y_nm >= tile_y_min)
+                & (y_nm < tile_y_max)
+            )
             tile_locs = locs[mask]
 
             # Only create task if tile has any localizations
             if len(tile_locs) > 0:
-                tile_tasks.append({
-                    'id': (i, j),
-                    'bounds': (tile_x_min, tile_x_max, tile_y_min, tile_y_max),
-                    'locs': tile_locs,  # Only localizations in this tile
-                    'pixelsize': pixelsize,
-                    'pixelsize_render': pixelsize_render,
-                    'smoothing_sigma': smoothing_sigma,
-                    'threshold': threshold,
-                    'min_locs_per_region': min_locs_per_region,
-                    'max_frc_range_nm': max_frc_range_nm
-                })
+                tile_tasks.append(
+                    {
+                        "id": (i, j),
+                        "bounds": (
+                            tile_x_min,
+                            tile_x_max,
+                            tile_y_min,
+                            tile_y_max,
+                        ),
+                        "locs": tile_locs,  # Only localizations in this tile
+                        "pixelsize": pixelsize,
+                        "pixelsize_render": pixelsize_render,
+                        "smoothing_sigma": smoothing_sigma,
+                        "threshold": threshold,
+                        "min_locs_per_region": min_locs_per_region,
+                        "max_frc_range_nm": max_frc_range_nm,
+                    }
+                )
             else:
                 # Create failed result for empty tile
-                tile_tasks.append({
-                    'id': (i, j),
-                    'bounds': (tile_x_min, tile_x_max, tile_y_min, tile_y_max),
-                    'locs': None,  # Marker for empty tile
-                    'pixelsize': pixelsize,
-                    'pixelsize_render': pixelsize_render,
-                    'smoothing_sigma': smoothing_sigma,
-                    'threshold': threshold,
-                    'min_locs_per_region': min_locs_per_region,
-                    'max_frc_range_nm': max_frc_range_nm
-                })
+                tile_tasks.append(
+                    {
+                        "id": (i, j),
+                        "bounds": (
+                            tile_x_min,
+                            tile_x_max,
+                            tile_y_min,
+                            tile_y_max,
+                        ),
+                        "locs": None,  # Marker for empty tile
+                        "pixelsize": pixelsize,
+                        "pixelsize_render": pixelsize_render,
+                        "smoothing_sigma": smoothing_sigma,
+                        "threshold": threshold,
+                        "min_locs_per_region": min_locs_per_region,
+                        "max_frc_range_nm": max_frc_range_nm,
+                    }
+                )
 
     logger.debug(f"  Generated {len(tile_tasks)} spatial tiles")
 
     # Log memory footprint
-    total_locs_in_tiles = sum(len(t['locs']) if t['locs'] is not None else 0
-                               for t in tile_tasks)
-    logger.debug(f"  Total localizations across tiles: {total_locs_in_tiles} "
-                f"(vs {len(locs)} original)")
+    total_locs_in_tiles = sum(
+        len(t["locs"]) if t["locs"] is not None else 0 for t in tile_tasks
+    )
+    logger.debug(
+        f"  Total localizations across tiles: {total_locs_in_tiles} "
+        f"(vs {len(locs)} original)"
+    )
 
     # Process tiles in parallel
     logger.debug(f"  Processing tiles with {n_processes} workers...")
 
     with ProcessPoolExecutor(max_workers=n_processes) as executor:
-        tile_results = list(executor.map(_process_tile_worker_minimal, tile_tasks))
+        tile_results = list(
+            executor.map(_process_tile_worker_minimal, tile_tasks)
+        )
 
     # Separate successful and failed tiles
-    successful_results = [r for r in tile_results if r.get('success', False)]
-    failed_results = [r for r in tile_results if not r.get('success', False)]
+    successful_results = [r for r in tile_results if r.get("success", False)]
+    failed_results = [r for r in tile_results if not r.get("success", False)]
 
     n_success = len(successful_results)
     n_failed = len(failed_results)
@@ -1245,7 +1418,7 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
     if n_failed > 0:
         error_counts = {}
         for r in failed_results:
-            error_type = r.get('error', 'unknown')
+            error_type = r.get("error", "unknown")
             error_counts[error_type] = error_counts.get(error_type, 0) + 1
 
         logger.warning(f"  Failed tiles: {n_failed}/{n_total}")
@@ -1255,33 +1428,37 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
     if n_success == 0:
         logger.error("  No successful tiles found!")
         return {
-            'resolution': np.nan,
-            'resolution_std': np.nan,
-            'resolutions_per_region': [],
-            'frc_curve_mean': np.array([]),
-            'frc_curve_std': np.array([]),
-            'spatial_frequencies': np.array([]),
-            'threshold': threshold,
-            'n_regions': n_success,
-            'n_regions_total': n_total,
-            'n_failed': n_failed,
-            'failed_tiles': failed_results
+            "resolution": np.nan,
+            "resolution_std": np.nan,
+            "resolutions_per_region": [],
+            "frc_curve_mean": np.array([]),
+            "frc_curve_std": np.array([]),
+            "spatial_frequencies": np.array([]),
+            "threshold": threshold,
+            "n_regions": n_success,
+            "n_regions_total": n_total,
+            "n_failed": n_failed,
+            "failed_tiles": failed_results,
         }
 
     # Validate: all successful tiles have same frequency array length
-    freq_lengths = [len(r['spatial_frequencies']) for r in successful_results]
+    freq_lengths = [len(r["spatial_frequencies"]) for r in successful_results]
     if len(set(freq_lengths)) > 1:
         logger.error(f"  Inconsistent FRC curve lengths: {set(freq_lengths)}")
-        logger.error("  This indicates inconsistent tile sizes - implementation bug!")
+        logger.error(
+            "  This indicates inconsistent tile sizes - implementation bug!"
+        )
         raise RuntimeError(
             f"Inconsistent FRC curve lengths across tiles: {set(freq_lengths)}. "
             "This should not happen with pixel-aligned bounds."
         )
 
     # Extract data from successful results
-    frc_curves = [r['frc_curve'] for r in successful_results]
-    resolutions = [r['resolution'] for r in successful_results]
-    spatial_frequencies = successful_results[0]['spatial_frequencies']  # Same for all
+    frc_curves = [r["frc_curve"] for r in successful_results]
+    resolutions = [r["resolution"] for r in successful_results]
+    spatial_frequencies = successful_results[0][
+        "spatial_frequencies"
+    ]  # Same for all
 
     # Compute statistics
     frc_curves = np.array(frc_curves)
@@ -1292,7 +1469,9 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
 
     if len(valid_resolutions) > 0:
         resolution_mean = np.mean(valid_resolutions)
-        resolution_std = np.std(valid_resolutions) if len(valid_resolutions) > 1 else 0.0
+        resolution_std = (
+            np.std(valid_resolutions) if len(valid_resolutions) > 1 else 0.0
+        )
     else:
         resolution_mean = np.nan
         resolution_std = np.nan
@@ -1313,20 +1492,26 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
         if window_size % 2 == 0:
             window_size += 1
 
-        logger.debug(f"  Smoothing FRC curve with window size {window_size} points "
-                    f"({smoothing_window:.4f} 1/nm)")
+        logger.debug(
+            f"  Smoothing FRC curve with window size {window_size} points "
+            f"({smoothing_window:.4f} 1/nm)"
+        )
 
         # Apply moving average using convolution
         window = np.ones(window_size) / window_size
-        frc_curve_smoothed = np.convolve(frc_curve_mean, window, mode='same')
+        frc_curve_smoothed = np.convolve(frc_curve_mean, window, mode="same")
 
         # Handle edges where convolution is less accurate
         half_window = window_size // 2
         for i in range(half_window):
             # Left edge
-            frc_curve_smoothed[i] = np.nanmean(frc_curve_mean[:i+half_window+1])
+            frc_curve_smoothed[i] = np.nanmean(
+                frc_curve_mean[: i + half_window + 1]
+            )
             # Right edge
-            frc_curve_smoothed[-(i+1)] = np.nanmean(frc_curve_mean[-(i+half_window+1):])
+            frc_curve_smoothed[-(i + 1)] = np.nanmean(
+                frc_curve_mean[-(i + half_window + 1) :]
+            )
 
         # Extract resolution from smoothed curve
         resolution_smoothed = extract_resolution(
@@ -1336,42 +1521,53 @@ def compute_frc_spatial(locs, pixelsize, pixelsize_render=5.0,
             frc_curve_mean, spatial_frequencies, threshold
         )
 
-        logger.debug(f"  Smoothed resolution: {resolution_smoothed[0]:.2f} nm "
-                    f"(unsmoothed: {resolution_mean:.2f} nm)"
-                    f"(mean from curve: {resolution_mean_fromcurve[0]:.2f} nm)")
+        logger.debug(
+            f"  Smoothed resolution: {resolution_smoothed[0]:.2f} nm "
+            f"(unsmoothed: {resolution_mean:.2f} nm)"
+            f"(mean from curve: {resolution_mean_fromcurve[0]:.2f} nm)"
+        )
     else:
         frc_curve_smoothed = frc_curve_mean.copy()
         resolution_smoothed = resolution_mean
 
-    logger.debug(f"  Mean resolution: {resolution_mean:.2f} ± {resolution_std:.2f} nm")
-    logger.debug(f"  Resolution range: {np.nanmin(resolutions):.2f} - {np.nanmax(resolutions):.2f} nm")
+    logger.debug(
+        f"  Mean resolution: {resolution_mean:.2f} ± {resolution_std:.2f} nm"
+    )
+    logger.debug(
+        f"  Resolution range: {np.nanmin(resolutions):.2f} - {np.nanmax(resolutions):.2f} nm"
+    )
 
     # Package results
     results = {
-        'resolution': resolution_smoothed,
-        'resolution_unsmoothed': resolution_mean,
-        'resolution_std': resolution_std,
-        'resolutions_per_region': resolutions.tolist(),
-        'frc_curve_mean': frc_curve_mean,
-        'frc_curve_smoothed': frc_curve_smoothed,
-        'frc_curve_std': frc_curve_std,
-        'spatial_frequencies': spatial_frequencies,
-        'threshold': threshold,
-        'n_regions': n_success,
-        'n_regions_total': n_total,
-        'n_regions_x': n_regions_x,
-        'n_regions_y': n_regions_y,
-        'n_failed': n_failed,
-        'tile_info': [(r['tile_id'], r['n_locs'], r['resolution'])
-                      for r in successful_results],  # For debugging
-        'failed_tiles': [(r['tile_id'], r.get('error', 'unknown'))
-                        for r in failed_results] if n_failed > 0 else []
+        "resolution": resolution_smoothed,
+        "resolution_unsmoothed": resolution_mean,
+        "resolution_std": resolution_std,
+        "resolutions_per_region": resolutions.tolist(),
+        "frc_curve_mean": frc_curve_mean,
+        "frc_curve_smoothed": frc_curve_smoothed,
+        "frc_curve_std": frc_curve_std,
+        "spatial_frequencies": spatial_frequencies,
+        "threshold": threshold,
+        "n_regions": n_success,
+        "n_regions_total": n_total,
+        "n_regions_x": n_regions_x,
+        "n_regions_y": n_regions_y,
+        "n_failed": n_failed,
+        "tile_info": [
+            (r["tile_id"], r["n_locs"], r["resolution"])
+            for r in successful_results
+        ],  # For debugging
+        "failed_tiles": (
+            [(r["tile_id"], r.get("error", "unknown")) for r in failed_results]
+            if n_failed > 0
+            else []
+        ),
     }
 
     return results
 
 
-def create_frc_plot(frc_results, results_folder, threshold=1/7):
+def create_frc_plot(frc_results, results_folder, threshold=1 / 7):
     """Create and save FRC curve plot
 
     Args:
@@ -1395,8 +1591,9 @@ def create_frc_plot(frc_results, results_folder, threshold=1/7):
         plot_path : str
             Path to saved plot file
     """
-    import matplotlib.pyplot as plt
     import os
+
+    import matplotlib.pyplot as plt
 
     # Create FRC curve plot
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -1407,22 +1604,40 @@ def create_frc_plot(frc_results, results_folder, threshold=1/7):
     frc_curve_std = frc_results["frc_curve_std"]
     spatial_frequencies = frc_results["spatial_frequencies"]
 
-    ax.plot(spatial_frequencies, frc_curve_mean, 'b-', linewidth=1.5,
-            alpha=0.75, label='Mean FRC (unsmoothed)')
+    ax.plot(
+        spatial_frequencies,
+        frc_curve_mean,
+        "b-",
+        linewidth=1.5,
+        alpha=0.75,
+        label="Mean FRC (unsmoothed)",
+    )
     ax.fill_between(
         spatial_frequencies,
         frc_curve_mean - frc_curve_std,
         frc_curve_mean + frc_curve_std,
-        alpha=0.2, color='blue', label=f'±1 SD ({frc_results["n_regions"]} regions)'
+        alpha=0.2,
+        color="blue",
+        label=f'±1 SD ({frc_results["n_regions"]} regions)',
     )
 
     # Plot smoothed curve
-    ax.plot(spatial_frequencies, frc_curve_smoothed, 'g-', linewidth=0.5,
-            label='Smoothed FRC')
+    ax.plot(
+        spatial_frequencies,
+        frc_curve_smoothed,
+        "g-",
+        linewidth=0.5,
+        label="Smoothed FRC",
+    )
 
     # Plot threshold line
-    ax.axhline(y=threshold, color='r', linestyle='--', linewidth=2,
-              label=f'Threshold (1/7)')
+    ax.axhline(
+        y=threshold,
+        color="r",
+        linestyle="--",
+        linewidth=2,
+        label=f"Threshold (1/7)",
+    )
 
     # Mark smoothed resolution
     resolution = frc_results["resolution"]
@@ -1432,21 +1647,37 @@ def create_frc_plot(frc_results, results_folder, threshold=1/7):
     resolution_unsmoothed = frc_results["resolution_unsmoothed"]
     if not np.isnan(resolution):
         resolution_freq = 1.0 / resolution
-        ax.axvline(x=resolution_freq, color='g', linestyle=':', linewidth=2,
-                  label=f'Resolution (smoothed): {resolution:.1f} nm')
+        ax.axvline(
+            x=resolution_freq,
+            color="g",
+            linestyle=":",
+            linewidth=2,
+            label=f"Resolution (smoothed): {resolution:.1f} nm",
+        )
 
     # Optionally mark unsmoothed resolution if different
-    if not np.isnan(resolution_unsmoothed) and abs(resolution - resolution_unsmoothed) > 1.0:
+    if (
+        not np.isnan(resolution_unsmoothed)
+        and abs(resolution - resolution_unsmoothed) > 1.0
+    ):
         resolution_freq_unsmoothed = 1.0 / resolution_unsmoothed
-        ax.axvline(x=resolution_freq_unsmoothed, color='orange', linestyle=':',
-                  linewidth=1.5, alpha=0.7,
-                  label=f'Resolution (unsmoothed): {resolution_unsmoothed:.1f} nm')
+        ax.axvline(
+            x=resolution_freq_unsmoothed,
+            color="orange",
+            linestyle=":",
+            linewidth=1.5,
+            alpha=0.7,
+            label=f"Resolution (unsmoothed): {resolution_unsmoothed:.1f} nm",
+        )
 
-    ax.set_xlabel('Spatial Frequency (1/nm)', fontsize=12)
-    ax.set_ylabel('FRC', fontsize=12)
+    ax.set_xlabel("Spatial Frequency (1/nm)", fontsize=12)
+    ax.set_ylabel("FRC", fontsize=12)
     n_regions_x = frc_results["n_regions_x"]
     n_regions_y = frc_results["n_regions_y"]
-    ax.set_title(f'Spatial FRC Analysis ({n_regions_x}×{n_regions_y} regions)', fontsize=14)
+    ax.set_title(
+        f"Spatial FRC Analysis ({n_regions_x}×{n_regions_y} regions)",
+        fontsize=14,
+    )
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
     ax.set_ylim([-0.1, 1.1])

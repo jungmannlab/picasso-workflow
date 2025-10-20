@@ -5,36 +5,45 @@ Author: Heinrich Grabmayr
 Initial Date: March 7, 2024
 Description: This is the picasso interface of picasso-workflow
 """
-from picasso import lib, io, localize, gausslq, postprocess, clusterer
-from picasso import aim, g5m, spinna
-from picasso import __version__ as picassoversion
-from picasso import CONFIG as pCONFIG
+import copy
+import gc
+import logging
+import multiprocessing as mp
 import os
-import sys
+import pickle
 import platform
-import psutil
+import random
+import string
+import sys
 import time
-from memory_profiler import memory_usage
+from datetime import datetime
 from functools import wraps
+
+import matplotlib.pyplot as plt
 
 # from tqdm import tqdm
 import numpy as np
 import pandas as pd
-from scipy.spatial import distance, KDTree
-import matplotlib.pyplot as plt
-from matplotlib import cm
-import logging
-from datetime import datetime
+import psutil
 import yaml
-import pickle
-import random
-import string
-import copy
-import gc
-import multiprocessing as mp
-
+from matplotlib import cm
+from memory_profiler import memory_usage
+from picasso import CONFIG as pCONFIG
+from picasso import __version__ as picassoversion
+from picasso import (
+    aim,
+    clusterer,
+    g5m,
+    gausslq,
+    io,
+    lib,
+    localize,
+    postprocess,
+    spinna,
+)
 from scipy.ndimage import label
-from scipy.stats import poisson, norm, kstest
+from scipy.spatial import KDTree, distance
+from scipy.stats import kstest, norm, poisson
 
 try:
     from scipy.stats import wasserstein_distance
@@ -66,12 +75,14 @@ except ImportError:
         return distance
 
 
-from picasso_workflow import util
-from picasso_workflow import process_brightfield
-from picasso_workflow import picasso_outpost, outpost_modules
-from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
+from picasso_workflow import (
+    outpost_modules,
+    picasso_outpost,
+    process_brightfield,
+    util,
+)
 from picasso_workflow.outpost_modules import render
-
+from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -2322,9 +2333,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         use_spline_interpolation,
     ):
         """Generate comprehensive drift analysis plot showing local drift, confidence, and window sizes"""
+        import os
+
         import matplotlib.pyplot as plt
         from matplotlib.patches import Rectangle
-        import os
 
         fig, axes = plt.subplots(4, 1, figsize=(14, 12))
         stage2_method = (
@@ -2626,8 +2638,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         plot_dir,
     ):
         """Generate summary statistics plot for drift correction performance"""
-        import matplotlib.pyplot as plt
         import os
+
+        import matplotlib.pyplot as plt
 
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
         fig.suptitle(
@@ -3082,8 +3095,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         plot_dir,
     ):
         """Generate diagnostic plots for spline fitting quality"""
-        import matplotlib.pyplot as plt
         import os
+
+        import matplotlib.pyplot as plt
 
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
         fig.suptitle(
@@ -3439,20 +3453,22 @@ class AutoPicasso(util.AbstractModuleCollection):
                     drift_plots : str
                         path to drift visualization plots
         """
-        from picasso_workflow.outpost_modules.undrift_rsso import compute_undrift_rsso
-        
+        from picasso_workflow.outpost_modules.undrift_rsso import (
+            compute_undrift_rsso,
+        )
+
         # Call external computation function
         self.locs, self.drift, results_data = compute_undrift_rsso(
             locs=self.locs,
             pixelsize=self.pixelsize,
             info=self.info,
             parameters=parameters,
-            results_folder=results["folder"]
+            results_folder=results["folder"],
         )
-        
+
         # Merge results from computation into results dict
         results.update(results_data)
-        
+
         return parameters, results
 
     def _plot_drift_with_confidence(
@@ -4017,8 +4033,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 path to radial profile plot
         """
         from picasso_workflow.picasso_outpost import (
-            resolution_ppac,
             analyse_resolution_ppac,
+            resolution_ppac,
         )
 
         # Get parameters with defaults
@@ -4433,8 +4449,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         Returns:
             tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
         """
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
         import numpy as np
+
+        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
 
         (
             frame_idx,
@@ -5216,8 +5233,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 path to split images comparison plot (only if n_splits=1)
         """
         from picasso_workflow.outpost_modules.resolution_frc import (
+            compute_frc_averaged,
             compute_frc_resolution,
-            compute_frc_averaged
         )
 
         # Get parameters with defaults
@@ -5247,7 +5264,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 use_chunking=use_chunking,
                 chunk_size_nm=chunk_size_nm,
                 max_frc_range_nm=max_frc_range_nm,
-                parallel_splits=parallel_splits
+                parallel_splits=parallel_splits,
             )
         else:
             # Use single-split pipeline
@@ -5258,12 +5275,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                 smoothing_sigma=smoothing_sigma,
                 threshold=threshold,
                 seed=seed,
-                max_frc_range_nm=max_frc_range_nm
+                max_frc_range_nm=max_frc_range_nm,
             )
 
         # Store results
         results["resolution_frc"] = frc_results["resolution"]
-        results["cutoff_frequency"] = frc_results.get("cutoff_frequency", np.nan)
+        results["cutoff_frequency"] = frc_results.get(
+            "cutoff_frequency", np.nan
+        )
         results["spatial_frequencies"] = frc_results["spatial_frequencies"]
         results["threshold"] = frc_results["threshold"]
 
@@ -5272,7 +5291,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["resolution_std"] = frc_results["resolution_std"]
             results["frc_curve"] = frc_results["frc_curve_mean"]
             results["frc_curve_std"] = frc_results["frc_curve_std"]
-            results["resolutions_per_split"] = frc_results["resolutions_per_split"]
+            results["resolutions_per_split"] = frc_results[
+                "resolutions_per_split"
+            ]
         else:
             results["frc_curve"] = frc_results["frc_curve"]
 
@@ -5291,7 +5312,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 frc_curve,
                 "b-",
                 linewidth=2,
-                label=f"FRC (mean, n={n_splits})"
+                label=f"FRC (mean, n={n_splits})",
             )
             ax.fill_between(
                 frc_results["spatial_frequencies"],
@@ -5299,7 +5320,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 frc_curve + frc_curve_std,
                 alpha=0.3,
                 color="b",
-                label="±1 std"
+                label="±1 std",
             )
 
             resolution_label = f"Resolution: {frc_results['resolution']:.1f} ± {frc_results['resolution_std']:.1f} nm"
@@ -5311,10 +5332,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 frc_curve,
                 "b-",
                 linewidth=2,
-                label="FRC"
+                label="FRC",
             )
 
-            resolution_label = f"Resolution: {frc_results['resolution']:.1f} nm"
+            resolution_label = (
+                f"Resolution: {frc_results['resolution']:.1f} nm"
+            )
 
         # Plot threshold line
         ax.axhline(
@@ -5322,7 +5345,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             color="r",
             linestyle="--",
             linewidth=1.5,
-            label=f"Threshold ({threshold:.3f})"
+            label=f"Threshold ({threshold:.3f})",
         )
 
         # Plot resolution point
@@ -5331,7 +5354,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             if cutoff_freq is None and n_splits > 1:
                 # Calculate mean cutoff frequency
                 cutoff_freqs = frc_results.get("cutoff_frequencies", [])
-                cutoff_freq = np.nanmean([c for c in cutoff_freqs if not np.isnan(c)])
+                cutoff_freq = np.nanmean(
+                    [c for c in cutoff_freqs if not np.isnan(c)]
+                )
 
             if cutoff_freq is not None and not np.isnan(cutoff_freq):
                 ax.axvline(
@@ -5339,7 +5364,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     color="g",
                     linestyle="--",
                     linewidth=1.5,
-                    label=resolution_label
+                    label=resolution_label,
                 )
 
         ax.set_xlabel("Spatial Frequency (1/nm)")
@@ -5454,7 +5479,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             fig_frc : str
                 path to FRC curve plot
         """
-        from picasso_workflow.outpost_modules.resolution_frc import compute_frc_spatial
+        from picasso_workflow.outpost_modules.resolution_frc import (
+            compute_frc_spatial,
+        )
 
         # Get parameters with defaults
         pixelsize_render = parameters.get("pixelsize_render", 5.0)
@@ -5478,7 +5505,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             min_locs_per_region=min_locs_per_region,
             max_frc_range_nm=max_frc_range_nm,
             n_processes=n_processes,
-            smoothing_window=smoothing_window
+            smoothing_window=smoothing_window,
         )
 
         # Store results
@@ -5492,10 +5519,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["frc_curve_std"] = frc_results["frc_curve_std"]
         results["spatial_frequencies"] = frc_results["spatial_frequencies"]
         results["threshold"] = frc_results["threshold"]
-        results["resolutions_per_region"] = frc_results["resolutions_per_region"]
+        results["resolutions_per_region"] = frc_results[
+            "resolutions_per_region"
+        ]
 
         # Create plot using external function
-        from picasso_workflow.outpost_modules.resolution_frc import create_frc_plot
+        from picasso_workflow.outpost_modules.resolution_frc import (
+            create_frc_plot,
+        )
+
         plot_path = create_frc_plot(frc_results, results["folder"], threshold)
         results["fig_frc"] = plot_path
 
@@ -5553,7 +5585,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 path to decorrelation curve plot
         """
         from picasso_workflow.outpost_modules.resolution_decorrelation import (
-            compute_decorr_spatial
+            compute_decorr_spatial,
         )
 
         # Get parameters with defaults
@@ -5582,7 +5614,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             r_max=r_max,
             n_r=n_r,
             n_gauss=n_gauss,
-            apod_edge_width=apod_edge_width
+            apod_edge_width=apod_edge_width,
         )
 
         # Store results
@@ -5593,7 +5625,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["decorr_curve_mean"] = decorr_results["decorr_curve_mean"]
         results["decorr_curve_std"] = decorr_results["decorr_curve_std"]
         results["r_values"] = decorr_results["r_values"]
-        results["resolutions_per_region"] = decorr_results["resolutions_per_region"]
+        results["resolutions_per_region"] = decorr_results[
+            "resolutions_per_region"
+        ]
 
         # Create decorrelation curve plot
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -5603,17 +5637,30 @@ class AutoPicasso(util.AbstractModuleCollection):
         decorr_curve_std = decorr_results["decorr_curve_std"]
         r_values = decorr_results["r_values"]
 
-        ax.plot(r_values, decorr_curve_mean, 'b-', linewidth=2, label='Mean Decorrelation')
+        ax.plot(
+            r_values,
+            decorr_curve_mean,
+            "b-",
+            linewidth=2,
+            label="Mean Decorrelation",
+        )
         ax.fill_between(
             r_values,
             decorr_curve_mean - decorr_curve_std,
             decorr_curve_mean + decorr_curve_std,
-            alpha=0.3, color='blue', label=f'±1 SD ({decorr_results["n_regions"]} regions)'
+            alpha=0.3,
+            color="blue",
+            label=f'±1 SD ({decorr_results["n_regions"]} regions)',
         )
 
         # Plot threshold line
-        ax.axhline(y=0.5, color='r', linestyle='--', linewidth=2,
-                  label='Threshold (0.5)')
+        ax.axhline(
+            y=0.5,
+            color="r",
+            linestyle="--",
+            linewidth=2,
+            label="Threshold (0.5)",
+        )
 
         # Mark resolution
         resolution = decorr_results["resolution"]
@@ -5624,15 +5671,22 @@ class AutoPicasso(util.AbstractModuleCollection):
             # normalized kc = kc_max * pixelsize * 2 (since r=1 corresponds to Nyquist = 0.5/pixel)
             r_cutoff = resolution / (4 * pixelsize_render)
             if np.any(r_cutoff < r_values):
-                ax.axvline(x=r_cutoff, color='g', linestyle=':', linewidth=2,
-                          label=f'Resolution: {resolution:.1f} nm')
+                ax.axvline(
+                    x=r_cutoff,
+                    color="g",
+                    linestyle=":",
+                    linewidth=2,
+                    label=f"Resolution: {resolution:.1f} nm",
+                )
 
-        ax.set_xlabel('Normalized Frequency', fontsize=12)
-        ax.set_ylabel('Decorrelation', fontsize=12)
+        ax.set_xlabel("Normalized Frequency", fontsize=12)
+        ax.set_ylabel("Decorrelation", fontsize=12)
         n_regions_x = decorr_results["n_regions_x"]
         n_regions_y = decorr_results["n_regions_y"]
-        ax.set_title(f'Image Decorrelation Analysis ({n_regions_x}×{n_regions_y} regions)',
-                    fontsize=14)
+        ax.set_title(
+            f"Image Decorrelation Analysis ({n_regions_x}×{n_regions_y} regions)",
+            fontsize=14,
+        )
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.set_ylim([-0.1, 1.1])
@@ -5640,7 +5694,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         plt.tight_layout()
 
         # Save plot
-        plot_path = os.path.join(results["folder"], "resolution_decorr_spatial.png")
+        plot_path = os.path.join(
+            results["folder"], "resolution_decorr_spatial.png"
+        )
         plt.savefig(plot_path, dpi=300, bbox_inches="tight")
         plt.close()
 
@@ -11175,5 +11231,3 @@ class ManualInputLackingError(AutoPicassoError):
 
 class PicassoConfigError(AutoPicassoError):
     pass
-
-
