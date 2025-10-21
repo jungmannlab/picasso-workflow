@@ -1363,18 +1363,27 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         # OPTIMIZATION: Create reference dataset for this iteration
         if current_subsampling_fraction < 1.0:
-            np.random.seed(42 + iteration)  # Different subset each iteration
-            n_reference = max(
-                1000, int(len(current_locs) * current_subsampling_fraction)
-            )
-            n_reference = min(
-                n_reference, len(current_locs)
-            )  # Don't exceed available data
+            # subsample by cropping the center
+            x_min_full, x_max_full = current_locs["x"].min(), current_locs["x"].max()
+            dx_full = x_max_full - x_min_full
+            y_min_full, y_max_full = current_locs["y"].min(), current_locs["y"].max()
+            dy_full = y_max_full - y_min_full
 
-            reference_indices = np.random.choice(
-                len(current_locs), n_reference, replace=False
-            )
-            reference_dataset = current_locs[reference_indices]
+            dx_each = dx_full * np.sqrt(current_subsampling_fraction) / 2
+            dy_each = dy_full * np.sqrt(current_subsampling_fraction) / 2
+
+            x_min = x_min_full + dx_each
+            x_max = x_max_full - dx_each
+            y_min = y_min_full + dy_each
+            y_max = y_max_full = dy_each
+
+            current_locs = current_locs[
+                (current_locs["x"] > x_min)
+                & (current_locs["x"] < x_max)
+                & (current_locs["y"] > y_min)
+                & (current_locs["y"] < y_min)]
+
+            reference_dataset = current_locs
 
             logger.debug(
                 f"    Created reference dataset: {len(reference_dataset):,} locs ({current_subsampling_fraction:.1%} of full dataset)"
