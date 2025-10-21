@@ -434,6 +434,7 @@ def _calculate_pairwise_shift(
     plot_dir=None,
     channel_pair=None,
     remove_zeroshift=False,
+    plot_fn_suffix="",
 ):
     """
     Calculate shift between two channels using histogram peak finding.
@@ -546,6 +547,7 @@ def _calculate_pairwise_shift(
 
     # Create and save histogram plot if requested
     plot_filepath = None
+    logger.debug()
     if plot_histogram:
         plot_filepath = _save_shift_histogram_plot(
             hist,
@@ -557,6 +559,7 @@ def _calculate_pairwise_shift(
             plot_dir,
             channel_pair,
             fit_successful,
+            plot_fn_suffix
         )
 
     # Return shift values and uncertainties
@@ -775,6 +778,7 @@ def _save_shift_histogram_plot(
     plot_dir,
     channel_pair,
     fit_successful=False,
+    plot_fn_suffix=""
 ):
     """
     Save 2D histogram plot showing shift distribution and estimated shift.
@@ -906,7 +910,7 @@ def _save_shift_histogram_plot(
     # Save the plot
     if channel_pair is not None:
         filename = (
-            f"shift_histogram_ch{channel_pair[0]}_to_ch{channel_pair[1]}.png"
+            f"shift_histogram_ch{channel_pair[0]}_to_ch{channel_pair[1]}{plot_fn_suffix}.png"
         )
     else:
         filename = "shift_histogram.png"

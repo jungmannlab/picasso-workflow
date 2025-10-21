@@ -1033,8 +1033,10 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                     dataset_locs,
                     frame_locs,
                     max_shift,
-                    plot_histogram=False,
+                    plot_histogram=plot_histogram,
                     remove_zeroshift=True,
+                    plot_dir=plot_dir,
+                    plot_fn_suffix=f"_{frame_number}_{iteration}",
                 )
                 uncertainty_info = std_info if std_info is not None else {}
                 computation_type = "Standard"
