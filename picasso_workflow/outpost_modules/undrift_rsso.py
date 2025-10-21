@@ -2129,7 +2129,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             )
             ax3_1.set_ylabel("Mean RSSO Sigma (nm)")
             ax3.set_title("Uncertainty Evolution")
-            ax3.set_yscale("log")
+            # ax3.set_yscale("log")
+            ax3.set_ylim(bottom=0)
+            ax3_1.set_ylim(bottom=0)
             ax3.grid(True, alpha=0.3)
             lines = line_ux + line_uy + line_sx + line_sy
             labels = [line.get_label() for line in lines]
