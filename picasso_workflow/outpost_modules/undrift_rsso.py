@@ -1316,6 +1316,8 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         logger.debug(
             f"    Numba optimization: {'enabled' if enable_numba_optimization else 'disabled'}"
         )
+        iter_dir = os.path.join(results["folder"], f"iteration_{iteration + 1}")
+        os.makedirs(iter_dir, exist_ok=True)
 
         # Monitor memory usage during iteration
         current_memory_gb = process.memory_info().rss / (1024 ** 3)
@@ -1482,7 +1484,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     current_subsampling_fraction,  # For uncertainty estimation subsampling
                     enable_numba_optimization,  # Use Numba JIT acceleration
                     plot_rsso,  # Whether to plot RSSO histograms
-                    results_folder,  # Directory for saving plots
+                    iter_dir,  # Directory for saving plots
                     iteration + 1,  # Current iteration number (1-indexed)
                 )
                 chunk_frame_data.append(frame_data)
@@ -2090,7 +2092,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 else:
                     mean_sigma_y.append(np.nan)
 
-            line_ux, _ = ax3.plot(
+            line_ux = ax3.plot(
                 all_iterations,
                 mean_uncertainty_x,
                 "b-o",
@@ -2098,7 +2100,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 linewidth=2,
                 markersize=6,
             )
-            line_uy, _ = ax3.plot(
+            line_uy = ax3.plot(
                 all_iterations,
                 mean_uncertainty_y,
                 "r-o",
@@ -2109,7 +2111,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             ax3.set_xlabel("Iteration")
             ax3.set_ylabel("Mean Uncertainty from fit (nm)")
             ax3_1 = ax3.twinx()
-            line_sx, _ = ax3_1.plot(
+            line_sx = ax3_1.plot(
                 all_iterations,
                 mean_sigma_x,
                 "b:x",
@@ -2117,7 +2119,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 linewidth=2,
                 markersize=6,
             )
-            line_sy, _ = ax3_1.plot(
+            line_sy = ax3_1.plot(
                 all_iterations,
                 mean_sigma_y,
                 "r:x",
@@ -2129,7 +2131,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             ax3.set_title("Uncertainty Evolution")
             ax3.set_yscale("log")
             ax3.grid(True, alpha=0.3)
-            lines = [line_ux, line_uy, line_sx, line_sy]
+            lines = line_ux + line_uy + line_sx + line_sy
             labels = [line.get_label() for line in lines]
             ax3.legend(lines, labels)
 
