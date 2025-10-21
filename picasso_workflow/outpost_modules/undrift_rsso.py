@@ -1486,6 +1486,8 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 )
                 chunk_frame_data.append(frame_data)
 
+            print('processing frame data', frame_data)
+
             # Process chunk in parallel (or sequentially if multiprocessing disabled)
             if enable_multiprocessing and n_processes > 1:
                 try:
