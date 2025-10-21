@@ -547,7 +547,6 @@ def _calculate_pairwise_shift(
 
     # Create and save histogram plot if requested
     plot_filepath = None
-    logger.debug(f"calculated shift, fit successful: {fit_successful}, plotting {plot_histogram} into {plot_dir} w suffix {plot_fn_suffix}")
     if plot_histogram:
         plot_filepath = _save_shift_histogram_plot(
             hist,
@@ -913,7 +912,7 @@ def _save_shift_histogram_plot(
             f"shift_histogram_ch{channel_pair[0]}_to_ch{channel_pair[1]}{plot_fn_suffix}.png"
         )
     else:
-        filename = "shift_histogram.png"
+        filename = f"shift_histogram{plot_fn_suffix}.png"
     filepath = os.path.join(plot_dir, filename)
     if os.path.exists(filepath):
         r, e = os.path.splitext(filename)
@@ -927,7 +926,7 @@ def _save_shift_histogram_plot(
     # plt.show()
     plt.close()
 
-    logger.debug(f"Saved shift histogram plot to {filepath}")
+    # logger.debug(f"Saved shift histogram plot to {filepath}")
 
     return filepath
 

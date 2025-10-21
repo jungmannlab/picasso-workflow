@@ -1036,7 +1036,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                     plot_histogram=plot_histogram,
                     remove_zeroshift=True,
                     plot_dir=plot_dir,
-                    plot_fn_suffix=f"_{frame_number}_{iteration}",
+                    plot_fn_suffix=f"_{iteration}_{frame_number}_dslocs{len(dataset_locs)}_tgtlocs{len(frame_locs)}",
                 )
                 uncertainty_info = std_info if std_info is not None else {}
                 computation_type = "Standard"
@@ -1486,8 +1486,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 )
                 chunk_frame_data.append(frame_data)
 
-            print('processing frame data', frame_data)
-
             # Process chunk in parallel (or sequentially if multiprocessing disabled)
             if enable_multiprocessing and n_processes > 1:
                 try:
@@ -1514,7 +1512,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     ]
             else:
                 # Sequential processing for very memory-constrained environments
-                logger.debug("computing frame to reference shift w/o multiprocessing.")
                 chunk_results = [
                     _compute_frame_to_reference_shift_optimized(frame_data)
                     for frame_data in chunk_frame_data
@@ -1537,7 +1534,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 # Collect performance statistics
                 if performance_info and "computation_time" in performance_info:
                     comp_time = performance_info["computation_time"]
-                    comp_type = performance_info.get(
+                    comp_type = performance_info.get( 
                         "computation_type", "Unknown"
                     )
 
