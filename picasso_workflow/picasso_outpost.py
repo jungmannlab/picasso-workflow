@@ -547,7 +547,7 @@ def _calculate_pairwise_shift(
 
     # Create and save histogram plot if requested
     plot_filepath = None
-    logger.debug()
+    logger.debug(f"calculated shift, fit successful: {fit_successful}, plotting {plot_histogram} into {plot_dir} w suffix {plot_fn_suffix}")
     if plot_histogram:
         plot_filepath = _save_shift_histogram_plot(
             hist,
