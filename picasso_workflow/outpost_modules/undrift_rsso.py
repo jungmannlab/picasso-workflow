@@ -1036,13 +1036,13 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                     plot_histogram=plot_histogram,
                     remove_zeroshift=True,
                     plot_dir=plot_dir,
-                    plot_fn_suffix=f"_{iteration}_{frame_number}_dslocs{len(dataset_locs)}_tgtlocs{len(frame_locs)}",
+                    plot_fn_suffix=f"_{iteration}_{frame_number}_dslocs{len_dataset}_tgtlocs{len(frame_locs)}",
                 )
                 uncertainty_info = std_info if std_info is not None else {}
                 computation_type = "Standard"
 
             computation_time = time.time() - start_time
-            logger.debug(f'Calculated shift in {computation_time} (reference: {len(dataset_locs)}, frame: {len(frame_locs)})')
+            # logger.debug(f'Calculated shift in {computation_time} (reference: {len_dataset}, frame: {len(frame_locs)})')
 
             # Add timing info to uncertainty_info
             if uncertainty_info is None:
@@ -1104,6 +1104,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         )
 
     except Exception as e:
+        raise e
         print(f"Error processing frame group {frame_indices}: {e}")
         return (frame_indices, None, None, None, None, 0.0, 0.0, None)
 
