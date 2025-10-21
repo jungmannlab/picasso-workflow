@@ -1042,6 +1042,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 computation_type = "Standard"
 
             computation_time = time.time() - start_time
+            logger.debug(f'Calculated shift in {computation_time} (reference: {len(dataset_locs)}, frame: {len(frame_locs)})')
 
             # Add timing info to uncertainty_info
             if uncertainty_info is None:
@@ -1511,6 +1512,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     ]
             else:
                 # Sequential processing for very memory-constrained environments
+                logger.debug("computing frame to reference shift w/o multiprocessing.")
                 chunk_results = [
                     _compute_frame_to_reference_shift_optimized(frame_data)
                     for frame_data in chunk_frame_data
