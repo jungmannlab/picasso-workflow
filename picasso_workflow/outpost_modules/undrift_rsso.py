@@ -947,7 +947,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
     ton = parameters["ton"]
     toff = parameters["toff"]
-    max_shift = parameters["max_shift"]
+    max_shift_nm = parameters["max_shift"]  # User provides in nanometers
+    max_shift_pixels = (
+        max_shift_nm / pixelsize
+    )  # Convert to pixels for internal use
     min_locs_per_frame = parameters.get("min_locs_per_frame", 10)
     max_iterations = parameters.get("max_iterations", 5)
     convergence_threshold = parameters.get("convergence_threshold", 0.1)
@@ -1079,6 +1082,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
     logger.debug(
         f"Starting iterative RSSO undrift: {n_frames} frames, ton={ton}, toff={toff}"
+    )
+    logger.debug(
+        f"Max shift: {max_shift_nm:.1f} nm ({max_shift_pixels:.2f} pixels)"
     )
 
     # Validate Numba implementation if enabled
@@ -1259,7 +1265,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     reference_dataset,  # SAME reference dataset for all frames
                     group_frame_numbers,  # List of frame numbers to process together
                     frame_locs,
-                    max_shift,
+                    max_shift_pixels,
                     min_locs_per_frame,
                     enable_uncertainty_estimation,
                     n_uncertainty_trials,
@@ -1438,10 +1444,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         # mean frame shift should be 0 to keep the image in place
         frame_shifts_x -= np.mean(frame_shifts_x)
-        frame_shifts_x -= np.mean(frame_shifts_x)
-        # Update cumulative drift arrays (convert pixels to nm for drift tracking)
-        drift_x += frame_shifts_x * pixelsize
-        drift_y += frame_shifts_y * pixelsize
+        frame_shifts_y -= np.mean(frame_shifts_y)
+        # Update cumulative drift arrays (already in nm from conversion above)
+        drift_x += frame_shifts_x
+        drift_y += frame_shifts_y
         uncertainty_x = new_uncertainty_x.copy()
         uncertainty_y = new_uncertainty_y.copy()
         sigma_x = new_sigma_x.copy()

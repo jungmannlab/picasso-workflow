@@ -106,7 +106,7 @@ class AbstractModuleCollection(abc.ABC):
                     toff : float
                         Time in frames for a spot to reappear after disappearing
                     max_shift : float
-                        Maximum expected drift per frame in pixels
+                        Maximum expected drift per frame in nanometers
                 optional items:
                     processing_chunk_size : int
                         Number of frames per processing chunk for memory efficiency
