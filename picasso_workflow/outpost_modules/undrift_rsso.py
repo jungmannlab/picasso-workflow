@@ -1005,12 +1005,12 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
             start_time = time.time()
 
+            frame_number = (
+                target_frames[0] if len(target_frames) > 0 else None
+            )
             if enable_numba_optimization:
                 # Use Numba-optimized RSSO computation
                 # Determine frame number for plotting (use first frame in group)
-                frame_number = (
-                    target_frames[0] if len(target_frames) > 0 else None
-                )
                 (
                     shift_x,
                     shift_y,
