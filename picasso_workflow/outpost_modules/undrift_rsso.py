@@ -1316,7 +1316,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         logger.debug(
             f"    Numba optimization: {'enabled' if enable_numba_optimization else 'disabled'}"
         )
-        iter_dir = os.path.join(results["folder"], f"iteration_{iteration + 1}")
+        iter_dir = os.path.join(results_folder, f"iteration_{iteration + 1}")
         os.makedirs(iter_dir, exist_ok=True)
 
         # Monitor memory usage during iteration
