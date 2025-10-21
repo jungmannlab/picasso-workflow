@@ -119,6 +119,9 @@ class AbstractModuleCollection(abc.ABC):
                         estimation (default: 100)
                     plot_drift : bool
                         Whether to save drift plots (default: True)
+                    plot_rsso : bool
+                        Whether to save RSSO histogram plots for each frame
+                        (default: False)
                     save_locs : bool
                         Whether to save undrifted localizations (default: True)
 

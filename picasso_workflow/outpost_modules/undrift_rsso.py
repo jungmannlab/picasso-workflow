@@ -309,7 +309,14 @@ else:
 
 
 def _compute_rsso_shift_numba_optimized(
-    locs_i, locs_j, max_shift_pixels, enable_numba=True
+    locs_i,
+    locs_j,
+    max_shift_pixels,
+    enable_numba=True,
+    plot_histogram=False,
+    plot_dir=None,
+    iteration=None,
+    frame_number=None,
 ):
     """Numba-optimized RSSO shift computation combining Phases 1 and 2
 
@@ -322,6 +329,14 @@ def _compute_rsso_shift_numba_optimized(
             Maximum expected shift in pixels
         enable_numba : bool
             Whether to use Numba optimization
+        plot_histogram : bool
+            Whether to save 2D histogram plot
+        plot_dir : str, optional
+            Directory to save plots
+        iteration : int, optional
+            Iteration number for filename
+        frame_number : int, optional
+            Frame number for filename
 
     Returns:
         shift_x, shift_y : float
@@ -417,7 +432,183 @@ def _compute_rsso_shift_numba_optimized(
         },
     }
 
+    # Create and save histogram plot if requested
+    if plot_histogram and plot_dir is not None:
+        plot_filepath = _save_rsso_histogram_plot(
+            hist,
+            x_edges,
+            y_edges,
+            shift_x,
+            shift_y,
+            max_shift_pixels,
+            plot_dir,
+            iteration,
+            frame_number,
+            quality_metrics,
+        )
+        quality_metrics["plot_filepath"] = plot_filepath
+
     return shift_x, shift_y, quality_metrics
+
+
+def _save_rsso_histogram_plot(
+    hist,
+    x_edges,
+    y_edges,
+    shift_x,
+    shift_y,
+    max_shift,
+    plot_dir,
+    iteration,
+    frame_number,
+    quality_metrics,
+):
+    """
+    Save 2D histogram plot showing RSSO shift distribution and peak.
+
+    Args:
+        hist : np.array
+            2D histogram of shifts
+        x_edges : np.array
+            Histogram x bin edges
+        y_edges : np.array
+            Histogram y bin edges
+        shift_x : float
+            Estimated x shift
+        shift_y : float
+            Estimated y shift
+        max_shift : float
+            Maximum shift range
+        plot_dir : str
+            Directory to save plot
+        iteration : int or None
+            Iteration number for filename
+        frame_number : int or None
+            Frame number for filename
+        quality_metrics : dict
+            Quality metrics to display on plot
+
+    Returns:
+        filepath : str
+            Path to saved plot
+    """
+    import matplotlib.pyplot as plt
+    import random
+    import string
+
+    # Create rsso_plots subdirectory
+    rsso_plot_dir = os.path.join(plot_dir, "rsso_plots")
+    os.makedirs(rsso_plot_dir, exist_ok=True)
+
+    # Create figure and axis
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Create coordinate grids - use bin centers
+    x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+    y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+    X_centers, Y_centers = np.meshgrid(x_centers, y_centers)
+
+    # Apply circular mask for visualization
+    hist_plot = hist.T.copy()
+    if max_shift is not None:
+        distances = np.sqrt(X_centers ** 2 + Y_centers ** 2)
+        outside_circle = distances > max_shift
+        hist_plot[outside_circle] = np.nan
+
+    # Plot the 2D histogram
+    im = ax.pcolormesh(
+        X_centers, Y_centers, hist_plot, cmap="viridis", shading="nearest"
+    )
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("Count", rotation=270, labelpad=20)
+
+    # Add circular boundary
+    if max_shift is not None:
+        circle = plt.Circle(
+            (0, 0),
+            max_shift,
+            fill=False,
+            color="white",
+            linestyle="--",
+            linewidth=2,
+            alpha=0.8,
+        )
+        ax.add_patch(circle)
+
+    # Mark the detected shift with a red cross
+    ax.plot(
+        shift_x,
+        shift_y,
+        "r+",
+        markersize=15,
+        markeredgewidth=2,
+        label=f"Shift: ({shift_x:.3f}, {shift_y:.3f}) px",
+    )
+
+    # Set labels and title
+    ax.set_xlabel("X Shift (pixels)")
+    ax.set_ylabel("Y Shift (pixels)")
+
+    # Build title with iteration and frame info
+    title_parts = ["RSSO Shift Histogram"]
+    if iteration is not None:
+        title_parts.append(f"Iter {iteration}")
+    if frame_number is not None:
+        title_parts.append(f"Frame {frame_number}")
+    ax.set_title(" - ".join(title_parts))
+
+    # Set axis limits
+    ax.set_xlim(-max_shift, max_shift)
+    ax.set_ylim(-max_shift, max_shift)
+
+    # Add grid and legend
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="lower right")
+
+    # Add text box with statistics
+    total_points = quality_metrics.get("total_pairs", np.sum(hist))
+    peak_count = quality_metrics.get("peak_value", np.max(hist))
+    sigma_x = quality_metrics.get("sigma_x", 0)
+    sigma_y = quality_metrics.get("sigma_y", 0)
+
+    textstr = (
+        f"Total pairs: {total_points:.0f}\n"
+        f"Peak count: {peak_count:.0f}\n"
+        f"σx: {sigma_x:.3f} px\n"
+        f"σy: {sigma_y:.3f} px"
+    )
+    props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
+    ax.text(
+        0.02,
+        0.98,
+        textstr,
+        transform=ax.transAxes,
+        fontsize=9,
+        verticalalignment="top",
+        bbox=props,
+    )
+
+    # Generate filename with iteration and frame number
+    filename_parts = ["rsso"]
+    if iteration is not None:
+        filename_parts.append(f"iter{iteration:02d}")
+    if frame_number is not None:
+        filename_parts.append(f"frame{frame_number:04d}")
+
+    # Add random code for uniqueness
+    rcode = "".join(random.choices(string.ascii_letters, k=6))
+    filename_parts.append(rcode)
+
+    filename = "_".join(filename_parts) + ".png"
+    filepath = os.path.join(rsso_plot_dir, filename)
+
+    # Save the plot
+    plt.savefig(filepath, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    return filepath
 
 
 def _validate_numba_implementation():
@@ -738,7 +929,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         frame_data : tuple
             (frame_indices, reference_dataset, target_frames, frame_locs, max_shift, min_locs_per_frame,
              enable_uncertainty_estimation, n_uncertainty_trials, subsampling_fraction,
-             enable_numba_optimization)
+             enable_numba_optimization, plot_histogram, plot_dir, iteration)
 
     Returns:
         tuple : (frame_indices, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality, performance_info)
@@ -756,6 +947,9 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         n_uncertainty_trials,
         subsampling_fraction,
         enable_numba_optimization,
+        plot_histogram,
+        plot_dir,
+        iteration,
     ) = frame_data
 
     try:
@@ -813,12 +1007,23 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
             if enable_numba_optimization:
                 # Use Numba-optimized RSSO computation
+                # Determine frame number for plotting (use first frame in group)
+                frame_number = (
+                    target_frames[0] if len(target_frames) > 0 else None
+                )
                 (
                     shift_x,
                     shift_y,
                     numba_info,
                 ) = _compute_rsso_shift_numba_optimized(
-                    dataset_locs, frame_locs, max_shift
+                    dataset_locs,
+                    frame_locs,
+                    max_shift,
+                    enable_numba=True,
+                    plot_histogram=plot_histogram,
+                    plot_dir=plot_dir,
+                    iteration=iteration,
+                    frame_number=frame_number,
                 )
                 uncertainty_info = numba_info if numba_info is not None else {}
                 computation_type = "Numba-optimized"
@@ -956,6 +1161,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     convergence_threshold = parameters.get("convergence_threshold", 0.1)
     save_locs = parameters.get("save_locs", True)
     plot_drift = parameters.get("plot_drift", True)
+    plot_rsso = parameters.get("plot_rsso", False)
 
     # Memory management parameters
     chunk_size = parameters.get("chunk_size", 100)
@@ -1271,6 +1477,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     n_uncertainty_trials,
                     current_subsampling_fraction,  # For uncertainty estimation subsampling
                     enable_numba_optimization,  # Use Numba JIT acceleration
+                    plot_rsso,  # Whether to plot RSSO histograms
+                    results_folder,  # Directory for saving plots
+                    iteration + 1,  # Current iteration number (1-indexed)
                 )
                 chunk_frame_data.append(frame_data)
 
