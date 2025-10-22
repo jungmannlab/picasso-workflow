@@ -1396,7 +1396,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             x_min = x_min_full + (dx_full - dx_reduced) / 2
             x_max = x_max_full - (dx_full - dx_reduced) / 2
             y_min = y_min_full + (dy_full - dy_reduced) / 2
-            y_max = y_max_full = (dy_full - dy_reduced) / 2
+            y_max = y_max_full - (dy_full - dy_reduced) / 2
 
             logger.debug(f"reduced FOV: ({x_min} - {x_max}, {y_min} - {y_max})")
 
