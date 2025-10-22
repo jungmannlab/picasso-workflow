@@ -8,7 +8,8 @@ Description: This is a collection of exploratory DNA-PAINT analysis / picasso
     next picasso release. The reasoning to put them here is that it makes
     testing cycles faster.
 """
-import logging
+# import logging
+from loguru import logger
 import numpy as np
 
 # from numpy.lib.recfunctions import stack_arrays
@@ -43,7 +44,7 @@ from scipy import stats
 import itertools
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 def align_channels(

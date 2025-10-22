@@ -28,7 +28,8 @@ dependencies = [
     "aicsimageio",
     "psutil",
     "atlassian-python-api",
-    "memory-profiler>=0.61.0"
+    "memory-profiler>=0.61.0",
+    "loguru>=0.7.3"
 ]
 keywords = ["picasso"]
 

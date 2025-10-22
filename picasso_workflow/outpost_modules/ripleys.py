@@ -6,7 +6,8 @@ Initial Date: Nov 21, 2024
 Description: This module provides functionality for Ripley's K analysis,
     especially in the context of the DC Atlas paper.
 """
-import logging
+# import logging
+from loguru import logger
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -14,7 +15,7 @@ from scipy.spatial import KDTree
 from scipy.ndimage import zoom, gaussian_filter, label
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 def otsu(image):

@@ -6,7 +6,8 @@ Initial Date: March 7, 2024
 Description: Interaction with Confluence
 """
 import html
-import logging
+# import logging
+from loguru import logger
 import os
 import traceback
 
@@ -17,7 +18,7 @@ from requests.exceptions import ConnectionError, HTTPError
 
 from picasso_workflow.util import AbstractModuleCollection
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 def module_decorator(method):

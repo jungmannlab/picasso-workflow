@@ -6,7 +6,8 @@ Initial Date: Jan 22, 2025
 Description: wrapping picasso.gui.render and pricasso.render
     for matplotlib plotting
 """
-import logging
+# import logging
+from loguru import logger
 
 from picasso import render
 import matplotlib.pyplot as plt
@@ -14,7 +15,7 @@ import numpy as np
 import colorsys
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 def render_scene(kwargs, locs, viewport=None):

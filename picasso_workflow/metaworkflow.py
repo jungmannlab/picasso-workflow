@@ -14,7 +14,8 @@ from picasso_workflow import confluence, util
 import matplotlib.pyplot as plt
 import multiprocessing
 import pandas as pd
-import logging
+# import logging
+from loguru import logger
 import time
 from datetime import datetime
 import hashlib
@@ -31,7 +32,7 @@ if ON_CLUSTER:
     from mpi4py import MPI
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 class PathParser:

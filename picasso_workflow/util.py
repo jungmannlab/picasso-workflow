@@ -8,13 +8,14 @@ Description: Utility functions for the package
 import abc
 import copy
 import inspect
-import logging
+# import logging
+from loguru import logger
 import os
 import re
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 class AbstractModuleCollection(abc.ABC):

@@ -5,7 +5,8 @@ Author: Heinrich Grabmayr
 Initial Date: Dec 13, 2024
 Description: This module provides a mask class for cell masking operations.
 """
-import logging
+# import logging
+from loguru import logger
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import (
@@ -18,7 +19,7 @@ from scipy.ndimage import (
 )
 import pickle
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 class CellMask:

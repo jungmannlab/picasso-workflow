@@ -20,12 +20,13 @@ Algorithm:
 Author: Generated for picasso-workflow
 """
 
-import logging
+# import logging
+from loguru import logger
 
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 def split_localizations_random(locs, seed=None):

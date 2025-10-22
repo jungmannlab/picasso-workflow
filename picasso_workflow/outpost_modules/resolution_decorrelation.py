@@ -9,10 +9,11 @@ structure decorrelates across spatial frequencies.
 """
 
 import numpy as np
-import logging
+# import logging
+from loguru import logger
 from concurrent.futures import ProcessPoolExecutor
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 def _get_memory_usage_mb():

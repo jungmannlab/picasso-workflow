@@ -7,7 +7,8 @@ Description: This is the picasso interface of picasso-workflow
 """
 import copy
 import gc
-import logging
+# import logging
+from loguru import logger
 import multiprocessing as mp
 import os
 import pickle
@@ -84,7 +85,7 @@ from picasso_workflow import (
 from picasso_workflow.outpost_modules import render
 from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 def generate_random_code(length):

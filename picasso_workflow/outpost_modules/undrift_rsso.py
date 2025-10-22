@@ -18,12 +18,13 @@ Author: Generated for picasso-workflow
 """
 
 import numpy as np
-import logging
+# import logging
+from loguru import logger
 import multiprocessing as mp
 import time
 import os
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 # Configure OpenMP BEFORE any potential OpenMP initialization
 # This prevents fork() conflicts when using multiprocessing

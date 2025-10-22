@@ -8,7 +8,8 @@ Description: This module implements the class ReportingAnalyzer,
 """
 import os
 from datetime import datetime
-import logging
+# import logging
+from loguru import logger
 import inspect
 import yaml
 import copy
@@ -42,7 +43,7 @@ yaml.constructor.SafeConstructor.add_constructor(
 )
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 class AggregationWorkflowRunner:
