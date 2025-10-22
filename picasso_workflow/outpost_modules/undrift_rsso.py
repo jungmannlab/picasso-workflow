@@ -1157,6 +1157,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     from picasso import io
     import matplotlib.pyplot as plt
     import matplotlib.colors as mcolors
+    from concurrent.futures import ThreadPoolExecutor
 
     # Note: OpenMP configuration is now done at module import time
     # (see module-level code after imports) to ensure environment
@@ -1542,13 +1543,15 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             # Process chunk in parallel (or sequentially if multiprocessing disabled)
             if enable_multiprocessing and n_processes > 1:
                 try:
-                    # Use safer multiprocessing context to avoid OpenMP conflicts
-                    ctx = _setup_multiprocessing_context()
-                    with ctx.Pool(processes=n_processes) as pool:
-                        chunk_results = pool.map(
-                            _compute_frame_to_reference_shift_optimized,
-                            chunk_frame_data,
-                        )
+                    # # Use safer multiprocessing context to avoid OpenMP conflicts
+                    # ctx = _setup_multiprocessing_context()
+                    # with ctx.Pool(processes=n_processes) as pool:
+                    #     chunk_results = pool.map(
+                    #         _compute_frame_to_reference_shift_optimized,
+                    #         chunk_frame_data,
+                    #     )
+                    with ThreadPoolExecutor(max_workers=n_processes) as executor:
+                        chunk_results = list(executor.map(_compute_frame_to_reference_shift_optimized, chunk_frame_data))
                     print(
                         f"    ✓ Parallel processing successful with {n_processes} processes"
                     )
