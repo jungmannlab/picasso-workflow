@@ -25,6 +25,15 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# Configure OpenMP BEFORE any potential OpenMP initialization
+# This prevents fork() conflicts when using multiprocessing
+# Must be set at module level before numerical libraries initialize
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 # Try to import Numba for acceleration
 try:
     import numba
@@ -45,21 +54,24 @@ except ImportError:
 def _configure_openmp_for_multiprocessing():
     """Configure OpenMP environment to avoid conflicts with multiprocessing
 
+    DEPRECATED: This function is kept for documentation purposes only.
+    OpenMP configuration is now done at module import time (see module-level
+    code after imports) to ensure environment variables are set before any
+    numerical libraries initialize OpenMP threads.
+
     This fixes the error: "Terminating: fork() called from a process already
     using GNU OpenMP, this is unsafe."
 
     The issue occurs when NumPy/SciPy compiled with OpenMP are used in
     combination with multiprocessing fork(). Setting these environment
     variables disables OpenMP threading in worker processes.
-    """
-    import os
 
-    # Set OpenMP to use single thread in worker processes
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
-    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+    The configuration is now applied at module level to ensure it takes
+    effect before any OpenMP initialization, which is critical for
+    SLURM/cluster environments where each MPI rank uses multiprocessing.
+    """
+    # Configuration now done at module level - this function is a no-op
+    pass
 
 
 def _setup_multiprocessing_context():
@@ -1146,8 +1158,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     import matplotlib.pyplot as plt
     import matplotlib.colors as mcolors
 
-    # Configure OpenMP
-    _configure_openmp_for_multiprocessing()
+    # Note: OpenMP configuration is now done at module import time
+    # (see module-level code after imports) to ensure environment
+    # variables are set before any numerical libraries initialize
 
     # Extract parameters with defaults
     max_frames = parameters.get("max_frames", np.inf)
@@ -1177,10 +1190,14 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         else 1
     )
 
-    # Check for potential OpenMP conflicts
+    # Log multiprocessing configuration
     if enable_multiprocessing and n_processes > 1:
-        print("  Configuring multiprocessing environment...")
-        print("  Note: OpenMP threading disabled to avoid fork() conflicts")
+        logger.info(f"Multiprocessing enabled: {n_processes} processes")
+        logger.info(
+            "OpenMP threading disabled at module level to avoid fork() conflicts"
+        )
+    else:
+        logger.info("Sequential processing mode")
 
     # Performance optimization parameters
     subsampling_fraction = parameters.get("subsampling_fraction", 0.1)
