@@ -1399,13 +1399,13 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             y_max = y_max_full - (dy_full - dy_reduced) / 2
 
             logger.debug(f"reduced FOV: ({x_min} - {x_max}, {y_min} - {y_max})")
-            logger.debug(f"#locs > xmin: {(current_locs["x"] > x_min).sum()}")
-            logger.debug(f"#locs < xmax: {(current_locs["x"] < x_max).sum()}")
-            logger.debug(f"#locs > y_min: {(current_locs["y"] > y_min).sum()}")
-            logger.debug(f"#locs < y_min: {(current_locs["y"] < y_min).sum()}")
-            logger.debug(f"#locs in xrange: {((current_locs["x"] > x_min) & (current_locs["x"] < x_max)).sum()}")
-            logger.debug(f"#locs in yrange: {((current_locs["y"] > y_min) & (current_locs["x"] < y_max)).sum()}")
-            logger.debug(f"#locs in reduced FOV: {((current_locs["x"] > x_min) & (current_locs["x"] < x_max) & (current_locs["y"] > y_min) & (current_locs["x"] < y_max)).sum()}")
+            logger.debug(f'#locs > xmin: {(current_locs["x"] > x_min).sum()}')
+            logger.debug(f'#locs < xmax: {(current_locs["x"] < x_max).sum()}')
+            logger.debug(f'#locs > y_min: {(current_locs["y"] > y_min).sum()}')
+            logger.debug(f'#locs < y_min: {(current_locs["y"] < y_min).sum()}')
+            logger.debug(f'#locs in xrange: {((current_locs["x"] > x_min) & (current_locs["x"] < x_max)).sum()}')
+            logger.debug(f'#locs in yrange: {((current_locs["y"] > y_min) & (current_locs["x"] < y_max)).sum()}')
+            logger.debug(f'#locs in reduced FOV: {((current_locs["x"] > x_min) & (current_locs["x"] < x_max) & (current_locs["y"] > y_min) & (current_locs["x"] < y_max)).sum()}')
             
 
             indices = (
