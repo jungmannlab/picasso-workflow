@@ -1391,7 +1391,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             dx_reduced = dx_full * np.sqrt(current_subsampling_fraction)
             dy_reduced = dy_full * np.sqrt(current_subsampling_fraction)
 
-            logger.debug(f"reducing side lengths from ({dx_full}, {dy_full}) by ({dx_each}, {dy_each})")
+            logger.debug(f"reducing side lengths from ({dx_full}, {dy_full}) to ({dx_reduced}, {dy_reduced})")
 
             x_min = x_min_full + (dx_full - dx_reduced) / 2
             x_max = x_max_full - (dx_full - dx_reduced) / 2
