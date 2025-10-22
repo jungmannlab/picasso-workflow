@@ -1406,7 +1406,8 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 & (current_locs["y"] > y_min)
                 & (current_locs["y"] < y_min))
             # only crop if there are enough locs
-            if np.sum(indices) > min_locs_per_frame:
+            logger.debug(f"found {indices.sum()} locs in range. Minimum is {min_locs_per_frame}")
+            if indices.sum() > min_locs_per_frame:
                 current_locs = current_locs[indices]
 
             reference_dataset = current_locs
