@@ -1386,19 +1386,28 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             y_min_full, y_max_full = current_locs["y"].min(), current_locs["y"].max()
             dy_full = y_max_full - y_min_full
 
-            dx_each = dx_full * np.sqrt(current_subsampling_fraction) / 2
-            dy_each = dy_full * np.sqrt(current_subsampling_fraction) / 2
+            logger.debug(f"full FOV: ({x_min_full} - {x_max_full}, {y_min_full} - {y_max_full})")
 
-            x_min = x_min_full + dx_each
-            x_max = x_max_full - dx_each
-            y_min = y_min_full + dy_each
-            y_max = y_max_full = dy_each
+            dx_reduced = dx_full * np.sqrt(current_subsampling_fraction)
+            dy_reduced = dy_full * np.sqrt(current_subsampling_fraction)
 
-            current_locs = current_locs[
+            logger.debug(f"reducing side lengths from ({dx_full}, {dy_full}) by ({dx_each}, {dy_each})")
+
+            x_min = x_min_full + (dx_full - dx_reduced) / 2
+            x_max = x_max_full - (dx_full - dx_reduced) / 2
+            y_min = y_min_full + (dy_full - dy_reduced) / 2
+            y_max = y_max_full = (dy_full - dy_reduced) / 2
+
+            logger.debug(f"reduced FOV: ({x_min} - {x_max}, {y_min} - {y_max})")
+
+            indices = (
                 (current_locs["x"] > x_min)
                 & (current_locs["x"] < x_max)
                 & (current_locs["y"] > y_min)
-                & (current_locs["y"] < y_min)]
+                & (current_locs["y"] < y_min))
+            # only crop if there are enough locs
+            if np.sum(indices) > min_locs_per_frame:
+                current_locs = current_locs[indices]
 
             reference_dataset = current_locs
 
