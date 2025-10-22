@@ -42,7 +42,7 @@ def config_logger():
     logger.add(
         logfile,
         format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {name} | {function} | {level} -> {message}",
-        rotation="1 MB", retention=5, enqueue=True, serialize=True)
+        rotation="1 MB", retention=5, enqueue=True, serialize=False)
 
 
 
