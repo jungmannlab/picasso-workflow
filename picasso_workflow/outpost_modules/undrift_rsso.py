@@ -1408,17 +1408,17 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             logger.debug(f'#locs in reduced FOV: {((current_locs["x"] > x_min) & (current_locs["x"] < x_max) & (current_locs["y"] > y_min) & (current_locs["y"] < y_max)).sum()}')
             
 
-            indices = (
-                (current_locs["x"] > x_min)
-                & (current_locs["x"] < x_max)
-                & (current_locs["y"] > y_min)
-                & (current_locs["y"] < y_min))
+            # indices = (
+            #     (current_locs["x"] > x_min)
+            #     & (current_locs["x"] < x_max)
+            #     & (current_locs["y"] > y_min)
+            #     & (current_locs["y"] < y_min))
             # indices = (
             #     (current_locs["x"] > x_min)
             #     & (current_locs["x"] < x_max)
             #     & (current_locs["y"] > y_min)
             #     & (current_locs["x"] < y_max))
-            indices = ((current_locs["x"] > x_min) & (current_locs["x"] < x_max) & (current_locs["y"] > y_min) & (current_locs["x"] < y_max))
+            indices = ((current_locs["x"] > x_min) & (current_locs["x"] < x_max) & (current_locs["y"] > y_min) & (current_locs["y"] < y_max))
             # only crop if there are enough locs
             logger.debug(f"found {indices.sum()} locs in range. Minimum is {min_locs_per_frame}")
             if indices.sum() > min_locs_per_frame:
