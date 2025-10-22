@@ -39,10 +39,15 @@ def config_logger():
     # stream_handler.setLevel(logging.WARNING)
     # logger.addHandler(file_handler)
     # # logger.addHandler(stream_handler)
+    logger.remove()  # Remove default stderr sink
     logger.add(
         logfile,
         format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {name} | {function} | {level} -> {message}",
         rotation="1 MB", retention=5, enqueue=True, serialize=False)
+    logger.add(
+        sys.stderr,
+        format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {name} | {function} | {level} -> {message}",
+        level="ERROR")
 
 
 
