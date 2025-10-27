@@ -24,16 +24,16 @@ import multiprocessing as mp
 import time
 import os
 
-# logger = logging.getLogger(__name__)
+# # logger = logging.getLogger(__name__)
 
-# Configure OpenMP BEFORE any potential OpenMP initialization
-# This prevents fork() conflicts when using multiprocessing
-# Must be set at module level before numerical libraries initialize
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
+# # Configure OpenMP BEFORE any potential OpenMP initialization
+# # This prevents fork() conflicts when using multiprocessing
+# # Must be set at module level before numerical libraries initialize
+# os.environ["OMP_NUM_THREADS"] = "1"
+# os.environ["OPENBLAS_NUM_THREADS"] = "1"
+# os.environ["MKL_NUM_THREADS"] = "1"
+# os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+# os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 # Try to import Numba for acceleration
 try:
@@ -1544,18 +1544,18 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             # Process chunk in parallel (or sequentially if multiprocessing disabled)
             if enable_multiprocessing and n_processes > 1:
                 try:
-                    # Use safer multiprocessing context to avoid OpenMP conflicts
-                    ctx = _setup_multiprocessing_context()
-                    with ctx.Pool(processes=n_processes) as pool:
-                        chunk_results = pool.map(
-                            _compute_frame_to_reference_shift_optimized,
-                            chunk_frame_data,
-                        )
-                    # with ThreadPoolExecutor(max_workers=n_processes) as executor:
-                    #     chunk_results = list(executor.map(_compute_frame_to_reference_shift_optimized, chunk_frame_data))
-                    # print(
-                    #     f"    ✓ Parallel processing successful with {n_processes} processes"
-                    # )
+                    # # Use safer multiprocessing context to avoid OpenMP conflicts
+                    # ctx = _setup_multiprocessing_context()
+                    # with ctx.Pool(processes=n_processes) as pool:
+                    #     chunk_results = pool.map(
+                    #         _compute_frame_to_reference_shift_optimized,
+                    #         chunk_frame_data,
+                    #     )
+                    with ThreadPoolExecutor(max_workers=n_processes) as executor:
+                        chunk_results = list(executor.map(_compute_frame_to_reference_shift_optimized, chunk_frame_data))
+                    print(
+                        f"    ✓ Parallel processing successful with {n_processes} processes"
+                    )
                 except (OSError, RuntimeError, AttributeError) as e:
                     print(
                         f"    ⚠ Multiprocessing failed ({e}), falling back to sequential processing"
