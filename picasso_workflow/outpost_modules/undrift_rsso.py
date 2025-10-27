@@ -18,6 +18,7 @@ Author: Generated for picasso-workflow
 """
 
 import numpy as np
+
 # import logging
 from loguru import logger
 import multiprocessing as mp
@@ -273,7 +274,6 @@ if NUMBA_AVAILABLE:
 
         return peak_x, peak_y, max_val
 
-
 else:
     # Fallback implementations when Numba is not available
     def _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y, max_shift=None):
@@ -524,7 +524,7 @@ def _save_rsso_histogram_plot(
     # Apply circular mask for visualization
     hist_plot = hist.T.copy()
     if max_shift is not None:
-        distances = np.sqrt(X_centers ** 2 + Y_centers ** 2)
+        distances = np.sqrt(X_centers**2 + Y_centers**2)
         outside_circle = distances > max_shift
         hist_plot[outside_circle] = np.nan
 
@@ -887,7 +887,10 @@ def _estimate_subsampling_uncertainty(
         else:
             # Use standard RSSO computation
             shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-                subset_dataset, frame_locs, max_shift, plot_histogram=False,
+                subset_dataset,
+                frame_locs,
+                max_shift,
+                plot_histogram=False,
             )
 
         if shift_x is not None and shift_y is not None:
@@ -905,9 +908,7 @@ def _estimate_subsampling_uncertainty(
         mean_shift_y = np.mean(shifts_array[:, 1])
 
         # Confidence based on consistency and number of localizations
-        uncertainty_magnitude = np.sqrt(
-            uncertainty_x ** 2 + uncertainty_y ** 2
-        )
+        uncertainty_magnitude = np.sqrt(uncertainty_x**2 + uncertainty_y**2)
         consistency_confidence = 1.0 / (
             1.0 + uncertainty_magnitude * 10
         )  # Penalize inconsistency
@@ -1018,9 +1019,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
             start_time = time.time()
 
-            frame_number = (
-                target_frames[0] if len(target_frames) > 0 else None
-            )
+            frame_number = target_frames[0] if len(target_frames) > 0 else None
             if enable_numba_optimization:
                 # Use Numba-optimized RSSO computation
                 # Determine frame number for plotting (use first frame in group)
@@ -1091,7 +1090,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 n_locs_frame = len(frame_locs)
                 if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
                     uncertainty_magnitude = np.sqrt(
-                        uncertainty_x ** 2 + uncertainty_y ** 2
+                        uncertainty_x**2 + uncertainty_y**2
                     )
                     confidence = min(
                         1.0,
@@ -1129,10 +1128,10 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
 def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     """Compute iterative RSSO-based drift correction
-    
+
     This is the main computation function that performs the full iterative RSSO
     drift correction algorithm.
-    
+
     Args:
         locs : structured array
             Localization data with 'x', 'y', 'frame' fields
@@ -1144,7 +1143,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             Algorithm parameters (see undrift_rsso method docstring for details)
         results_folder : str
             Path to folder for saving results
-    
+
     Returns:
         locs_undrifted : structured array
             Drift-corrected localizations
@@ -1158,7 +1157,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     from picasso import io
     import matplotlib.pyplot as plt
     import matplotlib.colors as mcolors
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ProcessPoolExecutor
 
     # Note: OpenMP configuration is now done at module import time
     # (see module-level code after imports) to ensure environment
@@ -1234,7 +1233,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
     # Monitor initial memory usage
     process = psutil.Process()
-    initial_memory_gb = process.memory_info().rss / (1024 ** 3)
+    initial_memory_gb = process.memory_info().rss / (1024**3)
 
     logger.debug(
         f"Iterative RSSO undrift: max_iterations={max_iterations}, "
@@ -1291,7 +1290,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     # Estimate memory requirements and warn if needed
     bytes_per_loc = locs.itemsize * len(locs.dtype)
     estimated_memory_gb = (len(locs) * bytes_per_loc * 3) / (
-        1024 ** 3
+        1024**3
     )  # Factor for processing
     logger.debug(
         f"Dataset size: {len(locs):,} localizations, {n_frames:,} frames"
@@ -1339,7 +1338,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         os.makedirs(iter_dir, exist_ok=True)
 
         # Monitor memory usage during iteration
-        current_memory_gb = process.memory_info().rss / (1024 ** 3)
+        current_memory_gb = process.memory_info().rss / (1024**3)
         logger.debug(
             f"    Memory usage at iteration start: {current_memory_gb:.2f} GB"
         )
@@ -1357,14 +1356,14 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         elif progressive_subsampling:
             # Progressive subsampling: use schedule
             if iteration < len(progressive_subsampling_schedule):
-                current_subsampling_fraction = progressive_subsampling_schedule[
-                    iteration
-                ]
+                current_subsampling_fraction = (
+                    progressive_subsampling_schedule[iteration]
+                )
             else:
                 # If we exceed schedule length, use last value
-                current_subsampling_fraction = progressive_subsampling_schedule[
-                    -1
-                ]
+                current_subsampling_fraction = (
+                    progressive_subsampling_schedule[-1]
+                )
             logger.debug(
                 f"    Progressive subsampling: {current_subsampling_fraction:.1%} of dataset"
             )
@@ -1383,9 +1382,15 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         # OPTIMIZATION: Create reference dataset for this iteration
         if current_subsampling_fraction < 1.0:
             # subsample by cropping the center
-            x_min_full, x_max_full = current_locs["x"].min(), current_locs["x"].max()
+            x_min_full, x_max_full = (
+                current_locs["x"].min(),
+                current_locs["x"].max(),
+            )
             dx_full = x_max_full - x_min_full
-            y_min_full, y_max_full = current_locs["y"].min(), current_locs["y"].max()
+            y_min_full, y_max_full = (
+                current_locs["y"].min(),
+                current_locs["y"].max(),
+            )
             dy_full = y_max_full - y_min_full
 
             # logger.debug(f"full FOV: ({x_min_full} - {x_max_full}, {y_min_full} - {y_max_full})")
@@ -1408,7 +1413,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             # logger.debug(f'#locs in xrange: {((current_locs["x"] > x_min) & (current_locs["x"] < x_max)).sum()}')
             # logger.debug(f'#locs in yrange: {((current_locs["y"] > y_min) & (current_locs["y"] < y_max)).sum()}')
             # logger.debug(f'#locs in reduced FOV: {((current_locs["x"] > x_min) & (current_locs["x"] < x_max) & (current_locs["y"] > y_min) & (current_locs["y"] < y_max)).sum()}')
-            
 
             # indices = (
             #     (current_locs["x"] > x_min)
@@ -1420,7 +1424,12 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             #     & (current_locs["x"] < x_max)
             #     & (current_locs["y"] > y_min)
             #     & (current_locs["x"] < y_max))
-            indices = ((current_locs["x"] > x_min) & (current_locs["x"] < x_max) & (current_locs["y"] > y_min) & (current_locs["y"] < y_max))
+            indices = (
+                (current_locs["x"] > x_min)
+                & (current_locs["x"] < x_max)
+                & (current_locs["y"] > y_min)
+                & (current_locs["y"] < y_max)
+            )
             # only crop if there are enough locs
             # logger.debug(f"found {indices.sum()} locs in range. Minimum is {min_locs_per_frame}")
             if indices.sum() > min_locs_per_frame:
@@ -1551,8 +1560,15 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     #         _compute_frame_to_reference_shift_optimized,
                     #         chunk_frame_data,
                     #     )
-                    with ThreadPoolExecutor(max_workers=n_processes) as executor:
-                        chunk_results = list(executor.map(_compute_frame_to_reference_shift_optimized, chunk_frame_data))
+                    with ProcessPoolExecutor(
+                        max_workers=n_processes
+                    ) as executor:
+                        chunk_results = list(
+                            executor.map(
+                                _compute_frame_to_reference_shift_optimized,
+                                chunk_frame_data,
+                            )
+                        )
                     print(
                         f"    ✓ Parallel processing successful with {n_processes} processes"
                     )
@@ -1591,7 +1607,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 # Collect performance statistics
                 if performance_info and "computation_time" in performance_info:
                     comp_time = performance_info["computation_time"]
-                    comp_type = performance_info.get( 
+                    comp_type = performance_info.get(
                         "computation_type", "Unknown"
                     )
 
@@ -1691,9 +1707,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         # Outlier detection using z-score
         if outlier_detection_enabled and valid_measurements > 5:
-            shifts_magnitude = np.sqrt(
-                frame_shifts_x ** 2 + frame_shifts_y ** 2
-            )
+            shifts_magnitude = np.sqrt(frame_shifts_x**2 + frame_shifts_y**2)
             valid_shifts = shifts_magnitude[shifts_magnitude > 0]
             if len(valid_shifts) > 0:
                 z_scores = np.abs(
@@ -1746,7 +1760,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             )
             rms_change_x = np.sqrt(np.mean((drift_x - prev_drift_x) ** 2))
             rms_change_y = np.sqrt(np.mean((drift_y - prev_drift_y) ** 2))
-            convergence_rms = np.sqrt(rms_change_x ** 2 + rms_change_y ** 2)
+            convergence_rms = np.sqrt(rms_change_x**2 + rms_change_y**2)
 
             logger.debug(f"    RMS change: {convergence_rms:.3f} nm")
 
@@ -1758,7 +1772,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         else:
             rms_change_x = np.sqrt(np.mean((drift_x) ** 2))
             rms_change_y = np.sqrt(np.mean((drift_y) ** 2))
-            convergence_rms = np.sqrt(rms_change_x ** 2 + rms_change_y ** 2)
+            convergence_rms = np.sqrt(rms_change_x**2 + rms_change_y**2)
 
             logger.debug(f"    RMS drift: {convergence_rms:.3f} nm")
 
@@ -1825,7 +1839,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     )
 
     # Report final memory usage
-    final_memory_gb = process.memory_info().rss / (1024 ** 3)
+    final_memory_gb = process.memory_info().rss / (1024**3)
     memory_reduction_gb = initial_memory_gb - final_memory_gb
 
     logger.debug(
@@ -1851,7 +1865,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     # Drift statistics
     drift_magnitude_x = np.max(np.abs(drift_x))
     drift_magnitude_y = np.max(np.abs(drift_y))
-    total_drift = np.sqrt(drift_magnitude_x ** 2 + drift_magnitude_y ** 2)
+    total_drift = np.sqrt(drift_magnitude_x**2 + drift_magnitude_y**2)
     mean_drift_quality = np.mean(drift_quality[drift_quality > 0])
 
     results["drift_magnitude_x"] = drift_magnitude_x
@@ -1864,9 +1878,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     results["progressive_subsampling"] = progressive_subsampling
     results["final_iteration_full_dataset"] = final_iteration_full_dataset
     if progressive_subsampling:
-        results[
-            "progressive_subsampling_schedule"
-        ] = progressive_subsampling_schedule
+        results["progressive_subsampling_schedule"] = (
+            progressive_subsampling_schedule
+        )
         # Calculate average speedup across iterations
         avg_speedup = np.mean(
             [
