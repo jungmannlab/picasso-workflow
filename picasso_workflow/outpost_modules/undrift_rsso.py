@@ -92,9 +92,11 @@ def _setup_multiprocessing_context():
             return mp.get_context()
 
 
-# Global variables to hold pre-built cKDTree in worker processes
+# Global variables to hold pre-built data structures in worker processes
 _WORKER_KDTREE = None
 _WORKER_KDTREE_SHM = None
+_WORKER_FRAMES = None  # Reference frame numbers for temporal filtering
+_WORKER_FRAMES_SHM = None  # Shared memory reference for frame array
 
 
 def _worker_init_kdtree(ref_coords):
@@ -115,24 +117,32 @@ def _worker_init_kdtree(ref_coords):
     logger.debug(f"Worker initialized: built cKDTree with {_WORKER_KDTREE.n} points")
 
 
-def _init_worker_from_shared_memory(shm_name, kdtree_size):
-    """Initialize worker by loading cKDTree from shared memory
+def _init_worker_from_shared_memory(
+    shm_name, kdtree_size, frame_shm_name=None, frame_array_len=None, frame_dtype=None
+):
+    """Initialize worker by loading cKDTree and frame array from shared memory
 
-    This function provides zero-copy access to a pre-built cKDTree by
-    deserializing it from shared memory. This is faster than building
-    the tree from coordinates and uses less memory than per-worker copies.
+    This function provides zero-copy access to a pre-built cKDTree and reference
+    frame array by deserializing them from shared memory. This is faster than
+    building the tree from coordinates and uses less memory than per-worker copies.
 
     Args:
         shm_name : str
-            Name of the shared memory segment
+            Name of the cKDTree shared memory segment
         kdtree_size : int
             Size of the serialized cKDTree in bytes
+        frame_shm_name : str, optional
+            Name of the frame array shared memory segment
+        frame_array_len : int, optional
+            Number of elements in frame array
+        frame_dtype : dtype, optional
+            Data type of frame array (typically np.int32)
     """
-    global _WORKER_KDTREE, _WORKER_KDTREE_SHM
+    global _WORKER_KDTREE, _WORKER_KDTREE_SHM, _WORKER_FRAMES, _WORKER_FRAMES_SHM
     from multiprocessing import shared_memory
     import pickle
 
-    # Attach to existing shared memory
+    # Attach to existing cKDTree shared memory
     shm = shared_memory.SharedMemory(name=shm_name)
 
     # Deserialize cKDTree from shared memory
@@ -143,8 +153,19 @@ def _init_worker_from_shared_memory(shm_name, kdtree_size):
     _WORKER_KDTREE_SHM = shm
 
     logger.debug(
-        f"Worker initialized from shared memory: {_WORKER_KDTREE.n} points"
+        f"Worker initialized cKDTree from shared memory: {_WORKER_KDTREE.n} points"
     )
+
+    # Load frame array if provided (for temporal filtering)
+    if frame_shm_name is not None and frame_array_len is not None:
+        frame_shm = shared_memory.SharedMemory(name=frame_shm_name)
+        frame_bytes = bytes(frame_shm.buf[: frame_array_len * np.dtype(frame_dtype).itemsize])
+        _WORKER_FRAMES = np.frombuffer(frame_bytes, dtype=frame_dtype)
+        _WORKER_FRAMES_SHM = frame_shm
+
+        logger.debug(
+            f"Worker initialized frame array from shared memory: {len(_WORKER_FRAMES):,} frames"
+        )
 
 
 def _create_shared_memory_kdtree(reference_coords):
@@ -181,6 +202,39 @@ def _create_shared_memory_kdtree(reference_coords):
     )
 
     return shm, kdtree_size
+
+
+def _create_shared_memory_frame_array(frame_array):
+    """Serialize frame array to shared memory for zero-copy worker access
+
+    Stores frame numbers in shared memory so workers can filter pairs by
+    temporal proximity without serializing the array with each task.
+
+    Args:
+        frame_array : ndarray
+            Frame numbers (N,) array of integers
+
+    Returns:
+        tuple : (SharedMemory, int, dtype)
+            Shared memory object, array size, and dtype for reconstruction
+    """
+    from multiprocessing import shared_memory
+
+    # Convert to int32 for memory efficiency
+    frame_array_int32 = frame_array.astype(np.int32)
+    array_bytes = frame_array_int32.tobytes()
+    array_size = len(array_bytes)
+
+    # Create shared memory segment
+    shm = shared_memory.SharedMemory(create=True, size=array_size)
+    shm.buf[:array_size] = array_bytes
+
+    logger.debug(
+        f"Created shared memory frame array: {len(frame_array):,} frames, "
+        f"{array_size / 1024 / 1024:.2f} MB"
+    )
+
+    return shm, len(frame_array), np.int32
 
 
 # ==============================================================================
@@ -392,11 +446,14 @@ def _log_performance_summary(
 if NUMBA_AVAILABLE:
 
     @numba.jit(nopython=True, parallel=True, cache=True)
-    def _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y, max_shift=None):
-        """Numba-optimized pairwise shift computation (Phase 1)
+    def _compute_pairwise_shifts_numba(
+        i_x, i_y, j_x, j_y, max_shift=None, i_frames=None, j_frames=None, ton_exclusion=0
+    ):
+        """Numba-optimized pairwise shift computation with temporal filtering
 
         Computes shifts from i to j: j - i (matches standard implementation)
         Only includes pairs within max_shift distance (like standard KDTree approach)
+        Optionally excludes pairs from temporally close frames (within ±2×ton)
 
         Note: Uses parallel=True with fixed-size arrays for optimal performance
 
@@ -407,6 +464,12 @@ if NUMBA_AVAILABLE:
                 Second set of coordinates (frame in standard call)
             max_shift : float, optional
                 Maximum distance to consider pairs (matches standard implementation)
+            i_frames : ndarray, optional
+                Frame numbers for i coordinates (for temporal filtering)
+            j_frames : ndarray, optional
+                Frame numbers for j coordinates (for temporal filtering)
+            ton_exclusion : int, default 0
+                Exclude pairs from frames within ±2×ton (temporal filtering)
 
         Returns:
             shifts_x, shifts_y : ndarray
@@ -424,6 +487,12 @@ if NUMBA_AVAILABLE:
         all_shifts_y = np.empty(max_pairs, dtype=numba.float32)
         valid_mask = np.zeros(max_pairs, dtype=numba.boolean)
 
+        # Determine if temporal filtering is enabled
+        use_temporal_filter = (
+            ton_exclusion > 0 and i_frames is not None and j_frames is not None
+        )
+        temporal_threshold = 2 * ton_exclusion
+
         # Parallel computation over pairs
         for idx in numba.prange(
             max_pairs
@@ -431,12 +500,20 @@ if NUMBA_AVAILABLE:
             i = idx // n_j  # Convert flat index to i,j coordinates
             j = idx % n_j
 
+            # Temporal filtering: skip pairs from nearby frames
+            if use_temporal_filter:
+                frame_diff = abs(i_frames[i] - j_frames[j])
+                if frame_diff <= temporal_threshold:
+                    valid_mask[idx] = False
+                    continue
+
             i_x_val = i_x[i]
             i_y_val = i_y[i]
 
             dx = j_x[j] - i_x_val
             dy = j_y[j] - i_y_val
 
+            # Spatial filtering: check distance
             if max_shift is None or (dx * dx + dy * dy) <= max_shift_sq:
                 all_shifts_x[idx] = dx
                 all_shifts_y[idx] = dy
@@ -569,24 +646,44 @@ if NUMBA_AVAILABLE:
 
 else:
     # Fallback implementations when Numba is not available
-    def _compute_pairwise_shifts_numba(i_x, i_y, j_x, j_y, max_shift=None):
-        """Fallback NumPy implementation"""
+    def _compute_pairwise_shifts_numba(
+        i_x, i_y, j_x, j_y, max_shift=None, i_frames=None, j_frames=None, ton_exclusion=0
+    ):
+        """Fallback NumPy implementation with temporal filtering"""
         i_coords = np.column_stack([i_x, i_y])
         j_coords = np.column_stack([j_x, j_y])
 
         shifts_x = []
         shifts_y = []
-        for i_coord in i_coords:
+
+        use_temporal_filter = (
+            ton_exclusion > 0 and i_frames is not None and j_frames is not None
+        )
+        temporal_threshold = 2 * ton_exclusion
+
+        for i, i_coord in enumerate(i_coords):
             # Calculate shift from i to j: j - i (matches standard)
             dx = j_coords[:, 0] - i_coord[0]
             dy = j_coords[:, 1] - i_coord[1]
 
-            # Filter by max_shift distance like standard implementation
+            # Start with all pairs valid
+            valid_mask = np.ones(len(dx), dtype=bool)
+
+            # Temporal filtering: exclude pairs from nearby frames
+            if use_temporal_filter:
+                frame_diffs = np.abs(j_frames - i_frames[i])
+                temporal_mask = frame_diffs > temporal_threshold
+                valid_mask &= temporal_mask
+
+            # Spatial filtering: exclude pairs beyond max_shift
             if max_shift is not None:
                 distances_sq = dx * dx + dy * dy
-                valid_mask = distances_sq <= (max_shift * max_shift)
-                dx = dx[valid_mask]
-                dy = dy[valid_mask]
+                spatial_mask = distances_sq <= (max_shift * max_shift)
+                valid_mask &= spatial_mask
+
+            # Apply combined mask
+            dx = dx[valid_mask]
+            dy = dy[valid_mask]
 
             shifts_x.extend(dx)
             shifts_y.extend(dy)
@@ -676,8 +773,11 @@ def _compute_rsso_shift_numba_optimized(
     plot_dir=None,
     iteration=None,
     frame_number=None,
+    ref_frames=None,
+    frame_locs_frames=None,
+    ton=0,
 ):
-    """Numba-optimized RSSO shift computation combining Phases 1 and 2
+    """Numba-optimized RSSO shift computation with temporal filtering
 
     Args:
         locs_i : ndarray
@@ -696,6 +796,12 @@ def _compute_rsso_shift_numba_optimized(
             Iteration number for filename
         frame_number : int, optional
             Frame number for filename
+        ref_frames : ndarray, optional
+            Frame numbers for reference localizations (for temporal filtering)
+        frame_locs_frames : ndarray, optional
+            Frame numbers for frame localizations (for temporal filtering)
+        ton : int, default 0
+            Exclude pairs from frames within ±2×ton (temporal filtering)
 
     Returns:
         shift_x, shift_y : float
@@ -717,18 +823,30 @@ def _compute_rsso_shift_numba_optimized(
     j_x = locs_j["x"].astype(np.float32)
     j_y = locs_j["y"].astype(np.float32)
 
+    # Extract frame numbers if available for temporal filtering
+    if ref_frames is not None:
+        i_frames = ref_frames.astype(np.int32) if not isinstance(ref_frames, np.ndarray) else ref_frames.astype(np.int32)
+    else:
+        i_frames = None
+
+    if frame_locs_frames is not None:
+        j_frames = frame_locs_frames.astype(np.int32) if not isinstance(frame_locs_frames, np.ndarray) else frame_locs_frames.astype(np.int32)
+    else:
+        j_frames = None
+
     phase1_start = time.time()
 
-    # Phase 1: Compute all pairwise shifts (Numba optimized)
+    # Phase 1: Compute all pairwise shifts with temporal filtering (Numba optimized)
     # Standard calculation: dx = coord_j[0] - coord_i[0] (j - i)
     # Only consider pairs within max_shift distance (like standard KDTree approach)
+    # Exclude pairs from temporally close frames (within ±2×ton)
     if enable_numba and NUMBA_AVAILABLE:
         shifts_x, shifts_y = _compute_pairwise_shifts_numba(
-            i_x, i_y, j_x, j_y, max_shift_pixels
+            i_x, i_y, j_x, j_y, max_shift_pixels, i_frames, j_frames, ton
         )
     else:
         shifts_x, shifts_y = _compute_pairwise_shifts_numba(
-            i_x, i_y, j_x, j_y, max_shift_pixels
+            i_x, i_y, j_x, j_y, max_shift_pixels, i_frames, j_frames, ton
         )  # Uses fallback
 
     phase1_time = time.time() - phase1_start
@@ -1283,13 +1401,13 @@ def _estimate_subsampling_uncertainty(
 
 
 def _compute_frame_to_reference_shift_optimized(frame_data):
-    """Optimized RSSO shift computation using per-iteration reference dataset
+    """Optimized RSSO shift computation with temporal filtering
 
     Args:
         frame_data : tuple
             (frame_indices, reference_dataset, target_frames, frame_locs, max_shift, min_locs_per_frame,
              enable_uncertainty_estimation, n_uncertainty_trials, subsampling_fraction,
-             enable_numba_optimization, plot_histogram, plot_dir, iteration)
+             enable_numba_optimization, plot_histogram, plot_dir, iteration, ton)
 
     Returns:
         tuple : (frame_indices, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality, performance_info)
@@ -1310,6 +1428,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         plot_histogram,
         plot_dir,
         iteration,
+        ton,  # For temporal filtering
     ) = frame_data
 
     try:
@@ -1326,19 +1445,31 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         # Create dataset by excluding all target frames
         from scipy.spatial import cKDTree
 
-        # Use pre-built cKDTree from worker initialization if available
-        global _WORKER_KDTREE
+        # Use pre-built cKDTree and frame array from worker initialization if available
+        global _WORKER_KDTREE, _WORKER_FRAMES
         if _WORKER_KDTREE is not None:
             # Worker has pre-built cKDTree - use it directly
+            # Temporal filtering will be done at pair level using _WORKER_FRAMES
             dataset_locs = _WORKER_KDTREE
             len_dataset = _WORKER_KDTREE.n
         elif not isinstance(reference_dataset, cKDTree):
-            # Old approach: filter reference_dataset by frame
+            # Pickle mode or sequential: filter reference_dataset by frame
+            # Apply both exact frame exclusion AND temporal filtering
             dataset_mask = ~np.isin(reference_dataset["frame"], target_frames)
+
+            # Add temporal filtering: exclude frames within ±2×ton of target frames
+            if ton > 0:
+                temporal_exclusion = 2 * ton
+                for target_frame in target_frames:
+                    # Exclude all frames in the range [target_frame - 2*ton, target_frame + 2*ton]
+                    frame_diffs = np.abs(reference_dataset["frame"] - target_frame)
+                    temporal_mask = frame_diffs > temporal_exclusion
+                    dataset_mask &= temporal_mask
+
             dataset_locs = reference_dataset[dataset_mask]
             len_dataset = len(dataset_locs)
         else:
-            # reference_dataset is already a cKDTree
+            # reference_dataset is already a cKDTree (shouldn't happen in normal flow)
             dataset_locs = reference_dataset
             len_dataset = reference_dataset.n
 
@@ -1374,8 +1505,13 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             start_time = time.time()
 
             frame_number = target_frames[0] if len(target_frames) > 0 else None
+
+            # Extract frame numbers for temporal filtering
+            frame_locs_frames = frame_locs["frame"] if "frame" in frame_locs.dtype.names else None
+            ref_frames = _WORKER_FRAMES  # From worker global (or None if not using shared memory)
+
             if enable_numba_optimization:
-                # Use Numba-optimized RSSO computation
+                # Use Numba-optimized RSSO computation with temporal filtering
                 # Determine frame number for plotting (use first frame in group)
                 (
                     shift_x,
@@ -1390,11 +1526,14 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                     plot_dir=plot_dir,
                     iteration=iteration,
                     frame_number=frame_number,
+                    ref_frames=ref_frames,
+                    frame_locs_frames=frame_locs_frames,
+                    ton=ton,
                 )
                 uncertainty_info = numba_info if numba_info is not None else {}
                 computation_type = "Numba-optimized"
             else:
-                # Use standard RSSO computation
+                # Use standard RSSO computation with temporal filtering
                 shift_x, shift_y, _, std_info = _calculate_pairwise_shift(
                     dataset_locs,
                     frame_locs,
@@ -1403,6 +1542,9 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                     remove_zeroshift=True,
                     plot_dir=plot_dir,
                     plot_fn_suffix=f"_{iteration}_{frame_number}_dslocs{len_dataset}_tgtlocs{len(frame_locs)}",
+                    ref_frames=ref_frames,
+                    frame_locs_frames=frame_locs_frames,
+                    ton_exclusion=ton,
                 )
                 uncertainty_info = std_info if std_info is not None else {}
                 computation_type = "Standard"
@@ -1936,6 +2078,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         # This saves ~30 seconds per iteration by avoiding repeated setup/teardown
         pool = None
         shm = None
+        frame_shm = None  # For temporal filtering
         ctx = None
         if enable_multiprocessing and n_processes > 1:
             try:
@@ -1953,11 +2096,17 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                             )
                         iteration_timings["kdtree_serialization"] += serial_timer.elapsed
 
+                        # Also create shared memory for frame array (temporal filtering)
+                        reference_frames = reference_dataset["frame"]
+                        frame_shm, frame_len, frame_dtype = _create_shared_memory_frame_array(
+                            reference_frames
+                        )
+
                         with _Timer("pool_init") as pool_timer:
                             pool = ctx.Pool(
                                 processes=n_processes,
                                 initializer=_init_worker_from_shared_memory,
-                                initargs=(shm.name, kdtree_size),
+                                initargs=(shm.name, kdtree_size, frame_shm.name, frame_len, frame_dtype),
                             )
                         iteration_timings["pool_creation"] += pool_timer.elapsed
 
@@ -2102,6 +2251,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         plot_rsso,  # Whether to plot RSSO histograms
                         iter_dir,  # Directory for saving plots
                         iteration + 1,  # Current iteration number (1-indexed)
+                        ton,  # For temporal filtering (exclude frames within ±2×ton)
                     )
                     chunk_frame_data.append(frame_data)
             iteration_timings["chunk_data_preparation"] += prep_timer.elapsed
@@ -2187,7 +2337,12 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         if shm is not None:
             shm.close()
             shm.unlink()
-            logger.debug("    Shared memory cleaned up")
+            logger.debug("    KDTree shared memory cleaned up")
+
+        if frame_shm is not None:
+            frame_shm.close()
+            frame_shm.unlink()
+            logger.debug("    Frame array shared memory cleaned up")
 
         # Convert pixel shifts to nm and finalize arrays
         with _Timer("array_operations") as array_ops_timer:

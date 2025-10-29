@@ -436,13 +436,16 @@ def _calculate_pairwise_shift(
     channel_pair=None,
     remove_zeroshift=False,
     plot_fn_suffix="",
+    ref_frames=None,
+    frame_locs_frames=None,
+    ton_exclusion=0,
 ):
     """
-    Calculate shift between two channels using histogram peak finding.
+    Calculate shift between two channels using histogram peak finding with temporal filtering.
 
     Args:
-        locs_i : np.rec.array
-            Localizations for first channel
+        locs_i : np.rec.array or cKDTree
+            Localizations for first channel (or pre-built KDTree)
         locs_j : np.rec.array
             Localizations for second channel
         max_shift : float
@@ -455,6 +458,12 @@ def _calculate_pairwise_shift(
             (i, j) channel indices for filename
         remove_zeroshift : bool, default False
             in case locs_j are part of locs_i, this may be useful
+        ref_frames : ndarray, optional
+            Frame numbers for reference localizations (for temporal filtering)
+        frame_locs_frames : ndarray, optional
+            Frame numbers for frame localizations (for temporal filtering)
+        ton_exclusion : int, default 0
+            Exclude pairs from frames within ±2×ton (temporal filtering)
 
     Returns:
         shift_x, shift_y, plot_filepath : float, float, str or None
@@ -479,14 +488,17 @@ def _calculate_pairwise_shift(
     # Calculate all pairwise distances and shifts
     coords_j = np.column_stack([locs_j.x, locs_j.y])
 
-
-    
+    # Determine if temporal filtering is enabled
+    use_temporal_filter = (
+        ton_exclusion > 0 and ref_frames is not None and frame_locs_frames is not None
+    )
+    temporal_threshold = 2 * ton_exclusion
 
     # Find all j points within max_shift of any i point
     valid_shifts_x = []
     valid_shifts_y = []
 
-    for coord_j in coords_j:
+    for j_idx, coord_j in enumerate(coords_j):
         # Find all i points within max_shift
         indices = tree_i.query_ball_point(coord_j, max_shift)
 
@@ -494,8 +506,19 @@ def _calculate_pairwise_shift(
             coord_i = tree_i.data[i_idx]
             dx = coord_j[0] - coord_i[0]  # x shift from i to j
             dy = coord_j[1] - coord_i[1]  # y shift from i to j
+
+            # Skip zero shifts if requested
             if remove_zeroshift and dx ==0 and dy ==0:
                 continue
+
+            # Temporal filtering: skip pairs from nearby frames
+            if use_temporal_filter:
+                ref_frame = ref_frames[i_idx]
+                frame_loc_frame = frame_locs_frames[j_idx]
+                frame_diff = abs(ref_frame - frame_loc_frame)
+                if frame_diff <= temporal_threshold:
+                    continue
+
             valid_shifts_x.append(dx)
             valid_shifts_y.append(dy)
 
