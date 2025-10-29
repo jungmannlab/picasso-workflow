@@ -221,6 +221,8 @@ def _format_time(seconds):
     Returns:
         str : Formatted string like "2.34 sec" or "3.45 min" or "1.23 hr"
     """
+    if seconds is None:
+        return "N/A"
     if seconds < 60:
         return f"{seconds:.2f} sec"
     elif seconds < 3600:
@@ -1703,9 +1705,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 from scipy.spatial import cKDTree
 
                 reference_dataset_kdtree = cKDTree(reference_coords)
-                logger.debug(
-                    f"    cKDTree creation: {_format_time(kdtree_timer.elapsed)}"
-                )
+            # Log after context manager exits
+            logger.debug(
+                f"    cKDTree creation: {_format_time(kdtree_timer.elapsed)}"
+            )
             iteration_timings["kdtree_creation"] = kdtree_timer.elapsed
         else:
             reference_coords = None
