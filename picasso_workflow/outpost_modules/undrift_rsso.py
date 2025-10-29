@@ -92,6 +92,28 @@ def _setup_multiprocessing_context():
             return mp.get_context()
 
 
+# Global variable to hold pre-built cKDTree in worker processes
+_WORKER_KDTREE = None
+
+
+def _worker_init_kdtree(ref_coords):
+    """Initialize worker process by building cKDTree once
+
+    This function is called once per worker process during pool initialization.
+    Building the cKDTree once per worker (rather than passing it with each task)
+    significantly reduces data transfer overhead.
+
+    Args:
+        ref_coords : ndarray
+            Reference coordinates (N x 2) array of [x, y] positions
+    """
+    global _WORKER_KDTREE
+    from scipy.spatial import cKDTree
+
+    _WORKER_KDTREE = cKDTree(ref_coords)
+    logger.debug(f"Worker initialized: built cKDTree with {_WORKER_KDTREE.n} points")
+
+
 # ==============================================================================
 # Numba-optimized RSSO computation functions
 # ==============================================================================
@@ -980,11 +1002,19 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         # Create dataset by excluding all target frames
         from scipy.spatial import cKDTree
 
-        if not isinstance(reference_dataset, cKDTree):
+        # Use pre-built cKDTree from worker initialization if available
+        global _WORKER_KDTREE
+        if _WORKER_KDTREE is not None:
+            # Worker has pre-built cKDTree - use it directly
+            dataset_locs = _WORKER_KDTREE
+            len_dataset = _WORKER_KDTREE.n
+        elif not isinstance(reference_dataset, cKDTree):
+            # Old approach: filter reference_dataset by frame
             dataset_mask = ~np.isin(reference_dataset["frame"], target_frames)
             dataset_locs = reference_dataset[dataset_mask]
             len_dataset = len(dataset_locs)
         else:
+            # reference_dataset is already a cKDTree
             dataset_locs = reference_dataset
             len_dataset = reference_dataset.n
 
@@ -1157,7 +1187,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     from picasso import io
     import matplotlib.pyplot as plt
     import matplotlib.colors as mcolors
-    from concurrent.futures import ProcessPoolExecutor
+    # from concurrent.futures import ProcessPoolExecutor
 
     # Note: OpenMP configuration is now done at module import time
     # (see module-level code after imports) to ensure environment
@@ -1446,12 +1476,20 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 f"    Using full dataset as reference: {len(reference_dataset):,} locs"
             )
 
+        # Prepare reference data for multiprocessing
+        # Extract coordinates for worker initialization (if using cKDTree approach)
         if not enable_numba_optimization:
+            reference_coords = np.column_stack(
+                [reference_dataset.x, reference_dataset.y]
+            )
+            # For backwards compatibility, also build cKDTree here
+            # (will be overridden by worker-level trees when using multiprocessing)
             from scipy.spatial import cKDTree
 
-            reference_dataset = cKDTree(
-                np.column_stack([reference_dataset.x, reference_dataset.y])
-            )
+            reference_dataset_kdtree = cKDTree(reference_coords)
+        else:
+            reference_coords = None
+            reference_dataset_kdtree = None
 
         # Process frames in chunks using same reference dataset
         logger.debug(
@@ -1533,9 +1571,26 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 )
                 frame_locs = current_locs[frame_mask]
 
+                # Decide which reference to pass based on multiprocessing mode
+                # If using worker initialization with cKDTree, pass None (worker has tree)
+                # Otherwise pass the reference dataset/tree for the worker to use
+                if (
+                    enable_multiprocessing
+                    and n_processes > 1
+                    and reference_coords is not None
+                ):
+                    # Workers will use pre-built cKDTree from initialization
+                    ref_data_for_worker = None
+                elif reference_dataset_kdtree is not None:
+                    # Sequential processing with cKDTree
+                    ref_data_for_worker = reference_dataset_kdtree
+                else:
+                    # Numba optimization or fallback to raw data
+                    ref_data_for_worker = reference_dataset
+
                 frame_data = (
                     group_indices,  # List of frame indices this result applies to
-                    reference_dataset,  # SAME reference dataset for all frames
+                    ref_data_for_worker,  # Reference dataset (None if using worker cKDTree)
                     group_frame_numbers,  # List of frame numbers to process together
                     frame_locs,
                     max_shift_pixels,
@@ -1553,22 +1608,41 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             # Process chunk in parallel (or sequentially if multiprocessing disabled)
             if enable_multiprocessing and n_processes > 1:
                 try:
-                    # # Use safer multiprocessing context to avoid OpenMP conflicts
-                    # ctx = _setup_multiprocessing_context()
-                    # with ctx.Pool(processes=n_processes) as pool:
-                    #     chunk_results = pool.map(
-                    #         _compute_frame_to_reference_shift_optimized,
-                    #         chunk_frame_data,
-                    #     )
-                    with ProcessPoolExecutor(
-                        max_workers=n_processes
-                    ) as executor:
-                        chunk_results = list(
-                            executor.map(
+                    # Use safer multiprocessing context to avoid OpenMP conflicts
+                    ctx = _setup_multiprocessing_context()
+
+                    # Use pool initializer for cKDTree approach to build tree once per worker
+                    # This significantly reduces data transfer overhead
+                    if reference_coords is not None:
+                        logger.debug(
+                            f"    Initializing {n_processes} workers with pre-built cKDTree "
+                            f"({reference_coords.shape[0]:,} points)"
+                        )
+                        with ctx.Pool(
+                            processes=n_processes,
+                            initializer=_worker_init_kdtree,
+                            initargs=(reference_coords,),
+                        ) as pool:
+                            chunk_results = pool.map(
                                 _compute_frame_to_reference_shift_optimized,
                                 chunk_frame_data,
                             )
-                        )
+                    else:
+                        # Numba optimization doesn't use cKDTree - no initializer needed
+                        with ctx.Pool(processes=n_processes) as pool:
+                            chunk_results = pool.map(
+                                _compute_frame_to_reference_shift_optimized,
+                                chunk_frame_data,
+                            )
+                    # with ProcessPoolExecutor(
+                    #     max_workers=n_processes
+                    # ) as executor:
+                    #     chunk_results = list(
+                    #         executor.map(
+                    #             _compute_frame_to_reference_shift_optimized,
+                    #             chunk_frame_data,
+                    #         )
+                    #     )
                     print(
                         f"    ✓ Parallel processing successful with {n_processes} processes"
                     )
