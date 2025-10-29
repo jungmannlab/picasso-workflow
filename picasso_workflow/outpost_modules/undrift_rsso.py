@@ -1796,55 +1796,55 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 x_min_full, x_max_full = (
                     current_locs["x"].min(),
                     current_locs["x"].max(),
-            )
-            dx_full = x_max_full - x_min_full
-            y_min_full, y_max_full = (
-                current_locs["y"].min(),
-                current_locs["y"].max(),
-            )
-            dy_full = y_max_full - y_min_full
+                )
+                dx_full = x_max_full - x_min_full
+                y_min_full, y_max_full = (
+                    current_locs["y"].min(),
+                    current_locs["y"].max(),
+                )
+                dy_full = y_max_full - y_min_full
 
-            # logger.debug(f"full FOV: ({x_min_full} - {x_max_full}, {y_min_full} - {y_max_full})")
+                # logger.debug(f"full FOV: ({x_min_full} - {x_max_full}, {y_min_full} - {y_max_full})")
 
-            dx_reduced = dx_full * np.sqrt(current_subsampling_fraction)
-            dy_reduced = dy_full * np.sqrt(current_subsampling_fraction)
+                dx_reduced = dx_full * np.sqrt(current_subsampling_fraction)
+                dy_reduced = dy_full * np.sqrt(current_subsampling_fraction)
 
-            # logger.debug(f"reducing side lengths from ({dx_full}, {dy_full}) to ({dx_reduced}, {dy_reduced})")
+                # logger.debug(f"reducing side lengths from ({dx_full}, {dy_full}) to ({dx_reduced}, {dy_reduced})")
 
-            x_min = x_min_full + (dx_full - dx_reduced) / 2
-            x_max = x_max_full - (dx_full - dx_reduced) / 2
-            y_min = y_min_full + (dy_full - dy_reduced) / 2
-            y_max = y_max_full - (dy_full - dy_reduced) / 2
+                x_min = x_min_full + (dx_full - dx_reduced) / 2
+                x_max = x_max_full - (dx_full - dx_reduced) / 2
+                y_min = y_min_full + (dy_full - dy_reduced) / 2
+                y_max = y_max_full - (dy_full - dy_reduced) / 2
 
-            # logger.debug(f"reduced FOV: ({x_min} - {x_max}, {y_min} - {y_max})")
-            # logger.debug(f'#locs > xmin: {(current_locs["x"] > x_min).sum()}')
-            # logger.debug(f'#locs < xmax: {(current_locs["x"] < x_max).sum()}')
-            # logger.debug(f'#locs > y_min: {(current_locs["y"] > y_min).sum()}')
-            # logger.debug(f'#locs < y_min: {(current_locs["y"] < y_min).sum()}')
-            # logger.debug(f'#locs in xrange: {((current_locs["x"] > x_min) & (current_locs["x"] < x_max)).sum()}')
-            # logger.debug(f'#locs in yrange: {((current_locs["y"] > y_min) & (current_locs["y"] < y_max)).sum()}')
-            # logger.debug(f'#locs in reduced FOV: {((current_locs["x"] > x_min) & (current_locs["x"] < x_max) & (current_locs["y"] > y_min) & (current_locs["y"] < y_max)).sum()}')
+                # logger.debug(f"reduced FOV: ({x_min} - {x_max}, {y_min} - {y_max})")
+                # logger.debug(f'#locs > xmin: {(current_locs["x"] > x_min).sum()}')
+                # logger.debug(f'#locs < xmax: {(current_locs["x"] < x_max).sum()}')
+                # logger.debug(f'#locs > y_min: {(current_locs["y"] > y_min).sum()}')
+                # logger.debug(f'#locs < y_min: {(current_locs["y"] < y_min).sum()}')
+                # logger.debug(f'#locs in xrange: {((current_locs["x"] > x_min) & (current_locs["x"] < x_max)).sum()}')
+                # logger.debug(f'#locs in yrange: {((current_locs["y"] > y_min) & (current_locs["y"] < y_max)).sum()}')
+                # logger.debug(f'#locs in reduced FOV: {((current_locs["x"] > x_min) & (current_locs["x"] < x_max) & (current_locs["y"] > y_min) & (current_locs["y"] < y_max)).sum()}')
 
-            # indices = (
-            #     (current_locs["x"] > x_min)
-            #     & (current_locs["x"] < x_max)
-            #     & (current_locs["y"] > y_min)
-            #     & (current_locs["y"] < y_min))
-            # indices = (
-            #     (current_locs["x"] > x_min)
-            #     & (current_locs["x"] < x_max)
-            #     & (current_locs["y"] > y_min)
-            #     & (current_locs["x"] < y_max))
-            indices = (
-                (current_locs["x"] > x_min)
-                & (current_locs["x"] < x_max)
-                & (current_locs["y"] > y_min)
-                & (current_locs["y"] < y_max)
-            )
-            # only crop if there are enough locs
-            # logger.debug(f"found {indices.sum()} locs in range. Minimum is {min_locs_per_frame}")
-            if indices.sum() > min_locs_per_frame:
-                current_locs = current_locs[indices]
+                # indices = (
+                #     (current_locs["x"] > x_min)
+                #     & (current_locs["x"] < x_max)
+                #     & (current_locs["y"] > y_min)
+                #     & (current_locs["y"] < y_min))
+                # indices = (
+                #     (current_locs["x"] > x_min)
+                #     & (current_locs["x"] < x_max)
+                #     & (current_locs["y"] > y_min)
+                #     & (current_locs["x"] < y_max))
+                indices = (
+                    (current_locs["x"] > x_min)
+                    & (current_locs["x"] < x_max)
+                    & (current_locs["y"] > y_min)
+                    & (current_locs["y"] < y_max)
+                )
+                # only crop if there are enough locs
+                # logger.debug(f"found {indices.sum()} locs in range. Minimum is {min_locs_per_frame}")
+                if indices.sum() > min_locs_per_frame:
+                    current_locs = current_locs[indices]
 
                 reference_dataset = current_locs
 
