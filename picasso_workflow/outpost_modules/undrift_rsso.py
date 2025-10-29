@@ -92,8 +92,9 @@ def _setup_multiprocessing_context():
             return mp.get_context()
 
 
-# Global variable to hold pre-built cKDTree in worker processes
+# Global variables to hold pre-built cKDTree in worker processes
 _WORKER_KDTREE = None
+_WORKER_KDTREE_SHM = None
 
 
 def _worker_init_kdtree(ref_coords):
@@ -112,6 +113,197 @@ def _worker_init_kdtree(ref_coords):
 
     _WORKER_KDTREE = cKDTree(ref_coords)
     logger.debug(f"Worker initialized: built cKDTree with {_WORKER_KDTREE.n} points")
+
+
+def _init_worker_from_shared_memory(shm_name, kdtree_size):
+    """Initialize worker by loading cKDTree from shared memory
+
+    This function provides zero-copy access to a pre-built cKDTree by
+    deserializing it from shared memory. This is faster than building
+    the tree from coordinates and uses less memory than per-worker copies.
+
+    Args:
+        shm_name : str
+            Name of the shared memory segment
+        kdtree_size : int
+            Size of the serialized cKDTree in bytes
+    """
+    global _WORKER_KDTREE, _WORKER_KDTREE_SHM
+    from multiprocessing import shared_memory
+    import pickle
+
+    # Attach to existing shared memory
+    shm = shared_memory.SharedMemory(name=shm_name)
+
+    # Deserialize cKDTree from shared memory
+    kdtree_bytes = bytes(shm.buf[:kdtree_size])
+    _WORKER_KDTREE = pickle.loads(kdtree_bytes)
+
+    # Store shared memory reference for potential cleanup
+    _WORKER_KDTREE_SHM = shm
+
+    logger.debug(
+        f"Worker initialized from shared memory: {_WORKER_KDTREE.n} points"
+    )
+
+
+def _create_shared_memory_kdtree(reference_coords):
+    """Serialize cKDTree to shared memory for zero-copy worker access
+
+    Creates a cKDTree from reference coordinates, serializes it using pickle,
+    and stores it in shared memory. Workers can then deserialize from the
+    shared memory without requiring per-task or per-worker data transfer.
+
+    Args:
+        reference_coords : ndarray
+            Reference coordinates (N x 2) array of [x, y] positions
+
+    Returns:
+        tuple : (SharedMemory, int)
+            Shared memory object and size in bytes of the serialized cKDTree
+    """
+    from scipy.spatial import cKDTree
+    from multiprocessing import shared_memory
+    import pickle
+
+    # Build tree and serialize with highest protocol for efficiency
+    kdtree = cKDTree(reference_coords)
+    kdtree_bytes = pickle.dumps(kdtree, protocol=pickle.HIGHEST_PROTOCOL)
+    kdtree_size = len(kdtree_bytes)
+
+    # Create shared memory segment
+    shm = shared_memory.SharedMemory(create=True, size=kdtree_size)
+    shm.buf[:kdtree_size] = kdtree_bytes
+
+    logger.debug(
+        f"Created shared memory cKDTree: {kdtree.n} points, "
+        f"{kdtree_size / 1024 / 1024:.2f} MB"
+    )
+
+    return shm, kdtree_size
+
+
+# ==============================================================================
+# Profiling and timing utilities
+# ==============================================================================
+
+
+class _Timer:
+    """Context manager for timing code blocks and operations
+
+    Usage:
+        with _Timer("operation_name") as timer:
+            # code to time
+        elapsed = timer.elapsed  # seconds
+    """
+
+    def __init__(self, name="operation"):
+        self.name = name
+        self.start_time = None
+        self.elapsed = None
+
+    def __enter__(self):
+        self.start_time = time.perf_counter()
+        return self
+
+    def __exit__(self, *args):
+        self.elapsed = time.perf_counter() - self.start_time
+        return False
+
+
+def _format_time(seconds):
+    """Format seconds into human-readable string
+
+    Args:
+        seconds : float
+            Time in seconds
+
+    Returns:
+        str : Formatted string like "2.34 sec" or "3.45 min" or "1.23 hr"
+    """
+    if seconds < 60:
+        return f"{seconds:.2f} sec"
+    elif seconds < 3600:
+        return f"{seconds / 60:.2f} min"
+    else:
+        return f"{seconds / 3600:.2f} hr"
+
+
+def _log_performance_summary(
+    iteration,
+    total_frames,
+    timings,
+    method_name,
+    n_processes,
+):
+    """Log detailed performance summary for an iteration
+
+    Args:
+        iteration : int
+            Iteration number (1-indexed)
+        total_frames : int
+            Number of frames processed
+        timings : dict
+            Dictionary with timing information
+        method_name : str
+            KDTree sharing method name
+        n_processes : int
+            Number of worker processes
+    """
+    total_time = timings["total"]
+    kdtree_time = timings.get("kdtree_creation", 0.0)
+    worker_init_time = timings.get("worker_init", 0.0)
+    processing_time = timings.get("frame_processing", 0.0)
+    aggregation_time = timings.get("aggregation", 0.0)
+
+    # Calculate percentages
+    kdtree_pct = (kdtree_time / total_time * 100) if total_time > 0 else 0
+    worker_init_pct = (
+        (worker_init_time / total_time * 100) if total_time > 0 else 0
+    )
+    processing_pct = (
+        (processing_time / total_time * 100) if total_time > 0 else 0
+    )
+    aggregation_pct = (
+        (aggregation_time / total_time * 100) if total_time > 0 else 0
+    )
+
+    # Calculate throughput
+    frames_per_sec = total_frames / processing_time if processing_time > 0 else 0
+    time_per_frame = processing_time / total_frames if total_frames > 0 else 0
+
+    # Log summary
+    logger.info("")
+    logger.info(f"=== Iteration {iteration} Performance Summary ===")
+    logger.info(f"Total time: {_format_time(total_time)}")
+    logger.info(f"├─ KDTree creation: {_format_time(kdtree_time)} ({kdtree_pct:.1f}%)")
+    logger.info(
+        f"├─ Worker initialization: {_format_time(worker_init_time)} ({worker_init_pct:.1f}%)"
+    )
+    logger.info(
+        f"├─ Frame processing: {_format_time(processing_time)} ({processing_pct:.1f}%)"
+    )
+    logger.info(f"│  ├─ Average per frame: {_format_time(time_per_frame)}")
+    logger.info(f"│  ├─ Throughput: {frames_per_sec:.2f} frames/sec")
+    logger.info(f"│  └─ Total frames: {total_frames}")
+    logger.info(
+        f"└─ Result aggregation: {_format_time(aggregation_time)} ({aggregation_pct:.1f}%)"
+    )
+    logger.info("")
+    logger.info(f"Method: {method_name}, Workers: {n_processes}")
+
+    # Log chunk timing details if available
+    if "chunk_times" in timings and timings["chunk_times"]:
+        chunk_times = timings["chunk_times"]
+        avg_chunk = np.mean(chunk_times)
+        min_chunk = np.min(chunk_times)
+        max_chunk = np.max(chunk_times)
+        logger.debug(
+            f"Chunk timing: avg={_format_time(avg_chunk)}, "
+            f"min={_format_time(min_chunk)}, max={_format_time(max_chunk)}"
+        )
+
+    logger.info("")
 
 
 # ==============================================================================
@@ -1251,6 +1443,16 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         "progressive_subsampling_schedule", [0.05, 0.1, 0.25, 0.5, 1.0]
     )
 
+    # cKDTree sharing method for multiprocessing (non-Numba only)
+    kdtree_sharing_method = parameters.get("kdtree_sharing_method", "worker_init")
+    if kdtree_sharing_method not in ["worker_init", "shared_memory", "pickle"]:
+        logger.warning(
+            f"Invalid kdtree_sharing_method '{kdtree_sharing_method}', "
+            f"using 'worker_init'"
+        )
+        kdtree_sharing_method = "worker_init"
+    logger.info(f"cKDTree sharing method: {kdtree_sharing_method}")
+
     # Analysis parameters
     confidence_threshold = parameters.get("confidence_threshold", 0.8)
     outlier_detection_enabled = parameters.get(
@@ -1360,7 +1562,20 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     convergence_rms = float("inf")
 
     for iteration in range(max_iterations):
-        logger.debug(f"  Iteration {iteration + 1}/{max_iterations}")
+        # Initialize timing dictionary for this iteration
+        iteration_timings = {
+            "kdtree_creation": 0.0,
+            "worker_init": 0.0,
+            "frame_processing": 0.0,
+            "aggregation": 0.0,
+            "chunk_times": [],
+            "total": 0.0,
+        }
+
+        # Start iteration timer
+        iteration_start_time_perf = time.perf_counter()
+
+        logger.info(f"  Iteration {iteration + 1}/{max_iterations}")
         logger.debug(
             f"    Numba optimization: {'enabled' if enable_numba_optimization else 'disabled'}"
         )
@@ -1479,14 +1694,19 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         # Prepare reference data for multiprocessing
         # Extract coordinates for worker initialization (if using cKDTree approach)
         if not enable_numba_optimization:
-            reference_coords = np.column_stack(
-                [reference_dataset.x, reference_dataset.y]
-            )
-            # For backwards compatibility, also build cKDTree here
-            # (will be overridden by worker-level trees when using multiprocessing)
-            from scipy.spatial import cKDTree
+            with _Timer("kdtree_creation") as kdtree_timer:
+                reference_coords = np.column_stack(
+                    [reference_dataset.x, reference_dataset.y]
+                )
+                # For backwards compatibility, also build cKDTree here
+                # (will be overridden by worker-level trees when using multiprocessing)
+                from scipy.spatial import cKDTree
 
-            reference_dataset_kdtree = cKDTree(reference_coords)
+                reference_dataset_kdtree = cKDTree(reference_coords)
+                logger.debug(
+                    f"    cKDTree creation: {_format_time(kdtree_timer.elapsed)}"
+                )
+            iteration_timings["kdtree_creation"] = kdtree_timer.elapsed
         else:
             reference_coords = None
             reference_dataset_kdtree = None
@@ -1572,17 +1792,17 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 frame_locs = current_locs[frame_mask]
 
                 # Decide which reference to pass based on multiprocessing mode
-                # If using worker initialization with cKDTree, pass None (worker has tree)
-                # Otherwise pass the reference dataset/tree for the worker to use
+                # Different strategies require different data to be passed to workers
                 if (
                     enable_multiprocessing
                     and n_processes > 1
                     and reference_coords is not None
+                    and kdtree_sharing_method != "pickle"
                 ):
-                    # Workers will use pre-built cKDTree from initialization
+                    # worker_init or shared_memory: workers have pre-built cKDTree
                     ref_data_for_worker = None
                 elif reference_dataset_kdtree is not None:
-                    # Sequential processing with cKDTree
+                    # Sequential processing or pickle mode with cKDTree
                     ref_data_for_worker = reference_dataset_kdtree
                 else:
                     # Numba optimization or fallback to raw data
@@ -1606,63 +1826,105 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 chunk_frame_data.append(frame_data)
 
             # Process chunk in parallel (or sequentially if multiprocessing disabled)
-            if enable_multiprocessing and n_processes > 1:
-                try:
-                    # Use safer multiprocessing context to avoid OpenMP conflicts
-                    ctx = _setup_multiprocessing_context()
+            with _Timer("chunk_processing") as chunk_timer:
+                if enable_multiprocessing and n_processes > 1:
+                    try:
+                        # Use safer multiprocessing context to avoid OpenMP conflicts
+                        ctx = _setup_multiprocessing_context()
 
-                    # Use pool initializer for cKDTree approach to build tree once per worker
-                    # This significantly reduces data transfer overhead
-                    if reference_coords is not None:
-                        logger.debug(
-                            f"    Initializing {n_processes} workers with pre-built cKDTree "
-                            f"({reference_coords.shape[0]:,} points)"
+                        # Choose pool initialization strategy based on kdtree_sharing_method
+                        if reference_coords is not None:
+                            if kdtree_sharing_method == "shared_memory":
+                                # Shared memory approach: serialize once, zero-copy access
+                                logger.debug(
+                                    f"    Creating shared memory cKDTree with {reference_coords.shape[0]:,} points"
+                                )
+                                shm, kdtree_size = _create_shared_memory_kdtree(
+                                    reference_coords
+                                )
+                                try:
+                                    with ctx.Pool(
+                                        processes=n_processes,
+                                        initializer=_init_worker_from_shared_memory,
+                                        initargs=(shm.name, kdtree_size),
+                                    ) as pool:
+                                        chunk_results = pool.map(
+                                            _compute_frame_to_reference_shift_optimized,
+                                            chunk_frame_data,
+                                        )
+                                finally:
+                                    # Cleanup shared memory
+                                    shm.close()
+                                    shm.unlink()
+                                    logger.debug("    Cleaned up shared memory")
+
+                            elif kdtree_sharing_method == "worker_init":
+                                # Worker initialization: each worker builds its own tree
+                                logger.debug(
+                                    f"    Initializing {n_processes} workers to build cKDTree "
+                                    f"({reference_coords.shape[0]:,} points each)"
+                                )
+                                with ctx.Pool(
+                                    processes=n_processes,
+                                    initializer=_worker_init_kdtree,
+                                    initargs=(reference_coords,),
+                                ) as pool:
+                                    chunk_results = pool.map(
+                                        _compute_frame_to_reference_shift_optimized,
+                                        chunk_frame_data,
+                                    )
+
+                            else:  # "pickle"
+                                # Old approach: pass cKDTree with each task
+                                logger.debug(
+                                    f"    Using pickle mode: cKDTree passed with each task "
+                                    f"({reference_coords.shape[0]:,} points)"
+                                )
+                                with ctx.Pool(processes=n_processes) as pool:
+                                    chunk_results = pool.map(
+                                        _compute_frame_to_reference_shift_optimized,
+                                        chunk_frame_data,
+                                    )
+                        else:
+                            # Numba optimization doesn't use cKDTree - no initializer needed
+                            with ctx.Pool(processes=n_processes) as pool:
+                                chunk_results = pool.map(
+                                    _compute_frame_to_reference_shift_optimized,
+                                    chunk_frame_data,
+                                )
+                        # with ProcessPoolExecutor(
+                        #     max_workers=n_processes
+                        # ) as executor:
+                        #     chunk_results = list(
+                        #         executor.map(
+                        #             _compute_frame_to_reference_shift_optimized,
+                        #             chunk_frame_data,
+                        #         )
+                        #     )
+                        print(
+                            f"    ✓ Parallel processing successful with {n_processes} processes"
                         )
-                        with ctx.Pool(
-                            processes=n_processes,
-                            initializer=_worker_init_kdtree,
-                            initargs=(reference_coords,),
-                        ) as pool:
-                            chunk_results = pool.map(
-                                _compute_frame_to_reference_shift_optimized,
-                                chunk_frame_data,
-                            )
-                    else:
-                        # Numba optimization doesn't use cKDTree - no initializer needed
-                        with ctx.Pool(processes=n_processes) as pool:
-                            chunk_results = pool.map(
-                                _compute_frame_to_reference_shift_optimized,
-                                chunk_frame_data,
-                            )
-                    # with ProcessPoolExecutor(
-                    #     max_workers=n_processes
-                    # ) as executor:
-                    #     chunk_results = list(
-                    #         executor.map(
-                    #             _compute_frame_to_reference_shift_optimized,
-                    #             chunk_frame_data,
-                    #         )
-                    #     )
-                    print(
-                        f"    ✓ Parallel processing successful with {n_processes} processes"
-                    )
-                except (OSError, RuntimeError, AttributeError) as e:
-                    print(
-                        f"    ⚠ Multiprocessing failed ({e}), falling back to sequential processing"
-                    )
-                    enable_multiprocessing = (
-                        False  # Disable for remaining chunks
-                    )
+                    except (OSError, RuntimeError, AttributeError) as e:
+                        print(
+                            f"    ⚠ Multiprocessing failed ({e}), falling back to sequential processing"
+                        )
+                        enable_multiprocessing = (
+                            False  # Disable for remaining chunks
+                        )
+                        chunk_results = [
+                            _compute_frame_to_reference_shift_optimized(frame_data)
+                            for frame_data in chunk_frame_data
+                        ]
+                else:
+                    # Sequential processing for very memory-constrained environments
                     chunk_results = [
                         _compute_frame_to_reference_shift_optimized(frame_data)
                         for frame_data in chunk_frame_data
                     ]
-            else:
-                # Sequential processing for very memory-constrained environments
-                chunk_results = [
-                    _compute_frame_to_reference_shift_optimized(frame_data)
-                    for frame_data in chunk_frame_data
-                ]
+
+            # Record chunk timing
+            iteration_timings["chunk_times"].append(chunk_timer.elapsed)
+            iteration_timings["frame_processing"] += chunk_timer.elapsed
 
             # Process chunk results immediately to avoid accumulating large arrays
             for result in chunk_results:
@@ -1873,11 +2135,24 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         )
 
         # Performance reporting for this iteration
-        iteration_end_time = time.time()
-        iteration_duration = iteration_end_time - iteration_start_time
+        iteration_end_time_perf = time.perf_counter()
+        iteration_timings["total"] = iteration_end_time_perf - iteration_start_time_perf
+        iteration_timings["aggregation"] = (
+            iteration_timings["total"]
+            - iteration_timings["kdtree_creation"]
+            - iteration_timings["frame_processing"]
+        )
+
+        # Log performance summary
+        _log_performance_summary(
+            iteration + 1,
+            n_frames,
+            iteration_timings,
+            kdtree_sharing_method if not enable_numba_optimization else "numba",
+            n_processes if enable_multiprocessing else 1,
+        )
 
         logger.debug(f"    Iteration {iteration + 1} completed")
-        logger.debug(f"    Total iteration time: {iteration_duration:.1f}s")
 
         # Report Numba vs Standard performance
         if enable_numba_optimization and numba_computation_times:
