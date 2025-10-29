@@ -1713,6 +1713,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             "pool_map_total": 0.0,
             "result_collection": 0.0,
             "pool_teardown": 0.0,
+            "frame_processing": 0.0,
 
             # Worker computation (extracted from performance_info)
             "worker_computation": 0.0,
