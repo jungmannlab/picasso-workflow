@@ -533,6 +533,59 @@ else:
 
 
 # ==============================================================================
+# Optimized frame correction application
+# ==============================================================================
+
+
+if NUMBA_AVAILABLE:
+
+    @numba.jit(nopython=True, parallel=True, cache=True)
+    def _apply_frame_corrections_numba(
+        frame_shifts_x, frame_shifts_y, frame_index_map, pixelsize
+    ):
+        """Apply per-frame shifts to per-localization corrections using Numba
+
+        This is much faster than NumPy fancy indexing for large arrays.
+        Uses parallel processing for optimal performance.
+
+        Args:
+            frame_shifts_x : ndarray (float)
+                Per-frame shifts in x (nm)
+            frame_shifts_y : ndarray (float)
+                Per-frame shifts in y (nm)
+            frame_index_map : ndarray (int32)
+                Maps each localization to its frame index
+            pixelsize : float
+                Pixel size for conversion from nm to pixels
+
+        Returns:
+            corrections_x, corrections_y : tuple of ndarray (float32)
+                Per-localization corrections in pixels
+        """
+        n_locs = len(frame_index_map)
+        corrections_x = np.empty(n_locs, dtype=np.float32)
+        corrections_y = np.empty(n_locs, dtype=np.float32)
+
+        # Parallel loop over all localizations
+        for i in numba.prange(n_locs):
+            frame_idx = frame_index_map[i]
+            corrections_x[i] = frame_shifts_x[frame_idx] / pixelsize
+            corrections_y[i] = frame_shifts_y[frame_idx] / pixelsize
+
+        return corrections_x, corrections_y
+
+else:
+
+    def _apply_frame_corrections_numba(
+        frame_shifts_x, frame_shifts_y, frame_index_map, pixelsize
+    ):
+        """Fallback NumPy implementation when Numba is not available"""
+        corrections_x = frame_shifts_x[frame_index_map] / pixelsize
+        corrections_y = frame_shifts_y[frame_index_map] / pixelsize
+        return corrections_x.astype(np.float32), corrections_y.astype(np.float32)
+
+
+# ==============================================================================
 # Main RSSO shift computation
 # ==============================================================================
 
@@ -1518,8 +1571,13 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     # Store original localization data to preserve for each iteration
     # We'll accumulate corrections without modifying the original dataset
     original_locs = locs.copy()
-    cumulative_corrections_x = np.zeros(len(locs))
-    cumulative_corrections_y = np.zeros(len(locs))
+    cumulative_corrections_x = np.zeros(len(locs), dtype=np.float32)
+    cumulative_corrections_y = np.zeros(len(locs), dtype=np.float32)
+
+    # PRE-COMPUTE frame index mapping (optimization to avoid recomputing every iteration)
+    # This maps each localization to its frame index for fast lookup
+    frame_index_map = (original_locs["frame"] - frames[0]).astype(np.int32)
+    logger.debug(f"Pre-computed frame index mapping for {len(frame_index_map):,} localizations")
 
     # Estimate memory requirements and warn if needed
     bytes_per_loc = locs.itemsize * len(locs.dtype)
@@ -1622,9 +1680,11 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             )
 
         # Create current dataset with accumulated corrections for this iteration
-        current_locs = original_locs.copy()
-        current_locs["x"] = original_locs["x"] + cumulative_corrections_x
-        current_locs["y"] = original_locs["y"] + cumulative_corrections_y
+        with _Timer("array_copy") as copy_timer:
+            current_locs = original_locs.copy()
+            current_locs["x"] = original_locs["x"] + cumulative_corrections_x
+            current_locs["y"] = original_locs["y"] + cumulative_corrections_y
+        logger.debug(f"    Array copy + corrections: {_format_time(copy_timer.elapsed)}")
 
         # OPTIMIZATION: Create reference dataset for this iteration
         if current_subsampling_fraction < 1.0:
@@ -2024,45 +2084,47 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     )
 
         # Handle outliers and windowing for low-confidence measurements
-        if windowing_enabled:
-            # Apply windowing to low-confidence frames
-            low_confidence_mask = new_confidence < confidence_threshold
-            n_low_conf = np.sum(low_confidence_mask)
-            if n_low_conf > 0:
-                logger.debug(
-                    f"    Applying windowing to {n_low_conf} low-confidence frames"
-                )
-                # For low-confidence frames, use windowed averaging (simplified approach)
-                min_window, max_window = window_size_range
-                for frame_idx in np.where(low_confidence_mask)[0]:
-                    if frame_idx > 0:  # Use previous frame's shift as fallback
-                        frame_shifts_x[frame_idx] = (
-                            frame_shifts_x[frame_idx - 1] * 0.5
-                        )
-                        frame_shifts_y[frame_idx] = (
-                            frame_shifts_y[frame_idx - 1] * 0.5
-                        )
-                        new_confidence[frame_idx] = 0.5
-
-        # Outlier detection using z-score
-        if outlier_detection_enabled and valid_measurements > 5:
-            shifts_magnitude = np.sqrt(frame_shifts_x**2 + frame_shifts_y**2)
-            valid_shifts = shifts_magnitude[shifts_magnitude > 0]
-            if len(valid_shifts) > 0:
-                z_scores = np.abs(
-                    (shifts_magnitude - np.mean(valid_shifts))
-                    / np.std(valid_shifts)
-                )
-                outliers = z_scores > outlier_z_threshold
-                n_outliers = np.sum(outliers)
-                if n_outliers > 0:
+        with _Timer("windowing_outliers") as window_timer:
+            if windowing_enabled:
+                # Apply windowing to low-confidence frames
+                low_confidence_mask = new_confidence < confidence_threshold
+                n_low_conf = np.sum(low_confidence_mask)
+                if n_low_conf > 0:
                     logger.debug(
-                        f"    Detected and filtered {n_outliers} outliers"
+                        f"    Applying windowing to {n_low_conf} low-confidence frames"
                     )
-                    # Set outlier shifts to zero
-                    frame_shifts_x[outliers] = 0
-                    frame_shifts_y[outliers] = 0
-                    new_confidence[outliers] = 0
+                    # For low-confidence frames, use windowed averaging (simplified approach)
+                    min_window, max_window = window_size_range
+                    for frame_idx in np.where(low_confidence_mask)[0]:
+                        if frame_idx > 0:  # Use previous frame's shift as fallback
+                            frame_shifts_x[frame_idx] = (
+                                frame_shifts_x[frame_idx - 1] * 0.5
+                            )
+                            frame_shifts_y[frame_idx] = (
+                                frame_shifts_y[frame_idx - 1] * 0.5
+                            )
+                            new_confidence[frame_idx] = 0.5
+
+            # Outlier detection using z-score
+            if outlier_detection_enabled and valid_measurements > 5:
+                shifts_magnitude = np.sqrt(frame_shifts_x**2 + frame_shifts_y**2)
+                valid_shifts = shifts_magnitude[shifts_magnitude > 0]
+                if len(valid_shifts) > 0:
+                    z_scores = np.abs(
+                        (shifts_magnitude - np.mean(valid_shifts))
+                        / np.std(valid_shifts)
+                    )
+                    outliers = z_scores > outlier_z_threshold
+                    n_outliers = np.sum(outliers)
+                    if n_outliers > 0:
+                        logger.debug(
+                            f"    Detected and filtered {n_outliers} outliers"
+                        )
+                        # Set outlier shifts to zero
+                        frame_shifts_x[outliers] = 0
+                        frame_shifts_y[outliers] = 0
+                        new_confidence[outliers] = 0
+        logger.debug(f"    Windowing + outlier detection: {_format_time(window_timer.elapsed)}")
 
         # mean frame shift should be 0 to keep the image in place
         frame_shifts_x -= np.mean(frame_shifts_x)
@@ -2079,16 +2141,20 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         # Accumulate drift corrections for next iteration
         # Convert frame-based shifts to per-localization corrections
-        frame_corrections_x = (
-            frame_shifts_x[original_locs["frame"] - frames[0]] / pixelsize
-        )
-        frame_corrections_y = (
-            frame_shifts_y[original_locs["frame"] - frames[0]] / pixelsize
-        )
+        with _Timer("frame_corrections") as corrections_timer:
+            # Use optimized Numba function (or fallback NumPy if Numba unavailable)
+            frame_corrections_x, frame_corrections_y = _apply_frame_corrections_numba(
+                frame_shifts_x, frame_shifts_y, frame_index_map, pixelsize
+            )
 
-        # Accumulate corrections instead of applying in-place
-        cumulative_corrections_x -= frame_corrections_x
-        cumulative_corrections_y -= frame_corrections_y
+            # Accumulate corrections using in-place operations
+            np.subtract(
+                cumulative_corrections_x, frame_corrections_x, out=cumulative_corrections_x
+            )
+            np.subtract(
+                cumulative_corrections_y, frame_corrections_y, out=cumulative_corrections_y
+            )
+        logger.debug(f"    Frame corrections application: {_format_time(corrections_timer.elapsed)}")
 
         # Check for convergence
         if iteration > 0:
