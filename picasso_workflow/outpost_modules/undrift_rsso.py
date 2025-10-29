@@ -238,7 +238,7 @@ def _log_performance_summary(
     method_name,
     n_processes,
 ):
-    """Log detailed performance summary for an iteration
+    """Log detailed performance summary for an iteration with comprehensive breakdown
 
     Args:
         iteration : int
@@ -246,53 +246,129 @@ def _log_performance_summary(
         total_frames : int
             Number of frames processed
         timings : dict
-            Dictionary with timing information
+            Dictionary with timing information including all fine-grained metrics
         method_name : str
             KDTree sharing method name
         n_processes : int
             Number of worker processes
     """
     total_time = timings["total"]
-    kdtree_time = timings.get("kdtree_creation", 0.0)
-    worker_init_time = timings.get("worker_init", 0.0)
-    processing_time = timings.get("frame_processing", 0.0)
-    aggregation_time = timings.get("aggregation", 0.0)
 
-    # Calculate percentages
-    kdtree_pct = (kdtree_time / total_time * 100) if total_time > 0 else 0
-    worker_init_pct = (
-        (worker_init_time / total_time * 100) if total_time > 0 else 0
-    )
-    processing_pct = (
-        (processing_time / total_time * 100) if total_time > 0 else 0
-    )
-    aggregation_pct = (
-        (aggregation_time / total_time * 100) if total_time > 0 else 0
-    )
+    def pct(t):
+        """Calculate percentage of total time"""
+        return (t / total_time * 100) if total_time > 0 else 0
+
+    # Extract all timing metrics
+    # Setup phase
+    reference_creation = timings.get("reference_creation", 0.0)
+    kdtree_creation = timings.get("kdtree_creation", 0.0)
+    kdtree_serialization = timings.get("kdtree_serialization", 0.0)
+    setup_total = reference_creation + kdtree_creation + kdtree_serialization
+
+    # Multiprocessing phase
+    pool_creation = timings.get("pool_creation", 0.0)
+    worker_initialization = timings.get("worker_initialization", 0.0)
+    pool_map_total = timings.get("pool_map_total", 0.0)
+    multiprocessing_overhead = timings.get("multiprocessing_overhead", 0.0)
+    mp_total = pool_creation + worker_initialization + pool_map_total
+
+    # Processing phase (frame-level operations)
+    frame_grouping = timings.get("frame_grouping", 0.0)
+    chunk_data_preparation = timings.get("chunk_data_preparation", 0.0)
+    worker_computation = timings.get("worker_computation", 0.0)
+    result_collection = timings.get("result_collection", 0.0)
+    processing_total = frame_grouping + chunk_data_preparation + result_collection
+
+    # Post-processing phase (localization-level operations)
+    array_copy = timings.get("array_copy", 0.0)
+    windowing_outliers = timings.get("windowing_outliers", 0.0)
+    array_operations = timings.get("array_operations", 0.0)
+    frame_corrections = timings.get("frame_corrections", 0.0)
+    postproc_total = array_copy + windowing_outliers + array_operations + frame_corrections
+
+    # Finalization phase
+    convergence_check = timings.get("convergence_check", 0.0)
+    history_storage = timings.get("history_storage", 0.0)
+    finalization_total = convergence_check + history_storage
 
     # Calculate throughput
-    frames_per_sec = total_frames / processing_time if processing_time > 0 else 0
-    time_per_frame = processing_time / total_frames if total_frames > 0 else 0
+    frame_processing_time = timings.get("frame_processing", 0.0)
+    frames_per_sec = total_frames / frame_processing_time if frame_processing_time > 0 else 0
+    time_per_frame = frame_processing_time / total_frames if total_frames > 0 else 0
 
-    # Log summary
+    # Log comprehensive summary
     logger.info("")
-    logger.info(f"=== Iteration {iteration} Performance Summary ===")
+    logger.info(f"{'='*70}")
+    logger.info(f"  Iteration {iteration} Performance Summary - {method_name} ({n_processes} workers)")
+    logger.info(f"{'='*70}")
     logger.info(f"Total time: {_format_time(total_time)}")
-    logger.info(f"├─ KDTree creation: {_format_time(kdtree_time)} ({kdtree_pct:.1f}%)")
-    logger.info(
-        f"├─ Worker initialization: {_format_time(worker_init_time)} ({worker_init_pct:.1f}%)"
-    )
-    logger.info(
-        f"├─ Frame processing: {_format_time(processing_time)} ({processing_pct:.1f}%)"
-    )
-    logger.info(f"│  ├─ Average per frame: {_format_time(time_per_frame)}")
-    logger.info(f"│  ├─ Throughput: {frames_per_sec:.2f} frames/sec")
-    logger.info(f"│  └─ Total frames: {total_frames}")
-    logger.info(
-        f"└─ Result aggregation: {_format_time(aggregation_time)} ({aggregation_pct:.1f}%)"
-    )
     logger.info("")
-    logger.info(f"Method: {method_name}, Workers: {n_processes}")
+
+    # Setup phase
+    logger.info(f"┌─ SETUP: {_format_time(setup_total)} ({pct(setup_total):.1f}%)")
+    if reference_creation > 0:
+        logger.info(f"│  ├─ Reference creation: {_format_time(reference_creation)} ({pct(reference_creation):.1f}%)")
+    logger.info(f"│  ├─ KDTree creation: {_format_time(kdtree_creation)} ({pct(kdtree_creation):.1f}%)")
+    if kdtree_serialization > 0:
+        logger.info(f"│  └─ KDTree serialization: {_format_time(kdtree_serialization)} ({pct(kdtree_serialization):.1f}%)")
+    logger.info("")
+
+    # Multiprocessing phase
+    if mp_total > 0:
+        logger.info(f"├─ MULTIPROCESSING: {_format_time(mp_total)} ({pct(mp_total):.1f}%)")
+        if pool_creation > 0:
+            logger.info(f"│  ├─ Pool creation: {_format_time(pool_creation)} ({pct(pool_creation):.1f}%)")
+        if worker_initialization > 0:
+            logger.info(f"│  ├─ Worker initialization: {_format_time(worker_initialization)} ({pct(worker_initialization):.1f}%)")
+        if pool_map_total > 0:
+            logger.info(f"│  ├─ Pool.map total: {_format_time(pool_map_total)} ({pct(pool_map_total):.1f}%)")
+            if worker_computation > 0:
+                logger.info(f"│  │  ├─ Worker computation: {_format_time(worker_computation)} ({pct(worker_computation):.1f}%)")
+            if multiprocessing_overhead > 0:
+                mp_overhead_pct = (multiprocessing_overhead / pool_map_total * 100) if pool_map_total > 0 else 0
+                logger.info(f"│  │  └─ MP overhead: {_format_time(multiprocessing_overhead)} ({mp_overhead_pct:.1f}% of pool.map)")
+        logger.info("")
+
+    # Processing phase
+    logger.info(f"├─ PROCESSING: {_format_time(processing_total)} ({pct(processing_total):.1f}%)")
+    if frame_grouping > 0:
+        logger.info(f"│  ├─ Frame grouping: {_format_time(frame_grouping)} ({pct(frame_grouping):.1f}%)")
+    if chunk_data_preparation > 0:
+        logger.info(f"│  ├─ Chunk data prep: {_format_time(chunk_data_preparation)} ({pct(chunk_data_preparation):.1f}%)")
+    if result_collection > 0:
+        logger.info(f"│  └─ Result collection: {_format_time(result_collection)} ({pct(result_collection):.1f}%)")
+    logger.info(f"│     └─ Total frames: {total_frames} @ {frames_per_sec:.2f} frames/sec")
+    logger.info("")
+
+    # Post-processing phase
+    logger.info(f"├─ POST-PROCESSING: {_format_time(postproc_total)} ({pct(postproc_total):.1f}%)")
+    if array_copy > 0:
+        logger.info(f"│  ├─ Array copy: {_format_time(array_copy)} ({pct(array_copy):.1f}%)")
+    if windowing_outliers > 0:
+        logger.info(f"│  ├─ Windowing/outliers: {_format_time(windowing_outliers)} ({pct(windowing_outliers):.1f}%)")
+    if array_operations > 0:
+        logger.info(f"│  ├─ Array operations: {_format_time(array_operations)} ({pct(array_operations):.1f}%)")
+    if frame_corrections > 0:
+        logger.info(f"│  └─ Frame corrections: {_format_time(frame_corrections)} ({pct(frame_corrections):.1f}%)")
+    logger.info("")
+
+    # Finalization phase
+    logger.info(f"└─ FINALIZATION: {_format_time(finalization_total)} ({pct(finalization_total):.1f}%)")
+    if convergence_check > 0:
+        logger.info(f"   ├─ Convergence check: {_format_time(convergence_check)} ({pct(convergence_check):.1f}%)")
+    if history_storage > 0:
+        logger.info(f"   └─ History storage: {_format_time(history_storage)} ({pct(history_storage):.1f}%)")
+
+    # Sanity check: sum of phases vs total
+    phase_sum = setup_total + mp_total + processing_total + postproc_total + finalization_total
+    unaccounted = total_time - phase_sum
+    if abs(unaccounted) > 0.1:  # More than 0.1 second unaccounted
+        logger.info("")
+        logger.info(f"⚠️  Unaccounted time: {_format_time(abs(unaccounted))} ({pct(abs(unaccounted)):.1f}%)")
+
+    logger.info("")
+    logger.info(f"{'='*70}")
+    logger.info("")
 
     # Log chunk timing details if available
     if "chunk_times" in timings and timings["chunk_times"]:
@@ -304,8 +380,6 @@ def _log_performance_summary(
             f"Chunk timing: avg={_format_time(avg_chunk)}, "
             f"min={_format_time(min_chunk)}, max={_format_time(max_chunk)}"
         )
-
-    logger.info("")
 
 
 # ==============================================================================
@@ -1622,14 +1696,42 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     convergence_rms = float("inf")
 
     for iteration in range(max_iterations):
-        # Initialize timing dictionary for this iteration
+        # Initialize comprehensive timing dictionary for this iteration
         iteration_timings = {
+            # Setup phase
+            "reference_creation": 0.0,
             "kdtree_creation": 0.0,
-            "worker_init": 0.0,
-            "frame_processing": 0.0,
-            "aggregation": 0.0,
-            "chunk_times": [],
+            "kdtree_serialization": 0.0,
+
+            # Multiprocessing setup
+            "pool_creation": 0.0,
+            "worker_initialization": 0.0,
+
+            # Processing phase
+            "frame_grouping": 0.0,
+            "chunk_data_preparation": 0.0,
+            "pool_map_total": 0.0,
+            "result_collection": 0.0,
+            "pool_teardown": 0.0,
+
+            # Worker computation (extracted from performance_info)
+            "worker_computation": 0.0,
+            "multiprocessing_overhead": 0.0,
+
+            # Post-processing phase
+            "array_copy": 0.0,
+            "windowing_outliers": 0.0,
+            "array_operations": 0.0,
+            "frame_corrections": 0.0,
+
+            # Finalization phase
+            "convergence_check": 0.0,
+            "history_storage": 0.0,
+
+            # Totals and metadata
             "total": 0.0,
+            "chunk_times": [],
+            "worker_times": [],
         }
 
         # Start iteration timer
@@ -1684,14 +1786,16 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             current_locs = original_locs.copy()
             current_locs["x"] = original_locs["x"] + cumulative_corrections_x
             current_locs["y"] = original_locs["y"] + cumulative_corrections_y
+        iteration_timings["array_copy"] = copy_timer.elapsed
         logger.debug(f"    Array copy + corrections: {_format_time(copy_timer.elapsed)}")
 
         # OPTIMIZATION: Create reference dataset for this iteration
-        if current_subsampling_fraction < 1.0:
-            # subsample by cropping the center
-            x_min_full, x_max_full = (
-                current_locs["x"].min(),
-                current_locs["x"].max(),
+        with _Timer("reference_creation") as ref_timer:
+            if current_subsampling_fraction < 1.0:
+                # subsample by cropping the center
+                x_min_full, x_max_full = (
+                    current_locs["x"].min(),
+                    current_locs["x"].max(),
             )
             dx_full = x_max_full - x_min_full
             y_min_full, y_max_full = (
@@ -1747,11 +1851,12 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             logger.debug(
                 f"    Created reference dataset: {len(reference_dataset):,} locs ({current_subsampling_fraction:.1%} of full dataset)"
             )
-        else:
-            reference_dataset = current_locs
-            logger.debug(
-                f"    Using full dataset as reference: {len(reference_dataset):,} locs"
-            )
+            else:
+                reference_dataset = current_locs
+                logger.debug(
+                    f"    Using full dataset as reference: {len(reference_dataset):,} locs"
+                )
+        iteration_timings["reference_creation"] = ref_timer.elapsed
 
         # Prepare reference data for multiprocessing
         # Extract coordinates for worker initialization (if using cKDTree approach)
@@ -1807,86 +1912,90 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             )
 
             # Evaluate frame sizes and create frame groups to ensure min_locs_per_frame
-            frame_groups = (
-                []
-            )  # List of (frame_indices, combined_frame_numbers)
-            current_group = []
-            current_locs_count = 0
+            with _Timer("frame_grouping") as grouping_timer:
+                frame_groups = (
+                    []
+                )  # List of (frame_indices, combined_frame_numbers)
+                current_group = []
+                current_locs_count = 0
 
-            for frame_idx in chunk_frames:
-                frame_number = frames[frame_idx]
-                frame_locs_count = np.sum(
-                    current_locs["frame"] == frame_number
-                )
-
-                current_group.append(frame_idx)
-                current_locs_count += frame_locs_count
-
-                # If we have enough locs or this is the last frame in chunk, finalize group
-                if (
-                    current_locs_count >= min_locs_per_frame
-                    or frame_idx == chunk_frames[-1]
-                ):
-
-                    # Get all frame numbers in this group
-                    group_frame_numbers = [
-                        frames[idx] for idx in current_group
-                    ]
-                    frame_groups.append(
-                        (current_group.copy(), group_frame_numbers)
+                for frame_idx in chunk_frames:
+                    frame_number = frames[frame_idx]
+                    frame_locs_count = np.sum(
+                        current_locs["frame"] == frame_number
                     )
 
-                    # logger.debug(
-                    #     f"        Created frame group: indices {current_group} "
-                    #     f"(frames {group_frame_numbers}), {current_locs_count} locs"
-                    # )
+                    current_group.append(frame_idx)
+                    current_locs_count += frame_locs_count
 
-                    # Start new group
-                    current_group = []
-                    current_locs_count = 0
+                    # If we have enough locs or this is the last frame in chunk, finalize group
+                    if (
+                        current_locs_count >= min_locs_per_frame
+                        or frame_idx == chunk_frames[-1]
+                    ):
+
+                        # Get all frame numbers in this group
+                        group_frame_numbers = [
+                            frames[idx] for idx in current_group
+                        ]
+                        frame_groups.append(
+                            (current_group.copy(), group_frame_numbers)
+                        )
+
+                        # logger.debug(
+                        #     f"        Created frame group: indices {current_group} "
+                        #     f"(frames {group_frame_numbers}), {current_locs_count} locs"
+                        #     )
+
+                        # Start new group
+                        current_group = []
+                        current_locs_count = 0
+            iteration_timings["frame_grouping"] += grouping_timer.elapsed
 
             # Prepare chunk data using frame groups
-            chunk_frame_data = []
-            for group_indices, group_frame_numbers in frame_groups:
-                # Extract frame localizations from reference dataset (combine multiple frames)
-                frame_mask = np.isin(
-                    current_locs["frame"], group_frame_numbers
-                )
-                frame_locs = current_locs[frame_mask]
+            with _Timer("data_prep") as prep_timer:
+                chunk_frame_data = []
+                for group_indices, group_frame_numbers in frame_groups:
+                    # Extract frame localizations from reference dataset (combine multiple frames)
+                    frame_mask = np.isin(
+                        current_locs["frame"], group_frame_numbers
+                    )
+                    frame_locs = current_locs[frame_mask]
 
-                # Decide which reference to pass based on multiprocessing mode
-                # Different strategies require different data to be passed to workers
-                if (
-                    enable_multiprocessing
-                    and n_processes > 1
-                    and reference_coords is not None
-                    and kdtree_sharing_method != "pickle"
-                ):
-                    # worker_init or shared_memory: workers have pre-built cKDTree
-                    ref_data_for_worker = None
-                elif reference_dataset_kdtree is not None:
-                    # Sequential processing or pickle mode with cKDTree
-                    ref_data_for_worker = reference_dataset_kdtree
-                else:
-                    # Numba optimization or fallback to raw data
-                    ref_data_for_worker = reference_dataset
+                    # Decide which reference to pass based on multiprocessing mode
+                    # Different strategies require different data to be passed to workers
+                    if (
+                        enable_multiprocessing
+                        and n_processes > 1
+                        and reference_coords is not None
+                        and kdtree_sharing_method != "pickle"
+                    ):
+                        # worker_init or shared_memory: workers have pre-built cKDTree
+                        ref_data_for_worker = None
+                    elif reference_dataset_kdtree is not None:
+                        # Sequential processing or pickle mode with cKDTree
+                        ref_data_for_worker = reference_dataset_kdtree
+                    else:
+                        # Numba optimization or fallback to raw data
+                        ref_data_for_worker = reference_dataset
 
-                frame_data = (
-                    group_indices,  # List of frame indices this result applies to
-                    ref_data_for_worker,  # Reference dataset (None if using worker cKDTree)
-                    group_frame_numbers,  # List of frame numbers to process together
-                    frame_locs,
-                    max_shift_pixels,
-                    min_locs_per_frame,
-                    enable_uncertainty_estimation,
-                    n_uncertainty_trials,
-                    current_subsampling_fraction,  # For uncertainty estimation subsampling
-                    enable_numba_optimization,  # Use Numba JIT acceleration
-                    plot_rsso,  # Whether to plot RSSO histograms
-                    iter_dir,  # Directory for saving plots
-                    iteration + 1,  # Current iteration number (1-indexed)
-                )
-                chunk_frame_data.append(frame_data)
+                    frame_data = (
+                        group_indices,  # List of frame indices this result applies to
+                        ref_data_for_worker,  # Reference dataset (None if using worker cKDTree)
+                        group_frame_numbers,  # List of frame numbers to process together
+                        frame_locs,
+                        max_shift_pixels,
+                        min_locs_per_frame,
+                        enable_uncertainty_estimation,
+                        n_uncertainty_trials,
+                        current_subsampling_fraction,  # For uncertainty estimation subsampling
+                        enable_numba_optimization,  # Use Numba JIT acceleration
+                        plot_rsso,  # Whether to plot RSSO histograms
+                        iter_dir,  # Directory for saving plots
+                        iteration + 1,  # Current iteration number (1-indexed)
+                    )
+                    chunk_frame_data.append(frame_data)
+            iteration_timings["chunk_data_preparation"] += prep_timer.elapsed
 
             # Process chunk in parallel (or sequentially if multiprocessing disabled)
             with _Timer("chunk_processing") as chunk_timer:
@@ -1902,19 +2011,27 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                                 logger.debug(
                                     f"    Creating shared memory cKDTree with {reference_coords.shape[0]:,} points"
                                 )
-                                shm, kdtree_size = _create_shared_memory_kdtree(
-                                    reference_coords
-                                )
+                                with _Timer("kdtree_serial") as serial_timer:
+                                    shm, kdtree_size = _create_shared_memory_kdtree(
+                                        reference_coords
+                                    )
+                                iteration_timings["kdtree_serialization"] += serial_timer.elapsed
                                 try:
-                                    with ctx.Pool(
-                                        processes=n_processes,
-                                        initializer=_init_worker_from_shared_memory,
-                                        initargs=(shm.name, kdtree_size),
-                                    ) as pool:
+                                    with _Timer("pool_init") as pool_timer:
+                                        pool = ctx.Pool(
+                                            processes=n_processes,
+                                            initializer=_init_worker_from_shared_memory,
+                                            initargs=(shm.name, kdtree_size),
+                                        )
+                                    iteration_timings["pool_creation"] += pool_timer.elapsed
+                                    with _Timer("pool_map") as map_timer:
                                         chunk_results = pool.map(
                                             _compute_frame_to_reference_shift_optimized,
                                             chunk_frame_data,
                                         )
+                                    iteration_timings["pool_map_total"] += map_timer.elapsed
+                                    pool.close()
+                                    pool.join()
                                 finally:
                                     # Cleanup shared memory
                                     shm.close()
@@ -1927,15 +2044,21 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                                     f"    Initializing {n_processes} workers to build cKDTree "
                                     f"({reference_coords.shape[0]:,} points each)"
                                 )
-                                with ctx.Pool(
-                                    processes=n_processes,
-                                    initializer=_worker_init_kdtree,
-                                    initargs=(reference_coords,),
-                                ) as pool:
+                                with _Timer("pool_init") as pool_timer:
+                                    pool = ctx.Pool(
+                                        processes=n_processes,
+                                        initializer=_worker_init_kdtree,
+                                        initargs=(reference_coords,),
+                                    )
+                                iteration_timings["pool_creation"] += pool_timer.elapsed
+                                with _Timer("pool_map") as map_timer:
                                     chunk_results = pool.map(
                                         _compute_frame_to_reference_shift_optimized,
                                         chunk_frame_data,
                                     )
+                                iteration_timings["pool_map_total"] += map_timer.elapsed
+                                pool.close()
+                                pool.join()
 
                             else:  # "pickle"
                                 # Old approach: pass cKDTree with each task
@@ -1943,18 +2066,32 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                                     f"    Using pickle mode: cKDTree passed with each task "
                                     f"({reference_coords.shape[0]:,} points)"
                                 )
-                                with ctx.Pool(processes=n_processes) as pool:
+                                with _Timer("pool_init") as pool_timer:
+                                    pool = ctx.Pool(processes=n_processes)
+                                iteration_timings["pool_creation"] += pool_timer.elapsed
+
+                                with _Timer("pool_map") as map_timer:
                                     chunk_results = pool.map(
                                         _compute_frame_to_reference_shift_optimized,
                                         chunk_frame_data,
                                     )
+                                iteration_timings["pool_map_total"] += map_timer.elapsed
+                                pool.close()
+                                pool.join()
                         else:
                             # Numba optimization doesn't use cKDTree - no initializer needed
-                            with ctx.Pool(processes=n_processes) as pool:
+                            with _Timer("pool_init") as pool_timer:
+                                pool = ctx.Pool(processes=n_processes)
+                            iteration_timings["pool_creation"] += pool_timer.elapsed
+
+                            with _Timer("pool_map") as map_timer:
                                 chunk_results = pool.map(
                                     _compute_frame_to_reference_shift_optimized,
                                     chunk_frame_data,
                                 )
+                            iteration_timings["pool_map_total"] += map_timer.elapsed
+                            pool.close()
+                            pool.join()
                         # with ProcessPoolExecutor(
                         #     max_workers=n_processes
                         # ) as executor:
@@ -1990,56 +2127,63 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             iteration_timings["frame_processing"] += chunk_timer.elapsed
 
             # Process chunk results immediately to avoid accumulating large arrays
-            for result in chunk_results:
-                (
-                    frame_indices,  # Now a list of frame indices
-                    shift_x,
-                    shift_y,
-                    uncertainty_x_val,
-                    uncertainty_y_val,
-                    confidence_val,
-                    quality_val,
-                    performance_info,
-                ) = result
-                # logger.debug(f"chunk results: {result}")
+            with _Timer("result_collection") as collection_timer:
+                for result in chunk_results:
+                    (
+                        frame_indices,  # Now a list of frame indices
+                        shift_x,
+                        shift_y,
+                        uncertainty_x_val,
+                        uncertainty_y_val,
+                        confidence_val,
+                        quality_val,
+                        performance_info,
+                    ) = result
+                    # logger.debug(f"chunk results: {result}")
 
-                # Collect performance statistics
-                if performance_info and "computation_time" in performance_info:
-                    comp_time = performance_info["computation_time"]
-                    comp_type = performance_info.get(
-                        "computation_type", "Unknown"
-                    )
+                    # Collect performance statistics
+                    if performance_info and "computation_time" in performance_info:
+                        comp_time = performance_info["computation_time"]
+                        comp_type = performance_info.get(
+                            "computation_type", "Unknown"
+                        )
 
-                    if comp_type == "Numba-optimized":
-                        numba_computation_times.append(comp_time)
-                        n_numba_computations += 1
-                    elif comp_type == "Standard":
-                        standard_computation_times.append(comp_time)
-                        n_standard_computations += 1
+                        if comp_type == "Numba-optimized":
+                            numba_computation_times.append(comp_time)
+                            n_numba_computations += 1
+                        elif comp_type == "Standard":
+                            standard_computation_times.append(comp_time)
+                            n_standard_computations += 1
 
-                if shift_x is not None and shift_y is not None:
-                    # Apply the same shift to all frames in the group
-                    for frame_idx in frame_indices:
-                        frame_shifts_x[frame_idx] = shift_x
-                        frame_shifts_y[frame_idx] = shift_y
-                        new_uncertainty_x[frame_idx] = uncertainty_x_val
-                        new_uncertainty_y[frame_idx] = uncertainty_y_val
-                        new_sigma_x[frame_idx] = performance_info["sigma_x"]
-                        new_sigma_y[frame_idx] = performance_info["sigma_y"]
-                        new_confidence[frame_idx] = confidence_val
-                        new_quality[frame_idx] = quality_val
-                        valid_measurements += 1
+                        # Collect worker computation times for overhead calculation
+                        iteration_timings["worker_times"].append(comp_time)
+
+                    if shift_x is not None and shift_y is not None:
+                        # Apply the same shift to all frames in the group
+                        for frame_idx in frame_indices:
+                            frame_shifts_x[frame_idx] = shift_x
+                            frame_shifts_y[frame_idx] = shift_y
+                            new_uncertainty_x[frame_idx] = uncertainty_x_val
+                            new_uncertainty_y[frame_idx] = uncertainty_y_val
+                            new_sigma_x[frame_idx] = performance_info["sigma_x"]
+                            new_sigma_y[frame_idx] = performance_info["sigma_y"]
+                            new_confidence[frame_idx] = confidence_val
+                            new_quality[frame_idx] = quality_val
+                            valid_measurements += 1
+            iteration_timings["result_collection"] += collection_timer.elapsed
 
             # Force garbage collection after each chunk
             gc.collect()
 
         # Convert pixel shifts to nm and finalize arrays
-        frame_shifts_x *= pixelsize  # Convert to nm
-        frame_shifts_y *= pixelsize
-        new_uncertainty_x *= pixelsize
-        new_uncertainty_y *= pixelsize
-        new_sigma_x *= pixelsize
-        new_sigma_y *= pixelsize
+        with _Timer("array_operations") as array_ops_timer:
+            frame_shifts_x *= pixelsize  # Convert to nm
+            frame_shifts_y *= pixelsize
+            new_uncertainty_x *= pixelsize
+            new_uncertainty_y *= pixelsize
+            new_sigma_x *= pixelsize
+            new_sigma_y *= pixelsize
+        iteration_timings["array_operations"] = array_ops_timer.elapsed
 
         logger.debug(
             f"    Valid measurements: {valid_measurements}/{n_frames}"
@@ -2124,11 +2268,14 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         frame_shifts_x[outliers] = 0
                         frame_shifts_y[outliers] = 0
                         new_confidence[outliers] = 0
+        iteration_timings["windowing_outliers"] += window_timer.elapsed
         logger.debug(f"    Windowing + outlier detection: {_format_time(window_timer.elapsed)}")
 
         # mean frame shift should be 0 to keep the image in place
-        frame_shifts_x -= np.mean(frame_shifts_x)
-        frame_shifts_y -= np.mean(frame_shifts_y)
+        with _Timer("mean_centering") as center_timer:
+            frame_shifts_x -= np.mean(frame_shifts_x)
+            frame_shifts_y -= np.mean(frame_shifts_y)
+        iteration_timings["array_operations"] += center_timer.elapsed
         # Update cumulative drift arrays (already in nm from conversion above)
         drift_x += frame_shifts_x
         drift_y += frame_shifts_y
@@ -2154,58 +2301,76 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             np.subtract(
                 cumulative_corrections_y, frame_corrections_y, out=cumulative_corrections_y
             )
+        iteration_timings["frame_corrections"] = corrections_timer.elapsed
         logger.debug(f"    Frame corrections application: {_format_time(corrections_timer.elapsed)}")
 
         # Check for convergence
-        if iteration > 0:
-            # Calculate RMS change from previous iteration
-            prev_drift_x, prev_drift_y = (
-                iteration_history[-1]["drift_x"],
-                iteration_history[-1]["drift_y"],
-            )
-            rms_change_x = np.sqrt(np.mean((drift_x - prev_drift_x) ** 2))
-            rms_change_y = np.sqrt(np.mean((drift_y - prev_drift_y) ** 2))
-            convergence_rms = np.sqrt(rms_change_x**2 + rms_change_y**2)
-
-            logger.debug(f"    RMS change: {convergence_rms:.3f} nm")
-
-            if convergence_rms < convergence_threshold:
-                logger.debug(
-                    f"    ✓ Converged after {iteration + 1} iterations (RMS change < {convergence_threshold:.3f} nm)"
+        with _Timer("convergence_check") as convergence_timer:
+            if iteration > 0:
+                # Calculate RMS change from previous iteration
+                prev_drift_x, prev_drift_y = (
+                    iteration_history[-1]["drift_x"],
+                    iteration_history[-1]["drift_y"],
                 )
-                break
-        else:
-            rms_change_x = np.sqrt(np.mean((drift_x) ** 2))
-            rms_change_y = np.sqrt(np.mean((drift_y) ** 2))
-            convergence_rms = np.sqrt(rms_change_x**2 + rms_change_y**2)
+                rms_change_x = np.sqrt(np.mean((drift_x - prev_drift_x) ** 2))
+                rms_change_y = np.sqrt(np.mean((drift_y - prev_drift_y) ** 2))
+                convergence_rms = np.sqrt(rms_change_x**2 + rms_change_y**2)
 
-            logger.debug(f"    RMS drift: {convergence_rms:.3f} nm")
+                logger.debug(f"    RMS change: {convergence_rms:.3f} nm")
 
-            if convergence_rms < convergence_threshold:
-                logger.debug(
-                    f"    ✓ Converged after {iteration + 1} iterations (RMS change < {convergence_threshold:.3f} nm)"
-                )
-                break
+                if convergence_rms < convergence_threshold:
+                    logger.debug(
+                        f"    ✓ Converged after {iteration + 1} iterations (RMS change < {convergence_threshold:.3f} nm)"
+                    )
+                    break
+            else:
+                rms_change_x = np.sqrt(np.mean((drift_x) ** 2))
+                rms_change_y = np.sqrt(np.mean((drift_y) ** 2))
+                convergence_rms = np.sqrt(rms_change_x**2 + rms_change_y**2)
+
+                logger.debug(f"    RMS drift: {convergence_rms:.3f} nm")
+
+                if convergence_rms < convergence_threshold:
+                    logger.debug(
+                        f"    ✓ Converged after {iteration + 1} iterations (RMS change < {convergence_threshold:.3f} nm)"
+                    )
+                    break
+        iteration_timings["convergence_check"] = convergence_timer.elapsed
 
         # Store iteration history
-        iteration_history.append(
-            {
-                "iteration": iteration + 1,
-                "drift_x": drift_x.copy(),
-                "drift_y": drift_y.copy(),
-                "uncertainty_x": new_uncertainty_x.copy(),
-                "uncertainty_y": new_uncertainty_y.copy(),
-                "sigma_x": new_sigma_x.copy(),
-                "sigma_y": new_sigma_y.copy(),
-                "confidence": new_confidence.copy(),
-                "convergence_rms": convergence_rms,
-                "valid_measurements": valid_measurements,
-            }
-        )
+        with _Timer("history_storage") as history_timer:
+            iteration_history.append(
+                {
+                    "iteration": iteration + 1,
+                    "drift_x": drift_x.copy(),
+                    "drift_y": drift_y.copy(),
+                    "uncertainty_x": new_uncertainty_x.copy(),
+                    "uncertainty_y": new_uncertainty_y.copy(),
+                    "sigma_x": new_sigma_x.copy(),
+                    "sigma_y": new_sigma_y.copy(),
+                    "confidence": new_confidence.copy(),
+                    "convergence_rms": convergence_rms,
+                    "valid_measurements": valid_measurements,
+                }
+            )
+        iteration_timings["history_storage"] = history_timer.elapsed
 
         # Performance reporting for this iteration
         iteration_end_time_perf = time.perf_counter()
         iteration_timings["total"] = iteration_end_time_perf - iteration_start_time_perf
+
+        # Calculate worker computation time and multiprocessing overhead
+        if iteration_timings["worker_times"]:
+            iteration_timings["worker_computation"] = sum(iteration_timings["worker_times"])
+            # Overhead = total pool_map time - actual worker computation time
+            # This includes serialization, IPC, and scheduling overhead
+            if iteration_timings["pool_map_total"] > 0:
+                iteration_timings["multiprocessing_overhead"] = (
+                    iteration_timings["pool_map_total"]
+                    - iteration_timings["worker_computation"] / n_processes
+                )
+
+        # Legacy aggregation metric (deprecated - use fine-grained metrics instead)
         iteration_timings["aggregation"] = (
             iteration_timings["total"]
             - iteration_timings["kdtree_creation"]
