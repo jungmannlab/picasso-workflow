@@ -1846,11 +1846,11 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             if indices.sum() > min_locs_per_frame:
                 current_locs = current_locs[indices]
 
-            reference_dataset = current_locs
+                reference_dataset = current_locs
 
-            logger.debug(
-                f"    Created reference dataset: {len(reference_dataset):,} locs ({current_subsampling_fraction:.1%} of full dataset)"
-            )
+                logger.debug(
+                    f"    Created reference dataset: {len(reference_dataset):,} locs ({current_subsampling_fraction:.1%} of full dataset)"
+                )
             else:
                 reference_dataset = current_locs
                 logger.debug(
