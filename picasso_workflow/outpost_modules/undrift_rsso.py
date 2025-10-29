@@ -281,10 +281,11 @@ def _log_performance_summary(
 
     # Post-processing phase (localization-level operations)
     array_copy = timings.get("array_copy", 0.0)
+    frame_pregrouping = timings.get("frame_pregrouping", 0.0)
     windowing_outliers = timings.get("windowing_outliers", 0.0)
     array_operations = timings.get("array_operations", 0.0)
     frame_corrections = timings.get("frame_corrections", 0.0)
-    postproc_total = array_copy + windowing_outliers + array_operations + frame_corrections
+    postproc_total = array_copy + frame_pregrouping + windowing_outliers + array_operations + frame_corrections
 
     # Finalization phase
     convergence_check = timings.get("convergence_check", 0.0)
@@ -344,6 +345,8 @@ def _log_performance_summary(
     logger.info(f"├─ POST-PROCESSING: {_format_time(postproc_total)} ({pct(postproc_total):.1f}%)")
     if array_copy > 0:
         logger.info(f"│  ├─ Array copy: {_format_time(array_copy)} ({pct(array_copy):.1f}%)")
+    if frame_pregrouping > 0:
+        logger.info(f"│  ├─ Frame pre-grouping: {_format_time(frame_pregrouping)} ({pct(frame_pregrouping):.1f}%)")
     if windowing_outliers > 0:
         logger.info(f"│  ├─ Windowing/outliers: {_format_time(windowing_outliers)} ({pct(windowing_outliers):.1f}%)")
     if array_operations > 0:
@@ -1721,6 +1724,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
             # Post-processing phase
             "array_copy": 0.0,
+            "frame_pregrouping": 0.0,
             "windowing_outliers": 0.0,
             "array_operations": 0.0,
             "frame_corrections": 0.0,
@@ -1789,6 +1793,31 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             current_locs["y"] = original_locs["y"] + cumulative_corrections_y
         iteration_timings["array_copy"] = copy_timer.elapsed
         logger.debug(f"    Array copy + corrections: {_format_time(copy_timer.elapsed)}")
+
+        # OPTIMIZATION: Pre-group localizations by frame for fast lookup
+        # This eliminates 15+ minutes of boolean masking operations per iteration
+        with _Timer("frame_pregrouping") as pregroup_timer:
+            # Sort by frame to enable slice-based access
+            sort_indices = np.argsort(current_locs["frame"])
+            current_locs = current_locs[sort_indices]
+
+            # Compute frame boundaries using unique frames
+            unique_frames, frame_start_indices, frame_counts = np.unique(
+                current_locs["frame"], return_index=True, return_counts=True
+            )
+
+            # Build fast lookup dictionary: frame_num -> (start_idx, end_idx, count)
+            frame_boundaries = {}
+            for i, frame_num in enumerate(unique_frames):
+                start_idx = frame_start_indices[i]
+                count = frame_counts[i]
+                end_idx = start_idx + count
+                frame_boundaries[frame_num] = (start_idx, end_idx, count)
+
+            logger.debug(
+                f"    Pre-grouped {len(current_locs):,} locs into {len(unique_frames)} frames: {_format_time(pregroup_timer.elapsed)}"
+            )
+        iteration_timings["frame_pregrouping"] = pregroup_timer.elapsed
 
         # OPTIMIZATION: Create reference dataset for this iteration
         with _Timer("reference_creation") as ref_timer:
@@ -1903,7 +1932,68 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         n_numba_computations = 0
         n_standard_computations = 0
 
-        # Process frames in chunks
+        # OPTIMIZATION: Create pool and shared memory ONCE for all chunks
+        # This saves ~30 seconds per iteration by avoiding repeated setup/teardown
+        pool = None
+        shm = None
+        ctx = None
+        if enable_multiprocessing and n_processes > 1:
+            try:
+                ctx = _setup_multiprocessing_context()
+
+                # Setup pool and shared memory based on method
+                if reference_coords is not None:
+                    if kdtree_sharing_method == "shared_memory":
+                        logger.debug(
+                            f"    Creating shared memory cKDTree with {reference_coords.shape[0]:,} points (ONCE for all chunks)"
+                        )
+                        with _Timer("kdtree_serial") as serial_timer:
+                            shm, kdtree_size = _create_shared_memory_kdtree(
+                                reference_coords
+                            )
+                        iteration_timings["kdtree_serialization"] += serial_timer.elapsed
+
+                        with _Timer("pool_init") as pool_timer:
+                            pool = ctx.Pool(
+                                processes=n_processes,
+                                initializer=_init_worker_from_shared_memory,
+                                initargs=(shm.name, kdtree_size),
+                            )
+                        iteration_timings["pool_creation"] += pool_timer.elapsed
+
+                    elif kdtree_sharing_method == "worker_init":
+                        logger.debug(
+                            f"    Initializing {n_processes} workers to build cKDTree "
+                            f"({reference_coords.shape[0]:,} points each, ONCE for all chunks)"
+                        )
+                        with _Timer("pool_init") as pool_timer:
+                            pool = ctx.Pool(
+                                processes=n_processes,
+                                initializer=_worker_init_kdtree,
+                                initargs=(reference_coords,),
+                            )
+                        iteration_timings["pool_creation"] += pool_timer.elapsed
+
+                    else:  # "pickle"
+                        logger.debug(
+                            f"    Creating pool for pickle mode (ONCE for all chunks)"
+                        )
+                        with _Timer("pool_init") as pool_timer:
+                            pool = ctx.Pool(processes=n_processes)
+                        iteration_timings["pool_creation"] += pool_timer.elapsed
+                else:
+                    # Numba mode - no KDTree
+                    logger.debug(
+                        f"    Creating pool for Numba mode (ONCE for all chunks)"
+                    )
+                    with _Timer("pool_init") as pool_timer:
+                        pool = ctx.Pool(processes=n_processes)
+                    iteration_timings["pool_creation"] += pool_timer.elapsed
+            except Exception as e:
+                logger.debug(f"    ⚠ Failed to create pool: {e}, falling back to sequential")
+                enable_multiprocessing = False
+
+        # Process frames in chunks (reusing the same pool)
         for chunk_start in range(0, n_frames, chunk_size):
             chunk_end = min(chunk_start + chunk_size, n_frames)
             chunk_frames = range(chunk_start, chunk_end)
@@ -1913,6 +2003,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             )
 
             # Evaluate frame sizes and create frame groups to ensure min_locs_per_frame
+            # OPTIMIZATION: Use pre-computed frame_boundaries for O(1) lookup instead of O(n) boolean masking
             with _Timer("frame_grouping") as grouping_timer:
                 frame_groups = (
                     []
@@ -1922,9 +2013,11 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
                 for frame_idx in chunk_frames:
                     frame_number = frames[frame_idx]
-                    frame_locs_count = np.sum(
-                        current_locs["frame"] == frame_number
-                    )
+                    # OPTIMIZED: O(1) dict lookup instead of O(n) boolean mask
+                    if frame_number in frame_boundaries:
+                        _, _, frame_locs_count = frame_boundaries[frame_number]
+                    else:
+                        frame_locs_count = 0
 
                     current_group.append(frame_idx)
                     current_locs_count += frame_locs_count
@@ -1954,14 +2047,29 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             iteration_timings["frame_grouping"] += grouping_timer.elapsed
 
             # Prepare chunk data using frame groups
+            # OPTIMIZATION: Use slice indexing instead of boolean masking
             with _Timer("data_prep") as prep_timer:
                 chunk_frame_data = []
                 for group_indices, group_frame_numbers in frame_groups:
-                    # Extract frame localizations from reference dataset (combine multiple frames)
-                    frame_mask = np.isin(
-                        current_locs["frame"], group_frame_numbers
-                    )
-                    frame_locs = current_locs[frame_mask]
+                    # Extract frame localizations using pre-computed boundaries
+                    # OPTIMIZED: O(1) slice instead of O(n) boolean mask
+                    if group_frame_numbers:
+                        # Get slice boundaries for all frames in the group
+                        first_frame = group_frame_numbers[0]
+                        last_frame = group_frame_numbers[-1]
+
+                        if first_frame in frame_boundaries and last_frame in frame_boundaries:
+                            start_idx = frame_boundaries[first_frame][0]
+                            end_idx = frame_boundaries[last_frame][1]
+                            frame_locs = current_locs[start_idx:end_idx]
+                        else:
+                            # Fallback if frame not in boundaries (shouldn't happen)
+                            frame_mask = np.isin(
+                                current_locs["frame"], group_frame_numbers
+                            )
+                            frame_locs = current_locs[frame_mask]
+                    else:
+                        frame_locs = np.array([], dtype=current_locs.dtype)
 
                     # Decide which reference to pass based on multiprocessing mode
                     # Different strategies require different data to be passed to workers
@@ -1998,126 +2106,18 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     chunk_frame_data.append(frame_data)
             iteration_timings["chunk_data_preparation"] += prep_timer.elapsed
 
-            # Process chunk in parallel (or sequentially if multiprocessing disabled)
+            # Process chunk using pre-created pool (OPTIMIZED: pool reused across all chunks)
             with _Timer("chunk_processing") as chunk_timer:
-                if enable_multiprocessing and n_processes > 1:
-                    try:
-                        # Use safer multiprocessing context to avoid OpenMP conflicts
-                        ctx = _setup_multiprocessing_context()
-
-                        # Choose pool initialization strategy based on kdtree_sharing_method
-                        if reference_coords is not None:
-                            if kdtree_sharing_method == "shared_memory":
-                                # Shared memory approach: serialize once, zero-copy access
-                                logger.debug(
-                                    f"    Creating shared memory cKDTree with {reference_coords.shape[0]:,} points"
-                                )
-                                with _Timer("kdtree_serial") as serial_timer:
-                                    shm, kdtree_size = _create_shared_memory_kdtree(
-                                        reference_coords
-                                    )
-                                iteration_timings["kdtree_serialization"] += serial_timer.elapsed
-                                try:
-                                    with _Timer("pool_init") as pool_timer:
-                                        pool = ctx.Pool(
-                                            processes=n_processes,
-                                            initializer=_init_worker_from_shared_memory,
-                                            initargs=(shm.name, kdtree_size),
-                                        )
-                                    iteration_timings["pool_creation"] += pool_timer.elapsed
-                                    with _Timer("pool_map") as map_timer:
-                                        chunk_results = pool.map(
-                                            _compute_frame_to_reference_shift_optimized,
-                                            chunk_frame_data,
-                                        )
-                                    iteration_timings["pool_map_total"] += map_timer.elapsed
-                                    pool.close()
-                                    pool.join()
-                                finally:
-                                    # Cleanup shared memory
-                                    shm.close()
-                                    shm.unlink()
-                                    logger.debug("    Cleaned up shared memory")
-
-                            elif kdtree_sharing_method == "worker_init":
-                                # Worker initialization: each worker builds its own tree
-                                logger.debug(
-                                    f"    Initializing {n_processes} workers to build cKDTree "
-                                    f"({reference_coords.shape[0]:,} points each)"
-                                )
-                                with _Timer("pool_init") as pool_timer:
-                                    pool = ctx.Pool(
-                                        processes=n_processes,
-                                        initializer=_worker_init_kdtree,
-                                        initargs=(reference_coords,),
-                                    )
-                                iteration_timings["pool_creation"] += pool_timer.elapsed
-                                with _Timer("pool_map") as map_timer:
-                                    chunk_results = pool.map(
-                                        _compute_frame_to_reference_shift_optimized,
-                                        chunk_frame_data,
-                                    )
-                                iteration_timings["pool_map_total"] += map_timer.elapsed
-                                pool.close()
-                                pool.join()
-
-                            else:  # "pickle"
-                                # Old approach: pass cKDTree with each task
-                                logger.debug(
-                                    f"    Using pickle mode: cKDTree passed with each task "
-                                    f"({reference_coords.shape[0]:,} points)"
-                                )
-                                with _Timer("pool_init") as pool_timer:
-                                    pool = ctx.Pool(processes=n_processes)
-                                iteration_timings["pool_creation"] += pool_timer.elapsed
-
-                                with _Timer("pool_map") as map_timer:
-                                    chunk_results = pool.map(
-                                        _compute_frame_to_reference_shift_optimized,
-                                        chunk_frame_data,
-                                    )
-                                iteration_timings["pool_map_total"] += map_timer.elapsed
-                                pool.close()
-                                pool.join()
-                        else:
-                            # Numba optimization doesn't use cKDTree - no initializer needed
-                            with _Timer("pool_init") as pool_timer:
-                                pool = ctx.Pool(processes=n_processes)
-                            iteration_timings["pool_creation"] += pool_timer.elapsed
-
-                            with _Timer("pool_map") as map_timer:
-                                chunk_results = pool.map(
-                                    _compute_frame_to_reference_shift_optimized,
-                                    chunk_frame_data,
-                                )
-                            iteration_timings["pool_map_total"] += map_timer.elapsed
-                            pool.close()
-                            pool.join()
-                        # with ProcessPoolExecutor(
-                        #     max_workers=n_processes
-                        # ) as executor:
-                        #     chunk_results = list(
-                        #         executor.map(
-                        #             _compute_frame_to_reference_shift_optimized,
-                        #             chunk_frame_data,
-                        #         )
-                        #     )
-                        print(
-                            f"    ✓ Parallel processing successful with {n_processes} processes"
+                if pool is not None:
+                    # Use pre-created pool for parallel processing
+                    with _Timer("pool_map") as map_timer:
+                        chunk_results = pool.map(
+                            _compute_frame_to_reference_shift_optimized,
+                            chunk_frame_data,
                         )
-                    except (OSError, RuntimeError, AttributeError) as e:
-                        print(
-                            f"    ⚠ Multiprocessing failed ({e}), falling back to sequential processing"
-                        )
-                        enable_multiprocessing = (
-                            False  # Disable for remaining chunks
-                        )
-                        chunk_results = [
-                            _compute_frame_to_reference_shift_optimized(frame_data)
-                            for frame_data in chunk_frame_data
-                        ]
+                    iteration_timings["pool_map_total"] += map_timer.elapsed
                 else:
-                    # Sequential processing for very memory-constrained environments
+                    # Sequential processing
                     chunk_results = [
                         _compute_frame_to_reference_shift_optimized(frame_data)
                         for frame_data in chunk_frame_data
@@ -2175,6 +2175,19 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
             # Force garbage collection after each chunk
             gc.collect()
+
+        # OPTIMIZATION: Cleanup pool and shared memory after ALL chunks are processed
+        if pool is not None:
+            with _Timer("pool_teardown") as teardown_timer:
+                pool.close()
+                pool.join()
+            iteration_timings["pool_teardown"] += teardown_timer.elapsed
+            logger.debug("    Pool closed and cleaned up")
+
+        if shm is not None:
+            shm.close()
+            shm.unlink()
+            logger.debug("    Shared memory cleaned up")
 
         # Convert pixel shifts to nm and finalize arrays
         with _Timer("array_operations") as array_ops_timer:
