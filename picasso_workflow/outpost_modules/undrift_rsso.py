@@ -1240,6 +1240,545 @@ def _plot_shift_magnitude_histogram(
     }
 
 
+def _plot_frame_shift_correlation_grid(
+    iteration_history,
+    results_folder,
+    outlier_percentile=99,
+    max_frames_scatter=500,
+):
+    """
+    Plot pairwise correlation grid showing frame shift relationships across iterations.
+
+    Creates an N×N grid where N is the number of iterations. Diagonal panels show
+    histograms of shift magnitudes for each iteration. Off-diagonal panels show
+    scatter plots (hexbin density + outlier overlay) comparing shifts between
+    different iterations.
+
+    Args:
+        iteration_history : list of dict
+            Each dict contains 'drift_x', 'drift_y', 'iteration' for all frames
+        results_folder : str
+            Directory to save plot
+        outlier_percentile : float
+            Percentile threshold for outlier identification (default 99)
+        max_frames_scatter : int
+            Maximum number of outlier frames to plot as scatter points
+
+    Returns:
+        str : Path to saved plot
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Ellipse
+    from scipy.stats import pearsonr
+
+    n_iterations = len(iteration_history)
+    if n_iterations < 2:
+        logger.warning("Need at least 2 iterations for correlation grid")
+        return None
+
+    # Extract shift magnitudes for all iterations
+    n_frames = len(iteration_history[0]['drift_x'])
+    shift_magnitudes = np.zeros((n_frames, n_iterations))
+
+    for i, hist in enumerate(iteration_history):
+        dx = hist['drift_x']
+        dy = hist['drift_y']
+        shift_magnitudes[:, i] = np.sqrt(dx**2 + dy**2)
+
+    # Identify outlier frames
+    outlier_threshold = np.percentile(shift_magnitudes, outlier_percentile)
+    outlier_mask = np.any(shift_magnitudes > outlier_threshold, axis=1)
+    n_outliers = np.sum(outlier_mask)
+
+    logger.debug(f"Identified {n_outliers:,} outlier frames ({n_outliers/n_frames*100:.2f}%)")
+
+    # Sample outliers for plotting if too many
+    outlier_indices = np.where(outlier_mask)[0]
+    if len(outlier_indices) > max_frames_scatter:
+        # Sample by taking worst frames
+        outlier_max_shifts = np.max(shift_magnitudes[outlier_indices], axis=1)
+        worst_indices = np.argsort(outlier_max_shifts)[-max_frames_scatter:]
+        outlier_indices = outlier_indices[worst_indices]
+
+    # Create figure with N×N subplots
+    fig, axes = plt.subplots(n_iterations, n_iterations, figsize=(4*n_iterations, 4*n_iterations))
+    if n_iterations == 1:
+        axes = np.array([[axes]])
+    elif n_iterations == 2:
+        axes = axes.reshape(2, 2)
+
+    # Plot each panel
+    for i in range(n_iterations):
+        for j in range(n_iterations):
+            ax = axes[i, j]
+
+            if i == j:
+                # Diagonal: histogram
+                ax.hist(shift_magnitudes[:, i], bins=50, color='skyblue',
+                       edgecolor='black', alpha=0.7)
+
+                # Mark outliers
+                outlier_shifts = shift_magnitudes[outlier_indices, i]
+                ax.scatter(outlier_shifts, np.zeros_like(outlier_shifts),
+                          color='red', s=50, alpha=0.6, marker='|',
+                          linewidths=2, label=f'Outliers (n={len(outlier_indices)})')
+
+                # Statistics
+                mean_shift = np.mean(shift_magnitudes[:, i])
+                median_shift = np.median(shift_magnitudes[:, i])
+                p95 = np.percentile(shift_magnitudes[:, i], 95)
+
+                ax.text(0.98, 0.98,
+                       f'Mean: {mean_shift:.2f} nm\n'
+                       f'Median: {median_shift:.2f} nm\n'
+                       f'95%: {p95:.2f} nm',
+                       transform=ax.transAxes, fontsize=9,
+                       verticalalignment='top', horizontalalignment='right',
+                       bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+                ax.set_xlabel(f'Iteration {i+1} Shift (nm)')
+                ax.set_ylabel('Count')
+                ax.legend(loc='upper left', fontsize=8)
+
+            else:
+                # Off-diagonal: scatter with hexbin density
+                x_data = shift_magnitudes[:, j]
+                y_data = shift_magnitudes[:, i]
+
+                # 2D histogram (hexbin)
+                hb = ax.hexbin(x_data, y_data, gridsize=40, cmap='Blues',
+                             mincnt=1, alpha=0.6, linewidths=0.2)
+
+                # Overlay outliers
+                if len(outlier_indices) > 0:
+                    ax.scatter(x_data[outlier_indices], y_data[outlier_indices],
+                             color='red', s=20, alpha=0.5, edgecolors='darkred',
+                             linewidths=0.5, label='Outliers')
+
+                # Identity line
+                max_val = max(np.max(x_data), np.max(y_data))
+                ax.plot([0, max_val], [0, max_val], 'k--', alpha=0.5, linewidth=1,
+                       label='y=x')
+
+                # Calculate correlation
+                corr, p_value = pearsonr(x_data, y_data)
+                r_squared = corr**2
+
+                # Mean absolute difference from identity
+                mad = np.mean(np.abs(y_data - x_data))
+
+                # Percentage improving
+                pct_improving = np.sum(y_data < x_data) / len(y_data) * 100
+
+                ax.text(0.02, 0.98,
+                       f'R² = {r_squared:.3f}\n'
+                       f'r = {corr:.3f}\n'
+                       f'MAD = {mad:.2f} nm\n'
+                       f'Improving: {pct_improving:.1f}%',
+                       transform=ax.transAxes, fontsize=9,
+                       verticalalignment='top', horizontalalignment='left',
+                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+
+                ax.set_xlabel(f'Iteration {j+1} Shift (nm)')
+                ax.set_ylabel(f'Iteration {i+1} Shift (nm)')
+                ax.legend(loc='lower right', fontsize=8)
+                ax.set_aspect('equal', adjustable='box')
+
+    plt.suptitle(f'Frame Shift Correlation Grid ({n_frames:,} frames, {n_outliers:,} outliers)',
+                fontsize=14, fontweight='bold')
+    plt.tight_layout()
+
+    # Save plot
+    filepath = os.path.join(results_folder, 'shift_correlation_grid.png')
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    logger.debug(f"Saved correlation grid: shift_correlation_grid.png")
+
+    return filepath
+
+
+def _plot_shift_convergence_lines(
+    iteration_history,
+    results_folder,
+    n_sample_frames=500,
+    outlier_percentile=90,
+):
+    """
+    Plot frame shift magnitude evolution across iterations with convergence lines.
+
+    Shows how individual frame shifts evolve over iterations. Displays percentile
+    bands, RMS convergence, and highlights outlier frames (slow convergers,
+    non-monotonic).
+
+    Args:
+        iteration_history : list of dict
+            Each dict contains 'drift_x', 'drift_y', 'iteration' for all frames
+        results_folder : str
+            Directory to save plot
+        n_sample_frames : int
+            Number of representative frames to plot as lines (default 500)
+        outlier_percentile : float
+            Percentile threshold for outlier identification (default 90)
+
+    Returns:
+        str : Path to saved plot
+    """
+    import matplotlib.pyplot as plt
+
+    n_iterations = len(iteration_history)
+    if n_iterations < 2:
+        logger.warning("Need at least 2 iterations for convergence lines")
+        return None
+
+    # Extract shift magnitudes for all iterations
+    n_frames = len(iteration_history[0]['drift_x'])
+    shift_magnitudes = np.zeros((n_frames, n_iterations))
+
+    for i, hist in enumerate(iteration_history):
+        dx = hist['drift_x']
+        dy = hist['drift_y']
+        shift_magnitudes[:, i] = np.sqrt(dx**2 + dy**2)
+
+    iterations = np.arange(1, n_iterations + 1)
+
+    # Calculate statistics per iteration
+    percentiles = {}
+    for p in [5, 25, 50, 75, 90, 95]:
+        percentiles[p] = [np.percentile(shift_magnitudes[:, i], p)
+                          for i in range(n_iterations)]
+
+    rms_values = [np.sqrt(np.mean(shift_magnitudes[:, i]**2))
+                  for i in range(n_iterations)]
+    median_values = percentiles[50]
+
+    # Identify outlier categories
+    final_shifts = shift_magnitudes[:, -1]
+    slow_converger_threshold = np.percentile(final_shifts, outlier_percentile)
+    slow_convergers = np.where(final_shifts > slow_converger_threshold)[0]
+
+    # Non-monotonic: shift increased between any consecutive iterations
+    diff_magnitudes = np.diff(shift_magnitudes, axis=1)
+    non_monotonic = np.where(np.any(diff_magnitudes > 0, axis=1))[0]
+
+    # Fast convergers: below median by iteration 2 (if enough iterations)
+    if n_iterations >= 2:
+        fast_convergers = np.where(shift_magnitudes[:, 1] < median_values[1])[0]
+    else:
+        fast_convergers = np.array([])
+
+    # Sample representative frames for plotting
+    # Sample uniformly across frame indices
+    sample_step = max(1, n_frames // n_sample_frames)
+    sample_indices = np.arange(0, n_frames, sample_step)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    # Plot percentile bands
+    ax.fill_between(iterations, percentiles[5], percentiles[95],
+                     color='lightblue', alpha=0.3, label='5-95 percentile')
+    ax.fill_between(iterations, percentiles[25], percentiles[75],
+                     color='skyblue', alpha=0.5, label='25-75 percentile')
+
+    # Plot sample frames as gray lines
+    for idx in sample_indices:
+        ax.plot(iterations, shift_magnitudes[idx, :],
+               color='gray', alpha=0.2, linewidth=0.5, zorder=1)
+
+    # Plot outlier categories with thick colored lines
+    # Slow convergers
+    for idx in slow_convergers[:min(20, len(slow_convergers))]:  # Limit to 20 for visibility
+        ax.plot(iterations, shift_magnitudes[idx, :],
+               color='red', alpha=0.6, linewidth=1.5, zorder=3)
+
+    # Non-monotonic
+    for idx in non_monotonic[:min(20, len(non_monotonic))]:
+        ax.plot(iterations, shift_magnitudes[idx, :],
+               color='orange', alpha=0.6, linewidth=1.5, zorder=2)
+
+    # Plot RMS and median as thick lines
+    ax.plot(iterations, rms_values, 'b-o', linewidth=3, markersize=8,
+           label='RMS', zorder=5)
+    ax.plot(iterations, median_values, 'g--o', linewidth=2.5, markersize=7,
+           label='Median', zorder=4)
+
+    # Add dummy lines for legend (outlier categories)
+    ax.plot([], [], color='red', linewidth=2, alpha=0.8,
+           label=f'Slow convergers (n={len(slow_convergers)})')
+    ax.plot([], [], color='orange', linewidth=2, alpha=0.8,
+           label=f'Non-monotonic (n={len(non_monotonic)})')
+    ax.plot([], [], color='gray', linewidth=1, alpha=0.5,
+           label=f'Sample frames (n={len(sample_indices)})')
+
+    # Labels and title
+    ax.set_xlabel('Iteration', fontsize=12)
+    ax.set_ylabel('Shift Magnitude (nm)', fontsize=12)
+    ax.set_title(f'Frame Shift Convergence ({n_frames:,} frames)',
+                fontsize=14, fontweight='bold')
+    ax.set_xticks(iterations)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
+
+    # Add convergence statistics text box
+    fast_pct = len(fast_convergers) / n_frames * 100 if n_iterations >= 2 else 0
+    slow_pct = len(slow_convergers) / n_frames * 100
+    non_mono_pct = len(non_monotonic) / n_frames * 100
+
+    # Calculate mean convergence rate (geometric mean of ratio between consecutive iterations)
+    if n_iterations >= 2:
+        ratios = []
+        for i in range(1, n_iterations):
+            ratio = rms_values[i] / rms_values[i-1] if rms_values[i-1] > 0 else 1.0
+            ratios.append(ratio)
+        mean_conv_rate = np.mean(ratios)
+    else:
+        mean_conv_rate = 1.0
+
+    textstr = (
+        f'Convergence Statistics:\n'
+        f'━━━━━━━━━━━━━━━━━━━━━━\n'
+        f'Fast convergers (<50% by iter 2): {len(fast_convergers):,} ({fast_pct:.1f}%)\n'
+        f'Slow convergers (>90% final): {len(slow_convergers):,} ({slow_pct:.1f}%)\n'
+        f'Non-monotonic frames: {len(non_monotonic):,} ({non_mono_pct:.2f}%)\n'
+        f'Mean convergence rate: {mean_conv_rate:.3f}'
+    )
+
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.9)
+    ax.text(0.02, 0.98, textstr,
+           transform=ax.transAxes, fontsize=10,
+           verticalalignment='top', horizontalalignment='left',
+           bbox=props, family='monospace')
+
+    # Use log scale if dynamic range is large
+    if np.max(shift_magnitudes) / np.min(shift_magnitudes[shift_magnitudes > 0]) > 100:
+        ax.set_yscale('log')
+        ax.set_ylabel('Shift Magnitude (nm, log scale)', fontsize=12)
+
+    plt.tight_layout()
+
+    # Save plot
+    filepath = os.path.join(results_folder, 'shift_convergence_lines.png')
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    logger.debug(f"Saved convergence lines: shift_convergence_lines.png")
+
+    return filepath
+
+
+def _plot_shift_trajectory_2d(
+    iteration_history,
+    results_folder,
+    n_sample_frames=500,
+    outlier_percentile=99,
+):
+    """
+    Plot 2D trajectories of frame shifts in X-Y coordinate space across iterations.
+
+    Shows how frame shifts evolve in 2D space from iteration 1 to final iteration.
+    Displays trajectories as paths with color gradients, highlighting outliers.
+
+    Args:
+        iteration_history : list of dict
+            Each dict contains 'drift_x', 'drift_y', 'iteration' for all frames
+        results_folder : str
+            Directory to save plot
+        n_sample_frames : int
+            Number of representative frames to plot as trajectories (default 500)
+        outlier_percentile : float
+            Percentile threshold for outlier identification (default 99)
+
+    Returns:
+        str : Path to saved plot
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import LineCollection
+    from matplotlib import cm
+    import matplotlib.colors as mcolors
+
+    n_iterations = len(iteration_history)
+    if n_iterations < 2:
+        logger.warning("Need at least 2 iterations for 2D trajectory plot")
+        return None
+
+    # Extract shifts for all iterations
+    n_frames = len(iteration_history[0]['drift_x'])
+    shifts_x = np.zeros((n_frames, n_iterations))
+    shifts_y = np.zeros((n_frames, n_iterations))
+
+    for i, hist in enumerate(iteration_history):
+        shifts_x[:, i] = hist['drift_x']
+        shifts_y[:, i] = hist['drift_y']
+
+    # Calculate shift magnitudes for outlier identification
+    shift_magnitudes = np.sqrt(shifts_x**2 + shifts_y**2)
+    outlier_threshold = np.percentile(shift_magnitudes, outlier_percentile)
+    outlier_mask = np.any(shift_magnitudes > outlier_threshold, axis=1)
+    outlier_indices = np.where(outlier_mask)[0]
+
+    # Sample representative frames (exclude outliers from sampling)
+    normal_indices = np.where(~outlier_mask)[0]
+    if len(normal_indices) > n_sample_frames:
+        sample_step = max(1, len(normal_indices) // n_sample_frames)
+        sample_indices = normal_indices[::sample_step]
+    else:
+        sample_indices = normal_indices
+
+    # Limit outliers to worst N for plotting
+    if len(outlier_indices) > 50:
+        outlier_max_shifts = np.max(shift_magnitudes[outlier_indices], axis=1)
+        worst_indices = np.argsort(outlier_max_shifts)[-50:]
+        outlier_indices_plot = outlier_indices[worst_indices]
+    else:
+        outlier_indices_plot = outlier_indices
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 12))
+
+    # Plot 2D hexbin of initial positions (iteration 1)
+    x_init = shifts_x[:, 0]
+    y_init = shifts_y[:, 0]
+    hb = ax.hexbin(x_init, y_init, gridsize=50, cmap='Greys', alpha=0.3,
+                  mincnt=1, linewidths=0.2, zorder=1)
+
+    # Color map for iteration progression
+    cmap = cm.get_cmap('RdYlGn_r')  # Red (start) -> Yellow -> Green (end)
+
+    # Plot sample frame trajectories with color gradient
+    for idx in sample_indices:
+        x_traj = shifts_x[idx, :]
+        y_traj = shifts_y[idx, :]
+
+        # Create line segments with colors
+        points = np.array([x_traj, y_traj]).T.reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+
+        # Color by iteration (normalized 0 to 1)
+        colors = np.linspace(0, 1, len(x_traj) - 1)
+
+        lc = LineCollection(segments, array=colors, cmap=cmap, linewidth=0.8,
+                           alpha=0.3, zorder=2)
+        ax.add_collection(lc)
+
+        # Add start marker
+        ax.plot(x_traj[0], y_traj[0], 'o', color='blue', markersize=2,
+               alpha=0.3, zorder=2)
+        # Add end marker
+        ax.plot(x_traj[-1], y_traj[-1], 'x', color='green', markersize=3,
+               alpha=0.3, zorder=2)
+
+    # Plot outlier trajectories with thick lines
+    for idx in outlier_indices_plot:
+        x_traj = shifts_x[idx, :]
+        y_traj = shifts_y[idx, :]
+
+        # Create line segments with colors
+        points = np.array([x_traj, y_traj]).T.reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+
+        # Color by iteration
+        colors = np.linspace(0, 1, len(x_traj) - 1)
+
+        lc = LineCollection(segments, array=colors, cmap=cmap, linewidth=2.5,
+                           alpha=0.8, zorder=4)
+        ax.add_collection(lc)
+
+        # Add start and end markers
+        ax.plot(x_traj[0], y_traj[0], 'o', color='darkred', markersize=6,
+               alpha=0.8, zorder=5, markeredgecolor='black', markeredgewidth=0.5)
+        ax.plot(x_traj[-1], y_traj[-1], 's', color='darkgreen', markersize=6,
+               alpha=0.8, zorder=5, markeredgecolor='black', markeredgewidth=0.5)
+
+    # Annotate worst 10 outliers
+    worst_10_indices = outlier_indices_plot[:min(10, len(outlier_indices_plot))]
+    for rank, idx in enumerate(worst_10_indices):
+        x_final = shifts_x[idx, -1]
+        y_final = shifts_y[idx, -1]
+        ax.annotate(f'{rank+1}', xy=(x_final, y_final), xytext=(5, 5),
+                   textcoords='offset points', fontsize=8, color='red',
+                   fontweight='bold', zorder=6)
+
+    # Add origin crosshairs
+    max_extent = max(np.abs(shifts_x).max(), np.abs(shifts_y).max()) * 1.1
+    ax.axhline(0, color='k', linewidth=0.8, alpha=0.5, linestyle='--')
+    ax.axvline(0, color='k', linewidth=0.8, alpha=0.5, linestyle='--')
+
+    # Add percentile circles for initial distribution
+    percentiles_to_plot = [50, 90, 95]
+    for p in percentiles_to_plot:
+        radius = np.percentile(np.sqrt(x_init**2 + y_init**2), p)
+        circle = plt.Circle((0, 0), radius, fill=False, color='gray',
+                           linestyle=':', alpha=0.5, linewidth=1)
+        ax.add_patch(circle)
+        ax.text(radius * 0.707, radius * 0.707, f'{p}%',
+               fontsize=8, color='gray', alpha=0.7)
+
+    # Labels and title
+    ax.set_xlabel('Shift X (nm)', fontsize=12)
+    ax.set_ylabel('Shift Y (nm)', fontsize=12)
+    ax.set_title(f'2D Shift Trajectories Across Iterations ({n_frames:,} frames)',
+                fontsize=14, fontweight='bold')
+    ax.set_aspect('equal', adjustable='box')
+    ax.grid(True, alpha=0.3)
+
+    # Set axis limits
+    ax.set_xlim(-max_extent, max_extent)
+    ax.set_ylim(-max_extent, max_extent)
+
+    # Add legend
+    legend_elements = [
+        plt.Line2D([0], [0], color='gray', linewidth=1, alpha=0.5,
+                  label=f'Sample frames (n={len(sample_indices)})'),
+        plt.Line2D([0], [0], color='red', linewidth=2.5, alpha=0.8,
+                  label=f'Outlier frames (n={len(outlier_indices_plot)})'),
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='blue',
+                  markersize=8, label='Start (iter 1)'),
+        plt.Line2D([0], [0], marker='x', color='w', markerfacecolor='green',
+                  markersize=8, markeredgewidth=2, label='End (final iter)'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper left', fontsize=10, framealpha=0.9)
+
+    # Add colorbar for iteration progression
+    sm = cm.ScalarMappable(cmap=cmap, norm=mcolors.Normalize(vmin=1, vmax=n_iterations))
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, orientation='vertical', pad=0.02, aspect=30)
+    cbar.set_label('Iteration', fontsize=10)
+
+    # Add convergence statistics text box
+    # Calculate directional bias
+    mean_x_init = np.mean(x_init)
+    mean_y_init = np.mean(y_init)
+    mean_x_final = np.mean(shifts_x[:, -1])
+    mean_y_final = np.mean(shifts_y[:, -1])
+
+    textstr = (
+        f'Convergence Patterns:\n'
+        f'━━━━━━━━━━━━━━━━━━━━\n'
+        f'Initial mean: ({mean_x_init:.1f}, {mean_y_init:.1f}) nm\n'
+        f'Final mean: ({mean_x_final:.1f}, {mean_y_final:.1f}) nm\n'
+        f'Outliers (>{outlier_percentile}%ile): {len(outlier_indices):,}\n'
+        f'Non-converged frames: {np.sum(shift_magnitudes[:, -1] > outlier_threshold):,}'
+    )
+
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.9)
+    ax.text(0.98, 0.02, textstr,
+           transform=ax.transAxes, fontsize=10,
+           verticalalignment='bottom', horizontalalignment='right',
+           bbox=props, family='monospace')
+
+    plt.tight_layout()
+
+    # Save plot
+    filepath = os.path.join(results_folder, 'shift_trajectory_2d.png')
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    logger.debug(f"Saved 2D trajectory plot: shift_trajectory_2d.png")
+
+    return filepath
+
+
 def _validate_numba_implementation():
     """Validate that Numba implementation produces equivalent results to standard implementation"""
     from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
@@ -2789,6 +3328,42 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         f"Final memory usage: {final_memory_gb:.2f} GB (change: {memory_reduction_gb:+.2f} GB)"
     )
 
+    # Generate frame shift evolution plots (if multiple iterations)
+    if n_iterations > 1:
+        logger.debug("Generating frame shift evolution plots...")
+
+        try:
+            # Plot 1: Correlation grid
+            corr_grid_path = _plot_frame_shift_correlation_grid(
+                iteration_history, results_folder
+            )
+            if corr_grid_path:
+                results["shift_correlation_grid"] = corr_grid_path
+        except Exception as e:
+            logger.warning(f"Failed to create correlation grid plot: {e}")
+
+        try:
+            # Plot 2: Convergence lines
+            conv_lines_path = _plot_shift_convergence_lines(
+                iteration_history, results_folder
+            )
+            if conv_lines_path:
+                results["shift_convergence_lines"] = conv_lines_path
+        except Exception as e:
+            logger.warning(f"Failed to create convergence lines plot: {e}")
+
+        try:
+            # Plot 3: 2D trajectories
+            traj_2d_path = _plot_shift_trajectory_2d(
+                iteration_history, results_folder
+            )
+            if traj_2d_path:
+                results["shift_trajectory_2d"] = traj_2d_path
+        except Exception as e:
+            logger.warning(f"Failed to create 2D trajectory plot: {e}")
+
+        logger.debug("Frame shift evolution plots completed")
+
     # Apply final cumulative drift corrections to the dataset
     locs["x"] = original_locs["x"] + cumulative_corrections_x
     locs["y"] = original_locs["y"] + cumulative_corrections_y
@@ -3290,6 +3865,49 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         else:
             print(f"  ✓ Coverage optimal (85-95%) - multiplier well-tuned!")
         print("="*100 + "\n")
+
+        # Print frame shift evolution plot summary
+        if n_iterations > 1:
+            print("\n" + "="*100)
+            print("FRAME SHIFT EVOLUTION ANALYSIS - Multi-Iteration Visualization")
+            print("="*100)
+            print("Three complementary visualizations have been generated:\n")
+
+            if "shift_correlation_grid" in results:
+                print("  1. CORRELATION GRID (shift_correlation_grid.png)")
+                print("     • N×N grid showing pairwise correlations between iterations")
+                print("     • Diagonal: histograms of shift magnitudes per iteration")
+                print("     • Off-diagonal: hexbin density + outlier scatter plots")
+                print("     • Statistics: R², Pearson r, MAD, % improving")
+                print("     → Reveals: Statistical decorrelation as algorithm converges\n")
+
+            if "shift_convergence_lines" in results:
+                print("  2. CONVERGENCE LINES (shift_convergence_lines.png)")
+                print("     • Shift magnitude vs iteration number")
+                print("     • Percentile bands (5-95%, 25-75%) showing bulk behavior")
+                print("     • RMS and median lines tracking overall convergence")
+                print("     • Individual lines for outlier frames (slow/non-monotonic)")
+                print("     → Reveals: Which frames converge quickly vs slowly\n")
+
+            if "shift_trajectory_2d" in results:
+                print("  3. 2D TRAJECTORIES (shift_trajectory_2d.png)")
+                print("     • Shift-X vs Shift-Y coordinate space")
+                print("     • Colored paths showing evolution from iter1 → final")
+                print("     • Hexbin background showing initial distribution")
+                print("     • Percentile circles and worst-10 annotations")
+                print("     → Reveals: Spatial drift patterns and directional bias\n")
+
+            # Count outliers across all plots
+            if iteration_history and 'histogram_stats' in iteration_history[-1]:
+                # Get outlier info from first visualization that ran
+                n_frames_total = len(iteration_history[0]['drift_x'])
+                print(f"Dataset size: {n_frames_total:,} frames analyzed")
+
+            print("\nHow to use these plots:")
+            print("  • Correlation grid: Check R² decreasing across iterations (good decorrelation)")
+            print("  • Convergence lines: Identify problematic frames requiring investigation")
+            print("  • 2D trajectories: Detect systematic drift or spatial clustering of outliers")
+            print("="*100 + "\n")
 
     # Save final undrifted localizations
     if save_locs:
