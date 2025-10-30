@@ -920,9 +920,19 @@ def _save_shift_histogram_plot(
 
     # Add text box with statistics
     total_points = np.sum(hist)
-    peak_count = np.max(hist)
+
+    # Calculate bin statistics (min, max, median) from bins within circular mask
+    # Use only bins within circular mask (non-NaN values)
+    valid_bins = hist_plot[~np.isnan(hist_plot)]
+    max_bin_value = np.max(valid_bins) if len(valid_bins) > 0 else 0
+    min_bin_value = np.min(valid_bins) if len(valid_bins) > 0 else 0
+    median_bin_value = np.median(valid_bins) if len(valid_bins) > 0 else 0
+
     textstr = (
-        f"Total shifts: {total_points:.0f}\n" f"Peak count: {peak_count:.0f}"
+        f"Total shifts: {total_points:.0f}\n"
+        f"Max bin: {max_bin_value:.0f}\n"
+        f"Min bin: {min_bin_value:.0f}\n"
+        f"Median bin: {median_bin_value:.1f}"
     )
     props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
     ax.text(

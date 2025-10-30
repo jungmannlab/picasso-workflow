@@ -152,9 +152,9 @@ def _init_worker_from_shared_memory(
     # Store shared memory reference for potential cleanup
     _WORKER_KDTREE_SHM = shm
 
-    logger.debug(
-        f"Worker initialized cKDTree from shared memory: {_WORKER_KDTREE.n} points"
-    )
+    # logger.debug(
+    #     f"Worker initialized cKDTree from shared memory: {_WORKER_KDTREE.n} points"
+    # )
 
     # Load frame array if provided (for temporal filtering)
     if frame_shm_name is not None and frame_array_len is not None:
@@ -163,9 +163,9 @@ def _init_worker_from_shared_memory(
         _WORKER_FRAMES = np.frombuffer(frame_bytes, dtype=frame_dtype)
         _WORKER_FRAMES_SHM = frame_shm
 
-        logger.debug(
-            f"Worker initialized frame array from shared memory: {len(_WORKER_FRAMES):,} frames"
-        )
+        # logger.debug(
+        #     f"Worker initialized frame array from shared memory: {len(_WORKER_FRAMES):,} frames"
+        # )
 
 
 def _create_shared_memory_kdtree(reference_coords):
@@ -1046,13 +1046,21 @@ def _save_rsso_histogram_plot(
 
     # Add text box with statistics
     total_points = quality_metrics.get("total_pairs", np.sum(hist))
-    peak_count = quality_metrics.get("peak_value", np.max(hist))
     sigma_x = quality_metrics.get("sigma_x", 0)
     sigma_y = quality_metrics.get("sigma_y", 0)
 
+    # Calculate bin statistics (min, max, median) from bins within circular mask
+    # Use only bins within circular mask (non-NaN values)
+    valid_bins = hist_plot[~np.isnan(hist_plot)]
+    max_bin_value = np.max(valid_bins) if len(valid_bins) > 0 else 0
+    min_bin_value = np.min(valid_bins) if len(valid_bins) > 0 else 0
+    median_bin_value = np.median(valid_bins) if len(valid_bins) > 0 else 0
+
     textstr = (
         f"Total pairs: {total_points:.0f}\n"
-        f"Peak count: {peak_count:.0f}\n"
+        f"Max bin: {max_bin_value:.0f}\n"
+        f"Min bin: {min_bin_value:.0f}\n"
+        f"Median bin: {median_bin_value:.1f}\n"
         f"σx: {sigma_x:.3f} px\n"
         f"σy: {sigma_y:.3f} px"
     )
@@ -2374,6 +2382,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     # Higher values (2-3) allow larger search radius, lower values (1) are more conservative
     # Use shift histogram plots to tune this parameter for your data
     max_shift_rms_multiplier = parameters.get("max_shift_rms_multiplier", 1.0)
+    # Minimum shift radius: adaptive max_shift will never go below this value
+    # Prevents search radius from becoming too small in later iterations
+    min_shift_nm = parameters.get("min_shift", 0.5)  # Default 0.5 nm
+    min_shift_pixels = min_shift_nm / pixelsize
     save_locs = parameters.get("save_locs", True)
     plot_drift = parameters.get("plot_drift", True)
     plot_rsso = parameters.get("plot_rsso", False)
@@ -3201,7 +3213,11 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         # Set the new search radius to this iteration's RMS change × multiplier
         # Multiplier allows user-tunable balance between performance and coverage
-        max_shift_pixels = (convergence_rms * max_shift_rms_multiplier) / pixelsize
+        # Enforce minimum shift radius to prevent search radius from becoming too small
+        max_shift_pixels = max(
+            (convergence_rms * max_shift_rms_multiplier) / pixelsize,
+            min_shift_pixels
+        )
         next_iteration_max_shift_nm = max_shift_pixels * pixelsize
 
         # Store iteration history (BEFORE checking for break, so final iteration is included)
@@ -3822,6 +3838,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         print("SHIFT DISTRIBUTION ANALYSIS - Adaptive max_shift Performance")
         print("="*100)
         print(f"RMS multiplier: {max_shift_rms_multiplier:.1f}x (adjustable via 'max_shift_rms_multiplier' parameter)")
+        print(f"Min shift: {min_shift_nm:.2f} nm (adaptive max_shift will never go below this)")
         print("\nPer-iteration shift statistics (all values in nm):")
         print("-"*100)
         print(f"{'Iter':<6} {'RMS':<8} {'Median':<8} {'90th':<8} {'95th':<8} "
@@ -3841,7 +3858,8 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 pct_at_rms_mult = hstats.get("percentile_at_rms_mult", np.nan)
 
                 # Calculate next max_shift (will be used in next iteration)
-                next_max = rms * max_shift_rms_multiplier
+                # Apply same min_shift constraint as actual algorithm
+                next_max = max(rms * max_shift_rms_multiplier, min_shift_nm)
 
                 print(f"{iter_num:<6} {rms:<8.2f} {median:<8.2f} {p90:<8.2f} {p95:<8.2f} "
                       f"{pct_at_rms:<10.1f} {pct_at_rms_mult:<12.1f} {next_max:<15.2f}")
