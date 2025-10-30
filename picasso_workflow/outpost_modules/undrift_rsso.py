@@ -1787,6 +1787,292 @@ def _plot_shift_trajectory_2d(
     return filepath
 
 
+def _plot_convergence_behavior_analysis(
+    iteration_history,
+    results_folder,
+    convergence_threshold=0.5,
+    max_frames_scatter=1000,
+):
+    """
+    Analyze convergence behavior to detect over/undercompensation patterns.
+
+    Creates sequential iteration comparison plots (N vs N+1) showing:
+    - How drift changes between consecutive iterations
+    - Sign flips (overcompensation indicators)
+    - Divergence (magnitude increases)
+    - Proper monotonic convergence
+
+    Args:
+        iteration_history : list of dict
+            History containing drift_x, drift_y for each iteration
+        results_folder : str
+            Directory to save plots
+        convergence_threshold : float
+            Threshold (nm) below which frames are considered converged
+        max_frames_scatter : int
+            Maximum number of individual frames to show as scatter points
+
+    Returns:
+        filepath : str
+            Path to saved plot
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from matplotlib.gridspec import GridSpec
+    import os
+
+    n_iterations = len(iteration_history)
+    if n_iterations < 2:
+        return None
+
+    # Number of iteration pairs to analyze
+    n_pairs = n_iterations - 1
+
+    # Extract drift data for all iterations
+    n_frames = len(iteration_history[0]['drift_x'])
+    drift_x_all = np.zeros((n_frames, n_iterations))
+    drift_y_all = np.zeros((n_frames, n_iterations))
+
+    for i, hist in enumerate(iteration_history):
+        drift_x_all[:, i] = hist['drift_x']
+        drift_y_all[:, i] = hist['drift_y']
+
+    # Calculate drift magnitudes
+    drift_mag_all = np.sqrt(drift_x_all**2 + drift_y_all**2)
+
+    # Create figure with subplots for each iteration pair
+    # Layout: n_pairs columns, 2 rows (scatter + histogram)
+    fig = plt.figure(figsize=(6 * n_pairs, 10))
+    gs = GridSpec(2, n_pairs, figure=fig, height_ratios=[2, 1], hspace=0.3, wspace=0.3)
+
+    # Store statistics for summary
+    pair_statistics = []
+
+    for pair_idx in range(n_pairs):
+        iter_n = pair_idx
+        iter_n1 = pair_idx + 1
+
+        # Extract drifts for this pair
+        drift_x_n = drift_x_all[:, iter_n]
+        drift_y_n = drift_y_all[:, iter_n]
+        drift_x_n1 = drift_x_all[:, iter_n1]
+        drift_y_n1 = drift_y_all[:, iter_n1]
+
+        drift_mag_n = drift_mag_all[:, iter_n]
+        drift_mag_n1 = drift_mag_all[:, iter_n1]
+
+        # Classify frame behaviors
+        # 1. Sign flips (overcompensation indicators)
+        sign_flip_x = (drift_x_n * drift_x_n1) < 0
+        sign_flip_y = (drift_y_n * drift_y_n1) < 0
+        any_sign_flip = sign_flip_x | sign_flip_y
+
+        # 2. Divergence (magnitude increases)
+        diverging = drift_mag_n1 > drift_mag_n
+
+        # 3. Well-converged (both iterations below threshold)
+        converged = (drift_mag_n < convergence_threshold) & (drift_mag_n1 < convergence_threshold)
+
+        # 4. Proper convergence (same direction, magnitude decreases, not yet converged)
+        proper_convergence = (~any_sign_flip) & (~diverging) & (~converged)
+
+        # Calculate damping ratios
+        # Avoid division by zero
+        damping_ratio = np.zeros(n_frames)
+        valid_damping = drift_mag_n > 0.01  # Avoid very small denominators
+        damping_ratio[valid_damping] = drift_mag_n1[valid_damping] / drift_mag_n[valid_damping]
+        damping_ratio[~valid_damping] = np.nan
+
+        # Statistics for this pair
+        stats = {
+            'pair': f"{iter_n+1}→{iter_n+1}",
+            'sign_flip_x_pct': 100 * np.sum(sign_flip_x) / n_frames,
+            'sign_flip_y_pct': 100 * np.sum(sign_flip_y) / n_frames,
+            'any_sign_flip_pct': 100 * np.sum(any_sign_flip) / n_frames,
+            'diverging_pct': 100 * np.sum(diverging) / n_frames,
+            'converged_pct': 100 * np.sum(converged) / n_frames,
+            'proper_convergence_pct': 100 * np.sum(proper_convergence) / n_frames,
+            'mean_damping': np.nanmean(damping_ratio),
+            'median_damping': np.nanmedian(damping_ratio),
+        }
+        pair_statistics.append(stats)
+
+        # Create scatter plot (top row)
+        ax_scatter = fig.add_subplot(gs[0, pair_idx])
+
+        # Determine which frames to show as individual points
+        if n_frames <= max_frames_scatter:
+            # Show all frames
+            sample_indices = np.arange(n_frames)
+        else:
+            # Sample, but always include problem frames
+            problem_frames = any_sign_flip | diverging
+            problem_indices = np.where(problem_frames)[0]
+            n_problems = len(problem_indices)
+
+            if n_problems < max_frames_scatter:
+                # Add random sample of well-behaved frames
+                good_indices = np.where(~problem_frames)[0]
+                n_additional = min(max_frames_scatter - n_problems, len(good_indices))
+                additional_indices = np.random.choice(good_indices, n_additional, replace=False)
+                sample_indices = np.concatenate([problem_indices, additional_indices])
+            else:
+                # Too many problems - sample from problems
+                sample_indices = np.random.choice(problem_indices, max_frames_scatter, replace=False)
+
+        # Plot hexbin as background for all data
+        valid_data = ~np.isnan(drift_mag_n) & ~np.isnan(drift_mag_n1)
+        if np.sum(valid_data) > 100:
+            ax_scatter.hexbin(
+                drift_mag_n[valid_data],
+                drift_mag_n1[valid_data],
+                gridsize=30,
+                cmap='Greys',
+                alpha=0.3,
+                mincnt=1,
+                zorder=1
+            )
+
+        # Scatter plot of sampled frames, color-coded by behavior
+        for idx in sample_indices:
+            if converged[idx]:
+                color = 'blue'
+                marker = 'o'
+                size = 20
+                alpha = 0.3
+                zorder = 2
+            elif any_sign_flip[idx]:
+                color = 'red'
+                marker = 'x'
+                size = 50
+                alpha = 0.8
+                zorder = 4
+            elif diverging[idx]:
+                color = 'orange'
+                marker = 's'
+                size = 40
+                alpha = 0.7
+                zorder = 3
+            else:  # proper_convergence
+                color = 'green'
+                marker = 'o'
+                size = 30
+                alpha = 0.5
+                zorder = 2
+
+            ax_scatter.scatter(
+                drift_mag_n[idx],
+                drift_mag_n1[idx],
+                c=color,
+                marker=marker,
+                s=size,
+                alpha=alpha,
+                zorder=zorder
+            )
+
+        # Reference lines
+        max_drift = max(np.nanmax(drift_mag_n), np.nanmax(drift_mag_n1))
+        x_ref = np.array([0, max_drift])
+
+        # y = x (no change - BAD)
+        ax_scatter.plot(x_ref, x_ref, 'k--', linewidth=1, alpha=0.5, label='No change (y=x)')
+
+        # y = 0.5x (50% reduction - GOOD)
+        ax_scatter.plot(x_ref, 0.5 * x_ref, 'g--', linewidth=1.5, alpha=0.7, label='50% reduction')
+
+        # y = 0 (perfect correction)
+        ax_scatter.axhline(0, color='gray', linewidth=1, alpha=0.5)
+
+        # Shading: acceptable convergence zone (between y=0 and y=0.5x)
+        ax_scatter.fill_between(x_ref, 0, 0.5 * x_ref, color='green', alpha=0.1, zorder=0)
+
+        # Labels and title
+        ax_scatter.set_xlabel(f'Drift magnitude at iter {iter_n+1} (nm)', fontsize=10)
+        ax_scatter.set_ylabel(f'Drift magnitude at iter {iter_n1+1} (nm)', fontsize=10)
+        ax_scatter.set_title(
+            f'Iteration {iter_n+1} → {iter_n1+1}\n'
+            f'Sign flips: {stats["any_sign_flip_pct"]:.1f}% | '
+            f'Diverging: {stats["diverging_pct"]:.1f}%',
+            fontsize=10
+        )
+
+        # Set equal aspect and limits
+        ax_scatter.set_xlim(0, max_drift * 1.05)
+        ax_scatter.set_ylim(0, max_drift * 1.05)
+        ax_scatter.set_aspect('equal')
+        ax_scatter.grid(True, alpha=0.3)
+
+        # Legend
+        if pair_idx == 0:
+            legend_elements = [
+                mpatches.Patch(color='green', alpha=0.5, label='Proper convergence'),
+                mpatches.Patch(color='red', alpha=0.8, label='Sign flip (overcomp.)'),
+                mpatches.Patch(color='orange', alpha=0.7, label='Diverging'),
+                mpatches.Patch(color='blue', alpha=0.3, label='Converged'),
+            ]
+            ax_scatter.legend(handles=legend_elements, loc='upper left', fontsize=8)
+
+        # Statistics text box
+        textstr = (
+            f"Mean damping: {stats['mean_damping']:.2f}\n"
+            f"Proper conv: {stats['proper_convergence_pct']:.1f}%\n"
+            f"Converged: {stats['converged_pct']:.1f}%"
+        )
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+        ax_scatter.text(
+            0.98, 0.02, textstr,
+            transform=ax_scatter.transAxes,
+            fontsize=8,
+            verticalalignment='bottom',
+            horizontalalignment='right',
+            bbox=props
+        )
+
+        # Create damping ratio histogram (bottom row)
+        ax_hist = fig.add_subplot(gs[1, pair_idx])
+
+        # Plot histogram of damping ratios
+        valid_damping_data = damping_ratio[~np.isnan(damping_ratio)]
+        if len(valid_damping_data) > 0:
+            # Clip extreme values for visualization
+            damping_clipped = np.clip(valid_damping_data, -0.5, 2.0)
+
+            ax_hist.hist(damping_clipped, bins=50, color='steelblue', alpha=0.7, edgecolor='black')
+
+            # Reference lines
+            ax_hist.axvline(0, color='red', linewidth=2, linestyle='--', alpha=0.7, label='Zero (sign flip)')
+            ax_hist.axvline(0.5, color='green', linewidth=2, linestyle='--', alpha=0.7, label='0.5 (good)')
+            ax_hist.axvline(1.0, color='orange', linewidth=2, linestyle='--', alpha=0.7, label='1.0 (no change)')
+
+            ax_hist.set_xlabel('Damping ratio (drift_N+1 / drift_N)', fontsize=9)
+            ax_hist.set_ylabel('Count', fontsize=9)
+            ax_hist.set_title(f'Damping Ratio Distribution', fontsize=9)
+            ax_hist.grid(True, alpha=0.3, axis='y')
+            ax_hist.legend(fontsize=7)
+
+            # Shade acceptable region (0.3-0.7)
+            ax_hist.axvspan(0.3, 0.7, color='green', alpha=0.1, zorder=0)
+
+    # Overall title
+    fig.suptitle(
+        'CONVERGENCE BEHAVIOR ANALYSIS - Over/Undercompensation Detection\n'
+        'Points below y=x line show convergence | Sign flips (red X) indicate overcompensation | '
+        'Points above y=x line show divergence',
+        fontsize=12,
+        fontweight='bold'
+    )
+
+    # Save plot
+    filepath = os.path.join(results_folder, 'convergence_behavior_analysis.png')
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    logger.debug(f"Saved convergence behavior analysis: convergence_behavior_analysis.png")
+
+    # Return filepath and statistics
+    return filepath, pair_statistics
+
+
 def _validate_numba_implementation():
     """Validate that Numba implementation produces equivalent results to standard implementation"""
     from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
@@ -3378,6 +3664,18 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         except Exception as e:
             logger.warning(f"Failed to create 2D trajectory plot: {e}")
 
+        try:
+            # Plot 4: Convergence behavior analysis (over/undercompensation detection)
+            conv_behavior_result = _plot_convergence_behavior_analysis(
+                iteration_history, results_folder, convergence_threshold=convergence_threshold
+            )
+            if conv_behavior_result is not None:
+                conv_behavior_path, pair_statistics = conv_behavior_result
+                results["convergence_behavior_analysis"] = conv_behavior_path
+                results["convergence_behavior_statistics"] = pair_statistics
+        except Exception as e:
+            logger.warning(f"Failed to create convergence behavior analysis plot: {e}")
+
         logger.debug("Frame shift evolution plots completed")
 
     # Apply final cumulative drift corrections to the dataset
@@ -3889,7 +4187,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             print("\n" + "="*100)
             print("FRAME SHIFT EVOLUTION ANALYSIS - Multi-Iteration Visualization")
             print("="*100)
-            print("Three complementary visualizations have been generated:\n")
+            print("Four complementary visualizations have been generated:\n")
 
             if "shift_correlation_grid" in results:
                 print("  1. CORRELATION GRID (shift_correlation_grid.png)")
@@ -3915,6 +4213,61 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 print("     • Percentile circles and worst-10 annotations")
                 print("     → Reveals: Spatial drift patterns and directional bias\n")
 
+            if "convergence_behavior_analysis" in results:
+                print("  4. CONVERGENCE BEHAVIOR ANALYSIS (convergence_behavior_analysis.png)")
+                print("     • Sequential iteration comparison plots (N vs N+1)")
+                print("     • Color-coded by behavior: Green=converging, Red=sign flip, Orange=diverging")
+                print("     • Reference lines: y=x (no change), y=0.5x (50% reduction)")
+                print("     • Damping ratio histograms showing convergence rate distribution")
+                print("     → Reveals: Overcompensation (sign flips) vs proper convergence\n")
+
+                # Print detailed statistics if available
+                if "convergence_behavior_statistics" in results:
+                    pair_stats = results["convergence_behavior_statistics"]
+                    print("     Convergence Behavior Statistics:")
+                    print("     " + "-"*60)
+                    print(f"     {'Transition':<12} {'Sign Flip':<12} {'Diverging':<12} {'Mean Damping':<12}")
+                    print("     " + "-"*60)
+                    for stats in pair_stats:
+                        print(f"     {stats['pair']:<12} "
+                              f"{stats['any_sign_flip_pct']:>9.1f}%  "
+                              f"{stats['diverging_pct']:>9.1f}%  "
+                              f"{stats['mean_damping']:>11.2f}")
+                    print("     " + "-"*60)
+
+                    # Calculate overall statistics
+                    avg_sign_flip = np.mean([s['any_sign_flip_pct'] for s in pair_stats])
+                    avg_diverging = np.mean([s['diverging_pct'] for s in pair_stats])
+                    avg_damping = np.mean([s['mean_damping'] for s in pair_stats])
+
+                    print(f"\n     Overall Averages:")
+                    print(f"       Sign flips (overcompensation): {avg_sign_flip:.1f}%")
+                    print(f"       Diverging frames: {avg_diverging:.1f}%")
+                    print(f"       Mean damping ratio: {avg_damping:.2f}")
+
+                    # Interpretation guidance
+                    print(f"\n     Interpretation:")
+                    if avg_sign_flip > 10:
+                        print(f"       ⚠ HIGH sign flip rate ({avg_sign_flip:.1f}%) indicates overcompensation")
+                        print(f"         → Consider reducing correction aggressiveness or max_shift")
+                    elif avg_sign_flip > 5:
+                        print(f"       ⚠ Moderate sign flip rate ({avg_sign_flip:.1f}%) - some overcompensation")
+                    else:
+                        print(f"       ✓ Low sign flip rate ({avg_sign_flip:.1f}%) - minimal overcompensation")
+
+                    if avg_damping < 0.3:
+                        print(f"       ✓ Fast convergence (damping={avg_damping:.2f}) - aggressive correction")
+                    elif avg_damping < 0.7:
+                        print(f"       ✓ Good convergence rate (damping={avg_damping:.2f})")
+                    elif avg_damping < 0.9:
+                        print(f"       ⚠ Slow convergence (damping={avg_damping:.2f}) - consider increasing correction")
+                    else:
+                        print(f"       ⚠ Very slow convergence (damping={avg_damping:.2f}) - barely improving")
+
+                    if avg_diverging > 5:
+                        print(f"       ⚠ HIGH divergence rate ({avg_diverging:.1f}%) - algorithm may be unstable")
+                    print()
+
             # Count outliers across all plots
             if iteration_history and 'histogram_stats' in iteration_history[-1]:
                 # Get outlier info from first visualization that ran
@@ -3925,6 +4278,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             print("  • Correlation grid: Check R² decreasing across iterations (good decorrelation)")
             print("  • Convergence lines: Identify problematic frames requiring investigation")
             print("  • 2D trajectories: Detect systematic drift or spatial clustering of outliers")
+            print("  • Convergence behavior: Detect overcompensation (red X) or undercompensation (slow)")
             print("="*100 + "\n")
 
     # Save final undrifted localizations
