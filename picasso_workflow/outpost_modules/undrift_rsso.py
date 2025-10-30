@@ -2657,9 +2657,13 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             has_converged = convergence_rms < convergence_threshold
         iteration_timings["convergence_check"] = convergence_timer.elapsed
 
+        # Save current max_shift before updating (needed for histogram plot)
+        current_iteration_max_shift_nm = max_shift_pixels * pixelsize
+
         # Set the new search radius to this iteration's RMS change × multiplier
         # Multiplier allows user-tunable balance between performance and coverage
         max_shift_pixels = (convergence_rms * max_shift_rms_multiplier) / pixelsize
+        next_iteration_max_shift_nm = max_shift_pixels * pixelsize
 
         # Store iteration history (BEFORE checking for break, so final iteration is included)
         with _Timer("history_storage") as history_timer:
@@ -2681,17 +2685,14 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         # Plot shift magnitude histogram to analyze distribution and tune max_shift
         with _Timer("histogram_plotting") as histogram_timer:
-            # Calculate current and next max_shift in nm
-            current_max_shift_nm = max_shift_pixels * pixelsize if iteration == 0 else (iteration_history[-2]["convergence_rms"] * max_shift_rms_multiplier if iteration > 0 else None)
-            next_max_shift_nm = max_shift_pixels * pixelsize
-
+            # Use pre-calculated max_shift values (current = used in this iteration, next = for next iteration)
             # Create histogram plot showing shift distribution vs search radius
             histogram_stats = _plot_shift_magnitude_histogram(
                 frame_shifts_x,
                 frame_shifts_y,
                 convergence_rms,
-                current_max_shift_nm,
-                next_max_shift_nm,
+                current_iteration_max_shift_nm,  # Max_shift used during THIS iteration
+                next_iteration_max_shift_nm,     # Max_shift to be used in NEXT iteration
                 max_shift_rms_multiplier,
                 iteration + 1,  # 1-indexed for display
                 results_folder,
