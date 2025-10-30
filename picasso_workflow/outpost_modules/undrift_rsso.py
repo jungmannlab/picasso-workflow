@@ -1797,14 +1797,20 @@ def _plot_convergence_behavior_analysis(
     Analyze convergence behavior to detect over/undercompensation patterns.
 
     Creates sequential iteration comparison plots (N vs N+1) showing:
-    - How drift changes between consecutive iterations
-    - Sign flips (overcompensation indicators)
-    - Divergence (magnitude increases)
-    - Proper monotonic convergence
+    - Residual drift detected at each iteration (incremental, not cumulative)
+    - Sign flips indicate overcompensation (correction was too large)
+    - Magnitude increases indicate divergence (correction made things worse)
+    - Proper monotonic convergence (magnitude decreases, same direction)
+
+    The plot shows INCREMENTAL drift at each iteration:
+    - Iter 1: Initial drift detected and corrected
+    - Iter 2: Residual drift after applying correction 1
+    - Iter 3: Residual drift after applying correction 2
+    - etc.
 
     Args:
         iteration_history : list of dict
-            History containing drift_x, drift_y for each iteration
+            History containing drift_x, drift_y (cumulative) for each iteration
         results_folder : str
             Directory to save plots
         convergence_threshold : float
@@ -1815,6 +1821,8 @@ def _plot_convergence_behavior_analysis(
     Returns:
         filepath : str
             Path to saved plot
+        pair_statistics : list of dict
+            Statistics for each iteration pair
     """
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
@@ -1830,15 +1838,29 @@ def _plot_convergence_behavior_analysis(
 
     # Extract drift data for all iterations
     n_frames = len(iteration_history[0]['drift_x'])
-    drift_x_all = np.zeros((n_frames, n_iterations))
-    drift_y_all = np.zeros((n_frames, n_iterations))
+    drift_x_cumulative = np.zeros((n_frames, n_iterations))
+    drift_y_cumulative = np.zeros((n_frames, n_iterations))
 
     for i, hist in enumerate(iteration_history):
-        drift_x_all[:, i] = hist['drift_x']
-        drift_y_all[:, i] = hist['drift_y']
+        drift_x_cumulative[:, i] = hist['drift_x']
+        drift_y_cumulative[:, i] = hist['drift_y']
 
-    # Calculate drift magnitudes
-    drift_mag_all = np.sqrt(drift_x_all**2 + drift_y_all**2)
+    # Calculate INCREMENTAL (additional) drift at each iteration
+    # This is what was detected/corrected at that specific iteration
+    drift_x_incremental = np.zeros((n_frames, n_iterations))
+    drift_y_incremental = np.zeros((n_frames, n_iterations))
+
+    # First iteration: incremental = cumulative (no previous iteration)
+    drift_x_incremental[:, 0] = drift_x_cumulative[:, 0]
+    drift_y_incremental[:, 0] = drift_y_cumulative[:, 0]
+
+    # Subsequent iterations: incremental = difference from previous
+    for i in range(1, n_iterations):
+        drift_x_incremental[:, i] = drift_x_cumulative[:, i] - drift_x_cumulative[:, i-1]
+        drift_y_incremental[:, i] = drift_y_cumulative[:, i] - drift_y_cumulative[:, i-1]
+
+    # Calculate magnitudes of INCREMENTAL drifts
+    drift_mag_incremental = np.sqrt(drift_x_incremental**2 + drift_y_incremental**2)
 
     # Create figure with subplots for each iteration pair
     # Layout: n_pairs columns, 2 rows (scatter + histogram)
@@ -1852,14 +1874,15 @@ def _plot_convergence_behavior_analysis(
         iter_n = pair_idx
         iter_n1 = pair_idx + 1
 
-        # Extract drifts for this pair
-        drift_x_n = drift_x_all[:, iter_n]
-        drift_y_n = drift_y_all[:, iter_n]
-        drift_x_n1 = drift_x_all[:, iter_n1]
-        drift_y_n1 = drift_y_all[:, iter_n1]
+        # Extract INCREMENTAL drifts for this pair
+        # These represent the residual drift detected at each iteration
+        drift_x_n = drift_x_incremental[:, iter_n]
+        drift_y_n = drift_y_incremental[:, iter_n]
+        drift_x_n1 = drift_x_incremental[:, iter_n1]
+        drift_y_n1 = drift_y_incremental[:, iter_n1]
 
-        drift_mag_n = drift_mag_all[:, iter_n]
-        drift_mag_n1 = drift_mag_all[:, iter_n1]
+        drift_mag_n = drift_mag_incremental[:, iter_n]
+        drift_mag_n1 = drift_mag_incremental[:, iter_n1]
 
         # Classify frame behaviors
         # 1. Sign flips (overcompensation indicators)
@@ -1987,8 +2010,8 @@ def _plot_convergence_behavior_analysis(
         ax_scatter.fill_between(x_ref, 0, 0.5 * x_ref, color='green', alpha=0.1, zorder=0)
 
         # Labels and title
-        ax_scatter.set_xlabel(f'Drift magnitude at iter {iter_n+1} (nm)', fontsize=10)
-        ax_scatter.set_ylabel(f'Drift magnitude at iter {iter_n1+1} (nm)', fontsize=10)
+        ax_scatter.set_xlabel(f'Residual drift at iter {iter_n+1} (nm)', fontsize=10)
+        ax_scatter.set_ylabel(f'Residual drift at iter {iter_n1+1} (nm)', fontsize=10)
         ax_scatter.set_title(
             f'Iteration {iter_n+1} → {iter_n1+1}\n'
             f'Sign flips: {stats["any_sign_flip_pct"]:.1f}% | '
@@ -1996,10 +2019,11 @@ def _plot_convergence_behavior_analysis(
             fontsize=10
         )
 
-        # Set equal aspect and limits
+        # Set equal aspect ratio and square limits
         ax_scatter.set_xlim(0, max_drift * 1.05)
         ax_scatter.set_ylim(0, max_drift * 1.05)
-        ax_scatter.set_aspect('equal')
+        ax_scatter.set_box_aspect(1)  # Force square aspect ratio
+        ax_scatter.set_aspect('equal', adjustable='box')
         ax_scatter.grid(True, alpha=0.3)
 
         # Legend
@@ -2044,7 +2068,7 @@ def _plot_convergence_behavior_analysis(
             ax_hist.axvline(0.5, color='green', linewidth=2, linestyle='--', alpha=0.7, label='0.5 (good)')
             ax_hist.axvline(1.0, color='orange', linewidth=2, linestyle='--', alpha=0.7, label='1.0 (no change)')
 
-            ax_hist.set_xlabel('Damping ratio (drift_N+1 / drift_N)', fontsize=9)
+            ax_hist.set_xlabel('Damping ratio (residual_N+1 / residual_N)', fontsize=9)
             ax_hist.set_ylabel('Count', fontsize=9)
             ax_hist.set_title(f'Damping Ratio Distribution', fontsize=9)
             ax_hist.grid(True, alpha=0.3, axis='y')
@@ -2056,9 +2080,9 @@ def _plot_convergence_behavior_analysis(
     # Overall title
     fig.suptitle(
         'CONVERGENCE BEHAVIOR ANALYSIS - Over/Undercompensation Detection\n'
-        'Points below y=x line show convergence | Sign flips (red X) indicate overcompensation | '
-        'Points above y=x line show divergence',
-        fontsize=12,
+        'Residual drift at iteration N vs N+1 (incremental, not cumulative)\n'
+        'Points below y=x: convergence | Red X: sign flip (overcompensation) | Above y=x: divergence',
+        fontsize=11,
         fontweight='bold'
     )
 
