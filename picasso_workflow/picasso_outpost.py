@@ -757,14 +757,19 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
 
     # Perform the fit
     try:
-        popt, pcov = curve_fit(
-            gaussian_2d,
-            (x_fit, y_fit),
-            z_fit,
-            p0=initial_guess,
-            bounds=bounds,
-            maxfev=1000,
-        )
+        # Suppress numerical warnings from scipy optimizer
+        # (divide by zero warnings are expected for ill-conditioned histograms)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=RuntimeWarning)
+            popt, pcov = curve_fit(
+                gaussian_2d,
+                (x_fit, y_fit),
+                z_fit,
+                p0=initial_guess,
+                bounds=bounds,
+                maxfev=1000,
+            )
 
         # Extract fitted center coordinates and uncertainties
         shift_x = popt[1]  # x0
@@ -3939,14 +3944,19 @@ def analyse_resolution_ppac(intensities, delta_r):
 
     try:
         # Perform the fit
-        popt, pcov = curve_fit(
-            gaussian_2d,
-            coords,
-            z_data,
-            p0=initial_guess,
-            bounds=bounds,
-            maxfev=5000,
-        )
+        # Suppress numerical warnings from scipy optimizer
+        # (divide by zero warnings are expected for ill-conditioned histograms)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=RuntimeWarning)
+            popt, pcov = curve_fit(
+                gaussian_2d,
+                coords,
+                z_data,
+                p0=initial_guess,
+                bounds=bounds,
+                maxfev=5000,
+            )
 
         amplitude, x0, y0, sigma_x, sigma_y, background = popt
 

@@ -1510,44 +1510,50 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             frame_locs_frames = frame_locs["frame"] if "frame" in frame_locs.dtype.names else None
             ref_frames = _WORKER_FRAMES  # From worker global (or None if not using shared memory)
 
-            if enable_numba_optimization:
-                # Use Numba-optimized RSSO computation with temporal filtering
-                # Determine frame number for plotting (use first frame in group)
-                (
-                    shift_x,
-                    shift_y,
-                    numba_info,
-                ) = _compute_rsso_shift_numba_optimized(
-                    dataset_locs,
-                    frame_locs,
-                    max_shift,
-                    enable_numba=True,
-                    plot_histogram=plot_histogram,
-                    plot_dir=plot_dir,
-                    iteration=iteration,
-                    frame_number=frame_number,
-                    ref_frames=ref_frames,
-                    frame_locs_frames=frame_locs_frames,
-                    ton=ton,
-                )
-                uncertainty_info = numba_info if numba_info is not None else {}
-                computation_type = "Numba-optimized"
-            else:
-                # Use standard RSSO computation with temporal filtering
-                shift_x, shift_y, _, std_info = _calculate_pairwise_shift(
-                    dataset_locs,
-                    frame_locs,
-                    max_shift,
-                    plot_histogram=plot_histogram,
-                    remove_zeroshift=True,
-                    plot_dir=plot_dir,
-                    plot_fn_suffix=f"_{iteration}_{frame_number}_dslocs{len_dataset}_tgtlocs{len(frame_locs)}",
-                    ref_frames=ref_frames,
-                    frame_locs_frames=frame_locs_frames,
-                    ton_exclusion=ton,
-                )
-                uncertainty_info = std_info if std_info is not None else {}
-                computation_type = "Standard"
+            for i_maxshift in range(4):
+                maxshift_curr = max_shift * (i_maxshift + 1)
+                if enable_numba_optimization:
+                    # Use Numba-optimized RSSO computation with temporal filtering
+                    # Determine frame number for plotting (use first frame in group)
+                    (
+                        shift_x,
+                        shift_y,
+                        numba_info,
+                    ) = _compute_rsso_shift_numba_optimized(
+                        dataset_locs,
+                        frame_locs,
+                        max_shift,
+                        enable_numba=True,
+                        plot_histogram=plot_histogram,
+                        plot_dir=plot_dir,
+                        iteration=iteration,
+                        frame_number=frame_number,
+                        ref_frames=ref_frames,
+                        frame_locs_frames=frame_locs_frames,
+                        ton=ton,
+                    )
+                    uncertainty_info = numba_info if numba_info is not None else {}
+                    computation_type = "Numba-optimized"
+                    if uncertainty_info.get("success", False):
+                        break
+                else:
+                    # Use standard RSSO computation with temporal filtering
+                    shift_x, shift_y, _, std_info = _calculate_pairwise_shift(
+                        dataset_locs,
+                        frame_locs,
+                        max_shift,
+                        plot_histogram=plot_histogram,
+                        remove_zeroshift=True,
+                        plot_dir=plot_dir,
+                        plot_fn_suffix=f"_{iteration}_{frame_number}_dslocs{len_dataset}_tgtlocs{len(frame_locs)}",
+                        ref_frames=ref_frames,
+                        frame_locs_frames=frame_locs_frames,
+                        ton_exclusion=ton,
+                    )
+                    uncertainty_info = std_info if std_info is not None else {}
+                    computation_type = "Standard"
+                    if uncertainty_info.get("fit_successful", False):
+                        break
 
             computation_time = time.time() - start_time
             # logger.debug(f'Calculated shift in {computation_time} (reference: {len_dataset}, frame: {len(frame_locs)})')
@@ -2505,6 +2511,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     )
                     break
         iteration_timings["convergence_check"] = convergence_timer.elapsed
+
+        # set the new search radius to this iteration's rms change
+        max_shift_pixels = convergence_rms / pixelsize
 
         # Store iteration history
         with _Timer("history_storage") as history_timer:
