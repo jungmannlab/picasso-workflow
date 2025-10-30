@@ -1088,6 +1088,158 @@ def _save_rsso_histogram_plot(
     return filepath
 
 
+def _plot_shift_magnitude_histogram(
+    frame_shifts_x,
+    frame_shifts_y,
+    convergence_rms,
+    current_max_shift_nm,
+    next_max_shift_nm,
+    rms_multiplier,
+    iteration,
+    results_folder,
+    pixelsize,
+):
+    """
+    Plot histogram of shift magnitudes for frames with quantile annotations.
+
+    Shows distribution of per-frame drift magnitudes and compares them to
+    the RMS value and search radius settings. Helps tune max_shift_rms_multiplier.
+
+    Args:
+        frame_shifts_x : ndarray
+            X shifts for all frames (nm)
+        frame_shifts_y : ndarray
+            Y shifts for all frames (nm)
+        convergence_rms : float
+            RMS of shifts (nm)
+        current_max_shift_nm : float
+            Max shift used for this iteration (nm)
+        next_max_shift_nm : float
+            Max shift to be used for next iteration (nm)
+        rms_multiplier : float
+            Multiplier applied to RMS
+        iteration : int
+            Current iteration number (1-indexed)
+        results_folder : str
+            Directory to save plot
+        pixelsize : float
+            Pixel size in nm (for reference)
+
+    Returns:
+        dict : Statistics including quantiles and percentile at RMS
+    """
+    import matplotlib.pyplot as plt
+
+    # Calculate shift magnitudes for valid (non-None) frames
+    valid_mask = ~(np.isnan(frame_shifts_x) | np.isnan(frame_shifts_y))
+    if not np.any(valid_mask):
+        logger.warning("No valid shifts to plot histogram")
+        return None
+
+    shifts_x_valid = frame_shifts_x[valid_mask]
+    shifts_y_valid = frame_shifts_y[valid_mask]
+    shift_magnitudes = np.sqrt(shifts_x_valid**2 + shifts_y_valid**2)
+
+    # Calculate statistics
+    median = np.median(shift_magnitudes)
+    p50 = np.percentile(shift_magnitudes, 50)
+    p90 = np.percentile(shift_magnitudes, 90)
+    p95 = np.percentile(shift_magnitudes, 95)
+
+    # Calculate percentile at RMS value
+    percentile_at_rms = (np.sum(shift_magnitudes <= convergence_rms) / len(shift_magnitudes)) * 100
+
+    # Calculate percentile at RMS × multiplier
+    rms_times_mult = convergence_rms * rms_multiplier
+    percentile_at_rms_mult = (np.sum(shift_magnitudes <= rms_times_mult) / len(shift_magnitudes)) * 100
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Plot histogram
+    n_bins = min(50, max(10, len(shift_magnitudes) // 10))
+    counts, bins, patches = ax.hist(
+        shift_magnitudes, bins=n_bins, color='skyblue',
+        edgecolor='black', alpha=0.7, label='Frame shifts'
+    )
+
+    # Add vertical lines for quantiles
+    ax.axvline(median, color='green', linestyle='--', linewidth=2,
+               label=f'Median: {median:.2f} nm', alpha=0.8)
+    ax.axvline(p90, color='orange', linestyle='--', linewidth=2,
+               label=f'90th %ile: {p90:.2f} nm', alpha=0.8)
+    ax.axvline(p95, color='red', linestyle='--', linewidth=2,
+               label=f'95th %ile: {p95:.2f} nm', alpha=0.8)
+
+    # Add vertical line for RMS
+    ax.axvline(convergence_rms, color='blue', linestyle='-', linewidth=2.5,
+               label=f'RMS: {convergence_rms:.2f} nm ({percentile_at_rms:.1f}th %ile)',
+               alpha=0.9)
+
+    # Add vertical line for RMS × multiplier (next max_shift)
+    if rms_multiplier != 1.0:
+        ax.axvline(rms_times_mult, color='purple', linestyle='-', linewidth=2.5,
+                   label=f'RMS×{rms_multiplier:.1f}: {rms_times_mult:.2f} nm ({percentile_at_rms_mult:.1f}th %ile)',
+                   alpha=0.9)
+
+    # Add vertical line for current max_shift
+    if current_max_shift_nm is not None:
+        ax.axvline(current_max_shift_nm, color='gray', linestyle=':', linewidth=2,
+                   label=f'Current max_shift: {current_max_shift_nm:.2f} nm',
+                   alpha=0.7)
+
+    # Labels and title
+    ax.set_xlabel('Shift Magnitude (nm)', fontsize=12)
+    ax.set_ylabel('Number of Frames', fontsize=12)
+    ax.set_title(
+        f'Iteration {iteration} - Frame Shift Distribution\n'
+        f'{len(shift_magnitudes)} valid frames, RMS={convergence_rms:.2f} nm',
+        fontsize=13, fontweight='bold'
+    )
+
+    # Add text box with statistics
+    textstr = (
+        f'Next iteration max_shift:\n'
+        f'  {next_max_shift_nm:.2f} nm\n'
+        f'  (RMS × {rms_multiplier:.1f})\n'
+        f'  Covers {percentile_at_rms_mult:.1f}% of shifts'
+    )
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.9)
+    ax.text(
+        0.98, 0.98, textstr,
+        transform=ax.transAxes,
+        fontsize=10,
+        verticalalignment='top',
+        horizontalalignment='right',
+        bbox=props
+    )
+
+    # Legend
+    ax.legend(loc='upper left', fontsize=9, framealpha=0.9)
+    ax.grid(True, alpha=0.3)
+
+    # Save plot
+    filename = f'shift_histogram_iter{iteration:02d}.png'
+    filepath = os.path.join(results_folder, filename)
+    plt.savefig(filepath, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    logger.debug(f"    Saved shift histogram: {filename}")
+
+    # Return statistics
+    return {
+        'median': median,
+        'p50': p50,
+        'p90': p90,
+        'p95': p95,
+        'rms': convergence_rms,
+        'percentile_at_rms': percentile_at_rms,
+        'percentile_at_rms_mult': percentile_at_rms_mult,
+        'n_valid_frames': len(shift_magnitudes),
+        'plot_path': filepath,
+    }
+
+
 def _validate_numba_implementation():
     """Validate that Numba implementation produces equivalent results to standard implementation"""
     from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
@@ -1522,7 +1674,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                     ) = _compute_rsso_shift_numba_optimized(
                         dataset_locs,
                         frame_locs,
-                        max_shift,
+                        maxshift_curr,
                         enable_numba=True,
                         plot_histogram=plot_histogram,
                         plot_dir=plot_dir,
@@ -1541,7 +1693,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                     shift_x, shift_y, _, std_info = _calculate_pairwise_shift(
                         dataset_locs,
                         frame_locs,
-                        max_shift,
+                        maxshift_curr,
                         plot_histogram=plot_histogram,
                         remove_zeroshift=True,
                         plot_dir=plot_dir,
@@ -1679,6 +1831,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     min_locs_per_frame = parameters.get("min_locs_per_frame", 10)
     max_iterations = parameters.get("max_iterations", 5)
     convergence_threshold = parameters.get("convergence_threshold", 0.1)
+    # Adaptive max_shift: multiplier applied to RMS from previous iteration
+    # Higher values (2-3) allow larger search radius, lower values (1) are more conservative
+    # Use shift histogram plots to tune this parameter for your data
+    max_shift_rms_multiplier = parameters.get("max_shift_rms_multiplier", 1.0)
     save_locs = parameters.get("save_locs", True)
     plot_drift = parameters.get("plot_drift", True)
     plot_rsso = parameters.get("plot_rsso", False)
@@ -2479,7 +2635,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         iteration_timings["frame_corrections"] = corrections_timer.elapsed
         logger.debug(f"    Frame corrections application: {_format_time(corrections_timer.elapsed)}")
 
-        # Check for convergence
+        # Calculate convergence metrics (but don't break yet - need to store history first)
         with _Timer("convergence_check") as convergence_timer:
             if iteration > 0:
                 # Calculate RMS change from previous iteration
@@ -2490,32 +2646,22 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 rms_change_x = np.sqrt(np.mean((drift_x - prev_drift_x) ** 2))
                 rms_change_y = np.sqrt(np.mean((drift_y - prev_drift_y) ** 2))
                 convergence_rms = np.sqrt(rms_change_x**2 + rms_change_y**2)
-
                 logger.debug(f"    RMS change: {convergence_rms:.3f} nm")
-
-                if convergence_rms < convergence_threshold:
-                    logger.debug(
-                        f"    ✓ Converged after {iteration + 1} iterations (RMS change < {convergence_threshold:.3f} nm)"
-                    )
-                    break
             else:
                 rms_change_x = np.sqrt(np.mean((drift_x) ** 2))
                 rms_change_y = np.sqrt(np.mean((drift_y) ** 2))
                 convergence_rms = np.sqrt(rms_change_x**2 + rms_change_y**2)
-
                 logger.debug(f"    RMS drift: {convergence_rms:.3f} nm")
 
-                if convergence_rms < convergence_threshold:
-                    logger.debug(
-                        f"    ✓ Converged after {iteration + 1} iterations (RMS change < {convergence_threshold:.3f} nm)"
-                    )
-                    break
+            # Store whether this iteration has converged (will check after storing history)
+            has_converged = convergence_rms < convergence_threshold
         iteration_timings["convergence_check"] = convergence_timer.elapsed
 
-        # set the new search radius to this iteration's rms change
-        max_shift_pixels = convergence_rms / pixelsize
+        # Set the new search radius to this iteration's RMS change × multiplier
+        # Multiplier allows user-tunable balance between performance and coverage
+        max_shift_pixels = (convergence_rms * max_shift_rms_multiplier) / pixelsize
 
-        # Store iteration history
+        # Store iteration history (BEFORE checking for break, so final iteration is included)
         with _Timer("history_storage") as history_timer:
             iteration_history.append(
                 {
@@ -2532,6 +2678,30 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 }
             )
         iteration_timings["history_storage"] = history_timer.elapsed
+
+        # Plot shift magnitude histogram to analyze distribution and tune max_shift
+        with _Timer("histogram_plotting") as histogram_timer:
+            # Calculate current and next max_shift in nm
+            current_max_shift_nm = max_shift_pixels * pixelsize if iteration == 0 else (iteration_history[-2]["convergence_rms"] * max_shift_rms_multiplier if iteration > 0 else None)
+            next_max_shift_nm = max_shift_pixels * pixelsize
+
+            # Create histogram plot showing shift distribution vs search radius
+            histogram_stats = _plot_shift_magnitude_histogram(
+                frame_shifts_x,
+                frame_shifts_y,
+                convergence_rms,
+                current_max_shift_nm,
+                next_max_shift_nm,
+                max_shift_rms_multiplier,
+                iteration + 1,  # 1-indexed for display
+                results_folder,
+                pixelsize,
+            )
+
+            # Store histogram statistics in iteration history
+            if histogram_stats:
+                iteration_history[-1]["histogram_stats"] = histogram_stats
+        iteration_timings["histogram_plotting"] = histogram_timer.elapsed
 
         # Performance reporting for this iteration
         iteration_end_time_perf = time.perf_counter()
@@ -2592,6 +2762,14 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             logger.debug(
                 f"    Standard computations: {n_standard_computations}, avg {avg_standard_time:.4f}s, total {total_standard_time:.1f}s"
             )
+
+        # Check for convergence and break if converged
+        # (Now that we've stored history and completed all reporting for this iteration)
+        if has_converged:
+            logger.debug(
+                f"    ✓ Converged after {iteration + 1} iterations (RMS change < {convergence_threshold:.3f} nm)"
+            )
+            break
 
     # Finalize results
     n_iterations = len(iteration_history)
@@ -3062,6 +3240,55 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             print("    • Convergence history on log scale")
             print("    • Uncertainty and confidence evolution")
             print("    • Drift range evolution for robustness assessment")
+
+        # Print shift magnitude histogram summary table
+        print("\n" + "="*100)
+        print("SHIFT DISTRIBUTION ANALYSIS - Adaptive max_shift Performance")
+        print("="*100)
+        print(f"RMS multiplier: {max_shift_rms_multiplier:.1f}x (adjustable via 'max_shift_rms_multiplier' parameter)")
+        print("\nPer-iteration shift statistics (all values in nm):")
+        print("-"*100)
+        print(f"{'Iter':<6} {'RMS':<8} {'Median':<8} {'90th':<8} {'95th':<8} "
+              f"{'%@RMS':<10} {'%@RMS×mult':<12} {'next_max_shift':<15}")
+        print("-"*100)
+
+        for hist_entry in iteration_history:
+            iter_num = hist_entry["iteration"]
+            rms = hist_entry["convergence_rms"]
+            hstats = hist_entry.get("histogram_stats", {})
+
+            if hstats:
+                median = hstats.get("median", np.nan)
+                p90 = hstats.get("p90", np.nan)
+                p95 = hstats.get("p95", np.nan)
+                pct_at_rms = hstats.get("percentile_at_rms", np.nan)
+                pct_at_rms_mult = hstats.get("percentile_at_rms_mult", np.nan)
+
+                # Calculate next max_shift (will be used in next iteration)
+                next_max = rms * max_shift_rms_multiplier
+
+                print(f"{iter_num:<6} {rms:<8.2f} {median:<8.2f} {p90:<8.2f} {p95:<8.2f} "
+                      f"{pct_at_rms:<10.1f} {pct_at_rms_mult:<12.1f} {next_max:<15.2f}")
+
+        print("-"*100)
+        print("\nInterpretation guide:")
+        print("  • '%@RMS': Percentile of shifts covered by RMS value")
+        print("  • '%@RMS×mult': Percentile covered by next iteration's max_shift (RMS × multiplier)")
+        print("  • Target: 85-95% coverage for optimal performance/accuracy balance")
+        print(f"  • Current multiplier ({max_shift_rms_multiplier:.1f}x) achieves "
+              f"{np.mean([h.get('histogram_stats', {}).get('percentile_at_rms_mult', np.nan) for h in iteration_history]):.1f}% avg coverage")
+        print("\nTuning recommendations:")
+        avg_coverage = np.mean([h.get('histogram_stats', {}).get('percentile_at_rms_mult', np.nan)
+                                for h in iteration_history if 'histogram_stats' in h])
+        if avg_coverage < 85:
+            recommended_mult = max_shift_rms_multiplier * (90 / avg_coverage)
+            print(f"  → Coverage too low (<85%) - consider increasing multiplier to ~{recommended_mult:.1f}x")
+        elif avg_coverage > 95:
+            recommended_mult = max_shift_rms_multiplier * (92 / avg_coverage)
+            print(f"  → Coverage very high (>95%) - can reduce multiplier to ~{recommended_mult:.1f}x for speed")
+        else:
+            print(f"  ✓ Coverage optimal (85-95%) - multiplier well-tuned!")
+        print("="*100 + "\n")
 
     # Save final undrifted localizations
     if save_locs:
