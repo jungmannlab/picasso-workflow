@@ -439,6 +439,8 @@ def _calculate_pairwise_shift(
     ref_frames=None,
     frame_locs_frames=None,
     ton_exclusion=0,
+    peak_mode="auto",
+    snr_threshold=3.0,
 ):
     """
     Calculate shift between two channels using histogram peak finding with temporal filtering.
@@ -464,6 +466,14 @@ def _calculate_pairwise_shift(
             Frame numbers for frame localizations (for temporal filtering)
         ton_exclusion : int, default 0
             Exclude pairs from frames within ±2×ton (temporal filtering)
+        peak_mode : str, default "auto"
+            Peak finding method:
+            - "gaussian": Try 2D Gaussian fit, fall back to center of mass if fails
+            - "center_of_mass": Use center of mass of top 9 bins directly
+            - "auto": Same as "gaussian" (try Gaussian, fall back to CoM)
+        snr_threshold : float, default 3.0
+            Signal-to-noise ratio threshold (max_bin / median_bin).
+            If SNR < threshold, force center_of_mass and mark as failed.
 
     Returns:
         shift_x, shift_y, plot_filepath : float, float, str or None
@@ -540,34 +550,59 @@ def _calculate_pairwise_shift(
         range=[shift_range, shift_range],
     )
 
-    # Use 2D Gaussian fitting to find the shift
-    try:
-        shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error = (
-            _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift)
-        )
-        fit_successful = True
-    except (RuntimeError, ValueError) as e:
+    # Calculate signal-to-noise ratio
+    max_bin_value = np.max(hist)
+    non_zero_bins = hist[hist > 0]
+    median_bin_value = np.median(non_zero_bins) if len(non_zero_bins) > 0 else 1.0
+    snr = max_bin_value / median_bin_value if median_bin_value > 0 else 0.0
+
+    # Check if SNR is too low - if so, force center_of_mass and mark as failed
+    # This allows max_shift iterations to increase search radius
+    snr_too_low = snr < snr_threshold
+    peak_mode_to_use = peak_mode
+
+    if snr_too_low and peak_mode != "center_of_mass":
         logger.warning(
-            f"2D Gaussian fitting failed: {e}. "
-            "Falling back to histogram maximum."
+            f"SNR too low ({snr:.2f} < {snr_threshold:.2f}). "
+            "Forcing center_of_mass method and marking as failed for max_shift retry."
         )
-        # Fallback to histogram maximum method
-        peak_idx = np.unravel_index(np.argmax(hist), hist.shape)
-        x_centers = (x_edges[:-1] + x_edges[1:]) / 2
-        y_centers = (y_edges[:-1] + y_edges[1:]) / 2
-        shift_x = x_centers[peak_idx[0]]
-        shift_y = y_centers[peak_idx[1]]
-        # Set uncertainty estimates for fallback method
-        sigma_x = bin_size  # Use bin size as rough uncertainty estimate
-        sigma_y = bin_size
-        shift_x_error = bin_size / 2  # Conservative error estimate
-        shift_y_error = bin_size / 2
-        fit_successful = False
-        # logger.warning(
-        #     f"2D Gaussian fitting failed: {e}. "
-        #     "Returning None results."
-        # )
-        # return None, None, None, None, None, None
+        peak_mode_to_use = "center_of_mass"
+
+    # Find peak using specified method
+    fit_successful = False
+
+    if peak_mode_to_use == "center_of_mass":
+        # Use center of mass directly (faster, more robust for broad peaks)
+        shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error = (
+            _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift)
+        )
+        # If user explicitly requested center_of_mass, mark as successful
+        # If forced due to low SNR, mark as failed to trigger max_shift retry
+        if snr_too_low:
+            fit_successful = False  # Trigger max_shift iterations
+        else:
+            fit_successful = True  # Explicit center_of_mass always succeeds
+
+    elif peak_mode_to_use in ["gaussian", "auto"]:
+        # Try 2D Gaussian fitting first
+        try:
+            shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error = (
+                _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift)
+            )
+            fit_successful = True
+        except (RuntimeError, ValueError) as e:
+            logger.warning(
+                f"2D Gaussian fitting failed: {e}. "
+                "Falling back to center of mass method."
+            )
+            # Fallback to center of mass method (better than simple maximum)
+            shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error = (
+                _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift)
+            )
+            fit_successful = False  # Indicates fallback was used
+
+    else:
+        raise ValueError(f"Unknown peak_mode: {peak_mode}. Use 'gaussian', 'center_of_mass', or 'auto'.")
 
     # Create and save histogram plot if requested
     plot_filepath = None
@@ -643,6 +678,113 @@ def _calculate_adaptive_bins(valid_shifts_x, valid_shifts_y, max_shift):
     # )
 
     return bin_size, bins
+
+
+def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None):
+    """
+    Find peak location using center of mass of the highest bins.
+
+    More robust than simple histogram maximum for broad/non-Gaussian peaks.
+    Provides sub-bin precision without requiring Gaussian fitting.
+
+    Uses 3×3 neighborhood (9 bins) around the histogram maximum to calculate
+    weighted center of mass, providing better accuracy than discrete bin centers.
+
+    Args:
+        hist : np.array
+            2D histogram of shifts
+        x_edges : np.array
+            Histogram x bin edges
+        y_edges : np.array
+            Histogram y bin edges
+        max_shift : float, optional
+            Maximum shift radius (for consistency with Gaussian fit API)
+
+    Returns:
+        shift_x, shift_y : float, float
+            Center of mass coordinates
+        sigma_x, sigma_y : float, float
+            Estimated spread (std dev of 3×3 neighborhood values)
+        shift_x_error, shift_y_error : float, float
+            Estimated errors (based on bin size and peak sharpness)
+    """
+    # Create bin centers
+    x_centers = (x_edges[:-1] + x_edges[1:]) / 2
+    y_centers = (y_edges[:-1] + y_edges[1:]) / 2
+    bin_size_x = x_edges[1] - x_edges[0] if len(x_edges) > 1 else 1.0
+    bin_size_y = y_edges[1] - y_edges[0] if len(y_edges) > 1 else 1.0
+
+    # Find histogram maximum
+    hist_transposed = hist.T  # Match meshgrid convention
+    peak_idx = np.unravel_index(np.argmax(hist_transposed), hist_transposed.shape)
+    peak_y_bin, peak_x_bin = peak_idx  # Note: unravel_index returns (row, col) = (y, x)
+
+    # Define 3×3 neighborhood around maximum
+    # Clip to valid histogram range (handle edge cases)
+    x_indices = np.clip(
+        [peak_x_bin - 1, peak_x_bin, peak_x_bin + 1],
+        0,
+        hist.shape[0] - 1
+    ).astype(int)
+    y_indices = np.clip(
+        [peak_y_bin - 1, peak_y_bin, peak_y_bin + 1],
+        0,
+        hist.shape[1] - 1
+    ).astype(int)
+
+    # Remove duplicates (in case peak is at edge and clipping created duplicates)
+    x_indices = np.unique(x_indices)
+    y_indices = np.unique(y_indices)
+
+    # Extract neighborhood values and coordinates
+    # Create meshgrid of indices
+    x_idx_grid, y_idx_grid = np.meshgrid(x_indices, y_indices)
+    neighborhood_values = hist_transposed[y_idx_grid, x_idx_grid]
+
+    # Clip negative values to zero (shouldn't happen but be safe)
+    neighborhood_values = np.maximum(neighborhood_values, 0)
+
+    # Check if we have any non-zero values
+    total_mass = np.sum(neighborhood_values)
+    if total_mass == 0:
+        # Fallback: return simple maximum position
+        shift_x = x_centers[peak_x_bin]
+        shift_y = y_centers[peak_y_bin]
+        sigma_x = bin_size_x
+        sigma_y = bin_size_y
+        shift_x_error = bin_size_x / 2
+        shift_y_error = bin_size_y / 2
+        return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error
+
+    # Get coordinate values for the neighborhood
+    x_coords = x_centers[x_indices]
+    y_coords = y_centers[y_indices]
+    x_coord_grid, y_coord_grid = np.meshgrid(x_coords, y_coords)
+
+    # Calculate center of mass
+    shift_x = np.sum(neighborhood_values * x_coord_grid) / total_mass
+    shift_y = np.sum(neighborhood_values * y_coord_grid) / total_mass
+
+    # Estimate uncertainty based on spread of the neighborhood
+    # Calculate weighted standard deviation
+    sigma_x = np.sqrt(
+        np.sum(neighborhood_values * (x_coord_grid - shift_x)**2) / total_mass
+    )
+    sigma_y = np.sqrt(
+        np.sum(neighborhood_values * (y_coord_grid - shift_y)**2) / total_mass
+    )
+
+    # Estimate position error based on bin size and peak sharpness
+    # Sharper peaks (high max/mean ratio) have lower uncertainty
+    peak_value = np.max(neighborhood_values)
+    mean_value = np.mean(neighborhood_values[neighborhood_values > 0])
+    sharpness_ratio = peak_value / mean_value if mean_value > 0 else 1.0
+
+    # Error scales inversely with sharpness, bounded by bin size
+    shift_x_error = min(bin_size_x / (2 * np.sqrt(sharpness_ratio)), bin_size_x / 2)
+    shift_y_error = min(bin_size_y / (2 * np.sqrt(sharpness_ratio)), bin_size_y / 2)
+
+    return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error
 
 
 def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):

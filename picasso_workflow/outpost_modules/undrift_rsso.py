@@ -644,6 +644,77 @@ if NUMBA_AVAILABLE:
 
         return peak_x, peak_y, max_val
 
+    @numba.jit(nopython=True, cache=True)
+    def _find_peak_center_of_mass_numba(hist, x_edges, y_edges):
+        """Numba-optimized center of mass peak finding
+
+        Calculates weighted center of mass of 3×3 neighborhood around maximum.
+        More robust than simple maximum for broad/non-Gaussian peaks.
+
+        Args:
+            hist : ndarray (2D)
+                Histogram counts
+            x_edges : ndarray
+                X bin edges
+            y_edges : ndarray
+                Y bin edges
+
+        Returns:
+            shift_x, shift_y : float
+                Center of mass coordinates
+            peak_value : float
+                Maximum bin value in neighborhood
+        """
+        # Find histogram maximum
+        max_val = numba.float32(0.0)
+        max_i = 0
+        max_j = 0
+
+        for i in range(hist.shape[0]):
+            for j in range(hist.shape[1]):
+                if hist[i, j] > max_val:
+                    max_val = hist[i, j]
+                    max_i = i
+                    max_j = j
+
+        # Define 3×3 neighborhood indices (clip to valid range)
+        i_start = max(0, max_i - 1)
+        i_end = min(hist.shape[0], max_i + 2)  # +2 because range is exclusive
+        j_start = max(0, max_j - 1)
+        j_end = min(hist.shape[1], max_j + 2)
+
+        # Calculate bin centers
+        bin_size_x = x_edges[1] - x_edges[0] if len(x_edges) > 1 else numba.float32(1.0)
+        bin_size_y = y_edges[1] - y_edges[0] if len(y_edges) > 1 else numba.float32(1.0)
+
+        # Calculate center of mass
+        total_mass = numba.float32(0.0)
+        weighted_x = numba.float32(0.0)
+        weighted_y = numba.float32(0.0)
+
+        for i in range(i_start, i_end):
+            for j in range(j_start, j_end):
+                value = hist[i, j]
+                if value > 0:
+                    # Bin center coordinates
+                    x_coord = x_edges[i] + bin_size_x / 2
+                    y_coord = y_edges[j] + bin_size_y / 2
+
+                    total_mass += value
+                    weighted_x += value * x_coord
+                    weighted_y += value * y_coord
+
+        # Calculate final center of mass
+        if total_mass > 0:
+            shift_x = weighted_x / total_mass
+            shift_y = weighted_y / total_mass
+        else:
+            # Fallback: use bin center of maximum
+            shift_x = x_edges[max_i] + bin_size_x / 2
+            shift_y = y_edges[max_j] + bin_size_y / 2
+
+        return shift_x, shift_y, max_val
+
 else:
     # Fallback implementations when Numba is not available
     def _compute_pairwise_shifts_numba(
@@ -704,6 +775,48 @@ else:
         """Fallback NumPy implementation"""
         max_idx = np.unravel_index(hist.argmax(), hist.shape)
         return float(max_idx[0]), float(max_idx[1]), hist[max_idx]
+
+    def _find_peak_center_of_mass_numba(hist, x_edges, y_edges):
+        """Fallback NumPy implementation of center of mass peak finding"""
+        # Find histogram maximum
+        max_idx = np.unravel_index(hist.argmax(), hist.shape)
+        max_i, max_j = max_idx
+
+        # Define 3×3 neighborhood (clip to valid range)
+        i_start = max(0, max_i - 1)
+        i_end = min(hist.shape[0], max_i + 2)
+        j_start = max(0, max_j - 1)
+        j_end = min(hist.shape[1], max_j + 2)
+
+        # Extract neighborhood
+        neighborhood = hist[i_start:i_end, j_start:j_end]
+
+        # Calculate bin centers
+        bin_size_x = x_edges[1] - x_edges[0] if len(x_edges) > 1 else 1.0
+        bin_size_y = y_edges[1] - y_edges[0] if len(y_edges) > 1 else 1.0
+
+        # Create coordinate grids for neighborhood
+        i_indices = np.arange(i_start, i_end)
+        j_indices = np.arange(j_start, j_end)
+        i_grid, j_grid = np.meshgrid(i_indices, j_indices, indexing='ij')
+
+        # Bin center coordinates
+        x_coords = x_edges[i_indices] + bin_size_x / 2
+        y_coords = y_edges[j_indices] + bin_size_y / 2
+        x_grid, y_grid = np.meshgrid(x_coords, y_coords, indexing='ij')
+
+        # Calculate center of mass
+        total_mass = np.sum(neighborhood)
+        if total_mass > 0:
+            shift_x = np.sum(neighborhood * x_grid) / total_mass
+            shift_y = np.sum(neighborhood * y_grid) / total_mass
+        else:
+            # Fallback: use bin center of maximum
+            shift_x = x_edges[max_i] + bin_size_x / 2
+            shift_y = y_edges[max_j] + bin_size_y / 2
+
+        max_val = hist[max_idx]
+        return float(shift_x), float(shift_y), float(max_val)
 
 
 # ==============================================================================
@@ -776,6 +889,8 @@ def _compute_rsso_shift_numba_optimized(
     ref_frames=None,
     frame_locs_frames=None,
     ton=0,
+    peak_mode="auto",
+    snr_threshold=3.0,
 ):
     """Numba-optimized RSSO shift computation with temporal filtering
 
@@ -802,6 +917,14 @@ def _compute_rsso_shift_numba_optimized(
             Frame numbers for frame localizations (for temporal filtering)
         ton : int, default 0
             Exclude pairs from frames within ±2×ton (temporal filtering)
+        peak_mode : str, default "auto"
+            Peak finding method:
+            - "gaussian": Not supported in Numba route (reserved for standard route)
+            - "center_of_mass": Use center of mass of top 9 bins directly
+            - "auto": Use parabolic interpolation (Numba default) or CoM
+        snr_threshold : float, default 3.0
+            Signal-to-noise ratio threshold (max_bin / median_bin).
+            If SNR < threshold, force center_of_mass and mark as failed.
 
     Returns:
         shift_x, shift_y : float
@@ -872,24 +995,52 @@ def _compute_rsso_shift_numba_optimized(
     phase2_time = time.time() - phase2_start
     phase3_start = time.time()
 
-    # Phase 3: Find peak with sub-pixel precision
-    peak_x_bin, peak_y_bin, peak_value = _find_histogram_peak_numba(hist)
+    # Calculate signal-to-noise ratio
+    max_bin_value = np.max(hist)
+    non_zero_bins = hist[hist > 0]
+    median_bin_value = np.median(non_zero_bins) if len(non_zero_bins) > 0 else 1.0
+    snr = max_bin_value / median_bin_value if median_bin_value > 0 else 0.0
 
-    # Convert bin indices to shift values
-    if n_bins > 1:
-        bin_size_x = x_edges[1] - x_edges[0]
-        bin_size_y = y_edges[1] - y_edges[0]
-        shift_x = x_edges[0] + peak_x_bin * bin_size_x
-        shift_y = y_edges[0] + peak_y_bin * bin_size_y
+    # Check if SNR is too low - if so, force center_of_mass and mark as failed
+    # This allows max_shift iterations to increase search radius
+    snr_too_low = snr < snr_threshold
+    peak_mode_to_use = peak_mode
+
+    if snr_too_low and peak_mode != "center_of_mass":
+        peak_mode_to_use = "center_of_mass"
+
+    # Phase 3: Find peak with sub-pixel precision
+    if peak_mode_to_use == "center_of_mass":
+        # Use center of mass directly (better for broad peaks)
+        shift_x, shift_y, peak_value = _find_peak_center_of_mass_numba(
+            hist, x_edges, y_edges
+        )
     else:
-        shift_x, shift_y = 0.0, 0.0
+        # Use parabolic interpolation (default Numba method)
+        peak_x_bin, peak_y_bin, peak_value = _find_histogram_peak_numba(hist)
+
+        # Convert bin indices to shift values
+        if n_bins > 1:
+            bin_size_x = x_edges[1] - x_edges[0]
+            bin_size_y = y_edges[1] - y_edges[0]
+            shift_x = x_edges[0] + peak_x_bin * bin_size_x
+            shift_y = y_edges[0] + peak_y_bin * bin_size_y
+        else:
+            shift_x, shift_y = 0.0, 0.0
 
     phase3_time = time.time() - phase3_start
     total_time = time.time() - start_time
 
     # Quality metrics
+    # If user explicitly requested center_of_mass, mark as successful
+    # If forced due to low SNR, mark as failed to trigger max_shift retry
+    if snr_too_low:
+        success = False  # Trigger max_shift iterations
+    else:
+        success = True  # Normal success or explicit center_of_mass
+
     quality_metrics = {
-        "success": True,
+        "success": success,
         "peak_value": int(peak_value),
         "total_pairs": len(shifts_x),
         "n_frame_locs": len(
@@ -901,6 +1052,9 @@ def _compute_rsso_shift_numba_optimized(
         "numba_enabled": enable_numba and NUMBA_AVAILABLE,
         "sigma_x": np.std(shifts_x),
         "sigma_y": np.std(shifts_y),
+        "snr": float(snr),
+        "snr_threshold": float(snr_threshold),
+        "snr_too_low": bool(snr_too_low),
         "timing": {
             "phase1_pairwise": phase1_time,
             "phase2_histogram": phase2_time,
@@ -1094,6 +1248,118 @@ def _save_rsso_histogram_plot(
     plt.close()
 
     return filepath
+
+
+def _create_histogram_movie(
+    results_folder,
+    iteration,
+    min_frames_for_movie=10,
+    fps=10,
+    cleanup=True,
+):
+    """
+    Create a movie from histogram PNG files for a given iteration.
+
+    Searches for all histogram files matching the iteration number,
+    sorts them by frame number, and compiles into an MP4 video.
+    Optionally deletes individual PNG files after movie creation.
+
+    Args:
+        results_folder : str
+            Directory containing histogram images
+        iteration : int
+            Iteration number to create movie for
+        min_frames_for_movie : int, default 10
+            Minimum number of histogram images required to create a movie
+        fps : int, default 10
+            Frames per second for output video
+        cleanup : bool, default True
+            Whether to delete individual PNG files after movie creation
+
+    Returns:
+        movie_path : str or None
+            Path to created movie, or None if failed/insufficient frames
+    """
+    import os
+    import glob
+    import re
+    try:
+        import imageio
+        IMAGEIO_AVAILABLE = True
+    except ImportError:
+        IMAGEIO_AVAILABLE = False
+
+    # Find all histogram files for this iteration
+    rsso_plot_dir = os.path.join(results_folder, "rsso_plots")
+    if not os.path.exists(rsso_plot_dir):
+        return None
+
+    # Pattern: rsso_iter{iteration:02d}_frame{frame:04d}_{randomcode}.png
+    pattern = os.path.join(rsso_plot_dir, f"rsso_iter{iteration:02d}_frame*.png")
+    histogram_files = glob.glob(pattern)
+
+    if len(histogram_files) < min_frames_for_movie:
+        logger.debug(
+            f"Only {len(histogram_files)} histogram files found for iteration {iteration}. "
+            f"Minimum {min_frames_for_movie} required for movie creation."
+        )
+        return None
+
+    if not IMAGEIO_AVAILABLE:
+        logger.warning(
+            "imageio not available. Cannot create histogram movie. "
+            "Install with: pip install imageio[ffmpeg]"
+        )
+        return None
+
+    # Sort files by frame number
+    def extract_frame_number(filepath):
+        """Extract frame number from filename"""
+        match = re.search(r'_frame(\d+)_', os.path.basename(filepath))
+        return int(match.group(1)) if match else 0
+
+    histogram_files_sorted = sorted(histogram_files, key=extract_frame_number)
+
+    # Create movie
+    movie_filename = f"rsso_histograms_iter{iteration:02d}.mp4"
+    movie_path = os.path.join(rsso_plot_dir, movie_filename)
+
+    try:
+        logger.debug(
+            f"Creating histogram movie from {len(histogram_files_sorted)} frames "
+            f"at {fps} fps..."
+        )
+
+        # Use imageio to create video
+        writer = imageio.get_writer(movie_path, fps=fps, codec='libx264', pixelformat='yuv420p')
+
+        for filepath in histogram_files_sorted:
+            try:
+                image = imageio.imread(filepath)
+                writer.append_data(image)
+            except Exception as e:
+                logger.warning(f"Failed to read histogram image {filepath}: {e}")
+                continue
+
+        writer.close()
+
+        logger.debug(f"Created histogram movie: {movie_filename}")
+
+        # Clean up individual PNGs if requested
+        if cleanup:
+            for filepath in histogram_files_sorted:
+                try:
+                    os.remove(filepath)
+                except Exception as e:
+                    logger.warning(f"Failed to delete {filepath}: {e}")
+
+            logger.debug(f"Cleaned up {len(histogram_files_sorted)} individual histogram PNGs")
+
+        return movie_path
+
+    except Exception as e:
+        logger.warning(f"Failed to create histogram movie: {e}")
+        return None
 
 
 def _plot_shift_magnitude_histogram(
@@ -2519,6 +2785,14 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             frame_locs_frames = frame_locs["frame"] if "frame" in frame_locs.dtype.names else None
             ref_frames = _WORKER_FRAMES  # From worker global (or None if not using shared memory)
 
+            # Determine peak finding mode based on iteration
+            # First iteration: use center of mass (histogram not Gaussian yet)
+            # Later iterations: use auto (try Gaussian, fall back to CoM)
+            peak_mode = "center_of_mass" if iteration == 0 else "auto"
+
+            # SNR threshold for peak quality check
+            snr_threshold = parameters.get("snr_threshold", 3.0)
+
             for i_maxshift in range(4):
                 maxshift_curr = max_shift * (i_maxshift + 1)
                 if enable_numba_optimization:
@@ -2540,6 +2814,8 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                         ref_frames=ref_frames,
                         frame_locs_frames=frame_locs_frames,
                         ton=ton,
+                        peak_mode=peak_mode,
+                        snr_threshold=snr_threshold,
                     )
                     uncertainty_info = numba_info if numba_info is not None else {}
                     computation_type = "Numba-optimized"
@@ -2558,6 +2834,8 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                         ref_frames=ref_frames,
                         frame_locs_frames=frame_locs_frames,
                         ton_exclusion=ton,
+                        peak_mode=peak_mode,
+                        snr_threshold=snr_threshold,
                     )
                     uncertainty_info = std_info if std_info is not None else {}
                     computation_type = "Standard"
@@ -3601,6 +3879,20 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         )
 
         logger.debug(f"    Iteration {iteration + 1} completed")
+
+        # Create movie from histogram frames if many were saved
+        if plot_rsso:
+            with _Timer("histogram_movie") as movie_timer:
+                movie_path = _create_histogram_movie(
+                    results_folder,
+                    iteration,
+                    min_frames_for_movie=10,
+                    fps=10,
+                    cleanup=True  # Delete individual PNGs after movie creation
+                )
+                if movie_path:
+                    logger.debug(f"    Created histogram movie: {os.path.basename(movie_path)}")
+            iteration_timings["histogram_movie"] = movie_timer.elapsed
 
         # Report Numba vs Standard performance
         if enable_numba_optimization and numba_computation_times:
