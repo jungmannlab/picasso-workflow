@@ -891,6 +891,7 @@ def _compute_rsso_shift_numba_optimized(
     ton=0,
     peak_mode="auto",
     snr_threshold=3.0,
+    shared_plot_dict=None,
 ):
     """Numba-optimized RSSO shift computation with temporal filtering
 
@@ -925,6 +926,8 @@ def _compute_rsso_shift_numba_optimized(
         snr_threshold : float, default 3.0
             Signal-to-noise ratio threshold (max_bin / median_bin).
             If SNR < threshold, force center_of_mass and mark as failed.
+        shared_plot_dict : multiprocessing.Manager.dict() or None, optional
+            If provided, stores plot as numpy array in this dict instead of saving to disk.
 
     Returns:
         shift_x, shift_y : float
@@ -1064,7 +1067,7 @@ def _compute_rsso_shift_numba_optimized(
     }
 
     # Create and save histogram plot if requested
-    if plot_histogram and plot_dir is not None:
+    if plot_histogram and (plot_dir is not None or shared_plot_dict is not None):
         plot_filepath = _save_rsso_histogram_plot(
             hist,
             x_edges,
@@ -1076,6 +1079,7 @@ def _compute_rsso_shift_numba_optimized(
             iteration,
             frame_number,
             quality_metrics,
+            shared_plot_dict=shared_plot_dict,
         )
         quality_metrics["plot_filepath"] = plot_filepath
 
@@ -1093,9 +1097,13 @@ def _save_rsso_histogram_plot(
     iteration,
     frame_number,
     quality_metrics,
+    shared_plot_dict=None,
 ):
     """
     Save 2D histogram plot showing RSSO shift distribution and peak.
+
+    Can either save to disk (traditional mode) or store in shared memory
+    for incremental video writing (memory-efficient mode).
 
     Args:
         hist : np.array
@@ -1111,25 +1119,25 @@ def _save_rsso_histogram_plot(
         max_shift : float
             Maximum shift range
         plot_dir : str
-            Directory to save plot
+            Directory to save plot (only used if shared_plot_dict is None)
         iteration : int or None
             Iteration number for filename
         frame_number : int or None
             Frame number for filename
         quality_metrics : dict
             Quality metrics to display on plot
+        shared_plot_dict : multiprocessing.Manager.dict() or None, optional
+            If provided, stores plot as numpy array in this dict instead of saving to disk.
+            Key is frame_number, value is numpy array of shape (height, width, 3).
 
     Returns:
-        filepath : str
-            Path to saved plot
+        filepath : str or frame_number
+            If shared_plot_dict is None: Path to saved plot file
+            If shared_plot_dict is provided: Frame number (key in dict)
     """
     import matplotlib.pyplot as plt
     import random
     import string
-
-    # Create rsso_plots subdirectory
-    rsso_plot_dir = os.path.join(plot_dir, "rsso_plots")
-    os.makedirs(rsso_plot_dir, exist_ok=True)
 
     # Create figure and axis
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -1229,25 +1237,88 @@ def _save_rsso_histogram_plot(
         bbox=props,
     )
 
-    # Generate filename with iteration and frame number
-    filename_parts = ["rsso"]
-    if iteration is not None:
-        filename_parts.append(f"iter{iteration:02d}")
-    if frame_number is not None:
-        filename_parts.append(f"frame{frame_number:04d}")
+    # Either save to disk or store in shared memory
+    if shared_plot_dict is not None:
+        # Memory-efficient mode: Render to numpy array and store in shared dict
+        # Draw the canvas to ensure everything is rendered
+        fig.canvas.draw()
 
-    # Add random code for uniqueness
-    rcode = "".join(random.choices(string.ascii_letters, k=6))
-    filename_parts.append(rcode)
+        # Convert figure to numpy array (RGB format)
+        img_array = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        img_array = img_array.reshape(fig.canvas.get_width_height()[::-1] + (3,))
 
-    filename = "_".join(filename_parts) + ".png"
-    filepath = os.path.join(rsso_plot_dir, filename)
+        # Store in shared dict with frame number as key
+        if frame_number is not None:
+            shared_plot_dict[frame_number] = img_array
 
-    # Save the plot
-    plt.savefig(filepath, dpi=150, bbox_inches="tight")
-    plt.close()
+        plt.close(fig)
 
-    return filepath
+        return frame_number
+    else:
+        # Traditional mode: Save to disk as PNG
+        # Create rsso_plots subdirectory
+        rsso_plot_dir = os.path.join(plot_dir, "rsso_plots")
+        os.makedirs(rsso_plot_dir, exist_ok=True)
+
+        # Generate filename with iteration and frame number
+        filename_parts = ["rsso"]
+        if iteration is not None:
+            filename_parts.append(f"iter{iteration:02d}")
+        if frame_number is not None:
+            filename_parts.append(f"frame{frame_number:04d}")
+
+        # Add random code for uniqueness
+        rcode = "".join(random.choices(string.ascii_letters, k=6))
+        filename_parts.append(rcode)
+
+        filename = "_".join(filename_parts) + ".png"
+        filepath = os.path.join(rsso_plot_dir, filename)
+
+        # Save the plot
+        plt.savefig(filepath, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        return filepath
+
+
+def _write_plots_to_video(shared_plot_dict, video_writer):
+    """
+    Write plot images from shared memory dict to video file in order.
+
+    Sorts frames by frame number and writes them to the video writer sequentially.
+    Clears processed frames from the shared dict to free memory.
+
+    Args:
+        shared_plot_dict : multiprocessing.Manager.dict()
+            Dictionary mapping frame_number -> numpy array (H x W x 3)
+        video_writer : imageio.Writer
+            Open video writer to append frames to
+
+    Returns:
+        int : Number of frames written
+    """
+    if not shared_plot_dict:
+        return 0
+
+    # Get all frame numbers and sort them
+    frame_numbers = sorted(shared_plot_dict.keys())
+
+    # Write frames in order
+    frames_written = 0
+    for frame_num in frame_numbers:
+        try:
+            img_array = shared_plot_dict[frame_num]
+            video_writer.append_data(img_array)
+            frames_written += 1
+
+            # Remove from dict to free memory
+            del shared_plot_dict[frame_num]
+
+        except Exception as e:
+            logger.warning(f"Failed to write frame {frame_num} to video: {e}")
+            continue
+
+    return frames_written
 
 
 def _create_histogram_movie(
@@ -2682,7 +2753,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         frame_data : tuple
             (frame_indices, reference_dataset, target_frames, frame_locs, max_shift, min_locs_per_frame,
              enable_uncertainty_estimation, n_uncertainty_trials, subsampling_fraction,
-             enable_numba_optimization, plot_histogram, plot_dir, iteration, ton, snr_threshold)
+             enable_numba_optimization, plot_histogram, plot_dir, iteration, ton, snr_threshold, shared_plot_dict)
 
     Returns:
         tuple : (frame_indices, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality, performance_info)
@@ -2706,6 +2777,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         iteration,
         ton,  # For temporal filtering
         snr_threshold,  # SNR threshold for peak quality check
+        shared_plot_dict,  # Shared memory dict for incremental video writing
     ) = frame_data
 
     try:
@@ -2817,6 +2889,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                         ton=ton,
                         peak_mode=peak_mode,
                         snr_threshold=snr_threshold,
+                        shared_plot_dict=shared_plot_dict,
                     )
                     uncertainty_info = numba_info if numba_info is not None else {}
                     computation_type = "Numba-optimized"
@@ -3183,6 +3256,53 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             "chunk_times": [],
             "worker_times": [],
         }
+
+        # Create shared memory dictionary for incremental video writing
+        # This allows workers to store plot images in memory instead of disk
+        video_writer = None
+        shared_plot_dict = None
+
+        if plot_rsso and enable_multiprocessing:
+            try:
+                import imageio
+                from multiprocessing import Manager
+
+                # Create shared dictionary for collecting plot images
+                manager = Manager()
+                shared_plot_dict = manager.dict()
+
+                # Create video writer for this iteration
+                rsso_plot_dir = os.path.join(results_folder, "rsso_plots")
+                os.makedirs(rsso_plot_dir, exist_ok=True)
+
+                movie_filename = f"rsso_histograms_iter{iteration:02d}.mp4"
+                movie_path = os.path.join(rsso_plot_dir, movie_filename)
+
+                video_writer = imageio.get_writer(
+                    movie_path,
+                    fps=10,
+                    codec='libx264',
+                    pixelformat='yuv420p'
+                )
+
+                logger.debug(
+                    f"    Initialized video writer for iteration {iteration + 1}: {movie_filename}"
+                )
+
+            except ImportError:
+                logger.warning(
+                    "imageio not available. Falling back to traditional PNG-based plotting. "
+                    "Install with: pip install imageio[ffmpeg]"
+                )
+                shared_plot_dict = None
+                video_writer = None
+            except Exception as e:
+                logger.warning(
+                    f"Failed to initialize video writer: {e}. "
+                    "Falling back to traditional PNG-based plotting."
+                )
+                shared_plot_dict = None
+                video_writer = None
 
         # Start iteration timer
         iteration_start_time_perf = time.perf_counter()
@@ -3556,6 +3676,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         iteration,  # Current iteration number (0-indexed, for peak_mode logic)
                         ton,  # For temporal filtering (exclude frames within ±2×ton)
                         snr_threshold,  # SNR threshold for peak quality check
+                        shared_plot_dict,  # Shared memory dict for incremental video writing
                     )
                     chunk_frame_data.append(frame_data)
             iteration_timings["chunk_data_preparation"] += prep_timer.elapsed
@@ -3626,6 +3747,14 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                             new_quality[frame_idx] = quality_val
                             valid_measurements += 1
             iteration_timings["result_collection"] += collection_timer.elapsed
+
+            # Write accumulated plots to video incrementally (memory-efficient)
+            if video_writer is not None and shared_plot_dict is not None:
+                frames_written = _write_plots_to_video(shared_plot_dict, video_writer)
+                if frames_written > 0:
+                    logger.debug(
+                        f"      Wrote {frames_written} histogram frames to video (batch mode)"
+                    )
 
             # Force garbage collection after each chunk
             gc.collect()
@@ -3883,18 +4012,27 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         logger.debug(f"    Iteration {iteration + 1} completed")
 
-        # Create movie from histogram frames if many were saved
-        if plot_rsso:
+        # Close video writer and finalize movie file
+        if video_writer is not None:
             with _Timer("histogram_movie") as movie_timer:
-                movie_path = _create_histogram_movie(
-                    results_folder,
-                    iteration,
-                    min_frames_for_movie=10,
-                    fps=10,
-                    cleanup=True  # Delete individual PNGs after movie creation
-                )
-                if movie_path:
-                    logger.debug(f"    Created histogram movie: {os.path.basename(movie_path)}")
+                try:
+                    # Write any remaining frames in shared dict
+                    if shared_plot_dict is not None:
+                        frames_written = _write_plots_to_video(shared_plot_dict, video_writer)
+                        if frames_written > 0:
+                            logger.debug(
+                                f"    Wrote final {frames_written} histogram frames to video"
+                            )
+
+                    # Close the video writer
+                    video_writer.close()
+
+                    logger.debug(
+                        f"    Created histogram movie: rsso_histograms_iter{iteration:02d}.mp4"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to finalize histogram movie: {e}")
+
             iteration_timings["histogram_movie"] = movie_timer.elapsed
 
         # Report Numba vs Standard performance
