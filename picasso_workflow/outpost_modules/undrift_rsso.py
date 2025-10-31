@@ -939,12 +939,6 @@ def _compute_rsso_shift_numba_optimized(
 
     start_time = time.time()
 
-    logger.debug(
-        f"        → _compute_rsso_shift_numba_optimized called: "
-        f"ref_locs={len(locs_i)}, frame_locs={len(locs_j)}, "
-        f"max_shift={max_shift_pixels:.1f}, peak_mode={peak_mode}"
-    )
-
     # Extract coordinates - match standard implementation naming
     # locs_i is reference, locs_j is frame in standard call pattern
     i_x = locs_i["x"].astype(np.float32)
@@ -1014,10 +1008,6 @@ def _compute_rsso_shift_numba_optimized(
 
     if snr_too_low and peak_mode != "center_of_mass":
         peak_mode_to_use = "center_of_mass"
-        logger.debug(
-            f"        → SNR too low ({snr:.2f} < {snr_threshold:.2f}), "
-            f"forcing center_of_mass (was: {peak_mode})"
-        )
 
     # Phase 3: Find peak with sub-pixel precision
     if peak_mode_to_use == "center_of_mass":
@@ -1046,16 +1036,8 @@ def _compute_rsso_shift_numba_optimized(
     # If FORCED to center_of_mass due to low SNR, mark as failed to trigger max_shift retry
     if snr_too_low and peak_mode != "center_of_mass":
         success = False  # Was forced by low SNR, trigger max_shift iterations
-        logger.debug(
-            f"        → Setting success=False (snr_too_low={snr_too_low}, "
-            f"peak_mode={repr(peak_mode)})"
-        )
     else:
         success = True  # Explicit request OR good SNR - mark as successful
-        logger.debug(
-            f"        → Setting success=True (snr_too_low={snr_too_low}, "
-            f"peak_mode={repr(peak_mode)})"
-        )
 
     quality_metrics = {
         "success": success,
@@ -2726,13 +2708,6 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         snr_threshold,  # SNR threshold for peak quality check
     ) = frame_data
 
-    # Log worker start (with PID to identify different workers)
-    logger.debug(
-        f"        [Worker PID {os.getpid()}] Started processing frame group: "
-        f"indices={frame_indices}, target_frames={target_frames}, "
-        f"n_frame_locs={len(frame_locs)}, iteration={iteration}"
-    )
-
     try:
         # Initialize uncertainty_info at the start to avoid "referenced before assignment" error
         uncertainty_info = {}
@@ -2821,10 +2796,6 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
             for i_maxshift in range(4):
                 maxshift_curr = max_shift * (i_maxshift + 1)
-                logger.debug(
-                    f"      Frame {frame_number}: max_shift attempt {i_maxshift + 1}/4 "
-                    f"(maxshift={maxshift_curr:.1f}, peak_mode={peak_mode})"
-                )
                 if enable_numba_optimization:
                     # Use Numba-optimized RSSO computation with temporal filtering
                     # Determine frame number for plotting (use first frame in group)
@@ -2850,17 +2821,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                     uncertainty_info = numba_info if numba_info is not None else {}
                     computation_type = "Numba-optimized"
                     if uncertainty_info.get("success", False):
-                        logger.debug(
-                            f"      Frame {frame_number}: SUCCESS on attempt {i_maxshift + 1}/4 "
-                            f"(SNR={uncertainty_info.get('snr', 'N/A'):.2f})"
-                        )
                         break
-                    else:
-                        logger.debug(
-                            f"      Frame {frame_number}: FAILED attempt {i_maxshift + 1}/4 "
-                            f"(SNR={uncertainty_info.get('snr', 'N/A'):.2f}, "
-                            f"success={uncertainty_info.get('success', False)})"
-                        )
                 else:
                     # Use standard RSSO computation with temporal filtering
                     shift_x, shift_y, _, std_info = _calculate_pairwise_shift(
@@ -2880,17 +2841,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                     uncertainty_info = std_info if std_info is not None else {}
                     computation_type = "Standard"
                     if uncertainty_info.get("fit_successful", False):
-                        logger.debug(
-                            f"      Frame {frame_number}: SUCCESS on attempt {i_maxshift + 1}/4 "
-                            f"(SNR={uncertainty_info.get('snr', 'N/A'):.2f})"
-                        )
                         break
-                    else:
-                        logger.debug(
-                            f"      Frame {frame_number}: FAILED attempt {i_maxshift + 1}/4 "
-                            f"(SNR={uncertainty_info.get('snr', 'N/A'):.2f}, "
-                            f"fit_successful={uncertainty_info.get('fit_successful', False)})"
-                        )
 
             computation_time = time.time() - start_time
             # logger.debug(f'Calculated shift in {computation_time} (reference: {len_dataset}, frame: {len(frame_locs)})')
@@ -3502,7 +3453,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             logger.debug(
                 f"      Processing chunk {chunk_start//chunk_size + 1}/{(n_frames-1)//chunk_size + 1}: frames {chunk_start}-{chunk_end-1}"
             )
-            logger.debug(f"      Starting frame grouping for {chunk_end - chunk_start} frames...")
 
             # Evaluate frame sizes and create frame groups to ensure min_locs_per_frame
             # OPTIMIZATION: Use pre-computed frame_boundaries for O(1) lookup instead of O(n) boolean masking
@@ -3547,16 +3497,12 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         current_group = []
                         current_locs_count = 0
             iteration_timings["frame_grouping"] += grouping_timer.elapsed
-            logger.debug(f"      Frame grouping completed: {len(frame_groups)} groups created")
 
             # Prepare chunk data using frame groups
             # OPTIMIZATION: Use slice indexing instead of boolean masking
-            logger.debug(f"      Starting chunk data preparation...")
             with _Timer("data_prep") as prep_timer:
                 chunk_frame_data = []
-                for group_idx, (group_indices, group_frame_numbers) in enumerate(frame_groups):
-                    if group_idx % 100 == 0:
-                        logger.debug(f"        Preparing group {group_idx + 1}/{len(frame_groups)}...")
+                for group_indices, group_frame_numbers in frame_groups:
                     # Extract frame localizations using pre-computed boundaries
                     # OPTIMIZED: O(1) slice instead of O(n) boolean mask
                     if group_frame_numbers:
@@ -3613,20 +3559,16 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     )
                     chunk_frame_data.append(frame_data)
             iteration_timings["chunk_data_preparation"] += prep_timer.elapsed
-            logger.debug(f"      Chunk data preparation completed: {len(chunk_frame_data)} frame groups ready")
 
             # Process chunk using pre-created pool (OPTIMIZED: pool reused across all chunks)
-            logger.debug(f"      Starting chunk processing with {'parallel' if pool is not None else 'sequential'} mode...")
             with _Timer("chunk_processing") as chunk_timer:
                 if pool is not None:
                     # Use pre-created pool for parallel processing
-                    logger.debug(f"      Calling pool.map with {len(chunk_frame_data)} tasks...")
                     with _Timer("pool_map") as map_timer:
                         chunk_results = pool.map(
                             _compute_frame_to_reference_shift_optimized,
                             chunk_frame_data,
                         )
-                    logger.debug(f"      pool.map completed, received {len(chunk_results)} results")
                     iteration_timings["pool_map_total"] += map_timer.elapsed
                 else:
                     # Sequential processing
