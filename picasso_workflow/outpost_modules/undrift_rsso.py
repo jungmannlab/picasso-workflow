@@ -474,6 +474,9 @@ if NUMBA_AVAILABLE:
         Returns:
             shifts_x, shifts_y : ndarray
                 Valid pairwise shift vectors from i to j
+            ref_indices : ndarray
+                Reference localization indices (i) for each valid shift
+                Used to track which reference frame contributed each shift
         """
         n_i = len(i_x)
         n_j = len(j_x)
@@ -485,6 +488,7 @@ if NUMBA_AVAILABLE:
         max_pairs = n_i * n_j
         all_shifts_x = np.empty(max_pairs, dtype=numba.float32)
         all_shifts_y = np.empty(max_pairs, dtype=numba.float32)
+        all_ref_indices = np.empty(max_pairs, dtype=numba.int32)  # Track reference loc index
         valid_mask = np.zeros(max_pairs, dtype=numba.boolean)
 
         # Determine if temporal filtering is enabled
@@ -517,6 +521,7 @@ if NUMBA_AVAILABLE:
             if max_shift is None or (dx * dx + dy * dy) <= max_shift_sq:
                 all_shifts_x[idx] = dx
                 all_shifts_y[idx] = dy
+                all_ref_indices[idx] = i  # Store reference localization index
                 valid_mask[idx] = True
             else:
                 valid_mask[idx] = False
@@ -530,6 +535,7 @@ if NUMBA_AVAILABLE:
         # Create compact output arrays
         shifts_x = np.empty(n_valid, dtype=numba.float32)
         shifts_y = np.empty(n_valid, dtype=numba.float32)
+        ref_indices = np.empty(n_valid, dtype=numba.int32)
 
         # Copy valid pairs sequentially
         valid_idx = 0
@@ -537,9 +543,10 @@ if NUMBA_AVAILABLE:
             if valid_mask[k]:
                 shifts_x[valid_idx] = all_shifts_x[k]
                 shifts_y[valid_idx] = all_shifts_y[k]
+                ref_indices[valid_idx] = all_ref_indices[k]
                 valid_idx += 1
 
-        return shifts_x, shifts_y
+        return shifts_x, shifts_y, ref_indices
 
     @numba.jit(
         nopython=True, parallel=False, cache=True
@@ -777,6 +784,7 @@ else:
 
         shifts_x = []
         shifts_y = []
+        ref_indices = []
 
         use_temporal_filter = (
             ton_exclusion > 0 and i_frames is not None and j_frames is not None
@@ -806,13 +814,16 @@ else:
             # Apply combined mask
             dx = dx[valid_mask]
             dy = dy[valid_mask]
+            n_valid = len(dx)
 
             shifts_x.extend(dx)
             shifts_y.extend(dy)
+            ref_indices.extend([i] * n_valid)  # Track reference loc index
 
         return (
             np.array(shifts_x, dtype=np.float32),
             np.array(shifts_y, dtype=np.float32),
+            np.array(ref_indices, dtype=np.int32),
         )
 
     def _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges):
@@ -1054,11 +1065,11 @@ def _compute_rsso_shift_numba_optimized(
     # Only consider pairs within max_shift distance (like standard KDTree approach)
     # Exclude pairs from temporally close frames (within ±2×ton)
     if enable_numba and NUMBA_AVAILABLE:
-        shifts_x, shifts_y = _compute_pairwise_shifts_numba(
+        shifts_x, shifts_y, ref_indices = _compute_pairwise_shifts_numba(
             i_x, i_y, j_x, j_y, max_shift_pixels, i_frames, j_frames, ton
         )
     else:
-        shifts_x, shifts_y = _compute_pairwise_shifts_numba(
+        shifts_x, shifts_y, ref_indices = _compute_pairwise_shifts_numba(
             i_x, i_y, j_x, j_y, max_shift_pixels, i_frames, j_frames, ton
         )  # Uses fallback
 
@@ -1081,6 +1092,30 @@ def _compute_rsso_shift_numba_optimized(
         hist = _histogram2d_numba(
             shifts_x, shifts_y, x_edges, y_edges
         )  # Uses fallback
+
+    # Track frame contributions (for matrix-based drift correction)
+    # Build dictionary: {ref_frame_j: [(bin_x, bin_y), ...]}
+    frame_contributions = None
+    if i_frames is not None and ref_frames is not None:
+        frame_contributions = {}
+        for shift_idx in range(len(shifts_x)):
+            shift_x_val = shifts_x[shift_idx]
+            shift_y_val = shifts_y[shift_idx]
+            ref_idx = ref_indices[shift_idx]
+            ref_frame = i_frames[ref_idx]
+
+            # Find which bin this shift fell into (replicate binning logic)
+            bin_x = np.searchsorted(x_edges, shift_x_val, side='right') - 1
+            bin_y = np.searchsorted(y_edges, shift_y_val, side='right') - 1
+
+            # Ensure valid bin indices
+            bin_x = np.clip(bin_x, 0, n_bins - 1)
+            bin_y = np.clip(bin_y, 0, n_bins - 1)
+
+            # Track this contribution
+            if ref_frame not in frame_contributions:
+                frame_contributions[ref_frame] = []
+            frame_contributions[ref_frame].append((int(bin_x), int(bin_y)))
 
     phase2_time = time.time() - phase2_start
     phase3_start = time.time()
@@ -1150,6 +1185,9 @@ def _compute_rsso_shift_numba_optimized(
         "peak_mode": peak_mode_to_use,  # Actual peak finding method used
         "com_threshold": com_threshold,  # Threshold value for CoM bin selection
         "com_use_threshold": com_use_threshold,  # Whether threshold mode was used
+        "frame_contributions": frame_contributions,  # For matrix-based drift correction
+        "hist": hist,  # Histogram for connectivity matrix building
+        "hist_edges": (x_edges, y_edges),  # Bin edges for histogram
         "timing": {
             "phase1_pairwise": phase1_time,
             "phase2_histogram": phase2_time,
@@ -3128,6 +3166,224 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
 
 # ==============================================================================
+# Matrix-based drift correction
+# ==============================================================================
+
+
+def _build_connectivity_matrix(frame_results, snr_threshold=3.0):
+    """Build sparse connectivity matrix from RSSO frame contributions.
+
+    For each frame pair (i,j), calculates signal enrichment to determine if
+    frame j genuinely contributes to frame i's drift estimate. Uses threshold-
+    based bin selection to distinguish signal from background noise.
+
+    Args:
+        frame_results : dict
+            Dictionary mapping frame_i -> quality_metrics (with frame_contributions, hist, etc.)
+        snr_threshold : float, default 3.0
+            Signal enrichment threshold. Frame j included if:
+            (observed_signal / expected_signal) >= snr_threshold
+
+    Returns:
+        W : scipy.sparse.csr_matrix (N×N)
+            Connectivity matrix where W[i,j] = net signal count (signal - expected background)
+            Sparse (~1-2% non-zero)
+        s_obs : ndarray (N×2)
+            Observed shifts for each frame (x, y components)
+        frame_numbers : ndarray (N,)
+            Frame numbers corresponding to rows/columns of W
+        valid_frames : ndarray (N,) bool
+            Mask indicating which frames have valid connectivity
+    """
+    import scipy.sparse as sp
+
+    # Extract frame numbers and sort
+    all_frame_numbers = sorted(frame_results.keys())
+    n_frames = len(all_frame_numbers)
+    frame_to_idx = {frame_num: idx for idx, frame_num in enumerate(all_frame_numbers)}
+
+    # Initialize outputs
+    s_obs = np.zeros((n_frames, 2), dtype=np.float64)
+    W_data = []  # Sparse matrix data (value, row, col)
+    valid_frames = np.ones(n_frames, dtype=bool)
+
+    logger.debug(f"Building connectivity matrix for {n_frames} frames...")
+
+    # Build connectivity matrix
+    for frame_i, metrics in frame_results.items():
+        idx_i = frame_to_idx[frame_i]
+
+        # Extract observed shift for this frame
+        shift_x = metrics.get("shift_x", 0.0)
+        shift_y = metrics.get("shift_y", 0.0)
+        s_obs[idx_i, 0] = shift_x
+        s_obs[idx_i, 1] = shift_y
+
+        # Extract histogram and frame contributions
+        hist = metrics.get("hist")
+        frame_contributions = metrics.get("frame_contributions")
+
+        if hist is None or frame_contributions is None or len(frame_contributions) == 0:
+            valid_frames[idx_i] = False
+            continue
+
+        # Calculate signal bins using threshold
+        non_zero_bins = hist[hist > 0]
+        if len(non_zero_bins) == 0:
+            valid_frames[idx_i] = False
+            continue
+
+        median_val = np.median(non_zero_bins)
+        threshold = median_val * snr_threshold
+        signal_mask = hist >= threshold
+
+        # Calculate expected background fraction
+        n_signal_bins = np.sum(signal_mask)
+        n_total_bins = hist.size
+        expected_background_fraction = n_signal_bins / n_total_bins if n_total_bins > 0 else 0
+
+        if expected_background_fraction == 0:
+            valid_frames[idx_i] = False
+            continue
+
+        # Evaluate each contributing reference frame
+        for ref_frame_j, bin_list in frame_contributions.items():
+            if ref_frame_j not in frame_to_idx:
+                continue  # Skip if frame not in results
+
+            idx_j = frame_to_idx[ref_frame_j]
+
+            # Count shifts in signal vs noise bins
+            total_shifts = len(bin_list)
+            signal_count = sum(1 for (bx, by) in bin_list if signal_mask[bx, by])
+
+            if signal_count == 0:
+                continue  # No signal from this frame
+
+            # Calculate expected signal count (if random)
+            expected_signal_count = total_shifts * expected_background_fraction
+
+            # Calculate signal enrichment
+            signal_enrichment = signal_count / expected_signal_count if expected_signal_count > 0 else 0
+
+            # Test: Is frame j genuinely connected to frame i?
+            if signal_enrichment >= snr_threshold:
+                # Net signal = observed - expected background
+                net_signal = signal_count - expected_signal_count
+                if net_signal > 0:
+                    W_data.append((net_signal, idx_i, idx_j))
+
+    # Build sparse matrix
+    if len(W_data) == 0:
+        logger.warning("No valid connectivity found! Matrix will be empty.")
+        W = sp.csr_matrix((n_frames, n_frames), dtype=np.float64)
+    else:
+        values, rows, cols = zip(*W_data)
+        W = sp.csr_matrix(
+            (values, (rows, cols)),
+            shape=(n_frames, n_frames),
+            dtype=np.float64
+        )
+
+    # Calculate sparsity
+    sparsity = 1.0 - (W.nnz / (n_frames * n_frames)) if n_frames > 0 else 1.0
+    logger.debug(f"Connectivity matrix: {n_frames}×{n_frames}, "
+                 f"{W.nnz} non-zero ({sparsity*100:.1f}% sparse)")
+    logger.debug(f"Valid frames: {np.sum(valid_frames)}/{n_frames}")
+
+    return W, s_obs, np.array(all_frame_numbers), valid_frames
+
+
+def _solve_drift_from_connectivity(W, s_obs, valid_frames):
+    """Solve linear system to estimate drift from connectivity matrix.
+
+    Solves: (I - W_normalized) × drift = s_obs
+    With constraint: mean(drift) = 0 (removes global offset ambiguity)
+
+    Args:
+        W : scipy.sparse matrix (N×N)
+            Connectivity matrix from _build_connectivity_matrix
+        s_obs : ndarray (N×2)
+            Observed shifts (x, y)
+        valid_frames : ndarray (N,) bool
+            Mask indicating valid frames
+
+    Returns:
+        drift_x, drift_y : ndarray (N,)
+            Estimated drift for each frame (zero-mean)
+        info : dict
+            Solver statistics (residuals, iterations, etc.)
+    """
+    import scipy.sparse as sp
+    import scipy.sparse.linalg as spla
+
+    n_frames = W.shape[0]
+    n_valid = np.sum(valid_frames)
+
+    logger.debug(f"Solving drift system for {n_valid}/{n_frames} valid frames...")
+
+    # Handle edge cases
+    if n_valid == 0:
+        logger.warning("No valid frames for matrix solver!")
+        return np.zeros(n_frames), np.zeros(n_frames), {"success": False, "reason": "no_valid_frames"}
+
+    if n_valid == 1:
+        logger.warning("Only 1 valid frame - cannot solve system!")
+        drift_x = np.zeros(n_frames)
+        drift_y = np.zeros(n_frames)
+        drift_x[valid_frames] = s_obs[valid_frames, 0]
+        drift_y[valid_frames] = s_obs[valid_frames, 1]
+        return drift_x, drift_y, {"success": True, "reason": "single_frame"}
+
+    # Normalize rows: W_normalized[i,j] = W[i,j] / sum_j(W[i,j])
+    row_sums = np.array(W.sum(axis=1)).flatten()
+    row_sums[row_sums == 0] = 1.0  # Avoid division by zero
+    row_sums[~valid_frames] = 1.0  # Don't normalize invalid frames
+
+    D_inv = sp.diags(1.0 / row_sums)
+    W_normalized = D_inv @ W
+
+    # Build system matrix: A = I - W_normalized
+    I = sp.eye(n_frames, format='csr')
+    A = I - W_normalized
+
+    # Solve for x and y components separately
+    try:
+        # Use LSQR for robustness (works well for rank-deficient systems)
+        result_x = spla.lsqr(A, s_obs[:, 0], atol=1e-8, btol=1e-8)
+        result_y = spla.lsqr(A, s_obs[:, 1], atol=1e-8, btol=1e-8)
+
+        drift_x = result_x[0]
+        drift_y = result_y[0]
+
+        # Apply zero-mean constraint (removes global offset)
+        drift_x -= np.mean(drift_x[valid_frames])
+        drift_y -= np.mean(drift_y[valid_frames])
+
+        # Gather solver info
+        info = {
+            "success": True,
+            "iterations_x": result_x[2],
+            "iterations_y": result_y[2],
+            "residual_x": result_x[3],
+            "residual_y": result_y[3],
+            "rms_drift_x": np.sqrt(np.mean(drift_x[valid_frames]**2)),
+            "rms_drift_y": np.sqrt(np.mean(drift_y[valid_frames]**2)),
+        }
+
+        logger.debug(f"Solver converged: {info['iterations_x']} / {info['iterations_y']} iterations")
+        logger.debug(f"RMS drift: ({info['rms_drift_x']:.3f}, {info['rms_drift_y']:.3f}) px")
+
+    except Exception as e:
+        logger.error(f"Matrix solver failed: {e}")
+        drift_x = np.zeros(n_frames)
+        drift_y = np.zeros(n_frames)
+        info = {"success": False, "error": str(e)}
+
+    return drift_x, drift_y, info
+
+
+# ==============================================================================
 # Main computation function
 # ==============================================================================
 
@@ -3195,6 +3451,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     plot_drift = parameters.get("plot_drift", True)
     plot_rsso = parameters.get("plot_rsso", False)
     snr_threshold = parameters.get("snr_threshold", 3.0)  # SNR threshold for peak quality check
+
+    # Matrix-based drift correction (experimental)
+    use_matrix_solver = parameters.get("use_matrix_solver", False)
+    matrix_refinement_iterations = parameters.get("matrix_refinement_iterations", 0)
 
     # Memory management parameters
     chunk_size = parameters.get("chunk_size", 100)
@@ -3633,6 +3893,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         new_quality = np.zeros(n_frames)
         valid_measurements = 0
 
+        # For matrix-based solver: collect frame results with connectivity info
+        frame_results_dict = {} if use_matrix_solver else None
+
         # Performance monitoring
         iteration_start_time = time.time()
         numba_computation_times = []
@@ -3889,6 +4152,14 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                             new_confidence[frame_idx] = confidence_val
                             new_quality[frame_idx] = quality_val
                             valid_measurements += 1
+
+                            # Store performance_info for matrix solver
+                            if frame_results_dict is not None:
+                                # Add shift values to performance_info
+                                frame_info = performance_info.copy() if performance_info else {}
+                                frame_info["shift_x"] = shift_x
+                                frame_info["shift_y"] = shift_y
+                                frame_results_dict[frame_idx] = frame_info
             iteration_timings["result_collection"] += collection_timer.elapsed
 
             # Write accumulated plots to video incrementally (memory-efficient)
@@ -4204,6 +4475,89 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             logger.debug(
                 f"    Standard computations: {n_standard_computations}, avg {avg_standard_time:.4f}s, total {total_standard_time:.1f}s"
             )
+
+        # Matrix-based drift correction: use connectivity matrix after iteration 0
+        if use_matrix_solver and iteration == 0 and frame_results_dict:
+            logger.info("=" * 70)
+            logger.info("MATRIX-BASED DRIFT CORRECTION")
+            logger.info("=" * 70)
+            logger.info(f"Building connectivity matrix from {len(frame_results_dict)} frames...")
+
+            try:
+                # Build connectivity matrix
+                matrix_start_time = time.time()
+                W, s_obs, frame_numbers, valid_frames = _build_connectivity_matrix(
+                    frame_results_dict, snr_threshold
+                )
+                matrix_build_time = time.time() - matrix_start_time
+
+                logger.info(f"  Matrix built in {matrix_build_time:.2f}s")
+                logger.info(f"  Sparsity: {100*(1-W.nnz/(W.shape[0]*W.shape[1])):.1f}%")
+                logger.info(f"  Non-zero entries: {W.nnz:,}")
+
+                # Solve for drift
+                solve_start_time = time.time()
+                drift_x_matrix, drift_y_matrix, solver_info = _solve_drift_from_connectivity(
+                    W, s_obs, valid_frames
+                )
+                solve_time = time.time() - solve_start_time
+
+                if solver_info.get("success", False):
+                    logger.info(f"  Solver converged in {solve_time:.2f}s")
+                    logger.info(f"  Iterations: {solver_info.get('iterations_x', 0)} / {solver_info.get('iterations_y', 0)}")
+                    logger.info(f"  RMS drift: ({solver_info.get('rms_drift_x', 0):.3f}, {solver_info.get('rms_drift_y', 0):.3f}) px")
+
+                    # Convert pixel drift to nm and map to frame indices
+                    drift_x_matrix_nm = drift_x_matrix * pixelsize
+                    drift_y_matrix_nm = drift_y_matrix * pixelsize
+
+                    # Create frame mapping
+                    frame_to_matrix_idx = {fn: idx for idx, fn in enumerate(frame_numbers)}
+
+                    # Map matrix solution to full frame array
+                    matrix_drift_x = np.zeros(n_frames)
+                    matrix_drift_y = np.zeros(n_frames)
+                    for frame_idx in range(n_frames):
+                        if frame_idx in frame_to_matrix_idx:
+                            matrix_idx = frame_to_matrix_idx[frame_idx]
+                            matrix_drift_x[frame_idx] = drift_x_matrix_nm[matrix_idx]
+                            matrix_drift_y[frame_idx] = drift_y_matrix_nm[matrix_idx]
+
+                    # Replace iterative drift with matrix solution
+                    drift_x = matrix_drift_x
+                    drift_y = matrix_drift_y
+
+                    # Update cumulative corrections
+                    cumulative_corrections_x = drift_x / pixelsize
+                    cumulative_corrections_y = drift_y / pixelsize
+
+                    # Update iteration history with matrix solution
+                    iteration_history[-1]["drift_x"] = drift_x.copy()
+                    iteration_history[-1]["drift_y"] = drift_y.copy()
+                    iteration_history[-1]["matrix_solver_info"] = solver_info
+                    iteration_history[-1]["matrix_build_time"] = matrix_build_time
+                    iteration_history[-1]["matrix_solve_time"] = solve_time
+
+                    logger.info(f"  Matrix solution applied successfully")
+
+                    # Optional: Run refinement iterations
+                    if matrix_refinement_iterations > 0:
+                        logger.info(f"  Running {matrix_refinement_iterations} refinement iteration(s)...")
+                    else:
+                        # Skip remaining iterations - matrix solution is final
+                        logger.info("  Matrix solver complete - skipping remaining iterations")
+                        logger.info("=" * 70)
+                        break
+
+                else:
+                    logger.warning(f"  Matrix solver failed: {solver_info.get('error', 'unknown')}")
+                    logger.warning("  Continuing with iterative approach...")
+
+            except Exception as e:
+                logger.error(f"  Matrix solver error: {e}")
+                logger.error("  Continuing with iterative approach...")
+                import traceback
+                traceback.print_exc()
 
         # Check for convergence and break if converged
         # (Now that we've stored history and completed all reporting for this iteration)
