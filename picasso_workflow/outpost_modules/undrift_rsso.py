@@ -1032,12 +1032,12 @@ def _compute_rsso_shift_numba_optimized(
     total_time = time.time() - start_time
 
     # Quality metrics
-    # If user explicitly requested center_of_mass, mark as successful
-    # If forced due to low SNR, mark as failed to trigger max_shift retry
-    if snr_too_low:
-        success = False  # Trigger max_shift iterations
+    # If user EXPLICITLY requested center_of_mass, ALWAYS mark as successful
+    # If FORCED to center_of_mass due to low SNR, mark as failed to trigger max_shift retry
+    if snr_too_low and peak_mode != "center_of_mass":
+        success = False  # Was forced by low SNR, trigger max_shift iterations
     else:
-        success = True  # Normal success or explicit center_of_mass
+        success = True  # Explicit request OR good SNR - mark as successful
 
     quality_metrics = {
         "success": success,

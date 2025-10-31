@@ -576,12 +576,12 @@ def _calculate_pairwise_shift(
         shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error = (
             _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift)
         )
-        # If user explicitly requested center_of_mass, mark as successful
-        # If forced due to low SNR, mark as failed to trigger max_shift retry
-        if snr_too_low:
-            fit_successful = False  # Trigger max_shift iterations
+        # If user EXPLICITLY requested center_of_mass, ALWAYS mark as successful
+        # If FORCED to center_of_mass due to low SNR, mark as failed to trigger max_shift retry
+        if snr_too_low and peak_mode != "center_of_mass":
+            fit_successful = False  # Was forced by low SNR, trigger max_shift iterations
         else:
-            fit_successful = True  # Explicit center_of_mass always succeeds
+            fit_successful = True  # Explicit request OR good SNR - mark as successful
 
     elif peak_mode_to_use in ["gaussian", "auto"]:
         # Try 2D Gaussian fitting first
