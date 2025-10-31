@@ -2700,12 +2700,13 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         frame_data : tuple
             (frame_indices, reference_dataset, target_frames, frame_locs, max_shift, min_locs_per_frame,
              enable_uncertainty_estimation, n_uncertainty_trials, subsampling_fraction,
-             enable_numba_optimization, plot_histogram, plot_dir, iteration, ton)
+             enable_numba_optimization, plot_histogram, plot_dir, iteration, ton, snr_threshold)
 
     Returns:
         tuple : (frame_indices, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality, performance_info)
     """
     from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+    import os
 
     (
         frame_indices,
@@ -2722,7 +2723,15 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         plot_dir,
         iteration,
         ton,  # For temporal filtering
+        snr_threshold,  # SNR threshold for peak quality check
     ) = frame_data
+
+    # Log worker start (with PID to identify different workers)
+    logger.debug(
+        f"        [Worker PID {os.getpid()}] Started processing frame group: "
+        f"indices={frame_indices}, target_frames={target_frames}, "
+        f"n_frame_locs={len(frame_locs)}, iteration={iteration}"
+    )
 
     try:
         # Initialize uncertainty_info at the start to avoid "referenced before assignment" error
@@ -2808,8 +2817,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             # Later iterations: use auto (try Gaussian, fall back to CoM)
             peak_mode = "center_of_mass" if iteration == 0 else "auto"
 
-            # SNR threshold for peak quality check
-            snr_threshold = parameters.get("snr_threshold", 3.0)
+            # snr_threshold is now passed in frame_data tuple (extracted from parameters in outer scope)
 
             for i_maxshift in range(4):
                 maxshift_curr = max_shift * (i_maxshift + 1)
@@ -3019,6 +3027,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     save_locs = parameters.get("save_locs", True)
     plot_drift = parameters.get("plot_drift", True)
     plot_rsso = parameters.get("plot_rsso", False)
+    snr_threshold = parameters.get("snr_threshold", 3.0)  # SNR threshold for peak quality check
 
     # Memory management parameters
     chunk_size = parameters.get("chunk_size", 100)
@@ -3493,6 +3502,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             logger.debug(
                 f"      Processing chunk {chunk_start//chunk_size + 1}/{(n_frames-1)//chunk_size + 1}: frames {chunk_start}-{chunk_end-1}"
             )
+            logger.debug(f"      Starting frame grouping for {chunk_end - chunk_start} frames...")
 
             # Evaluate frame sizes and create frame groups to ensure min_locs_per_frame
             # OPTIMIZATION: Use pre-computed frame_boundaries for O(1) lookup instead of O(n) boolean masking
@@ -3537,12 +3547,16 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         current_group = []
                         current_locs_count = 0
             iteration_timings["frame_grouping"] += grouping_timer.elapsed
+            logger.debug(f"      Frame grouping completed: {len(frame_groups)} groups created")
 
             # Prepare chunk data using frame groups
             # OPTIMIZATION: Use slice indexing instead of boolean masking
+            logger.debug(f"      Starting chunk data preparation...")
             with _Timer("data_prep") as prep_timer:
                 chunk_frame_data = []
-                for group_indices, group_frame_numbers in frame_groups:
+                for group_idx, (group_indices, group_frame_numbers) in enumerate(frame_groups):
+                    if group_idx % 100 == 0:
+                        logger.debug(f"        Preparing group {group_idx + 1}/{len(frame_groups)}...")
                     # Extract frame localizations using pre-computed boundaries
                     # OPTIMIZED: O(1) slice instead of O(n) boolean mask
                     if group_frame_numbers:
@@ -3593,21 +3607,26 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         enable_numba_optimization,  # Use Numba JIT acceleration
                         plot_rsso,  # Whether to plot RSSO histograms
                         iter_dir,  # Directory for saving plots
-                        iteration + 1,  # Current iteration number (1-indexed)
+                        iteration,  # Current iteration number (0-indexed, for peak_mode logic)
                         ton,  # For temporal filtering (exclude frames within ±2×ton)
+                        snr_threshold,  # SNR threshold for peak quality check
                     )
                     chunk_frame_data.append(frame_data)
             iteration_timings["chunk_data_preparation"] += prep_timer.elapsed
+            logger.debug(f"      Chunk data preparation completed: {len(chunk_frame_data)} frame groups ready")
 
             # Process chunk using pre-created pool (OPTIMIZED: pool reused across all chunks)
+            logger.debug(f"      Starting chunk processing with {'parallel' if pool is not None else 'sequential'} mode...")
             with _Timer("chunk_processing") as chunk_timer:
                 if pool is not None:
                     # Use pre-created pool for parallel processing
+                    logger.debug(f"      Calling pool.map with {len(chunk_frame_data)} tasks...")
                     with _Timer("pool_map") as map_timer:
                         chunk_results = pool.map(
                             _compute_frame_to_reference_shift_optimized,
                             chunk_frame_data,
                         )
+                    logger.debug(f"      pool.map completed, received {len(chunk_results)} results")
                     iteration_timings["pool_map_total"] += map_timer.elapsed
                 else:
                     # Sequential processing
