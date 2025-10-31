@@ -562,9 +562,9 @@ def _calculate_pairwise_shift(
     peak_mode_to_use = peak_mode
 
     if snr_too_low and peak_mode != "center_of_mass":
-        logger.warning(
-            f"SNR too low ({snr:.2f} < {snr_threshold:.2f}). "
-            "Forcing center_of_mass method and marking as failed for max_shift retry."
+        logger.debug(
+            f"      SNR too low ({snr:.2f} < {snr_threshold:.2f}). "
+            f"Forcing center_of_mass method (was: {peak_mode})"
         )
         peak_mode_to_use = "center_of_mass"
 
@@ -580,8 +580,16 @@ def _calculate_pairwise_shift(
         # If FORCED to center_of_mass due to low SNR, mark as failed to trigger max_shift retry
         if snr_too_low and peak_mode != "center_of_mass":
             fit_successful = False  # Was forced by low SNR, trigger max_shift iterations
+            logger.debug(
+                f"      Setting fit_successful=False (snr_too_low={snr_too_low}, "
+                f"peak_mode={repr(peak_mode)})"
+            )
         else:
             fit_successful = True  # Explicit request OR good SNR - mark as successful
+            logger.debug(
+                f"      Setting fit_successful=True (snr_too_low={snr_too_low}, "
+                f"peak_mode={repr(peak_mode)})"
+            )
 
     elif peak_mode_to_use in ["gaussian", "auto"]:
         # Try 2D Gaussian fitting first

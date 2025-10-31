@@ -939,6 +939,12 @@ def _compute_rsso_shift_numba_optimized(
 
     start_time = time.time()
 
+    logger.debug(
+        f"        → _compute_rsso_shift_numba_optimized called: "
+        f"ref_locs={len(locs_i)}, frame_locs={len(locs_j)}, "
+        f"max_shift={max_shift_pixels:.1f}, peak_mode={peak_mode}"
+    )
+
     # Extract coordinates - match standard implementation naming
     # locs_i is reference, locs_j is frame in standard call pattern
     i_x = locs_i["x"].astype(np.float32)
@@ -1008,6 +1014,10 @@ def _compute_rsso_shift_numba_optimized(
 
     if snr_too_low and peak_mode != "center_of_mass":
         peak_mode_to_use = "center_of_mass"
+        logger.debug(
+            f"        → SNR too low ({snr:.2f} < {snr_threshold:.2f}), "
+            f"forcing center_of_mass (was: {peak_mode})"
+        )
 
     # Phase 3: Find peak with sub-pixel precision
     if peak_mode_to_use == "center_of_mass":
@@ -1036,8 +1046,16 @@ def _compute_rsso_shift_numba_optimized(
     # If FORCED to center_of_mass due to low SNR, mark as failed to trigger max_shift retry
     if snr_too_low and peak_mode != "center_of_mass":
         success = False  # Was forced by low SNR, trigger max_shift iterations
+        logger.debug(
+            f"        → Setting success=False (snr_too_low={snr_too_low}, "
+            f"peak_mode={repr(peak_mode)})"
+        )
     else:
         success = True  # Explicit request OR good SNR - mark as successful
+        logger.debug(
+            f"        → Setting success=True (snr_too_low={snr_too_low}, "
+            f"peak_mode={repr(peak_mode)})"
+        )
 
     quality_metrics = {
         "success": success,
@@ -2795,6 +2813,10 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
             for i_maxshift in range(4):
                 maxshift_curr = max_shift * (i_maxshift + 1)
+                logger.debug(
+                    f"      Frame {frame_number}: max_shift attempt {i_maxshift + 1}/4 "
+                    f"(maxshift={maxshift_curr:.1f}, peak_mode={peak_mode})"
+                )
                 if enable_numba_optimization:
                     # Use Numba-optimized RSSO computation with temporal filtering
                     # Determine frame number for plotting (use first frame in group)
@@ -2820,7 +2842,17 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                     uncertainty_info = numba_info if numba_info is not None else {}
                     computation_type = "Numba-optimized"
                     if uncertainty_info.get("success", False):
+                        logger.debug(
+                            f"      Frame {frame_number}: SUCCESS on attempt {i_maxshift + 1}/4 "
+                            f"(SNR={uncertainty_info.get('snr', 'N/A'):.2f})"
+                        )
                         break
+                    else:
+                        logger.debug(
+                            f"      Frame {frame_number}: FAILED attempt {i_maxshift + 1}/4 "
+                            f"(SNR={uncertainty_info.get('snr', 'N/A'):.2f}, "
+                            f"success={uncertainty_info.get('success', False)})"
+                        )
                 else:
                     # Use standard RSSO computation with temporal filtering
                     shift_x, shift_y, _, std_info = _calculate_pairwise_shift(
@@ -2840,7 +2872,17 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                     uncertainty_info = std_info if std_info is not None else {}
                     computation_type = "Standard"
                     if uncertainty_info.get("fit_successful", False):
+                        logger.debug(
+                            f"      Frame {frame_number}: SUCCESS on attempt {i_maxshift + 1}/4 "
+                            f"(SNR={uncertainty_info.get('snr', 'N/A'):.2f})"
+                        )
                         break
+                    else:
+                        logger.debug(
+                            f"      Frame {frame_number}: FAILED attempt {i_maxshift + 1}/4 "
+                            f"(SNR={uncertainty_info.get('snr', 'N/A'):.2f}, "
+                            f"fit_successful={uncertainty_info.get('fit_successful', False)})"
+                        )
 
             computation_time = time.time() - start_time
             # logger.debug(f'Calculated shift in {computation_time} (reference: {len_dataset}, frame: {len(frame_locs)})')
