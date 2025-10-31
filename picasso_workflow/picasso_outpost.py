@@ -566,11 +566,14 @@ def _calculate_pairwise_shift(
 
     # Find peak using specified method
     fit_successful = False
+    com_threshold = None
+    com_use_threshold = None
 
     if peak_mode_to_use == "center_of_mass":
         # Use center of mass directly (faster, more robust for broad peaks)
-        shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error = (
-            _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift)
+        (shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error,
+         com_threshold, com_use_threshold) = (
+            _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift, snr_threshold)
         )
         # If user EXPLICITLY requested center_of_mass, ALWAYS mark as successful
         # If FORCED to center_of_mass due to low SNR, mark as failed to trigger max_shift retry
@@ -592,10 +595,12 @@ def _calculate_pairwise_shift(
                 "Falling back to center of mass method."
             )
             # Fallback to center of mass method (better than simple maximum)
-            shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error = (
-                _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift)
+            (shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error,
+             com_threshold, com_use_threshold) = (
+                _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift, snr_threshold)
             )
             fit_successful = False  # Indicates fallback was used
+            peak_mode_to_use = "center_of_mass"  # Update to reflect actual method used
 
     else:
         raise ValueError(f"Unknown peak_mode: {peak_mode}. Use 'gaussian', 'center_of_mass', or 'auto'.")
@@ -626,6 +631,9 @@ def _calculate_pairwise_shift(
         "snr": float(snr),
         "snr_threshold": float(snr_threshold),
         "snr_too_low": bool(snr_too_low),
+        "peak_mode": peak_mode_to_use,  # Actual peak finding method used
+        "com_threshold": com_threshold,  # Threshold value for CoM bin selection
+        "com_use_threshold": com_use_threshold,  # Whether threshold mode was used
     }
 
     return shift_x, shift_y, plot_filepath, uncertainty_info
@@ -679,15 +687,16 @@ def _calculate_adaptive_bins(valid_shifts_x, valid_shifts_y, max_shift):
     return bin_size, bins
 
 
-def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None):
+def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None, snr_threshold=3.0):
     """
     Find peak location using center of mass of the highest bins.
 
     More robust than simple histogram maximum for broad/non-Gaussian peaks.
     Provides sub-bin precision without requiring Gaussian fitting.
 
-    Uses 3×3 neighborhood (9 bins) around the histogram maximum to calculate
-    weighted center of mass, providing better accuracy than discrete bin centers.
+    Uses threshold-based bin selection: includes all bins with count >= median × snr_threshold
+    in the center of mass calculation (minimum 9 bins). Falls back to 3×3 neighborhood if
+    fewer than 9 bins exceed the threshold.
 
     Args:
         hist : np.array
@@ -698,6 +707,9 @@ def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None):
             Histogram y bin edges
         max_shift : float, optional
             Maximum shift radius (for consistency with Gaussian fit API)
+        snr_threshold : float, optional
+            Threshold multiplier for median bin count. Bins with count >= median × snr_threshold
+            are included in center of mass calculation. Default: 3.0
 
     Returns:
         shift_x, shift_y : float, float
@@ -706,6 +718,10 @@ def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None):
             Estimated spread (std dev of 3×3 neighborhood values)
         shift_x_error, shift_y_error : float, float
             Estimated errors (based on bin size and peak sharpness)
+        threshold : float
+            Threshold value used for bin selection (median × snr_threshold)
+        use_threshold : bool
+            Whether threshold-based selection was used (True) or 3×3 fallback (False)
     """
     # Create bin centers
     x_centers = (x_edges[:-1] + x_edges[1:]) / 2
@@ -718,27 +734,61 @@ def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None):
     peak_idx = np.unravel_index(np.argmax(hist_transposed), hist_transposed.shape)
     peak_y_bin, peak_x_bin = peak_idx  # Note: unravel_index returns (row, col) = (y, x)
 
-    # Define 3×3 neighborhood around maximum
-    # Clip to valid histogram range (handle edge cases)
-    x_indices = np.clip(
-        [peak_x_bin - 1, peak_x_bin, peak_x_bin + 1],
-        0,
-        hist.shape[0] - 1
-    ).astype(int)
-    y_indices = np.clip(
-        [peak_y_bin - 1, peak_y_bin, peak_y_bin + 1],
-        0,
-        hist.shape[1] - 1
-    ).astype(int)
+    # Calculate median of non-zero bins for threshold-based selection
+    non_zero_bins = hist_transposed[hist_transposed > 0]
+    if len(non_zero_bins) == 0:
+        # Fallback: return simple maximum position
+        shift_x = x_centers[peak_x_bin]
+        shift_y = y_centers[peak_y_bin]
+        sigma_x = bin_size_x
+        sigma_y = bin_size_y
+        shift_x_error = bin_size_x / 2
+        shift_y_error = bin_size_y / 2
+        return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error, 0.0, False
 
-    # Remove duplicates (in case peak is at edge and clipping created duplicates)
-    x_indices = np.unique(x_indices)
-    y_indices = np.unique(y_indices)
+    median_val = np.median(non_zero_bins)
+    threshold = median_val * snr_threshold
 
-    # Extract neighborhood values and coordinates
-    # Create meshgrid of indices
-    x_idx_grid, y_idx_grid = np.meshgrid(x_indices, y_indices)
-    neighborhood_values = hist_transposed[y_idx_grid, x_idx_grid]
+    # Create mask for bins above threshold
+    threshold_mask = hist_transposed >= threshold
+    n_threshold_bins = np.sum(threshold_mask)
+    use_threshold = n_threshold_bins >= 9
+
+    if use_threshold:
+        # Use threshold-selected bins for center of mass
+        y_indices_all, x_indices_all = np.where(threshold_mask)
+
+        # Get unique indices
+        x_indices = np.unique(x_indices_all)
+        y_indices = np.unique(y_indices_all)
+
+        # Extract selected values and coordinates
+        x_idx_grid, y_idx_grid = np.meshgrid(x_indices, y_indices)
+        neighborhood_values = hist_transposed[y_idx_grid, x_idx_grid]
+
+        # Apply threshold mask to the meshgrid
+        mask_grid = threshold_mask[y_idx_grid, x_idx_grid]
+        neighborhood_values = np.where(mask_grid, neighborhood_values, 0)
+    else:
+        # Fall back to 3×3 neighborhood around maximum
+        x_indices = np.clip(
+            [peak_x_bin - 1, peak_x_bin, peak_x_bin + 1],
+            0,
+            hist.shape[0] - 1
+        ).astype(int)
+        y_indices = np.clip(
+            [peak_y_bin - 1, peak_y_bin, peak_y_bin + 1],
+            0,
+            hist.shape[1] - 1
+        ).astype(int)
+
+        # Remove duplicates (in case peak is at edge and clipping created duplicates)
+        x_indices = np.unique(x_indices)
+        y_indices = np.unique(y_indices)
+
+        # Extract neighborhood values
+        x_idx_grid, y_idx_grid = np.meshgrid(x_indices, y_indices)
+        neighborhood_values = hist_transposed[y_idx_grid, x_idx_grid]
 
     # Clip negative values to zero (shouldn't happen but be safe)
     neighborhood_values = np.maximum(neighborhood_values, 0)
@@ -783,7 +833,7 @@ def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None):
     shift_x_error = min(bin_size_x / (2 * np.sqrt(sharpness_ratio)), bin_size_x / 2)
     shift_y_error = min(bin_size_y / (2 * np.sqrt(sharpness_ratio)), bin_size_y / 2)
 
-    return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error
+    return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error, threshold, use_threshold
 
 
 def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):

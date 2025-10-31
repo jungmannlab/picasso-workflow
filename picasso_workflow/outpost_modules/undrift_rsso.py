@@ -645,11 +645,11 @@ if NUMBA_AVAILABLE:
         return peak_x, peak_y, max_val
 
     @numba.jit(nopython=True, cache=True)
-    def _find_peak_center_of_mass_numba(hist, x_edges, y_edges):
+    def _find_peak_center_of_mass_numba(hist, x_edges, y_edges, snr_threshold=3.0):
         """Numba-optimized center of mass peak finding
 
-        Calculates weighted center of mass of 3×3 neighborhood around maximum.
-        More robust than simple maximum for broad/non-Gaussian peaks.
+        Calculates weighted center of mass using threshold-based bin selection.
+        Includes all bins >= median × snr_threshold, with 3×3 fallback if < 9 bins.
 
         Args:
             hist : ndarray (2D)
@@ -658,12 +658,18 @@ if NUMBA_AVAILABLE:
                 X bin edges
             y_edges : ndarray
                 Y bin edges
+            snr_threshold : float, default 3.0
+                Multiplier for median threshold (bins >= median × snr_threshold are included)
 
         Returns:
             shift_x, shift_y : float
                 Center of mass coordinates
             peak_value : float
-                Maximum bin value in neighborhood
+                Maximum bin value
+            threshold : float
+                Threshold value used for bin selection (median × snr_threshold)
+            use_threshold : bool
+                Whether threshold-based selection was used (True) or 3×3 fallback (False)
         """
         # Find histogram maximum
         max_val = numba.float32(0.0)
@@ -677,11 +683,40 @@ if NUMBA_AVAILABLE:
                     max_i = i
                     max_j = j
 
-        # Define 3×3 neighborhood indices (clip to valid range)
-        i_start = max(0, max_i - 1)
-        i_end = min(hist.shape[0], max_i + 2)  # +2 because range is exclusive
-        j_start = max(0, max_j - 1)
-        j_end = min(hist.shape[1], max_j + 2)
+        # Calculate median of non-zero bins for threshold
+        non_zero_count = 0
+        for i in range(hist.shape[0]):
+            for j in range(hist.shape[1]):
+                if hist[i, j] > 0:
+                    non_zero_count += 1
+
+        if non_zero_count == 0:
+            # No data, return center
+            bin_size_x = x_edges[1] - x_edges[0] if len(x_edges) > 1 else numba.float32(1.0)
+            bin_size_y = y_edges[1] - y_edges[0] if len(y_edges) > 1 else numba.float32(1.0)
+            return numba.float32(0.0), numba.float32(0.0), max_val, numba.float32(0.0), False
+
+        # Collect non-zero values for median calculation
+        non_zero_vals = np.empty(non_zero_count, dtype=numba.float32)
+        idx = 0
+        for i in range(hist.shape[0]):
+            for j in range(hist.shape[1]):
+                if hist[i, j] > 0:
+                    non_zero_vals[idx] = hist[i, j]
+                    idx += 1
+
+        median_val = np.median(non_zero_vals)
+        threshold = median_val * snr_threshold
+
+        # Count bins above threshold
+        n_threshold_bins = 0
+        for i in range(hist.shape[0]):
+            for j in range(hist.shape[1]):
+                if hist[i, j] >= threshold:
+                    n_threshold_bins += 1
+
+        # Decide which bins to use: threshold-based or 3×3 fallback
+        use_threshold = n_threshold_bins >= 9
 
         # Calculate bin centers
         bin_size_x = x_edges[1] - x_edges[0] if len(x_edges) > 1 else numba.float32(1.0)
@@ -692,17 +727,33 @@ if NUMBA_AVAILABLE:
         weighted_x = numba.float32(0.0)
         weighted_y = numba.float32(0.0)
 
-        for i in range(i_start, i_end):
-            for j in range(j_start, j_end):
-                value = hist[i, j]
-                if value > 0:
-                    # Bin center coordinates
-                    x_coord = x_edges[i] + bin_size_x / 2
-                    y_coord = y_edges[j] + bin_size_y / 2
+        if use_threshold:
+            # Use all bins above threshold
+            for i in range(hist.shape[0]):
+                for j in range(hist.shape[1]):
+                    value = hist[i, j]
+                    if value >= threshold:
+                        x_coord = x_edges[i] + bin_size_x / 2
+                        y_coord = y_edges[j] + bin_size_y / 2
+                        total_mass += value
+                        weighted_x += value * x_coord
+                        weighted_y += value * y_coord
+        else:
+            # Fall back to 3×3 neighborhood around maximum
+            i_start = max(0, max_i - 1)
+            i_end = min(hist.shape[0], max_i + 2)
+            j_start = max(0, max_j - 1)
+            j_end = min(hist.shape[1], max_j + 2)
 
-                    total_mass += value
-                    weighted_x += value * x_coord
-                    weighted_y += value * y_coord
+            for i in range(i_start, i_end):
+                for j in range(j_start, j_end):
+                    value = hist[i, j]
+                    if value > 0:
+                        x_coord = x_edges[i] + bin_size_x / 2
+                        y_coord = y_edges[j] + bin_size_y / 2
+                        total_mass += value
+                        weighted_x += value * x_coord
+                        weighted_y += value * y_coord
 
         # Calculate final center of mass
         if total_mass > 0:
@@ -713,7 +764,7 @@ if NUMBA_AVAILABLE:
             shift_x = x_edges[max_i] + bin_size_x / 2
             shift_y = y_edges[max_j] + bin_size_y / 2
 
-        return shift_x, shift_y, max_val
+        return shift_x, shift_y, max_val, threshold, use_threshold
 
 else:
     # Fallback implementations when Numba is not available
@@ -776,47 +827,83 @@ else:
         max_idx = np.unravel_index(hist.argmax(), hist.shape)
         return float(max_idx[0]), float(max_idx[1]), hist[max_idx]
 
-    def _find_peak_center_of_mass_numba(hist, x_edges, y_edges):
-        """Fallback NumPy implementation of center of mass peak finding"""
+    def _find_peak_center_of_mass_numba(hist, x_edges, y_edges, snr_threshold=3.0):
+        """Fallback NumPy implementation of center of mass peak finding
+
+        Uses threshold-based bin selection: includes all bins >= median × snr_threshold,
+        with 3×3 fallback if < 9 bins found.
+        """
         # Find histogram maximum
         max_idx = np.unravel_index(hist.argmax(), hist.shape)
         max_i, max_j = max_idx
+        max_val = hist[max_idx]
 
-        # Define 3×3 neighborhood (clip to valid range)
-        i_start = max(0, max_i - 1)
-        i_end = min(hist.shape[0], max_i + 2)
-        j_start = max(0, max_j - 1)
-        j_end = min(hist.shape[1], max_j + 2)
+        # Calculate median of non-zero bins for threshold
+        non_zero_bins = hist[hist > 0]
+        if len(non_zero_bins) == 0:
+            # No data, return center
+            return 0.0, 0.0, float(max_val), 0.0, False
 
-        # Extract neighborhood
-        neighborhood = hist[i_start:i_end, j_start:j_end]
+        median_val = np.median(non_zero_bins)
+        threshold = median_val * snr_threshold
+
+        # Create mask for bins above threshold
+        threshold_mask = hist >= threshold
+        n_threshold_bins = np.sum(threshold_mask)
+
+        # Decide which bins to use
+        use_threshold = n_threshold_bins >= 9
 
         # Calculate bin centers
         bin_size_x = x_edges[1] - x_edges[0] if len(x_edges) > 1 else 1.0
         bin_size_y = y_edges[1] - y_edges[0] if len(y_edges) > 1 else 1.0
 
-        # Create coordinate grids for neighborhood
-        i_indices = np.arange(i_start, i_end)
-        j_indices = np.arange(j_start, j_end)
-        i_grid, j_grid = np.meshgrid(i_indices, j_indices, indexing='ij')
+        if use_threshold:
+            # Use all bins above threshold
+            selected_values = hist[threshold_mask]
 
-        # Bin center coordinates
-        x_coords = x_edges[i_indices] + bin_size_x / 2
-        y_coords = y_edges[j_indices] + bin_size_y / 2
-        x_grid, y_grid = np.meshgrid(x_coords, y_coords, indexing='ij')
+            # Get indices of selected bins
+            i_indices, j_indices = np.where(threshold_mask)
 
-        # Calculate center of mass
-        total_mass = np.sum(neighborhood)
-        if total_mass > 0:
-            shift_x = np.sum(neighborhood * x_grid) / total_mass
-            shift_y = np.sum(neighborhood * y_grid) / total_mass
+            # Bin center coordinates for selected bins
+            x_coords = x_edges[i_indices] + bin_size_x / 2
+            y_coords = y_edges[j_indices] + bin_size_y / 2
+
+            # Calculate center of mass
+            total_mass = np.sum(selected_values)
+            shift_x = np.sum(selected_values * x_coords) / total_mass
+            shift_y = np.sum(selected_values * y_coords) / total_mass
         else:
-            # Fallback: use bin center of maximum
-            shift_x = x_edges[max_i] + bin_size_x / 2
-            shift_y = y_edges[max_j] + bin_size_y / 2
+            # Fall back to 3×3 neighborhood around maximum
+            i_start = max(0, max_i - 1)
+            i_end = min(hist.shape[0], max_i + 2)
+            j_start = max(0, max_j - 1)
+            j_end = min(hist.shape[1], max_j + 2)
 
-        max_val = hist[max_idx]
-        return float(shift_x), float(shift_y), float(max_val)
+            # Extract neighborhood
+            neighborhood = hist[i_start:i_end, j_start:j_end]
+
+            # Create coordinate grids for neighborhood
+            i_indices = np.arange(i_start, i_end)
+            j_indices = np.arange(j_start, j_end)
+            i_grid, j_grid = np.meshgrid(i_indices, j_indices, indexing='ij')
+
+            # Bin center coordinates
+            x_coords = x_edges[i_indices] + bin_size_x / 2
+            y_coords = y_edges[j_indices] + bin_size_y / 2
+            x_grid, y_grid = np.meshgrid(x_coords, y_coords, indexing='ij')
+
+            # Calculate center of mass
+            total_mass = np.sum(neighborhood)
+            if total_mass > 0:
+                shift_x = np.sum(neighborhood * x_grid) / total_mass
+                shift_y = np.sum(neighborhood * y_grid) / total_mass
+            else:
+                # Fallback: use bin center of maximum
+                shift_x = x_edges[max_i] + bin_size_x / 2
+                shift_y = y_edges[max_j] + bin_size_y / 2
+
+        return float(shift_x), float(shift_y), float(max_val), float(threshold), bool(use_threshold)
 
 
 # ==============================================================================
@@ -1013,10 +1100,12 @@ def _compute_rsso_shift_numba_optimized(
         peak_mode_to_use = "center_of_mass"
 
     # Phase 3: Find peak with sub-pixel precision
+    com_threshold = None
+    com_use_threshold = None
     if peak_mode_to_use == "center_of_mass":
         # Use center of mass directly (better for broad peaks)
-        shift_x, shift_y, peak_value = _find_peak_center_of_mass_numba(
-            hist, x_edges, y_edges
+        shift_x, shift_y, peak_value, com_threshold, com_use_threshold = _find_peak_center_of_mass_numba(
+            hist, x_edges, y_edges, snr_threshold
         )
     else:
         # Use parabolic interpolation (default Numba method)
@@ -1058,6 +1147,9 @@ def _compute_rsso_shift_numba_optimized(
         "snr": float(snr),
         "snr_threshold": float(snr_threshold),
         "snr_too_low": bool(snr_too_low),
+        "peak_mode": peak_mode_to_use,  # Actual peak finding method used
+        "com_threshold": com_threshold,  # Threshold value for CoM bin selection
+        "com_use_threshold": com_use_threshold,  # Whether threshold mode was used
         "timing": {
             "phase1_pairwise": phase1_time,
             "phase2_histogram": phase2_time,
@@ -1177,14 +1269,65 @@ def _save_rsso_histogram_plot(
         ax.add_patch(circle)
 
     # Mark the detected shift with a red cross
+    # Include peak finding method in legend
+    peak_mode_display = quality_metrics.get("peak_mode", "unknown")
     ax.plot(
         shift_x,
         shift_y,
         "r+",
         markersize=15,
         markeredgewidth=2,
-        label=f"Shift: ({shift_x:.3f}, {shift_y:.3f}) px",
+        label=f"Shift: ({shift_x:.3f}, {shift_y:.3f}) px\nMethod: {peak_mode_display}",
     )
+
+    # Visualize bins used for center of mass calculation
+    com_threshold = quality_metrics.get("com_threshold")
+    com_use_threshold = quality_metrics.get("com_use_threshold")
+
+    if com_threshold is not None and peak_mode_display == "center_of_mass":
+        # Recreate bin selection mask
+        hist_t = hist.T
+        bin_size_x = x_edges[1] - x_edges[0] if len(x_edges) > 1 else 1.0
+        bin_size_y = y_edges[1] - y_edges[0] if len(y_edges) > 1 else 1.0
+
+        if com_use_threshold:
+            # Threshold-based selection: outline all bins >= threshold
+            selected_bins = hist_t >= com_threshold
+        else:
+            # 3×3 fallback: outline 3×3 neighborhood around peak
+            peak_idx = np.unravel_index(np.argmax(hist_t), hist_t.shape)
+            peak_y, peak_x = peak_idx
+
+            # Create 3×3 mask
+            selected_bins = np.zeros_like(hist_t, dtype=bool)
+            y_start = max(0, peak_y - 1)
+            y_end = min(hist_t.shape[0], peak_y + 2)
+            x_start = max(0, peak_x - 1)
+            x_end = min(hist_t.shape[1], peak_x + 2)
+            selected_bins[y_start:y_end, x_start:x_end] = True
+
+        # Draw outlines around selected bins
+        # For each selected bin, draw a rectangle outline
+        for i in range(hist.shape[0]):
+            for j in range(hist.shape[1]):
+                if selected_bins[j, i]:  # Note: hist_t is transposed
+                    # Calculate bin edges
+                    x_left = x_edges[i]
+                    x_right = x_edges[i+1] if i+1 < len(x_edges) else x_edges[i] + bin_size_x
+                    y_bottom = y_edges[j]
+                    y_top = y_edges[j+1] if j+1 < len(y_edges) else y_edges[j] + bin_size_y
+
+                    # Draw rectangle outline
+                    rect = plt.Rectangle(
+                        (x_left, y_bottom),
+                        x_right - x_left,
+                        y_top - y_bottom,
+                        fill=False,
+                        edgecolor='cyan',
+                        linewidth=1.5,
+                        alpha=0.8
+                    )
+                    ax.add_patch(rect)
 
     # Set labels and title
     ax.set_xlabel("X Shift (pixels)")
