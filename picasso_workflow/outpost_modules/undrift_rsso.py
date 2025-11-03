@@ -1437,9 +1437,18 @@ def _save_rsso_histogram_plot(
         return frame_number
     else:
         # Traditional mode: Save to disk as PNG
-        # Create rsso_plots subdirectory
+        # Create rsso_plots subdirectory with iteration-specific subfolder
         rsso_plot_dir = os.path.join(plot_dir, "rsso_plots")
-        os.makedirs(rsso_plot_dir, exist_ok=True)
+
+        # If iteration is specified, create iteration subfolder with sglframe subfolder
+        if iteration is not None:
+            iteration_dir = os.path.join(rsso_plot_dir, f"iteration_{iteration:02d}", "sglframe")
+            os.makedirs(iteration_dir, exist_ok=True)
+            save_dir = iteration_dir
+        else:
+            # No iteration specified, use base rsso_plots directory
+            os.makedirs(rsso_plot_dir, exist_ok=True)
+            save_dir = rsso_plot_dir
 
         # Generate filename with iteration and frame number
         filename_parts = ["rsso"]
@@ -1453,7 +1462,7 @@ def _save_rsso_histogram_plot(
         filename_parts.append(rcode)
 
         filename = "_".join(filename_parts) + ".png"
-        filepath = os.path.join(rsso_plot_dir, filename)
+        filepath = os.path.join(save_dir, filename)
 
         # Save the plot
         plt.savefig(filepath, dpi=150, bbox_inches="tight")
@@ -1547,7 +1556,14 @@ def _create_histogram_movie(
         return None
 
     # Pattern: rsso_iter{iteration:02d}_frame{frame:04d}_{randomcode}.png
-    pattern = os.path.join(rsso_plot_dir, f"rsso_iter{iteration:02d}_frame*.png")
+    # Check new subfolder structure first: iteration_XX/sglframe/
+    sglframe_dir = os.path.join(rsso_plot_dir, f"iteration_{iteration:02d}", "sglframe")
+    if os.path.exists(sglframe_dir):
+        pattern = os.path.join(sglframe_dir, f"rsso_iter{iteration:02d}_frame*.png")
+    else:
+        # Fallback to old structure (flat directory)
+        pattern = os.path.join(rsso_plot_dir, f"rsso_iter{iteration:02d}_frame*.png")
+
     histogram_files = glob.glob(pattern)
 
     if len(histogram_files) < min_frames_for_movie:
@@ -1572,9 +1588,12 @@ def _create_histogram_movie(
 
     histogram_files_sorted = sorted(histogram_files, key=extract_frame_number)
 
-    # Create movie
+    # Create movie in iteration folder
+    iteration_dir = os.path.join(rsso_plot_dir, f"iteration_{iteration:02d}")
+    os.makedirs(iteration_dir, exist_ok=True)
+
     movie_filename = f"rsso_histograms_iter{iteration:02d}.mp4"
-    movie_path = os.path.join(rsso_plot_dir, movie_filename)
+    movie_path = os.path.join(iteration_dir, movie_filename)
 
     try:
         logger.debug(
@@ -2682,7 +2701,7 @@ def _validate_numba_implementation():
     manual_frame_x = np.array([52.5], dtype=np.float32)
     manual_frame_y = np.array([48.2], dtype=np.float32)
 
-    manual_shifts_x, manual_shifts_y = _compute_pairwise_shifts_numba(
+    manual_shifts_x, manual_shifts_y, _ = _compute_pairwise_shifts_numba(
         manual_ref_x,
         manual_ref_y,
         manual_frame_x,
@@ -3676,10 +3695,11 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
                 # Create video writer for this iteration
                 rsso_plot_dir = os.path.join(results_folder, "rsso_plots")
-                os.makedirs(rsso_plot_dir, exist_ok=True)
+                iteration_dir = os.path.join(rsso_plot_dir, f"iteration_{iteration:02d}")
+                os.makedirs(iteration_dir, exist_ok=True)
 
                 movie_filename = f"rsso_histograms_iter{iteration:02d}.mp4"
-                movie_path = os.path.join(rsso_plot_dir, movie_filename)
+                movie_path = os.path.join(iteration_dir, movie_filename)
 
                 video_writer = imageio.get_writer(
                     movie_path,

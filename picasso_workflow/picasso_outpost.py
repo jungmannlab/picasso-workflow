@@ -507,6 +507,7 @@ def _calculate_pairwise_shift(
     # Find all j points within max_shift of any i point
     valid_shifts_x = []
     valid_shifts_y = []
+    ref_indices = []  # Track which reference loc contributed each shift
 
     for j_idx, coord_j in enumerate(coords_j):
         # Find all i points within max_shift
@@ -531,6 +532,7 @@ def _calculate_pairwise_shift(
 
             valid_shifts_x.append(dx)
             valid_shifts_y.append(dy)
+            ref_indices.append(i_idx)  # Track reference localization index
 
     if len(valid_shifts_x) == 0:
         logger.warning(
@@ -549,6 +551,31 @@ def _calculate_pairwise_shift(
         bins=bins,
         range=[shift_range, shift_range],
     )
+
+    # Build frame contributions dictionary (for matrix-based drift correction)
+    frame_contributions = None
+    if ref_frames is not None and len(ref_indices) > 0:
+        frame_contributions = {}
+        n_bins = len(x_edges) - 1
+
+        for shift_idx in range(len(valid_shifts_x)):
+            shift_x_val = valid_shifts_x[shift_idx]
+            shift_y_val = valid_shifts_y[shift_idx]
+            ref_idx = ref_indices[shift_idx]
+            ref_frame = ref_frames[ref_idx]
+
+            # Find which bin this shift fell into
+            bin_x = np.searchsorted(x_edges, shift_x_val, side='right') - 1
+            bin_y = np.searchsorted(y_edges, shift_y_val, side='right') - 1
+
+            # Ensure valid bin indices
+            bin_x = np.clip(bin_x, 0, n_bins - 1)
+            bin_y = np.clip(bin_y, 0, n_bins - 1)
+
+            # Track this contribution
+            if ref_frame not in frame_contributions:
+                frame_contributions[ref_frame] = []
+            frame_contributions[ref_frame].append((int(bin_x), int(bin_y)))
 
     # Calculate signal-to-noise ratio
     max_bin_value = np.max(hist)
@@ -634,6 +661,9 @@ def _calculate_pairwise_shift(
         "peak_mode": peak_mode_to_use,  # Actual peak finding method used
         "com_threshold": com_threshold,  # Threshold value for CoM bin selection
         "com_use_threshold": com_use_threshold,  # Whether threshold mode was used
+        "frame_contributions": frame_contributions,  # For matrix-based drift correction
+        "hist": hist,  # Histogram for connectivity matrix building
+        "hist_edges": (x_edges, y_edges),  # Bin edges for histogram
     }
 
     return shift_x, shift_y, plot_filepath, uncertainty_info
