@@ -136,6 +136,152 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    def conditional_branch(self, i, parameters, results):
+        """Report on conditional branch execution.
+
+        Creates a collapsible section showing the condition evaluation
+        and reports on each executed sub-module within the section.
+        """
+        logger.debug(f"Reporting conditional_branch module {i:02d}")
+
+        # Extract condition information
+        condition = results.get("condition", {})
+        condition_result = results.get("condition_result", False)
+        branch_taken = results.get("branch_taken", "unknown")
+        branch_results = results.get("if_branch", {})
+        skipped_branch = results.get("skipped_branch", "unknown")
+        skipped_modules = results.get("skipped_modules", [])
+
+        # Format condition for display
+        if "left" in condition and "operator" in condition:
+            left_val = condition.get("left", "?")
+            operator = condition.get("operator", "?")
+            right_val = condition.get("right", "?")
+            condition_str = f"{left_val} {operator} {right_val}"
+        else:
+            condition_str = str(condition)
+
+        # Create the main conditional module section
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Conditional Branch</strong></p>
+        <h4>Condition Evaluation</h4>
+        <ul>
+        <li><strong>Condition:</strong> {html.escape(condition_str)}</li>
+        <li><strong>Result:</strong> <span style="background-color: {'#c3e6cb' if condition_result else '#f5c6cb'}; padding: 2px 6px; border-radius: 3px;">{condition_result}</span></li>
+        <li><strong>Branch Taken:</strong> <strong>{branch_taken}</strong></li>
+        <li><strong>Skipped Branch:</strong> {skipped_branch}</li>
+        <li><strong>Skipped Modules:</strong> {', '.join(skipped_modules) if skipped_modules else 'None'}</li>
+        <li><strong>Start Time:</strong> {results.get('start time', 'N/A')}</li>
+        <li><strong>Total Duration:</strong> {results.get("duration", 0) // 60:.0f} min {(results.get("duration", 0) % 60):.02f} s</li>
+        </ul>
+        """
+
+        # Create collapsible section for executed sub-modules
+        text += f"""
+        <ac:structured-macro ac:name="expand" ac:schema-version="1">
+        <ac:parameter ac:name="title">Executed Sub-Modules ({len(branch_results)} modules in {branch_taken} branch)</ac:parameter>
+        <ac:rich-text-body>
+        """
+
+        # Report on each executed sub-module
+        for sub_key in sorted(branch_results.keys()):
+            sub_results = branch_results[sub_key]
+            # Extract module name from key (format: "00_module_name")
+            module_name = "_".join(sub_key.split("_")[1:])
+
+            text += f"""
+            <div style="margin-left: 20px; border-left: 3px solid #4a90e2; padding-left: 10px; margin-bottom: 15px;">
+            <h5>Sub-Module {sub_key}: {module_name}</h5>
+            """
+
+            # Check if module execution was successful
+            if not sub_results.get("success", True):
+                text += f"""
+                <p style="color: #d9534f;"><strong>⚠ Module Failed</strong></p>
+                <p>Error: {html.escape(str(sub_results.get('error', 'Unknown error')))}</p>
+                """
+            else:
+                # Try to call the specific reporter for this sub-module
+                if hasattr(self, module_name):
+                    try:
+                        logger.debug(
+                            f"Calling reporter for sub-module: {module_name}"
+                        )
+
+                        # Close the div temporarily for the sub-module reporter
+                        text += "</div>"
+                        # Update page with content so far
+                        self.ci.update_page_content(
+                            self.report_page_name, self.report_page_id, text
+                        )
+
+                        # Call the sub-module reporter
+                        reporter_method = getattr(self, module_name)
+                        # Extract the sub-module index from the key
+                        sub_idx = int(sub_key.split("_")[0])
+
+                        # Get the sub-module parameters from the branch parameters
+                        sub_module_params = {}
+                        if branch_taken == "if_true":
+                            branch_modules = parameters.get("if_true", [])
+                        else:
+                            branch_modules = parameters.get("if_false", [])
+
+                        for idx, (mod_name, mod_params) in enumerate(
+                            branch_modules
+                        ):
+                            if idx == sub_idx and mod_name == module_name:
+                                sub_module_params = mod_params
+                                break
+
+                        # Call the reporter method
+                        reporter_method(sub_idx, sub_module_params, sub_results)
+
+                        # Start a new text section after the sub-module report
+                        text = """<div style="margin-left: 20px; border-left: 3px solid #4a90e2; padding-left: 10px; margin-bottom: 15px;">"""
+
+                    except Exception as e:
+                        logger.error(
+                            f"Error calling reporter for {module_name}: {e}"
+                        )
+                        text += f"""
+                        <p style="color: #f0ad4e;">⚠ Could not generate detailed report: {html.escape(str(e))}</p>
+                        """
+                else:
+                    logger.warning(
+                        f"No reporter found for sub-module: {module_name}"
+                    )
+                    # Show basic results information
+                    text += """
+                    <ac:structured-macro ac:name="expand" ac:schema-version="1">
+                    <ac:parameter ac:name="title">Results</ac:parameter>
+                    <ac:rich-text-body>
+                    <ul>
+                    """
+                    for k, v in sub_results.items():
+                        if k not in ["folder", "start time", "end time"]:
+                            text += f"<li>{k}: {html.escape(str(v))}</li>"
+                    text += """
+                    </ul>
+                    </ac:rich-text-body>
+                    </ac:structured-macro>
+                    """
+
+            text += "</div>"
+
+        # Close the collapsible section
+        text += """
+        </ac:rich-text-body>
+        </ac:structured-macro>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+
+        # Update the page
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
     def analysis_documentation(self, i, parameters, results):
         """This module documents where and how analysis is being performed"""
         logger.debug("Reporting analysis_documentation.")

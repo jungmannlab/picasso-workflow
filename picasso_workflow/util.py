@@ -42,6 +42,14 @@ class AbstractModuleCollection(abc.ABC):
         """Document the parameters of the analysis machine and software."""
         pass
 
+    @abc.abstractmethod
+    def conditional_branch(self):
+        """Execute different sub-module sequences based on a condition.
+
+        Allows conditional execution: if(condition){modules...}else{modules...}
+        """
+        pass
+
     ##########################################################################
     # Single-dataset workflow modules
     ##########################################################################
@@ -935,6 +943,111 @@ def is_valid_expression(expression):
     # pattern = r"^[\d+\-*/\s()]+$"
     pattern = r"^[*-+/][0-9]*(\.[0-9]*)?"
     return re.match(pattern, expression) is not None
+
+
+class ConditionEvaluator:
+    """Evaluates conditions for conditional branching in workflows.
+
+    Supports comparison operators (>, <, >=, <=, ==, !=) and logical
+    operators (and, or) for combining conditions.
+    """
+
+    COMPARISON_OPERATORS = {
+        ">": lambda a, b: a > b,
+        "<": lambda a, b: a < b,
+        ">=": lambda a, b: a >= b,
+        "<=": lambda a, b: a <= b,
+        "==": lambda a, b: a == b,
+        "!=": lambda a, b: a != b,
+    }
+
+    def __init__(self, parameter_command_executor=None):
+        """
+        Args:
+            parameter_command_executor : ParameterCommandExecutor or None
+                if provided, will be used to resolve parameter commands
+                in condition values (e.g., $get_prior_result)
+        """
+        self.parameter_command_executor = parameter_command_executor
+
+    def evaluate(self, condition):
+        """Evaluate a condition dictionary.
+
+        Args:
+            condition : dict
+                Either a comparison condition with keys:
+                    - "left": value or parameter command tuple
+                    - "operator": str, one of >, <, >=, <=, ==, !=
+                    - "right": value or parameter command tuple
+                Or a logical condition with keys:
+                    - "and": list of conditions (all must be True)
+                    - "or": list of conditions (at least one must be True)
+
+        Returns:
+            bool : the result of the condition evaluation
+
+        Raises:
+            ValueError : if the condition format is invalid or operator
+                        is unsupported
+        """
+        # Handle logical operators
+        if "and" in condition:
+            return all(self.evaluate(c) for c in condition["and"])
+        elif "or" in condition:
+            return any(self.evaluate(c) for c in condition["or"])
+
+        # Handle comparison operators
+        if not all(k in condition for k in ["left", "operator", "right"]):
+            raise ValueError(
+                "Condition must have 'left', 'operator', and 'right' keys, "
+                f"or 'and'/'or' keys. Got: {condition.keys()}"
+            )
+
+        left = self._resolve_value(condition["left"])
+        operator = condition["operator"]
+        right = self._resolve_value(condition["right"])
+
+        if operator not in self.COMPARISON_OPERATORS:
+            raise ValueError(
+                f"Unsupported operator: {operator}. "
+                f"Supported operators: {list(self.COMPARISON_OPERATORS.keys())}"
+            )
+
+        result = self.COMPARISON_OPERATORS[operator](left, right)
+        logger.debug(
+            f"Condition evaluation: {left} {operator} {right} = {result}"
+        )
+        return result
+
+    def _resolve_value(self, value):
+        """Resolve a value, which may be a parameter command or a literal.
+
+        Args:
+            value : any
+                the value to resolve. If it's a tuple starting with $,
+                it will be resolved as a parameter command.
+
+        Returns:
+            any : the resolved value
+        """
+        # Check if it's a parameter command tuple
+        if (
+            isinstance(value, tuple)
+            and len(value) > 1
+            and isinstance(value[0], str)
+            and value[0].startswith("$")
+        ):
+            if self.parameter_command_executor is None:
+                raise ValueError(
+                    "Cannot resolve parameter command without "
+                    "ParameterCommandExecutor"
+                )
+            # Use the parameter command executor to resolve
+            result = self.parameter_command_executor.scan_tuple(value)
+            if isinstance(result, dict) and "parsed" in result:
+                return result["parsed"]
+            return result
+        return value
 
 
 class PriorResultError(AttributeError):

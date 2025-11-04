@@ -1198,17 +1198,28 @@ def _compute_rsso_shift_numba_optimized(
 
     # Create and save histogram plot if requested
     if plot_histogram and (plot_dir is not None or shared_plot_dict is not None):
-        plot_filepath = _save_rsso_histogram_plot(
-            hist,
-            x_edges,
-            y_edges,
-            shift_x,
-            shift_y,
-            max_shift_pixels,
-            plot_dir,
-            iteration,
-            frame_number,
-            quality_metrics,
+        # Import unified plotting function from picasso_outpost
+        from picasso_workflow.picasso_outpost import _save_rsso_shift_histogram_plot
+
+        # Determine output subdirectory structure for numba route
+        if iteration is not None:
+            output_subdir = f"rsso_plots/iteration_{iteration:02d}/sglframe"
+        else:
+            output_subdir = "rsso_plots"
+
+        plot_filepath = _save_rsso_shift_histogram_plot(
+            hist=hist,
+            x_edges=x_edges,
+            y_edges=y_edges,
+            shift_x=shift_x,
+            shift_y=shift_y,
+            max_shift=max_shift_pixels,
+            plot_dir=plot_dir,
+            quality_metrics=quality_metrics,
+            iteration=iteration,
+            frame_number=frame_number,
+            channel_pair=None,  # Numba route doesn't use channel_pair
+            output_subdir=output_subdir,  # Numba route uses subdirectory structure
             shared_plot_dict=shared_plot_dict,
         )
         quality_metrics["plot_filepath"] = plot_filepath
@@ -1230,245 +1241,55 @@ def _save_rsso_histogram_plot(
     shared_plot_dict=None,
 ):
     """
-    Save 2D histogram plot showing RSSO shift distribution and peak.
+    DEPRECATED: Use _save_rsso_shift_histogram_plot from picasso_outpost instead.
 
-    Can either save to disk (traditional mode) or store in shared memory
-    for incremental video writing (memory-efficient mode).
+    This function is kept for backward compatibility and redirects to the
+    unified plotting function in picasso_outpost.py.
 
     Args:
-        hist : np.array
-            2D histogram of shifts
-        x_edges : np.array
-            Histogram x bin edges
-        y_edges : np.array
-            Histogram y bin edges
-        shift_x : float
-            Estimated x shift
-        shift_y : float
-            Estimated y shift
-        max_shift : float
-            Maximum shift range
-        plot_dir : str
-            Directory to save plot (only used if shared_plot_dict is None)
-        iteration : int or None
-            Iteration number for filename
-        frame_number : int or None
-            Frame number for filename
-        quality_metrics : dict
-            Quality metrics to display on plot
-        shared_plot_dict : multiprocessing.Manager.dict() or None, optional
-            If provided, stores plot as numpy array in this dict instead of saving to disk.
-            Key is frame_number, value is numpy array of shape (height, width, 3).
+        hist, x_edges, y_edges, shift_x, shift_y, max_shift : see new function
+        plot_dir : str - Directory to save plot
+        iteration : int or None - Iteration number
+        frame_number : int or None - Frame number
+        quality_metrics : dict - Quality metrics
+        shared_plot_dict : dict or None - Shared memory dict for video
 
     Returns:
         filepath : str or frame_number
-            If shared_plot_dict is None: Path to saved plot file
-            If shared_plot_dict is provided: Frame number (key in dict)
     """
-    import matplotlib.pyplot as plt
-    import random
-    import string
-
-    # Create figure and axis
-    fig, ax = plt.subplots(figsize=(8, 6))
-
-    # Create coordinate grids - use bin centers
-    x_centers = (x_edges[:-1] + x_edges[1:]) / 2
-    y_centers = (y_edges[:-1] + y_edges[1:]) / 2
-    X_centers, Y_centers = np.meshgrid(x_centers, y_centers)
-
-    # Apply circular mask for visualization
-    hist_plot = hist.T.copy()
-    if max_shift is not None:
-        distances = np.sqrt(X_centers**2 + Y_centers**2)
-        outside_circle = distances > max_shift
-        hist_plot[outside_circle] = np.nan
-
-    # Plot the 2D histogram
-    im = ax.pcolormesh(
-        X_centers, Y_centers, hist_plot, cmap="viridis", shading="nearest"
+    import warnings
+    warnings.warn(
+        "_save_rsso_histogram_plot is deprecated. "
+        "Use picasso_outpost._save_rsso_shift_histogram_plot instead.",
+        DeprecationWarning,
+        stacklevel=2
     )
 
-    # Add colorbar
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label("Count", rotation=270, labelpad=20)
+    # Import unified function
+    from picasso_workflow.picasso_outpost import _save_rsso_shift_histogram_plot
 
-    # Add circular boundary
-    if max_shift is not None:
-        circle = plt.Circle(
-            (0, 0),
-            max_shift,
-            fill=False,
-            color="white",
-            linestyle="--",
-            linewidth=2,
-            alpha=0.8,
-        )
-        ax.add_patch(circle)
-
-    # Mark the detected shift with a red cross
-    # Include peak finding method in legend
-    peak_mode_display = quality_metrics.get("peak_mode", "unknown")
-    ax.plot(
-        shift_x,
-        shift_y,
-        "r+",
-        markersize=15,
-        markeredgewidth=2,
-        label=f"Shift: ({shift_x:.3f}, {shift_y:.3f}) px\nMethod: {peak_mode_display}",
-    )
-
-    # Visualize bins used for center of mass calculation
-    com_threshold = quality_metrics.get("com_threshold")
-    com_use_threshold = quality_metrics.get("com_use_threshold")
-
-    if com_threshold is not None and peak_mode_display == "center_of_mass":
-        # Recreate bin selection mask
-        hist_t = hist.T
-        bin_size_x = x_edges[1] - x_edges[0] if len(x_edges) > 1 else 1.0
-        bin_size_y = y_edges[1] - y_edges[0] if len(y_edges) > 1 else 1.0
-
-        if com_use_threshold:
-            # Threshold-based selection: outline all bins >= threshold
-            selected_bins = hist_t >= com_threshold
-        else:
-            # 3×3 fallback: outline 3×3 neighborhood around peak
-            peak_idx = np.unravel_index(np.argmax(hist_t), hist_t.shape)
-            peak_y, peak_x = peak_idx
-
-            # Create 3×3 mask
-            selected_bins = np.zeros_like(hist_t, dtype=bool)
-            y_start = max(0, peak_y - 1)
-            y_end = min(hist_t.shape[0], peak_y + 2)
-            x_start = max(0, peak_x - 1)
-            x_end = min(hist_t.shape[1], peak_x + 2)
-            selected_bins[y_start:y_end, x_start:x_end] = True
-
-        # Draw outlines around selected bins
-        # For each selected bin, draw a rectangle outline
-        for i in range(hist.shape[0]):
-            for j in range(hist.shape[1]):
-                if selected_bins[j, i]:  # Note: hist_t is transposed
-                    # Calculate bin edges
-                    x_left = x_edges[i]
-                    x_right = x_edges[i+1] if i+1 < len(x_edges) else x_edges[i] + bin_size_x
-                    y_bottom = y_edges[j]
-                    y_top = y_edges[j+1] if j+1 < len(y_edges) else y_edges[j] + bin_size_y
-
-                    # Draw rectangle outline
-                    rect = plt.Rectangle(
-                        (x_left, y_bottom),
-                        x_right - x_left,
-                        y_top - y_bottom,
-                        fill=False,
-                        edgecolor='cyan',
-                        linewidth=1.5,
-                        alpha=0.8
-                    )
-                    ax.add_patch(rect)
-
-    # Set labels and title
-    ax.set_xlabel("X Shift (pixels)")
-    ax.set_ylabel("Y Shift (pixels)")
-
-    # Build title with iteration and frame info
-    title_parts = ["RSSO Shift Histogram"]
+    # Determine output subdirectory structure
     if iteration is not None:
-        title_parts.append(f"Iter {iteration}")
-    if frame_number is not None:
-        title_parts.append(f"Frame {frame_number}")
-    ax.set_title(" - ".join(title_parts))
-
-    # Set axis limits
-    ax.set_xlim(-max_shift, max_shift)
-    ax.set_ylim(-max_shift, max_shift)
-
-    # Add grid and legend
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="lower right")
-
-    # Add text box with statistics
-    total_points = quality_metrics.get("total_pairs", np.sum(hist))
-    sigma_x = quality_metrics.get("sigma_x", 0)
-    sigma_y = quality_metrics.get("sigma_y", 0)
-
-    # Calculate bin statistics (min, max, median) from bins within circular mask
-    # Use only bins within circular mask (non-NaN values)
-    valid_bins = hist_plot[~np.isnan(hist_plot)]
-    max_bin_value = np.max(valid_bins) if len(valid_bins) > 0 else 0
-    min_bin_value = np.min(valid_bins) if len(valid_bins) > 0 else 0
-    median_bin_value = np.median(valid_bins) if len(valid_bins) > 0 else 0
-
-    textstr = (
-        f"Total pairs: {total_points:.0f}\n"
-        f"Max bin: {max_bin_value:.0f}\n"
-        f"Min bin: {min_bin_value:.0f}\n"
-        f"Median bin: {median_bin_value:.1f}\n"
-        f"σx: {sigma_x:.3f} px\n"
-        f"σy: {sigma_y:.3f} px"
-    )
-    props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
-    ax.text(
-        0.02,
-        0.98,
-        textstr,
-        transform=ax.transAxes,
-        fontsize=9,
-        verticalalignment="top",
-        bbox=props,
-    )
-
-    # Either save to disk or store in shared memory
-    if shared_plot_dict is not None:
-        # Memory-efficient mode: Render to numpy array and store in shared dict
-        # Draw the canvas to ensure everything is rendered
-        fig.canvas.draw()
-
-        # Convert figure to numpy array (RGB format)
-        img_array = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        img_array = img_array.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-
-        # Store in shared dict with frame number as key
-        if frame_number is not None:
-            shared_plot_dict[frame_number] = img_array
-
-        plt.close(fig)
-
-        return frame_number
+        output_subdir = f"rsso_plots/iteration_{iteration:02d}/sglframe"
     else:
-        # Traditional mode: Save to disk as PNG
-        # Create rsso_plots subdirectory with iteration-specific subfolder
-        rsso_plot_dir = os.path.join(plot_dir, "rsso_plots")
+        output_subdir = "rsso_plots"
 
-        # If iteration is specified, create iteration subfolder with sglframe subfolder
-        if iteration is not None:
-            iteration_dir = os.path.join(rsso_plot_dir, f"iteration_{iteration:02d}", "sglframe")
-            os.makedirs(iteration_dir, exist_ok=True)
-            save_dir = iteration_dir
-        else:
-            # No iteration specified, use base rsso_plots directory
-            os.makedirs(rsso_plot_dir, exist_ok=True)
-            save_dir = rsso_plot_dir
-
-        # Generate filename with iteration and frame number
-        filename_parts = ["rsso"]
-        if iteration is not None:
-            filename_parts.append(f"iter{iteration:02d}")
-        if frame_number is not None:
-            filename_parts.append(f"frame{frame_number:04d}")
-
-        # Add random code for uniqueness
-        rcode = "".join(random.choices(string.ascii_letters, k=6))
-        filename_parts.append(rcode)
-
-        filename = "_".join(filename_parts) + ".png"
-        filepath = os.path.join(save_dir, filename)
-
-        # Save the plot
-        plt.savefig(filepath, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-
-        return filepath
+    # Call unified function
+    return _save_rsso_shift_histogram_plot(
+        hist=hist,
+        x_edges=x_edges,
+        y_edges=y_edges,
+        shift_x=shift_x,
+        shift_y=shift_y,
+        max_shift=max_shift,
+        plot_dir=plot_dir,
+        quality_metrics=quality_metrics,
+        iteration=iteration,
+        frame_number=frame_number,
+        channel_pair=None,
+        output_subdir=output_subdir,
+        shared_plot_dict=shared_plot_dict,
+    )
 
 
 def _write_plots_to_video(shared_plot_dict, video_writer):
@@ -3474,6 +3295,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     # Matrix-based drift correction (experimental)
     use_matrix_solver = parameters.get("use_matrix_solver", False)
     matrix_refinement_iterations = parameters.get("matrix_refinement_iterations", 0)
+    min_matrix_sparsity = parameters.get("min_matrix_sparsity", 90.0)  # Skip matrix solver if sparsity < this %
 
     # Memory management parameters
     chunk_size = parameters.get("chunk_size", 100)
@@ -4512,66 +4334,86 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 matrix_build_time = time.time() - matrix_start_time
 
                 logger.info(f"  Matrix built in {matrix_build_time:.2f}s")
-                logger.info(f"  Sparsity: {100*(1-W.nnz/(W.shape[0]*W.shape[1])):.1f}%")
+
+                # Calculate sparsity
+                sparsity_pct = 100 * (1 - W.nnz / (W.shape[0] * W.shape[1]))
+                logger.info(f"  Sparsity: {sparsity_pct:.1f}%")
                 logger.info(f"  Non-zero entries: {W.nnz:,}")
 
-                # Solve for drift
-                solve_start_time = time.time()
-                drift_x_matrix, drift_y_matrix, solver_info = _solve_drift_from_connectivity(
-                    W, s_obs, valid_frames
-                )
-                solve_time = time.time() - solve_start_time
+                # Check if matrix is sparse enough to solve efficiently
+                if sparsity_pct < min_matrix_sparsity:
+                    logger.warning(
+                        f"  Matrix sparsity ({sparsity_pct:.1f}%) is below minimum threshold "
+                        f"({min_matrix_sparsity:.1f}%)."
+                    )
+                    logger.warning(
+                        f"  Matrix is too dense ({W.nnz:,} non-zero entries) - solving would be very slow."
+                    )
+                    logger.warning(
+                        "  Skipping matrix solver. Consider increasing snr_threshold or disabling use_matrix_solver."
+                    )
+                    logger.info("  Continuing with iterative RSSO approach...")
 
-                if solver_info.get("success", False):
-                    logger.info(f"  Solver converged in {solve_time:.2f}s")
-                    logger.info(f"  Iterations: {solver_info.get('iterations_x', 0)} / {solver_info.get('iterations_y', 0)}")
-                    logger.info(f"  RMS drift: ({solver_info.get('rms_drift_x', 0):.3f}, {solver_info.get('rms_drift_y', 0):.3f}) px")
-
-                    # Convert pixel drift to nm and map to frame indices
-                    drift_x_matrix_nm = drift_x_matrix * pixelsize
-                    drift_y_matrix_nm = drift_y_matrix * pixelsize
-
-                    # Create frame mapping
-                    frame_to_matrix_idx = {fn: idx for idx, fn in enumerate(frame_numbers)}
-
-                    # Map matrix solution to full frame array
-                    matrix_drift_x = np.zeros(n_frames)
-                    matrix_drift_y = np.zeros(n_frames)
-                    for frame_idx in range(n_frames):
-                        if frame_idx in frame_to_matrix_idx:
-                            matrix_idx = frame_to_matrix_idx[frame_idx]
-                            matrix_drift_x[frame_idx] = drift_x_matrix_nm[matrix_idx]
-                            matrix_drift_y[frame_idx] = drift_y_matrix_nm[matrix_idx]
-
-                    # Replace iterative drift with matrix solution
-                    drift_x = matrix_drift_x
-                    drift_y = matrix_drift_y
-
-                    # Update cumulative corrections
-                    cumulative_corrections_x = drift_x / pixelsize
-                    cumulative_corrections_y = drift_y / pixelsize
-
-                    # Update iteration history with matrix solution
-                    iteration_history[-1]["drift_x"] = drift_x.copy()
-                    iteration_history[-1]["drift_y"] = drift_y.copy()
-                    iteration_history[-1]["matrix_solver_info"] = solver_info
-                    iteration_history[-1]["matrix_build_time"] = matrix_build_time
-                    iteration_history[-1]["matrix_solve_time"] = solve_time
-
-                    logger.info(f"  Matrix solution applied successfully")
-
-                    # Optional: Run refinement iterations
-                    if matrix_refinement_iterations > 0:
-                        logger.info(f"  Running {matrix_refinement_iterations} refinement iteration(s)...")
-                    else:
-                        # Skip remaining iterations - matrix solution is final
-                        logger.info("  Matrix solver complete - skipping remaining iterations")
-                        logger.info("=" * 70)
-                        break
-
+                    # Don't break - continue with normal iterations
+                    pass
                 else:
-                    logger.warning(f"  Matrix solver failed: {solver_info.get('error', 'unknown')}")
-                    logger.warning("  Continuing with iterative approach...")
+                    # Solve for drift
+                    solve_start_time = time.time()
+                    drift_x_matrix, drift_y_matrix, solver_info = _solve_drift_from_connectivity(
+                        W, s_obs, valid_frames
+                    )
+                    solve_time = time.time() - solve_start_time
+
+                    if solver_info.get("success", False):
+                        logger.info(f"  Solver converged in {solve_time:.2f}s")
+                        logger.info(f"  Iterations: {solver_info.get('iterations_x', 0)} / {solver_info.get('iterations_y', 0)}")
+                        logger.info(f"  RMS drift: ({solver_info.get('rms_drift_x', 0):.3f}, {solver_info.get('rms_drift_y', 0):.3f}) px")
+
+                        # Convert pixel drift to nm and map to frame indices
+                        drift_x_matrix_nm = drift_x_matrix * pixelsize
+                        drift_y_matrix_nm = drift_y_matrix * pixelsize
+
+                        # Create frame mapping
+                        frame_to_matrix_idx = {fn: idx for idx, fn in enumerate(frame_numbers)}
+
+                        # Map matrix solution to full frame array
+                        matrix_drift_x = np.zeros(n_frames)
+                        matrix_drift_y = np.zeros(n_frames)
+                        for frame_idx in range(n_frames):
+                            if frame_idx in frame_to_matrix_idx:
+                                matrix_idx = frame_to_matrix_idx[frame_idx]
+                                matrix_drift_x[frame_idx] = drift_x_matrix_nm[matrix_idx]
+                                matrix_drift_y[frame_idx] = drift_y_matrix_nm[matrix_idx]
+
+                        # Replace iterative drift with matrix solution
+                        drift_x = matrix_drift_x
+                        drift_y = matrix_drift_y
+
+                        # Update cumulative corrections
+                        cumulative_corrections_x = drift_x / pixelsize
+                        cumulative_corrections_y = drift_y / pixelsize
+
+                        # Update iteration history with matrix solution
+                        iteration_history[-1]["drift_x"] = drift_x.copy()
+                        iteration_history[-1]["drift_y"] = drift_y.copy()
+                        iteration_history[-1]["matrix_solver_info"] = solver_info
+                        iteration_history[-1]["matrix_build_time"] = matrix_build_time
+                        iteration_history[-1]["matrix_solve_time"] = solve_time
+
+                        logger.info(f"  Matrix solution applied successfully")
+
+                        # Optional: Run refinement iterations
+                        if matrix_refinement_iterations > 0:
+                            logger.info(f"  Running {matrix_refinement_iterations} refinement iteration(s)...")
+                        else:
+                            # Skip remaining iterations - matrix solution is final
+                            logger.info("  Matrix solver complete - skipping remaining iterations")
+                            logger.info("=" * 70)
+                            break
+
+                    else:
+                        logger.warning(f"  Matrix solver failed: {solver_info.get('error', 'unknown')}")
+                        logger.warning("  Continuing with iterative approach...")
 
             except Exception as e:
                 logger.error(f"  Matrix solver error: {e}")

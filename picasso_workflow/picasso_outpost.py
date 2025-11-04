@@ -632,22 +632,6 @@ def _calculate_pairwise_shift(
     else:
         raise ValueError(f"Unknown peak_mode: {peak_mode}. Use 'gaussian', 'center_of_mass', or 'auto'.")
 
-    # Create and save histogram plot if requested
-    plot_filepath = None
-    if plot_histogram:
-        plot_filepath = _save_shift_histogram_plot(
-            hist,
-            x_edges,
-            y_edges,
-            shift_x,
-            shift_y,
-            max_shift,
-            plot_dir,
-            channel_pair,
-            fit_successful,
-            plot_fn_suffix
-        )
-
     # Return shift values and uncertainties
     uncertainty_info = {
         "sigma_x": sigma_x,
@@ -665,6 +649,32 @@ def _calculate_pairwise_shift(
         "hist": hist,  # Histogram for connectivity matrix building
         "hist_edges": (x_edges, y_edges),  # Bin edges for histogram
     }
+
+    # Create and save histogram plot if requested (using unified plotting function)
+    plot_filepath = None
+    if plot_histogram:
+        # Normalize quality metrics for unified plotting function
+        quality_metrics = _normalize_quality_metrics(
+            uncertainty_info=uncertainty_info,
+            hist=hist
+        )
+
+        # Call unified plotting function
+        plot_filepath = _save_rsso_shift_histogram_plot(
+            hist=hist,
+            x_edges=x_edges,
+            y_edges=y_edges,
+            shift_x=shift_x,
+            shift_y=shift_y,
+            max_shift=max_shift,
+            plot_dir=plot_dir,
+            quality_metrics=quality_metrics,
+            iteration=None,  # Not used in standard route
+            frame_number=None,  # Not used in standard route
+            channel_pair=channel_pair,  # Standard route uses channel_pair
+            output_subdir=None,  # Standard route saves directly to plot_dir
+            shared_plot_dict=None,  # Standard route always saves to disk
+        )
 
     return shift_x, shift_y, plot_filepath, uncertainty_info
 
@@ -1017,7 +1027,79 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
         raise RuntimeError(f"Gaussian fitting failed: {str(e)}")
 
 
-def _save_shift_histogram_plot(
+def _normalize_quality_metrics(uncertainty_info=None, quality_metrics=None, hist=None):
+    """
+    Normalize quality metrics from either standard or numba route format.
+
+    Converts uncertainty_info (standard route) or quality_metrics (numba route)
+    into a unified format suitable for plotting functions.
+
+    Args:
+        uncertainty_info : dict or None
+            Quality metrics from standard route (_calculate_pairwise_shift)
+            Expected keys: sigma_x, sigma_y, fit_successful, peak_mode,
+                          com_threshold, com_use_threshold
+        quality_metrics : dict or None
+            Quality metrics from numba route (_compute_rsso_shift_numba_optimized)
+            Expected keys: sigma_x, sigma_y, peak_mode, success,
+                          com_threshold, com_use_threshold, total_pairs
+        hist : np.array or None
+            2D histogram for calculating total_pairs if not in quality_metrics
+
+    Returns:
+        normalized : dict
+            Unified quality metrics dict with keys:
+                - peak_mode : str
+                - sigma_x : float
+                - sigma_y : float
+                - total_pairs : float
+                - com_threshold : float or None
+                - com_use_threshold : bool or None
+    """
+    normalized = {}
+
+    # Determine source and extract values
+    if quality_metrics is not None:
+        # Numba route - already in good format
+        normalized["peak_mode"] = quality_metrics.get("peak_mode", "unknown")
+        normalized["sigma_x"] = quality_metrics.get("sigma_x", 0.0)
+        normalized["sigma_y"] = quality_metrics.get("sigma_y", 0.0)
+        normalized["total_pairs"] = quality_metrics.get(
+            "total_pairs",
+            np.sum(hist) if hist is not None else 0
+        )
+        normalized["com_threshold"] = quality_metrics.get("com_threshold")
+        normalized["com_use_threshold"] = quality_metrics.get("com_use_threshold")
+
+    elif uncertainty_info is not None:
+        # Standard route - convert from uncertainty_info format
+        fit_successful = uncertainty_info.get("fit_successful", False)
+        peak_mode = uncertainty_info.get("peak_mode", "unknown")
+
+        # Convert fit_successful to peak_mode if not explicitly set
+        if peak_mode == "unknown":
+            peak_mode = "gaussian" if fit_successful else "histogram_maximum"
+
+        normalized["peak_mode"] = peak_mode
+        normalized["sigma_x"] = uncertainty_info.get("sigma_x", 0.0)
+        normalized["sigma_y"] = uncertainty_info.get("sigma_y", 0.0)
+        normalized["total_pairs"] = np.sum(hist) if hist is not None else 0
+        normalized["com_threshold"] = uncertainty_info.get("com_threshold")
+        normalized["com_use_threshold"] = uncertainty_info.get("com_use_threshold")
+
+    else:
+        # No metrics provided - use defaults
+        normalized["peak_mode"] = "unknown"
+        normalized["sigma_x"] = 0.0
+        normalized["sigma_y"] = 0.0
+        normalized["total_pairs"] = np.sum(hist) if hist is not None else 0
+        normalized["com_threshold"] = None
+        normalized["com_use_threshold"] = None
+
+    return normalized
+
+
+def _save_rsso_shift_histogram_plot(
     hist,
     x_edges,
     y_edges,
@@ -1025,12 +1107,19 @@ def _save_shift_histogram_plot(
     shift_y,
     max_shift,
     plot_dir,
-    channel_pair,
-    fit_successful=False,
-    plot_fn_suffix=""
+    quality_metrics,
+    iteration=None,
+    frame_number=None,
+    channel_pair=None,
+    output_subdir=None,
+    shared_plot_dict=None,
 ):
     """
-    Save 2D histogram plot showing shift distribution and estimated shift.
+    Unified function to save 2D histogram plots showing RSSO shift distribution and peak.
+
+    Works for both standard (channel alignment) and numba (iterative drift) routes.
+    Can either save to disk (traditional mode) or store in shared memory
+    for incremental video writing (memory-efficient mode).
 
     Args:
         hist : np.array
@@ -1045,37 +1134,53 @@ def _save_shift_histogram_plot(
             Estimated y shift
         max_shift : float
             Maximum shift range
-        plot_dir : str or None
-            Directory to save plot
-        channel_pair : tuple
-            (i, j) channel indices
+        plot_dir : str
+            Directory to save plot (only used if shared_plot_dict is None)
+        quality_metrics : dict
+            Quality metrics to display on plot. Expected keys:
+                - peak_mode : str (method used)
+                - sigma_x, sigma_y : float (uncertainties)
+                - total_pairs : float (number of pairs)
+                - com_threshold : float or None (CoM threshold)
+                - com_use_threshold : bool or None (whether threshold was used)
+        iteration : int or None, optional
+            Iteration number for filename (numba route)
+        frame_number : int or None, optional
+            Frame number for filename (numba route)
+        channel_pair : tuple or None, optional
+            (i, j) channel indices for filename (standard route)
+        output_subdir : str or None, optional
+            Subdirectory structure to create (e.g., "rsso_plots/iteration_00/sglframe/")
+            If None, saves directly to plot_dir
+        shared_plot_dict : multiprocessing.Manager.dict() or None, optional
+            If provided, stores plot as numpy array in this dict instead of saving to disk.
+            Key is frame_number, value is numpy array of shape (height, width, 3).
+
+    Returns:
+        filepath : str or frame_number
+            If shared_plot_dict is None: Path to saved plot file
+            If shared_plot_dict is provided: Frame number (key in dict)
     """
     import matplotlib.pyplot as plt
-    import os
-
-    # Set up the plot directory
-    if plot_dir is None:
-        plot_dir = "."
-    os.makedirs(plot_dir, exist_ok=True)
+    import random
+    import string
 
     # Create figure and axis
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    # Create coordinate grids - use bin centers for consistency with fitting
+    # Create coordinate grids - use bin centers
     x_centers = (x_edges[:-1] + x_edges[1:]) / 2
     y_centers = (y_edges[:-1] + y_edges[1:]) / 2
     X_centers, Y_centers = np.meshgrid(x_centers, y_centers)
 
-    # Apply circular mask for visualization (same as fitting)
+    # Apply circular mask for visualization
     hist_plot = hist.T.copy()
     if max_shift is not None:
         distances = np.sqrt(X_centers**2 + Y_centers**2)
         outside_circle = distances > max_shift
         hist_plot[outside_circle] = np.nan
 
-    # Plot the 2D histogram - use centers for both histogram and
-    # crosshair consistency
-    # This ensures perfect alignment between the fitted peak and the crosshair
+    # Plot the 2D histogram
     im = ax.pcolormesh(
         X_centers, Y_centers, hist_plot, cmap="viridis", shading="nearest"
     )
@@ -1084,7 +1189,7 @@ def _save_shift_histogram_plot(
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label("Count", rotation=270, labelpad=20)
 
-    # Add circular boundary if max_shift is defined
+    # Add circular boundary
     if max_shift is not None:
         circle = plt.Circle(
             (0, 0),
@@ -1096,40 +1201,86 @@ def _save_shift_histogram_plot(
             alpha=0.8,
         )
         ax.add_patch(circle)
-        ax.text(
-            0.02,
-            0.98,
-            f"max_shift = {max_shift:.1f}",
-            transform=ax.transAxes,
-            verticalalignment="top",
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
-            fontsize=10,
-        )
 
-    # Mark the estimated shift with a red cross
-    method_str = "2D Gaussian fit" if fit_successful else "Histogram maximum"
+    # Mark the detected shift with a red cross
+    # Include peak finding method in legend
+    peak_mode_display = quality_metrics.get("peak_mode", "unknown")
     ax.plot(
         shift_x,
         shift_y,
         "r+",
         markersize=15,
-        markeredgewidth=1,
-        label=(
-            f"Estimated shift: ({shift_x:.3f}, {shift_y:.3f})"
-            + f" [{method_str}]"
-        ),
+        markeredgewidth=2,
+        label=f"Shift: ({shift_x:.3f}, {shift_y:.3f}) px\nMethod: {peak_mode_display}",
     )
+
+    # Visualize bins used for center of mass calculation
+    com_threshold = quality_metrics.get("com_threshold")
+    com_use_threshold = quality_metrics.get("com_use_threshold")
+
+    if com_threshold is not None and peak_mode_display == "center_of_mass":
+        # Recreate bin selection mask
+        hist_t = hist.T
+        bin_size_x = x_edges[1] - x_edges[0] if len(x_edges) > 1 else 1.0
+        bin_size_y = y_edges[1] - y_edges[0] if len(y_edges) > 1 else 1.0
+
+        if com_use_threshold:
+            # Threshold-based selection: outline all bins >= threshold
+            selected_bins = hist_t >= com_threshold
+        else:
+            # 3×3 fallback: outline 3×3 neighborhood around peak
+            peak_idx = np.unravel_index(np.argmax(hist_t), hist_t.shape)
+            peak_y, peak_x = peak_idx
+
+            # Create 3×3 mask
+            selected_bins = np.zeros_like(hist_t, dtype=bool)
+            y_start = max(0, peak_y - 1)
+            y_end = min(hist_t.shape[0], peak_y + 2)
+            x_start = max(0, peak_x - 1)
+            x_end = min(hist_t.shape[1], peak_x + 2)
+            selected_bins[y_start:y_end, x_start:x_end] = True
+
+        # Draw outlines around selected bins
+        for i in range(hist.shape[0]):
+            for j in range(hist.shape[1]):
+                if selected_bins[j, i]:  # Note: hist_t is transposed
+                    # Calculate bin edges
+                    x_left = x_edges[i]
+                    x_right = x_edges[i+1] if i+1 < len(x_edges) else x_edges[i] + bin_size_x
+                    y_bottom = y_edges[j]
+                    y_top = y_edges[j+1] if j+1 < len(y_edges) else y_edges[j] + bin_size_y
+
+                    # Draw rectangle outline
+                    rect = plt.Rectangle(
+                        (x_left, y_bottom),
+                        x_right - x_left,
+                        y_top - y_bottom,
+                        fill=False,
+                        edgecolor='cyan',
+                        linewidth=1.5,
+                        alpha=0.8
+                    )
+                    ax.add_patch(rect)
 
     # Set labels and title
     ax.set_xlabel("X Shift (pixels)")
     ax.set_ylabel("Y Shift (pixels)")
+
+    # Build title based on available information
+    title_parts = []
     if channel_pair is not None:
-        title = (
-            f"Shift Histogram: Channel {channel_pair[0]} → {channel_pair[1]}"
-        )
+        # Standard route - channel alignment
+        title_parts.append(f"RSSO: Ch {channel_pair[0]} → Ch {channel_pair[1]}")
     else:
-        title = "Shift Histogram"
-    ax.set_title(title)
+        # Numba route - iterative drift
+        title_parts.append("RSSO Shift Histogram")
+
+    if iteration is not None:
+        title_parts.append(f"Iter {iteration}")
+    if frame_number is not None:
+        title_parts.append(f"Frame {frame_number}")
+
+    ax.set_title(" - ".join(title_parts))
 
     # Set axis limits
     ax.set_xlim(-max_shift, max_shift)
@@ -1140,20 +1291,23 @@ def _save_shift_histogram_plot(
     ax.legend(loc="lower right")
 
     # Add text box with statistics
-    total_points = np.sum(hist)
+    total_pairs = quality_metrics.get("total_pairs", np.sum(hist))
+    sigma_x = quality_metrics.get("sigma_x", 0)
+    sigma_y = quality_metrics.get("sigma_y", 0)
 
     # Calculate bin statistics (min, max, median) from bins within circular mask
-    # Use only bins within circular mask (non-NaN values)
     valid_bins = hist_plot[~np.isnan(hist_plot)]
     max_bin_value = np.max(valid_bins) if len(valid_bins) > 0 else 0
     min_bin_value = np.min(valid_bins) if len(valid_bins) > 0 else 0
     median_bin_value = np.median(valid_bins) if len(valid_bins) > 0 else 0
 
     textstr = (
-        f"Total shifts: {total_points:.0f}\n"
+        f"Total pairs: {total_pairs:.0f}\n"
         f"Max bin: {max_bin_value:.0f}\n"
         f"Min bin: {min_bin_value:.0f}\n"
-        f"Median bin: {median_bin_value:.1f}"
+        f"Median bin: {median_bin_value:.1f}\n"
+        f"σx: {sigma_x:.3f} px\n"
+        f"σy: {sigma_y:.3f} px"
     )
     props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
     ax.text(
@@ -1161,34 +1315,143 @@ def _save_shift_histogram_plot(
         0.98,
         textstr,
         transform=ax.transAxes,
-        fontsize=10,
+        fontsize=9,
         verticalalignment="top",
         bbox=props,
     )
 
-    # Save the plot
-    if channel_pair is not None:
-        filename = (
-            f"shift_histogram_ch{channel_pair[0]}_to_ch{channel_pair[1]}{plot_fn_suffix}.png"
-        )
+    # Either save to disk or store in shared memory
+    if shared_plot_dict is not None:
+        # Memory-efficient mode: Render to numpy array and store in shared dict
+        fig.canvas.draw()
+
+        # Convert figure to numpy array (RGB format)
+        img_array = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        img_array = img_array.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+
+        # Store in shared dict with frame number as key
+        if frame_number is not None:
+            shared_plot_dict[frame_number] = img_array
+
+        plt.close(fig)
+        return frame_number
+
     else:
-        filename = f"shift_histogram{plot_fn_suffix}.png"
-    filepath = os.path.join(plot_dir, filename)
-    if os.path.exists(filepath):
-        r, e = os.path.splitext(filename)
-        nfiles = len([f for f in os.listdir(plot_dir) if r in f])
-        r, e = os.path.splitext(filepath)
-        filepath = f"{r}-{nfiles}{e}"
+        # Traditional mode: Save to disk
+        # Determine save directory
+        if output_subdir is not None:
+            # Use provided subdirectory structure
+            save_dir = os.path.join(plot_dir, output_subdir)
+            os.makedirs(save_dir, exist_ok=True)
+        else:
+            # Save directly to plot_dir
+            os.makedirs(plot_dir, exist_ok=True)
+            save_dir = plot_dir
 
-    ax.set_aspect("equal")
-    plt.tight_layout()
-    plt.savefig(filepath, dpi=150, bbox_inches="tight")
-    # plt.show()
-    plt.close()
+        # Generate filename based on available information
+        if channel_pair is not None:
+            # Standard route naming
+            filename = f"shift_histogram_ch{channel_pair[0]}_to_ch{channel_pair[1]}.png"
+        else:
+            # Numba route naming
+            filename_parts = ["rsso"]
+            if iteration is not None:
+                filename_parts.append(f"iter{iteration:02d}")
+            if frame_number is not None:
+                filename_parts.append(f"frame{frame_number:04d}")
 
-    # logger.debug(f"Saved shift histogram plot to {filepath}")
+            # Add random code for uniqueness
+            rcode = "".join(random.choices(string.ascii_letters, k=6))
+            filename_parts.append(rcode)
+            filename = "_".join(filename_parts) + ".png"
 
-    return filepath
+        filepath = os.path.join(save_dir, filename)
+
+        # Handle filename collision for standard route
+        if channel_pair is not None and os.path.exists(filepath):
+            r, e = os.path.splitext(filename)
+            nfiles = len([f for f in os.listdir(save_dir) if r in f])
+            r, e = os.path.splitext(filepath)
+            filepath = f"{r}-{nfiles}{e}"
+
+        # Save the plot
+        plt.savefig(filepath, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        return filepath
+
+
+def _save_shift_histogram_plot(
+    hist,
+    x_edges,
+    y_edges,
+    shift_x,
+    shift_y,
+    max_shift,
+    plot_dir,
+    channel_pair,
+    fit_successful=False,
+    plot_fn_suffix=""
+):
+    """
+    DEPRECATED: Use _save_rsso_shift_histogram_plot instead.
+
+    This function is kept for backward compatibility and redirects to the
+    unified plotting function.
+
+    Args:
+        hist : np.array - 2D histogram of shifts
+        x_edges : np.array - Histogram x bin edges
+        y_edges : np.array - Histogram y bin edges
+        shift_x : float - Estimated x shift
+        shift_y : float - Estimated y shift
+        max_shift : float - Maximum shift range
+        plot_dir : str or None - Directory to save plot
+        channel_pair : tuple - (i, j) channel indices
+        fit_successful : bool - Whether Gaussian fit succeeded
+        plot_fn_suffix : str - Suffix for filename (ignored in new function)
+
+    Returns:
+        filepath : str - Path to saved plot file
+    """
+    import warnings
+    warnings.warn(
+        "_save_shift_histogram_plot is deprecated. "
+        "Use _save_rsso_shift_histogram_plot instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
+    # Build quality_metrics from old parameters
+    peak_mode = "gaussian" if fit_successful else "histogram_maximum"
+    quality_metrics = {
+        "peak_mode": peak_mode,
+        "sigma_x": 0.0,  # Not available in old function
+        "sigma_y": 0.0,  # Not available in old function
+        "total_pairs": np.sum(hist),
+        "com_threshold": None,
+        "com_use_threshold": None,
+    }
+
+    if plot_dir is None:
+        plot_dir = "."
+
+    # Call unified function
+    return _save_rsso_shift_histogram_plot(
+        hist=hist,
+        x_edges=x_edges,
+        y_edges=y_edges,
+        shift_x=shift_x,
+        shift_y=shift_y,
+        max_shift=max_shift,
+        plot_dir=plot_dir,
+        quality_metrics=quality_metrics,
+        iteration=None,
+        frame_number=None,
+        channel_pair=channel_pair,
+        output_subdir=None,  # Save directly to plot_dir
+        shared_plot_dict=None,
+    )
 
 
 def _solve_optimal_shifts(

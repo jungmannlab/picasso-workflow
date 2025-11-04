@@ -453,6 +453,164 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         return parameters, results
 
+    @profile_resource_usage
+    @module_decorator
+    def conditional_branch(self, i, parameters, results):
+        """Execute different sub-module sequences based on a condition.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    condition : dict
+                        condition dictionary with keys:
+                            - "left": value or parameter command tuple
+                            - "operator": str (>, <, >=, <=, ==, !=)
+                            - "right": value or parameter command tuple
+                        or logical condition with "and"/"or" keys
+                    if_true : list of tuples
+                        list of (module_name, module_parameters) tuples
+                        to execute if condition is True
+                    if_false : list of tuples
+                        list of (module_name, module_parameters) tuples
+                        to execute if condition is False
+                optional keys:
+                    parameter_command_executor : ParameterCommandExecutor
+                        if provided, will be used for resolving parameter
+                        commands in condition values
+            results : dict
+                the results this function generates
+
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results including:
+                    - condition_result : bool
+                    - branch_taken : str ("if_true" or "if_false")
+                    - if_branch : dict of sub-module results
+                    - branch_modules : dict of flat-indexed results
+        """
+        # Get the parameter command executor from workflow runner if available
+        pce = parameters.get("parameter_command_executor", None)
+
+        # Create condition evaluator
+        condition_evaluator = util.ConditionEvaluator(pce)
+
+        # Evaluate the condition
+        condition = parameters["condition"]
+        condition_result = condition_evaluator.evaluate(condition)
+
+        logger.info(f"Condition evaluated to: {condition_result}")
+        results["condition_result"] = condition_result
+        results["condition"] = condition
+
+        # Determine which branch to execute
+        if condition_result:
+            branch_to_execute = parameters["if_true"]
+            branch_name = "if_true"
+        else:
+            branch_to_execute = parameters["if_false"]
+            branch_name = "if_false"
+
+        results["branch_taken"] = branch_name
+        logger.info(f"Executing branch: {branch_name}")
+
+        # Execute sub-modules in the selected branch
+        branch_results = {}
+        flat_results = {}
+
+        for sub_idx, (module_name, module_parameters) in enumerate(
+            branch_to_execute
+        ):
+            logger.info(
+                f"Executing sub-module {sub_idx}: {module_name} "
+                f"in branch {branch_name}"
+            )
+
+            # Get the module method
+            if not hasattr(self, module_name):
+                raise AttributeError(
+                    f"Module '{module_name}' not found in AutoPicasso"
+                )
+
+            module_method = getattr(self, module_name)
+
+            # Create flat folder key for compatibility with existing modules
+            flat_key = f"{i:02d}_{sub_idx:02d}_{module_name}"
+
+            # Prepare module parameters with parameter command executor
+            if pce is not None:
+                # Temporarily update the current root index for parameter
+                # resolution within sub-modules
+                original_rootidx = pce.curr_rootidx
+                # Sub-modules should reference previous modules correctly
+                pce.curr_rootidx = i
+                module_parameters_resolved = pce.run(
+                    copy.deepcopy(module_parameters), curr_rootidx=i
+                )
+                pce.curr_rootidx = original_rootidx
+            else:
+                module_parameters_resolved = module_parameters
+
+            # Execute the sub-module
+            # The module will be called with the decorators already applied
+            # We pass the results folder as calling_module_dir to create
+            # a nested structure
+            try:
+                sub_params, sub_results = module_method(
+                    sub_idx,
+                    module_parameters_resolved,
+                    calling_module_dir=results["folder"],
+                    suffix="",
+                )
+
+                # Store results in branch structure
+                sub_key = f"{sub_idx:02d}_{module_name}"
+                branch_results[sub_key] = sub_results
+
+                # Also store in flat structure for easier access
+                flat_results[flat_key] = sub_results
+
+                logger.info(
+                    f"Sub-module {module_name} completed successfully. "
+                    f"Result folder: {sub_results.get('folder', 'N/A')}"
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"Error executing sub-module {module_name}: {str(e)}"
+                )
+                # Store error information
+                sub_key = f"{sub_idx:02d}_{module_name}"
+                branch_results[sub_key] = {
+                    "success": False,
+                    "error": str(e),
+                }
+                flat_results[flat_key] = branch_results[sub_key]
+                # Propagate the error
+                raise
+
+        # Store branch results
+        results["if_branch"] = branch_results
+        results["branch_modules"] = flat_results
+
+        # Store information about skipped branch for reference
+        skipped_branch = "if_false" if condition_result else "if_true"
+        results["skipped_branch"] = skipped_branch
+        results["skipped_modules"] = [
+            module_name
+            for module_name, _ in parameters.get(skipped_branch, [])
+        ]
+
+        logger.info(
+            f"Conditional branch completed. "
+            f"Executed {len(branch_results)} sub-modules in {branch_name} branch."
+        )
+
+        return parameters, results
+
     ##########################################################################
     # Single dataset modules
     ##########################################################################

@@ -761,6 +761,14 @@ class WorkflowRunner:
         """
         key = f"{i:02d}_{fun_name}"
         logger.debug(f"Working on {key}")
+
+        # For conditional_branch module, inject the parameter_command_executor
+        # so it can resolve sub-module parameters
+        if fun_name == "conditional_branch":
+            parameters["parameter_command_executor"] = (
+                self.parameter_command_executor
+            )
+
         fun_ap = getattr(self.autopicasso, fun_name)
         analyse_error = None
         try:
