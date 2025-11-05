@@ -669,6 +669,7 @@ def _calculate_pairwise_shift(
             max_shift=max_shift,
             plot_dir=plot_dir,
             quality_metrics=quality_metrics,
+            plot_fn_suffix=plot_fn_suffix,
             iteration=None,  # Not used in standard route
             frame_number=None,  # Not used in standard route
             channel_pair=channel_pair,  # Standard route uses channel_pair
