@@ -2885,11 +2885,12 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             # Determine peak finding mode based on iteration
             # First iteration: use center of mass (histogram not Gaussian yet)
             # Later iterations: use auto (try Gaussian, fall back to CoM)
-            peak_mode = "center_of_mass" # if iteration == 0 else "auto"
+            # peak_mode = "center_of_mass" if iteration == 0 else "auto"
 
             # snr_threshold is now passed in frame_data tuple (extracted from parameters in outer scope)
 
             for i_maxshift in range(4):
+                peak_mode = "center_of_mass" if (iteration == 0) or (i_maxshift > 0) else "auto"
                 maxshift_curr = max_shift * (i_maxshift + 1)
                 if enable_numba_optimization:
                     # Use Numba-optimized RSSO computation with temporal filtering
@@ -2927,7 +2928,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                         plot_histogram=plot_histogram,
                         remove_zeroshift=True,
                         plot_dir=plot_dir,
-                        plot_fn_suffix=f"_{iteration}_{frame_number}_dslocs{len_dataset}_tgtlocs{len(frame_locs)}",
+                        plot_fn_suffix=f"_{iteration}_{frame_number}_dslocs{len_dataset}_tgtlocs{len(frame_locs)}_{i_maxshift}",
                         ref_frames=ref_frames,
                         frame_locs_frames=frame_locs_frames,
                         ton_exclusion=ton,
