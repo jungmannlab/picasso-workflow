@@ -2885,7 +2885,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             # Determine peak finding mode based on iteration
             # First iteration: use center of mass (histogram not Gaussian yet)
             # Later iterations: use auto (try Gaussian, fall back to CoM)
-            peak_mode = "center_of_mass" if iteration == 0 else "auto"
+            peak_mode = "center_of_mass" # if iteration == 0 else "auto"
 
             # snr_threshold is now passed in frame_data tuple (extracted from parameters in outer scope)
 
@@ -4052,9 +4052,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         )
 
         framesgt10 = np.argwhere(
-            np.sqrt(frame_shifts_x**2 + frame_shifts_y**2) > 10)
+            np.sqrt(frame_shifts_x**2 + frame_shifts_y**2) > 10).ravel()
         logger.debug(
-            f"    frames with shifts > 10 nm: {framesgt10.ravel()}"
+            f"    {len(framesgt10)} frames with shifts > 10 nm: {framesgt10}"
         )
 
         # Report subsampling performance
