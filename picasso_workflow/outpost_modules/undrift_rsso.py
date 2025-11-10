@@ -2774,7 +2774,8 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         frame_data : tuple
             (frame_indices, reference_dataset, target_frames, frame_locs, max_shift, min_locs_per_frame,
              enable_uncertainty_estimation, n_uncertainty_trials, subsampling_fraction,
-             enable_numba_optimization, plot_histogram, plot_dir, iteration, ton, snr_threshold, shared_plot_dict)
+             enable_numba_optimization, plot_histogram, plot_dir, iteration, ton, snr_threshold,
+             shared_plot_dict, use_matrix_solver)
 
     Returns:
         tuple : (frame_indices, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality, performance_info)
@@ -2799,6 +2800,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         ton,  # For temporal filtering
         snr_threshold,  # SNR threshold for peak quality check
         shared_plot_dict,  # Shared memory dict for incremental video writing
+        use_matrix_solver,  # Whether to build frame_contributions for matrix solver
     ) = frame_data
 
     try:
@@ -2931,6 +2933,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                         ton_exclusion=ton,
                         peak_mode=peak_mode,
                         snr_threshold=snr_threshold,
+                        build_frame_contributions=use_matrix_solver,  # Only build if matrix solver enabled
                     )
                     uncertainty_info = std_info if std_info is not None else {}
                     computation_type = "Standard"
@@ -3925,6 +3928,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         ton,  # For temporal filtering (exclude frames within ±2×ton)
                         snr_threshold,  # SNR threshold for peak quality check
                         shared_plot_dict,  # Shared memory dict for incremental video writing
+                        use_matrix_solver,  # Whether to build frame_contributions for matrix solver
                     )
                     chunk_frame_data.append(frame_data)
             iteration_timings["chunk_data_preparation"] += prep_timer.elapsed

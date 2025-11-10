@@ -441,6 +441,7 @@ def _calculate_pairwise_shift(
     ton_exclusion=0,
     peak_mode="auto",
     snr_threshold=3.0,
+    build_frame_contributions=False,
 ):
     """
     Calculate shift between two channels using histogram peak finding with temporal filtering.
@@ -474,6 +475,10 @@ def _calculate_pairwise_shift(
         snr_threshold : float, default 3.0
             Signal-to-noise ratio threshold (max_bin / median_bin).
             If SNR < threshold, force center_of_mass and mark as failed.
+        build_frame_contributions : bool, default False
+            Whether to build frame_contributions dictionary for matrix-based
+            drift correction. Only set to True if matrix solver will be used,
+            as building this data is computationally expensive (O(n*log(bins))).
 
     Returns:
         shift_x, shift_y, plot_filepath : float, float, str or None
@@ -553,8 +558,9 @@ def _calculate_pairwise_shift(
     )
 
     # Build frame contributions dictionary (for matrix-based drift correction)
+    # ONLY if explicitly requested, as this is computationally expensive
     frame_contributions = None
-    if ref_frames is not None and len(ref_indices) > 0:
+    if build_frame_contributions and ref_frames is not None and len(ref_indices) > 0:
         frame_contributions = {}
         n_bins = len(x_edges) - 1
 
