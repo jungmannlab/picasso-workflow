@@ -4054,7 +4054,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         framesgt10 = np.argwhere(
             np.sqrt(frame_shifts_x**2 + frame_shifts_y**2) > 10)
         logger.debug(
-            f"    frames with shifts > 20 nm: {framesgt10}"
+            f"    frames with shifts > 10 nm: {framesgt10.ravel()}"
         )
 
         # Report subsampling performance
