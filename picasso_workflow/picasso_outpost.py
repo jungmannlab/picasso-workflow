@@ -1115,6 +1115,7 @@ def _save_rsso_shift_histogram_plot(
     max_shift,
     plot_dir,
     quality_metrics,
+    plot_fn_suffix=None,
     iteration=None,
     frame_number=None,
     channel_pair=None,
@@ -1366,6 +1367,8 @@ def _save_rsso_shift_histogram_plot(
                 filename_parts.append(f"iter{iteration:02d}")
             if frame_number is not None:
                 filename_parts.append(f"frame{frame_number:04d}")
+            if plot_fn_suffix is not None:
+                filename_parts.append(plot_fn_suffix)
 
             # Add random code for uniqueness
             rcode = "".join(random.choices(string.ascii_letters, k=6))
