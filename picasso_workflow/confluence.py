@@ -176,8 +176,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li><strong>Start Time:</strong> {html.escape(str(results.get('start time', 'N/A')))}</li>
         <li><strong>Total Duration:</strong> {results.get("duration", 0) // 60:.0f} min {(results.get("duration", 0) % 60):.02f} s</li>
         </ul>
-        {parameter_text}
-        {result_text}
+        {html.escape(parameter_text)}
+        {html.escape(result_text)}
         """
 
         # Create collapsible section for executed sub-modules
@@ -244,6 +244,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                                 break
 
                         # Call the reporter method
+                        logger.debug("Now performing the call.")
                         module_text = reporter_method(sub_idx, sub_module_params, sub_results, postpone_report=True)
                         # logger.debug(f"not calling {str(reporter_method)}")
 
