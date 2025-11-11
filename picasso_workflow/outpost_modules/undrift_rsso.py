@@ -2455,6 +2455,294 @@ def _plot_convergence_behavior_analysis(
     return filepath, pair_statistics
 
 
+def _plot_goodness_of_fit_analysis(
+    iteration_history,
+    results_folder,
+    min_valid_fits=10,
+):
+    """
+    Plot goodness of fit metrics (chi-squared and R-squared) across iterations.
+
+    Creates a comprehensive 2×2 grid showing:
+    1. Chi-squared vs frame number for all iterations (time series)
+    2. R-squared vs frame number for all iterations (time series)
+    3. Chi-squared vs R-squared scatter plot
+    4. Multi-panel scatter: Chi-squared vs shift magnitude, R-squared vs shift magnitude
+
+    Args:
+        iteration_history : list of dict
+            Each dict contains drift data, goodness_of_fit metrics for all frames
+        results_folder : str
+            Directory to save plot
+        min_valid_fits : int
+            Minimum number of valid Gaussian fits required to create plots
+
+    Returns:
+        str or None : Path to saved plot, or None if insufficient data
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+    import os
+
+    n_iterations = len(iteration_history)
+    if n_iterations < 1:
+        logger.warning("No iteration history available for goodness of fit plots")
+        return None
+
+    n_frames = len(iteration_history[0]['drift_x'])
+
+    # Extract goodness of fit metrics across all iterations
+    chi_squared_all = np.zeros((n_frames, n_iterations))
+    r_squared_all = np.zeros((n_frames, n_iterations))
+    shift_magnitude_all = np.zeros((n_frames, n_iterations))
+
+    for i, hist in enumerate(iteration_history):
+        chi_squared_all[:, i] = hist.get('chi_squared', np.full(n_frames, np.nan))
+        r_squared_all[:, i] = hist.get('r_squared', np.full(n_frames, np.nan))
+
+        # Calculate shift magnitudes
+        dx = hist['drift_x']
+        dy = hist['drift_y']
+        shift_magnitude_all[:, i] = np.sqrt(dx**2 + dy**2)
+
+    # Count valid Gaussian fits (non-NaN chi_squared values)
+    valid_fits_mask = ~np.isnan(chi_squared_all)
+    n_valid_fits = np.sum(valid_fits_mask)
+
+    if n_valid_fits < min_valid_fits:
+        logger.warning(
+            f"Insufficient Gaussian fits for goodness of fit analysis: "
+            f"{n_valid_fits} < {min_valid_fits} required. "
+            "Plots require successful Gaussian peak fitting (not center of mass)."
+        )
+        return None
+
+    logger.info(
+        f"Creating goodness of fit plots with {n_valid_fits} valid fits "
+        f"({n_valid_fits / chi_squared_all.size * 100:.1f}% of total measurements)"
+    )
+
+    # Create figure with 2×2 grid
+    fig = plt.figure(figsize=(16, 14))
+    gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.3, wspace=0.3)
+
+    # Define colors for iterations
+    colors_iter = plt.cm.viridis(np.linspace(0.2, 1.0, n_iterations))
+
+    # =========================
+    # Plot 1: Chi-squared Time Series (Top-Left)
+    # =========================
+    ax1 = fig.add_subplot(gs[0, 0])
+    frame_indices = np.arange(n_frames)
+
+    # Plot chi-squared for each iteration
+    for i in range(n_iterations):
+        chi_sq = chi_squared_all[:, i]
+        valid_mask = ~np.isnan(chi_sq)
+
+        if np.sum(valid_mask) > 0:
+            alpha = 0.3 if i < n_iterations - 1 else 1.0
+            linewidth = 1.0 if i < n_iterations - 1 else 2.0
+            label = f"Iter {i+1}" if n_iterations > 1 else "Chi-squared"
+
+            ax1.plot(
+                frame_indices[valid_mask],
+                chi_sq[valid_mask],
+                'o-',
+                color=colors_iter[i],
+                alpha=alpha,
+                linewidth=linewidth,
+                markersize=3,
+                label=label
+            )
+
+    # Add threshold line (chi_squared < 2.0 is good)
+    ax1.axhline(y=2.0, color='red', linestyle='--', linewidth=2,
+               alpha=0.7, label='Quality threshold (2.0)')
+
+    ax1.set_xlabel('Frame Number', fontsize=11)
+    ax1.set_ylabel('Reduced Chi-Squared', fontsize=11)
+    ax1.set_title('Goodness of Fit: Chi-Squared Evolution', fontsize=12, fontweight='bold')
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(fontsize=8, loc='best', ncol=2)
+    ax1.set_yscale('log')  # Log scale often better for chi-squared
+
+    # =========================
+    # Plot 2: R-squared Time Series (Top-Right)
+    # =========================
+    ax2 = fig.add_subplot(gs[0, 1])
+
+    # Plot R-squared for each iteration
+    for i in range(n_iterations):
+        r_sq = r_squared_all[:, i]
+        valid_mask = ~np.isnan(r_sq)
+
+        if np.sum(valid_mask) > 0:
+            alpha = 0.3 if i < n_iterations - 1 else 1.0
+            linewidth = 1.0 if i < n_iterations - 1 else 2.0
+            label = f"Iter {i+1}" if n_iterations > 1 else "R-squared"
+
+            ax2.plot(
+                frame_indices[valid_mask],
+                r_sq[valid_mask],
+                'o-',
+                color=colors_iter[i],
+                alpha=alpha,
+                linewidth=linewidth,
+                markersize=3,
+                label=label
+            )
+
+    # Add threshold line (R² > 0.90 is good)
+    ax2.axhline(y=0.90, color='green', linestyle='--', linewidth=2,
+               alpha=0.7, label='Quality threshold (0.90)')
+
+    ax2.set_xlabel('Frame Number', fontsize=11)
+    ax2.set_ylabel('R-Squared (R²)', fontsize=11)
+    ax2.set_title('Goodness of Fit: R-Squared Evolution', fontsize=12, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend(fontsize=8, loc='best', ncol=2)
+    ax2.set_ylim([0, 1.05])  # R² is always between 0 and 1
+
+    # =========================
+    # Plot 3: Chi-squared vs R-squared Scatter (Bottom-Left)
+    # =========================
+    ax3 = fig.add_subplot(gs[1, 0])
+
+    # Flatten all iterations for combined scatter plot
+    chi_sq_flat = chi_squared_all[valid_fits_mask]
+    r_sq_flat = r_squared_all[valid_fits_mask]
+
+    # Create scatter with color by iteration
+    iteration_labels = np.repeat(np.arange(n_iterations), n_frames)[valid_fits_mask.ravel()]
+
+    scatter = ax3.scatter(
+        chi_sq_flat,
+        r_sq_flat,
+        c=iteration_labels,
+        cmap='viridis',
+        alpha=0.6,
+        s=30,
+        edgecolors='black',
+        linewidths=0.5
+    )
+
+    # Add reference lines
+    ax3.axvline(x=2.0, color='red', linestyle='--', linewidth=2, alpha=0.5, label='χ² threshold')
+    ax3.axhline(y=0.90, color='green', linestyle='--', linewidth=2, alpha=0.5, label='R² threshold')
+
+    # Add "good fit" region shading
+    ax3.axvspan(0, 2.0, ymin=0.90/1.05, ymax=1.0, color='green', alpha=0.1, zorder=0)
+
+    ax3.set_xlabel('Reduced Chi-Squared', fontsize=11)
+    ax3.set_ylabel('R-Squared (R²)', fontsize=11)
+    ax3.set_title('Fit Quality: Chi-Squared vs R-Squared', fontsize=12, fontweight='bold')
+    ax3.grid(True, alpha=0.3)
+    ax3.set_xscale('log')
+    ax3.set_ylim([0, 1.05])
+    ax3.legend(fontsize=9)
+
+    # Add colorbar
+    cbar = plt.colorbar(scatter, ax=ax3, label='Iteration')
+    cbar.set_ticks(np.arange(n_iterations))
+    cbar.set_ticklabels([f'{i+1}' for i in range(n_iterations)])
+
+    # Add statistics text box
+    good_fits = np.sum((chi_sq_flat < 2.0) & (r_sq_flat > 0.90))
+    pct_good = good_fits / len(chi_sq_flat) * 100
+    stats_text = f"Good fits: {good_fits}/{len(chi_sq_flat)} ({pct_good:.1f}%)\n"
+    stats_text += f"Median χ²: {np.median(chi_sq_flat):.2f}\n"
+    stats_text += f"Median R²: {np.median(r_sq_flat):.3f}"
+
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+    ax3.text(0.98, 0.02, stats_text, transform=ax3.transAxes, fontsize=9,
+             verticalalignment='bottom', horizontalalignment='right', bbox=props)
+
+    # =========================
+    # Plot 4: Chi²/R² vs Shift Magnitude (Bottom-Right, Dual Panels)
+    # =========================
+    ax4 = fig.add_subplot(gs[1, 1])
+
+    # Use final iteration data for shift magnitude analysis
+    chi_sq_final = chi_squared_all[:, -1]
+    r_sq_final = r_squared_all[:, -1]
+    shift_mag_final = shift_magnitude_all[:, -1]
+    valid_final = ~np.isnan(chi_sq_final)
+
+    if np.sum(valid_final) > 0:
+        # Create twin axis for dual y-axes
+        ax4_twin = ax4.twinx()
+
+        # Plot chi-squared vs shift magnitude (left y-axis)
+        scatter1 = ax4.scatter(
+            shift_mag_final[valid_final],
+            chi_sq_final[valid_final],
+            c='blue',
+            alpha=0.5,
+            s=30,
+            label='Chi-squared',
+            marker='o',
+            edgecolors='darkblue',
+            linewidths=0.5
+        )
+
+        # Plot R-squared vs shift magnitude (right y-axis)
+        scatter2 = ax4_twin.scatter(
+            shift_mag_final[valid_final],
+            r_sq_final[valid_final],
+            c='red',
+            alpha=0.5,
+            s=30,
+            label='R-squared',
+            marker='s',
+            edgecolors='darkred',
+            linewidths=0.5
+        )
+
+        # Reference lines
+        ax4.axhline(y=2.0, color='blue', linestyle='--', linewidth=1.5, alpha=0.5)
+        ax4_twin.axhline(y=0.90, color='red', linestyle='--', linewidth=1.5, alpha=0.5)
+
+        ax4.set_xlabel('Shift Magnitude (nm)', fontsize=11)
+        ax4.set_ylabel('Reduced Chi-Squared', fontsize=11, color='blue')
+        ax4_twin.set_ylabel('R-Squared (R²)', fontsize=11, color='red')
+        ax4.set_title('Fit Quality vs Shift Magnitude (Final Iteration)',
+                      fontsize=12, fontweight='bold')
+        ax4.grid(True, alpha=0.3)
+        ax4.set_yscale('log')
+        ax4_twin.set_ylim([0, 1.05])
+
+        # Color y-axis labels
+        ax4.tick_params(axis='y', labelcolor='blue')
+        ax4_twin.tick_params(axis='y', labelcolor='red')
+
+        # Combined legend
+        lines = [scatter1, scatter2]
+        labels = ['Chi-squared', 'R-squared']
+        ax4.legend(lines, labels, fontsize=9, loc='upper left')
+    else:
+        ax4.text(0.5, 0.5, 'No valid data for final iteration',
+                transform=ax4.transAxes, ha='center', va='center', fontsize=12)
+
+    # Overall figure title
+    fig.suptitle(
+        'GOODNESS OF FIT ANALYSIS - Gaussian Peak Fitting Quality Metrics\n'
+        f'{n_iterations} iterations, {n_valid_fits}/{chi_squared_all.size} valid Gaussian fits '
+        f'({n_valid_fits / chi_squared_all.size * 100:.1f}%)',
+        fontsize=14,
+        fontweight='bold',
+        y=0.98
+    )
+
+    # Save plot
+    filepath = os.path.join(results_folder, 'goodness_of_fit_analysis.png')
+    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    logger.info(f"Saved goodness of fit analysis: goodness_of_fit_analysis.png")
+    return filepath
+
+
 def _validate_numba_implementation():
     """Validate that Numba implementation produces equivalent results to standard implementation"""
     from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
@@ -3792,6 +4080,11 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         new_quality = np.zeros(n_frames)
         valid_measurements = 0
 
+        # Goodness-of-fit tracking (for Gaussian peak fitting quality)
+        chi_squared_per_frame = np.full(n_frames, np.nan)  # NaN indicates CoM or failed fit
+        r_squared_per_frame = np.full(n_frames, np.nan)
+        fit_method_per_frame = np.full(n_frames, '', dtype='U20')  # String array for fit method
+
         # For matrix-based solver: collect frame results with connectivity info
         frame_results_dict = {} if use_matrix_solver else None
 
@@ -4063,6 +4356,20 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                             new_quality[frame_idx] = quality_val
                             valid_measurements += 1
 
+                            # Extract goodness-of-fit metrics if available
+                            if performance_info:
+                                goodness_of_fit = performance_info.get("goodness_of_fit")
+                                fit_method = performance_info.get("peak_mode", "unknown")
+
+                                if goodness_of_fit is not None:
+                                    # Gaussian fit succeeded - extract quality metrics
+                                    chi_squared_per_frame[frame_idx] = goodness_of_fit["chi_squared_reduced"]
+                                    r_squared_per_frame[frame_idx] = goodness_of_fit["r_squared"]
+                                    fit_method_per_frame[frame_idx] = "gaussian"
+                                else:
+                                    # CoM method used or fit failed - store method but leave metrics as NaN
+                                    fit_method_per_frame[frame_idx] = fit_method
+
                             # Update shift magnitude tracking for next iteration
                             previous_shift_magnitudes[frame_idx] = shift_magnitude
 
@@ -4287,6 +4594,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     "confidence": new_confidence.copy(),
                     "convergence_rms": convergence_rms,
                     "valid_measurements": valid_measurements,
+                    "chi_squared": chi_squared_per_frame.copy(),
+                    "r_squared": r_squared_per_frame.copy(),
+                    "fit_method": fit_method_per_frame.copy(),
                 }
             )
         iteration_timings["history_storage"] = history_timer.elapsed
@@ -4568,6 +4878,16 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 results["convergence_behavior_statistics"] = pair_statistics
         except Exception as e:
             logger.warning(f"Failed to create convergence behavior analysis plot: {e}")
+
+        try:
+            # Plot 5: Goodness of fit analysis (chi-squared and R-squared)
+            gof_analysis_path = _plot_goodness_of_fit_analysis(
+                iteration_history, results_folder
+            )
+            if gof_analysis_path:
+                results["goodness_of_fit_analysis"] = gof_analysis_path
+        except Exception as e:
+            logger.warning(f"Failed to create goodness of fit analysis plot: {e}")
 
         logger.debug("Frame shift evolution plots completed")
 
