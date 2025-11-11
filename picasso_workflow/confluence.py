@@ -31,7 +31,7 @@ def module_decorator(method):
             <ul>
             """
         for k, v in parameters.items():
-            parameter_text += f"<li>{k}: {v}</li>"
+            parameter_text += f"<li>{html.escape(k)}: {html.escape(v)}</li>"
 
         parameter_text += """
         </ul>
@@ -46,7 +46,7 @@ def module_decorator(method):
             <ul>
             """
         for k, v in results.items():
-            result_text += f"<li>{k}: {v}</li>"
+            result_text += f"<li>{html.escape(k)}: {html.escape(v)}</li>"
 
         result_text += """
         </ul>
@@ -176,8 +176,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li><strong>Start Time:</strong> {html.escape(str(results.get('start time', 'N/A')))}</li>
         <li><strong>Total Duration:</strong> {results.get("duration", 0) // 60:.0f} min {(results.get("duration", 0) % 60):.02f} s</li>
         </ul>
-        {html.escape(parameter_text)}
-        {html.escape(result_text)}
+        {parameter_text}
+        {result_text}
         """
 
         # Create collapsible section for executed sub-modules
@@ -263,6 +263,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                         logger.error(
                             f"Error calling reporter for {module_name}: {e}"
                         )
+                        raise e
                         text += f"""
                         <p style="color: #f0ad4e;">⚠ Could not generate detailed report: {html.escape(str(e))}</p>
                         """
