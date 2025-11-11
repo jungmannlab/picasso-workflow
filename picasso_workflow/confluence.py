@@ -31,7 +31,7 @@ def module_decorator(method):
             <ul>
             """
         for k, v in parameters.items():
-            parameter_text += f"<li>{html.escape(k)}: {html.escape(v)}</li>"
+            parameter_text += f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
 
         parameter_text += """
         </ul>
@@ -46,7 +46,7 @@ def module_decorator(method):
             <ul>
             """
         for k, v in results.items():
-            result_text += f"<li>{html.escape(k)}: {html.escape(v)}</li>"
+            result_text += f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
 
         result_text += """
         </ul>

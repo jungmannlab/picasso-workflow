@@ -495,11 +495,12 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         # print(f'rank {self.rank}, size {self.size}: running {run_awr_kwargs}')
 
         for kwargs in run_wr_kwargs:
-            try:
-                self.run_wr(**kwargs)
-            except Exception as e:
-                logger.error(e)
-                pass
+            self.run_wr(**kwargs)
+            # try:
+            #     self.run_wr(**kwargs)
+            # except Exception as e:
+            #     logger.error(e)
+            #     pass
 
             if self.profiler is not None:
                 self.profiler.append_profile_page(kwargs["wr"].all_results)
