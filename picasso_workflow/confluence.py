@@ -2678,7 +2678,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     @module_decorator
-    def find_gold(self, i, parameters, results, parameter_text, result_text):
+    def find_gold(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
         """Find localizations stemming from gold beads based on blinking
         kinetics.
         The metrics used are number of locs and rms deviation from mean
