@@ -236,7 +236,8 @@ class ConfluenceReporter(AbstractModuleCollection):
                                 break
 
                         # Call the reporter method
-                        reporter_method(sub_idx, sub_module_params, sub_results)
+                        # reporter_method(sub_idx, sub_module_params, sub_results)
+                        logger.debug(f"not calling {str(reporter_method)}")
 
                         # Start a new text section after the sub-module report
                         text = """<div style="margin-left: 20px; border-left: 3px solid #4a90e2; padding-left: 10px; margin-bottom: 15px;">"""
@@ -276,6 +277,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:structured-macro>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+
+        logger.debug(f"updating page with text: {text}")
 
         # Update the page
         self.ci.update_page_content(
