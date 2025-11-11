@@ -2775,7 +2775,8 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             (frame_indices, reference_dataset, target_frames, frame_locs, max_shift, min_locs_per_frame,
              enable_uncertainty_estimation, n_uncertainty_trials, subsampling_fraction,
              enable_numba_optimization, plot_histogram, plot_dir, iteration, ton, snr_threshold,
-             shared_plot_dict, use_matrix_solver)
+             shared_plot_dict, use_matrix_solver, enable_shift_capping, max_shift_change_factor,
+             previous_shift_magnitude)
 
     Returns:
         tuple : (frame_indices, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality, performance_info)
@@ -2801,6 +2802,9 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         snr_threshold,  # SNR threshold for peak quality check
         shared_plot_dict,  # Shared memory dict for incremental video writing
         use_matrix_solver,  # Whether to build frame_contributions for matrix solver
+        enable_shift_capping,  # Whether to cap shifts based on previous iteration
+        max_shift_change_factor,  # Max factor for shift change
+        previous_shift_magnitude,  # Previous iteration's shift magnitude for this frame
     ) = frame_data
 
     try:
@@ -2885,12 +2889,12 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             # Determine peak finding mode based on iteration
             # First iteration: use center of mass (histogram not Gaussian yet)
             # Later iterations: use auto (try Gaussian, fall back to CoM)
-            # peak_mode = "center_of_mass" if iteration == 0 else "auto"
+            peak_mode = "center_of_mass" if iteration == 0 else "auto"
 
             # snr_threshold is now passed in frame_data tuple (extracted from parameters in outer scope)
 
             for i_maxshift in range(4):
-                peak_mode = "center_of_mass" if (iteration == 0) or (i_maxshift > 0) else "auto"
+                # peak_mode = "center_of_mass" if (iteration == 0) or (i_maxshift > 0) else "auto"
                 maxshift_curr = max_shift * (i_maxshift + 1)
                 if enable_numba_optimization:
                     # Use Numba-optimized RSSO computation with temporal filtering
@@ -2953,6 +2957,47 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             uncertainty_info["n_frame_locs"] = len(frame_locs)
 
             if shift_x is not None and shift_y is not None:
+                # Apply shift capping if enabled and we're past iteration 1
+                # Start capping from iteration 2 (iterations 0 and 1 are unconstrained)
+                if (
+                    enable_shift_capping
+                    and iteration >= 2
+                    and previous_shift_magnitude > 0
+                ):
+                    # Calculate current shift magnitude
+                    current_magnitude = np.sqrt(shift_x**2 + shift_y**2)
+
+                    # Calculate maximum allowed shift based on previous iteration
+                    max_allowed_magnitude = (
+                        max_shift_change_factor * previous_shift_magnitude
+                    )
+
+                    # If current magnitude exceeds limit, scale it down
+                    if current_magnitude > max_allowed_magnitude:
+                        scale_factor = max_allowed_magnitude / current_magnitude
+                        shift_x_uncapped = shift_x
+                        shift_y_uncapped = shift_y
+                        shift_x = shift_x * scale_factor
+                        shift_y = shift_y * scale_factor
+
+                        # Log the capping event
+                        logger.debug(
+                            f"Shift capping applied to frames {frame_indices}: "
+                            f"magnitude {current_magnitude:.3f} -> {max_allowed_magnitude:.3f} px "
+                            f"(previous: {previous_shift_magnitude:.3f} px, "
+                            f"factor: {max_shift_change_factor})"
+                        )
+
+                        # Store capping info in uncertainty_info
+                        uncertainty_info["shift_capped"] = True
+                        uncertainty_info["shift_uncapped"] = (
+                            shift_x_uncapped,
+                            shift_y_uncapped,
+                        )
+                        uncertainty_info["scale_factor"] = scale_factor
+                    else:
+                        uncertainty_info["shift_capped"] = False
+
                 # Extract uncertainty from RSSO calculation based on computation method
                 if computation_type == "Numba-optimized":
                     # Numba implementation doesn't provide uncertainty estimates
@@ -3296,6 +3341,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     plot_rsso = parameters.get("plot_rsso", False)
     snr_threshold = parameters.get("snr_threshold", 3.0)  # SNR threshold for peak quality check
 
+    # Shift capping for convergence robustness
+    enable_shift_capping = parameters.get("enable_shift_capping", True)
+    max_shift_change_factor = parameters.get("max_shift_change_factor", 0.9)
+
     # Matrix-based drift correction (experimental)
     use_matrix_solver = parameters.get("use_matrix_solver", False)
     matrix_refinement_iterations = parameters.get("matrix_refinement_iterations", 0)
@@ -3463,6 +3512,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     # Start iterative refinement loop
     iteration_history = []
     convergence_rms = float("inf")
+
+    # Initialize shift magnitude tracking for shift capping
+    # Numpy array mapping frame index to shift magnitude from previous iteration
+    previous_shift_magnitudes = np.zeros(n_frames)
 
     for iteration in range(max_iterations):
         # Initialize comprehensive timing dictionary for this iteration
@@ -3912,6 +3965,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         # Numba optimization or fallback to raw data
                         ref_data_for_worker = reference_dataset
 
+                    # Get previous shift magnitude for the first frame in the group
+                    # All frames in the group share the same shift, so use first frame's previous magnitude
+                    prev_magnitude = previous_shift_magnitudes[group_indices[0]]
+
                     frame_data = (
                         group_indices,  # List of frame indices this result applies to
                         ref_data_for_worker,  # Reference dataset (None if using worker cKDTree)
@@ -3930,6 +3987,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         snr_threshold,  # SNR threshold for peak quality check
                         shared_plot_dict,  # Shared memory dict for incremental video writing
                         use_matrix_solver,  # Whether to build frame_contributions for matrix solver
+                        enable_shift_capping,  # Whether to cap shifts based on previous iteration
+                        max_shift_change_factor,  # Max factor for shift change
+                        prev_magnitude,  # Previous iteration's shift magnitude for this frame group
                     )
                     chunk_frame_data.append(frame_data)
             iteration_timings["chunk_data_preparation"] += prep_timer.elapsed
@@ -3988,6 +4048,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         iteration_timings["worker_times"].append(comp_time)
 
                     if shift_x is not None and shift_y is not None:
+                        # Calculate and store shift magnitude for next iteration's capping
+                        shift_magnitude = np.sqrt(shift_x**2 + shift_y**2)
+
                         # Apply the same shift to all frames in the group
                         for frame_idx in frame_indices:
                             frame_shifts_x[frame_idx] = shift_x
@@ -3999,6 +4062,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                             new_confidence[frame_idx] = confidence_val
                             new_quality[frame_idx] = quality_val
                             valid_measurements += 1
+
+                            # Update shift magnitude tracking for next iteration
+                            previous_shift_magnitudes[frame_idx] = shift_magnitude
 
                             # Store performance_info for matrix solver
                             if frame_results_dict is not None:

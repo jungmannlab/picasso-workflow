@@ -442,6 +442,8 @@ def _calculate_pairwise_shift(
     peak_mode="auto",
     snr_threshold=3.0,
     build_frame_contributions=False,
+    enable_fit_quality_check=True,
+    fit_quality_thresholds=None,
 ):
     """
     Calculate shift between two channels using histogram peak finding with temporal filtering.
@@ -479,6 +481,12 @@ def _calculate_pairwise_shift(
             Whether to build frame_contributions dictionary for matrix-based
             drift correction. Only set to True if matrix solver will be used,
             as building this data is computationally expensive (O(n*log(bins))).
+        enable_fit_quality_check : bool, default True
+            Whether to check Gaussian fit quality and fall back to CoM if quality
+            is poor. When True, both chi_squared and r_squared thresholds must pass.
+        fit_quality_thresholds : dict, optional
+            Thresholds for fit quality check. Default: {"chi_squared": 2.0, "r_squared": 0.90}
+            Both thresholds must be satisfied for fit to be accepted.
 
     Returns:
         shift_x, shift_y, plot_filepath : float, float, str or None
@@ -490,6 +498,10 @@ def _calculate_pairwise_shift(
         shift_x_error, shift_y_error : float, float
             Parameter errors from covariance matrix fitting
     """
+    # Set default quality thresholds if not provided
+    if fit_quality_thresholds is None:
+        fit_quality_thresholds = {"chi_squared": 2.0, "r_squared": 0.90}
+
     # Use KDTree for efficient nearest neighbor search
     from scipy.spatial import cKDTree
     if not isinstance(locs_i, cKDTree):
@@ -601,6 +613,7 @@ def _calculate_pairwise_shift(
     fit_successful = False
     com_threshold = None
     com_use_threshold = None
+    goodness_of_fit = None  # Initialize for all paths
 
     if peak_mode_to_use == "center_of_mass":
         # Use center of mass directly (faster, more robust for broad peaks)
@@ -618,10 +631,31 @@ def _calculate_pairwise_shift(
     elif peak_mode_to_use in ["gaussian", "auto"]:
         # Try 2D Gaussian fitting first
         try:
-            shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error = (
+            shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error, goodness_of_fit = (
                 _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift)
             )
+
+            # Check fit quality if enabled
+            fit_quality_passed = True
+            if enable_fit_quality_check and goodness_of_fit is not None:
+                chi_sq = goodness_of_fit["chi_squared_reduced"]
+                r_sq = goodness_of_fit["r_squared"]
+                chi_threshold = fit_quality_thresholds["chi_squared"]
+                r_threshold = fit_quality_thresholds["r_squared"]
+
+                # Combined metric: BOTH chi_squared and r_squared must pass
+                fit_quality_passed = (chi_sq < chi_threshold) and (r_sq > r_threshold)
+
+                if not fit_quality_passed:
+                    logger.warning(
+                        f"Gaussian fit quality check failed: χ²_red={chi_sq:.3f} "
+                        f"(threshold={chi_threshold}), R²={r_sq:.3f} "
+                        f"(threshold={r_threshold}). Falling back to center of mass method."
+                    )
+                    raise ValueError("Fit quality check failed")
+
             fit_successful = True
+
         except (RuntimeError, ValueError) as e:
             logger.warning(
                 f"2D Gaussian fitting failed: {e}. "
@@ -634,6 +668,7 @@ def _calculate_pairwise_shift(
             )
             fit_successful = False  # Indicates fallback was used
             peak_mode_to_use = "center_of_mass"  # Update to reflect actual method used
+            goodness_of_fit = None  # CoM doesn't have goodness of fit
 
     else:
         raise ValueError(f"Unknown peak_mode: {peak_mode}. Use 'gaussian', 'center_of_mass', or 'auto'.")
@@ -651,6 +686,7 @@ def _calculate_pairwise_shift(
         "peak_mode": peak_mode_to_use,  # Actual peak finding method used
         "com_threshold": com_threshold,  # Threshold value for CoM bin selection
         "com_use_threshold": com_use_threshold,  # Whether threshold mode was used
+        "goodness_of_fit": goodness_of_fit,  # Gaussian fit quality metrics (None for CoM)
         "frame_contributions": frame_contributions,  # For matrix-based drift correction
         "hist": hist,  # Histogram for connectivity matrix building
         "hist_edges": (x_edges, y_edges),  # Bin edges for histogram
@@ -900,8 +936,25 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
             Maximum shift radius. Values outside this circle are set to NaN.
 
     Returns:
-        shift_x, shift_y : float, float
-            Fitted peak center coordinates
+        shift_x : float
+            Fitted peak center x coordinate
+        shift_y : float
+            Fitted peak center y coordinate
+        sigma_x : float
+            Gaussian width in x direction
+        sigma_y : float
+            Gaussian width in y direction
+        shift_x_error : float
+            Uncertainty in x coordinate from covariance matrix
+        shift_y_error : float
+            Uncertainty in y coordinate from covariance matrix
+        goodness_of_fit : dict
+            Dictionary containing fit quality metrics:
+            - chi_squared_reduced: Reduced chi-squared statistic
+            - r_squared: R-squared (coefficient of determination)
+            - rmse: Root mean squared error
+            - n_points: Number of data points used in fit
+            - degrees_of_freedom: Degrees of freedom (n_points - n_params)
     """
     from scipy.optimize import curve_fit
 
@@ -1028,7 +1081,43 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
         #     f"amplitude={popt[0]:.1f}, background={popt[6]:.1f}"
         # )
 
-        return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error
+        # Calculate goodness of fit metrics
+        # Predicted values using fitted parameters
+        z_pred = gaussian_2d((x_fit, y_fit), *popt)
+
+        # Residuals
+        residuals = z_fit - z_pred
+
+        # Reduced chi-squared (assuming Poisson variance for counts)
+        # χ²_red = Σ[(observed - predicted)² / observed] / (n_points - n_params)
+        n_points = len(z_fit)
+        n_params = len(popt)  # 7 parameters
+        degrees_of_freedom = n_points - n_params
+
+        # Use Poisson variance (variance = observed count)
+        # For bins with very low counts, use minimum of 1 to avoid division by zero
+        variances = np.maximum(z_fit, 1.0)
+        chi_squared = np.sum((residuals ** 2) / variances)
+        chi_squared_reduced = chi_squared / degrees_of_freedom if degrees_of_freedom > 0 else np.inf
+
+        # R-squared (coefficient of determination)
+        # R² = 1 - (SS_residual / SS_total)
+        ss_residual = np.sum(residuals ** 2)
+        ss_total = np.sum((z_fit - np.mean(z_fit)) ** 2)
+        r_squared = 1 - (ss_residual / ss_total) if ss_total > 0 else 0.0
+
+        # Root mean squared error
+        rmse = np.sqrt(np.mean(residuals ** 2))
+
+        goodness_of_fit = {
+            "chi_squared_reduced": chi_squared_reduced,
+            "r_squared": r_squared,
+            "rmse": rmse,
+            "n_points": n_points,
+            "degrees_of_freedom": degrees_of_freedom,
+        }
+
+        return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error, goodness_of_fit
 
     except Exception as e:
         raise RuntimeError(f"Gaussian fitting failed: {str(e)}")
