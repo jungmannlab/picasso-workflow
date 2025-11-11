@@ -10149,7 +10149,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @profile_resource_usage
     @module_decorator
-    def find_gold(self, i, parameters, results, postpone_report=False):
+    def find_gold(self, i, parameters, results):
         """Find localizations stemming from gold beads based on blinking
         kinetics.
         The metrics used are number of locs and rms deviation from mean
