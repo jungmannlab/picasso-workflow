@@ -169,10 +169,10 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul>
         <li><strong>Condition:</strong> {html.escape(condition_str)}</li>
         <li><strong>Result:</strong> <span style="background-color: {'#c3e6cb' if condition_result else '#f5c6cb'}; padding: 2px 6px; border-radius: 3px;">{condition_result}</span></li>
-        <li><strong>Branch Taken:</strong> <strong>{branch_taken}</strong></li>
-        <li><strong>Skipped Branch:</strong> {skipped_branch}</li>
-        <li><strong>Skipped Modules:</strong> {', '.join(skipped_modules) if skipped_modules else 'None'}</li>
-        <li><strong>Start Time:</strong> {results.get('start time', 'N/A')}</li>
+        <li><strong>Branch Taken:</strong> <strong>{html.escape(branch_taken)}</strong></li>
+        <li><strong>Skipped Branch:</strong> {html.escape(skipped_branch)}</li>
+        <li><strong>Skipped Modules:</strong> {html.escape(', '.join(skipped_modules)) if skipped_modules else 'None'}</li>
+        <li><strong>Start Time:</strong> {html.escape(str(results.get('start time', 'N/A')))}</li>
         <li><strong>Total Duration:</strong> {results.get("duration", 0) // 60:.0f} min {(results.get("duration", 0) % 60):.02f} s</li>
         </ul>
         """
@@ -192,7 +192,7 @@ class ConfluenceReporter(AbstractModuleCollection):
 
             text += f"""
             <div style="margin-left: 20px; border-left: 3px solid #4a90e2; padding-left: 10px; margin-bottom: 15px;">
-            <h5>Sub-Module {sub_key}: {module_name}</h5>
+            <h5>Sub-Module {html.escape(sub_key)}: {html.escape(module_name)}</h5>
             """
 
             # Check if module execution was successful
@@ -209,8 +209,13 @@ class ConfluenceReporter(AbstractModuleCollection):
                             f"Calling reporter for sub-module: {module_name}"
                         )
 
-                        # Close the div temporarily for the sub-module reporter
-                        text += "</div>"
+                        # Close all open tags to create valid HTML before intermediate update
+                        text += """
+                        </div>
+                        </ac:rich-text-body>
+                        </ac:structured-macro>
+                        </ac:layout-cell></ac:layout-section></ac:layout>
+                        """
                         # Update page with content so far
                         self.ci.update_page_content(
                             self.report_page_name, self.report_page_id, text
@@ -236,11 +241,18 @@ class ConfluenceReporter(AbstractModuleCollection):
                                 break
 
                         # Call the reporter method
-                        # reporter_method(sub_idx, sub_module_params, sub_results)
-                        logger.debug(f"not calling {str(reporter_method)}")
+                        reporter_method(sub_idx, sub_module_params, sub_results)
+                        # logger.debug(f"not calling {str(reporter_method)}")
 
                         # Start a new text section after the sub-module report
-                        text = """<div style="margin-left: 20px; border-left: 3px solid #4a90e2; padding-left: 10px; margin-bottom: 15px;">"""
+                        # Reopen the layout and expand macro structure
+                        text = f"""
+                        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+                        <ac:structured-macro ac:name="expand" ac:schema-version="1">
+                        <ac:parameter ac:name="title">Executed Sub-Modules ({len(branch_results)} modules in {html.escape(branch_taken)} branch)</ac:parameter>
+                        <ac:rich-text-body>
+                        <div style="margin-left: 20px; border-left: 3px solid #4a90e2; padding-left: 10px; margin-bottom: 15px;">
+                        """
 
                     except Exception as e:
                         logger.error(
