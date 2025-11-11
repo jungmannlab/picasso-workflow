@@ -3093,6 +3093,8 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         enable_shift_capping,  # Whether to cap shifts based on previous iteration
         max_shift_change_factor,  # Max factor for shift change
         previous_shift_magnitude,  # Previous iteration's shift magnitude for this frame
+        enable_fit_quality_check,
+        fit_quality_thresholds,
     ) = frame_data
 
     try:
@@ -3227,6 +3229,8 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                         peak_mode=peak_mode,
                         snr_threshold=snr_threshold,
                         build_frame_contributions=use_matrix_solver,  # Only build if matrix solver enabled
+                        enable_fit_quality_check=enable_fit_quality_check,
+                        fit_quality_thresholds=fit_quality_thresholds,
                     )
                     uncertainty_info = std_info if std_info is not None else {}
                     computation_type = "Standard"
@@ -3697,6 +3701,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     min_signal_to_noise = parameters.get("min_signal_to_noise", 0.5)
     windowing_enabled = parameters.get("windowing_enabled", True)
     window_size_range = parameters.get("window_size_range", (3, 20))
+
+    enable_fit_quality_check = parameters.get("enable_fit_quality_check", True)
+    fit_quality_thresholds = parameters.get(
+        "fit_quality_thresholds", {"chi_squared": 2.0, "r_squared": 0.90})
 
     # Monitor initial memory usage
     process = psutil.Process()
@@ -4283,6 +4291,8 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         enable_shift_capping,  # Whether to cap shifts based on previous iteration
                         max_shift_change_factor,  # Max factor for shift change
                         prev_magnitude,  # Previous iteration's shift magnitude for this frame group
+                        enable_fit_quality_check,
+                        fit_quality_thresholds,
                     )
                     chunk_frame_data.append(frame_data)
             iteration_timings["chunk_data_preparation"] += prep_timer.elapsed
