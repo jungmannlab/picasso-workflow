@@ -22,7 +22,7 @@ from picasso_workflow.util import AbstractModuleCollection
 
 
 def module_decorator(method):
-    def module_wrapper(self, i, parameters, results):
+    def module_wrapper(self, i, parameters, results, postpone_report=False):
         # create parameter and results documentation
         parameter_text = """
             <ac:structured-macro ac:name="expand" ac:schema-version="1">
@@ -55,7 +55,7 @@ def module_decorator(method):
         """
 
         # call the module
-        method(self, i, parameters, results, parameter_text, result_text)
+        method(self, i, parameters, results, parameter_text, result_text, postpone_report=postpone_report)
 
     return module_wrapper
 
@@ -136,7 +136,8 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def conditional_branch(self, i, parameters, results):
+    @module_decorator
+    def conditional_branch(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
         """Report on conditional branch execution.
 
         Creates a collapsible section showing the condition evaluation
@@ -175,6 +176,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li><strong>Start Time:</strong> {html.escape(str(results.get('start time', 'N/A')))}</li>
         <li><strong>Total Duration:</strong> {results.get("duration", 0) // 60:.0f} min {(results.get("duration", 0) % 60):.02f} s</li>
         </ul>
+        {parameter_text}
+        {result_text}
         """
 
         # Create collapsible section for executed sub-modules
@@ -241,7 +244,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                                 break
 
                         # Call the reporter method
-                        reporter_method(sub_idx, sub_module_params, sub_results)
+                        module_text = reporter_method(sub_idx, sub_module_params, sub_results, postpone_report=True)
                         # logger.debug(f"not calling {str(reporter_method)}")
 
                         # Start a new text section after the sub-module report
@@ -253,6 +256,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                         <ac:rich-text-body>
                         <div style="margin-left: 20px; border-left: 3px solid #4a90e2; padding-left: 10px; margin-bottom: 15px;">
                         """
+                        text += module_text
 
                     except Exception as e:
                         logger.error(
@@ -297,7 +301,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def analysis_documentation(self, i, parameters, results):
+    def analysis_documentation(self, i, parameters, results, postpone_report=False):
         """This module documents where and how analysis is being performed"""
         logger.debug("Reporting analysis_documentation.")
         text = f"""
@@ -383,7 +387,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(sample_mov_res["filename"])[1],
             )
 
-    def load_dataset_localizations(self, i, parameters, results):
+    def load_dataset_localizations(self, i, parameters, results, postpone_report=False):
         """Describes the loading
         Args:
             i : int
@@ -575,7 +579,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def undrift_rcc(self, i, parameters, results):
+    def undrift_rcc(self, i, parameters, results, postpone_report=False):
         """Describes the Localize section of picasso
         Args:
         """
@@ -976,7 +980,7 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def resolution_analysis(
-        self, i, parameters, results, parameter_text, result_text
+        self, i, parameters, results, parameter_text, result_text, postpone_report=False
     ):
         """Report resolution analysis results to Confluence"""
 
@@ -1024,7 +1028,7 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def resolution_frc_spatial(
-        self, i, parameters, results, parameter_text, result_text
+        self, i, parameters, results, parameter_text, result_text, postpone_report=False
     ):
         """Report spatial FRC resolution analysis results to Confluence"""
 
@@ -2940,7 +2944,7 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def undrift_from_picked(
-        self, i, parameters, results, parameter_text, result_text
+        self, i, parameters, results, parameter_text, result_text, postpone_report=False
     ):
         """Performs undrift from piced locs.
         Args:
@@ -2980,9 +2984,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
+            )
 
     @module_decorator
     def filter_locs(self, i, parameters, results, parameter_text, result_text):
