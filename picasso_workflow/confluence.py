@@ -55,7 +55,10 @@ def module_decorator(method):
         """
 
         # call the module
-        method(self, i, parameters, results, parameter_text, result_text, postpone_report=postpone_report)
+        retval = method(
+            self, i, parameters, results,
+            parameter_text, result_text, postpone_report=postpone_report)
+        return retval
 
     return module_wrapper
 
