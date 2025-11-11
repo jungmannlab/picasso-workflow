@@ -203,10 +203,11 @@ class ConfluenceReporter(AbstractModuleCollection):
 
             # Check if module execution was successful
             if not sub_results.get("success", True):
-                text += f"""
-                <p style="color: #d9534f;"><strong>⚠ Module Failed</strong></p>
-                <p>Error: {html.escape(str(sub_results.get('error', 'Unknown error')))}</p>
-                """
+                # text += f"""
+                # <p style="color: #d9534f;"><strong>⚠ Module Failed</strong></p>
+                # <p>Error: {html.escape(str(sub_results.get('error', 'Unknown error')))}</p>
+                # """
+                pass
             else:
                 # Try to call the specific reporter for this sub-module
                 if hasattr(self, module_name):
@@ -215,17 +216,17 @@ class ConfluenceReporter(AbstractModuleCollection):
                             f"Calling reporter for sub-module: {module_name}"
                         )
 
-                        # Close all open tags to create valid HTML before intermediate update
-                        text += """
-                        </div>
-                        </ac:rich-text-body>
-                        </ac:structured-macro>
-                        </ac:layout-cell></ac:layout-section></ac:layout>
-                        """
-                        # Update page with content so far
-                        self.ci.update_page_content(
-                            self.report_page_name, self.report_page_id, text
-                        )
+                        # # Close all open tags to create valid HTML before intermediate update
+                        # text += """
+                        # </div>
+                        # </ac:rich-text-body>
+                        # </ac:structured-macro>
+                        # </ac:layout-cell></ac:layout-section></ac:layout>
+                        # """
+                        # # Update page with content so far
+                        # self.ci.update_page_content(
+                        #     self.report_page_name, self.report_page_id, text
+                        # )
 
                         # Call the sub-module reporter
                         reporter_method = getattr(self, module_name)
@@ -251,15 +252,15 @@ class ConfluenceReporter(AbstractModuleCollection):
                         module_text = reporter_method(sub_idx, sub_module_params, sub_results, postpone_report=True)
                         # logger.debug(f"not calling {str(reporter_method)}")
 
-                        # Start a new text section after the sub-module report
-                        # Reopen the layout and expand macro structure
-                        text = f"""
-                        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-                        <ac:structured-macro ac:name="expand" ac:schema-version="1">
-                        <ac:parameter ac:name="title">Executed Sub-Modules ({len(branch_results)} modules in {html.escape(branch_taken)} branch)</ac:parameter>
-                        <ac:rich-text-body>
-                        <div style="margin-left: 20px; border-left: 3px solid #4a90e2; padding-left: 10px; margin-bottom: 15px;">
-                        """
+                        # # Start a new text section after the sub-module report
+                        # # Reopen the layout and expand macro structure
+                        # text = f"""
+                        # <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+                        # <ac:structured-macro ac:name="expand" ac:schema-version="1">
+                        # <ac:parameter ac:name="title">Executed Sub-Modules ({len(branch_results)} modules in {html.escape(branch_taken)} branch)</ac:parameter>
+                        # <ac:rich-text-body>
+                        # <div style="margin-left: 20px; border-left: 3px solid #4a90e2; padding-left: 10px; margin-bottom: 15px;">
+                        # """
                         text += module_text
 
                     except Exception as e:

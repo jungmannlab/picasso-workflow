@@ -606,8 +606,8 @@ def _calculate_pairwise_shift(
     snr_too_low = snr < snr_threshold
     peak_mode_to_use = peak_mode
 
-    if snr_too_low and peak_mode != "center_of_mass":
-        peak_mode_to_use = "center_of_mass"
+    # if snr_too_low and peak_mode != "center_of_mass":
+    #     peak_mode_to_use = "center_of_mass"
 
     # Find peak using specified method
     fit_successful = False
@@ -647,11 +647,11 @@ def _calculate_pairwise_shift(
                 fit_quality_passed = (chi_sq < chi_threshold) and (r_sq > r_threshold)
 
                 if not fit_quality_passed:
-                    logger.warning(
-                        f"Gaussian fit quality check failed: χ²_red={chi_sq:.3f} "
-                        f"(threshold={chi_threshold}), R²={r_sq:.3f} "
-                        f"(threshold={r_threshold}). Falling back to center of mass method."
-                    )
+                    # logger.warning(
+                    #     f"Gaussian fit quality check failed: χ²_red={chi_sq:.3f} "
+                    #     f"(threshold={chi_threshold}), R²={r_sq:.3f} "
+                    #     f"(threshold={r_threshold}). Falling back to center of mass method."
+                    # )
                     raise ValueError("Fit quality check failed")
 
             fit_successful = True

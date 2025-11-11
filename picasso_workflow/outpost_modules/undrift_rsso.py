@@ -2458,6 +2458,7 @@ def _plot_convergence_behavior_analysis(
 def _plot_goodness_of_fit_analysis(
     iteration_history,
     results_folder,
+    fit_quality_thresholds,
     min_valid_fits=10,
 ):
     """
@@ -2490,6 +2491,9 @@ def _plot_goodness_of_fit_analysis(
         return None
 
     n_frames = len(iteration_history[0]['drift_x'])
+
+    thresh_chisq = fit_quality_thresholds['chi_squared']
+    thresh_rsq = fit_quality_thresholds['r_squared']
 
     # Extract goodness of fit metrics across all iterations
     chi_squared_all = np.zeros((n_frames, n_iterations))
@@ -2557,7 +2561,7 @@ def _plot_goodness_of_fit_analysis(
             )
 
     # Add threshold line (chi_squared < 2.0 is good)
-    ax1.axhline(y=2.0, color='red', linestyle='--', linewidth=2,
+    ax1.axhline(y=thresh_chisq, color='red', linestyle='--', linewidth=2,
                alpha=0.7, label='Quality threshold (2.0)')
 
     ax1.set_xlabel('Frame Number', fontsize=11)
@@ -2594,7 +2598,7 @@ def _plot_goodness_of_fit_analysis(
             )
 
     # Add threshold line (R² > 0.90 is good)
-    ax2.axhline(y=0.90, color='green', linestyle='--', linewidth=2,
+    ax2.axhline(y=thresh_rsq, color='green', linestyle='--', linewidth=2,
                alpha=0.7, label='Quality threshold (0.90)')
 
     ax2.set_xlabel('Frame Number', fontsize=11)
@@ -2628,17 +2632,17 @@ def _plot_goodness_of_fit_analysis(
     )
 
     # Add reference lines
-    ax3.axvline(x=2.0, color='red', linestyle='--', linewidth=2, alpha=0.5, label='χ² threshold')
-    ax3.axhline(y=0.90, color='green', linestyle='--', linewidth=2, alpha=0.5, label='R² threshold')
+    ax3.axvline(x=thresh_chisq, color='red', linestyle='--', linewidth=2, alpha=0.5, label='χ² threshold')
+    ax3.axhline(y=thresh_rsq, color='green', linestyle='--', linewidth=2, alpha=0.5, label='R² threshold')
 
     # Add "good fit" region shading
-    ax3.axvspan(0, 2.0, ymin=0.90/1.05, ymax=1.0, color='green', alpha=0.1, zorder=0)
+    ax3.axvspan(0, thresh_chisq, ymin=thresh_rsq/1.05, ymax=1.0, color='green', alpha=0.1, zorder=0)
 
     ax3.set_xlabel('Reduced Chi-Squared', fontsize=11)
     ax3.set_ylabel('R-Squared (R²)', fontsize=11)
     ax3.set_title('Fit Quality: Chi-Squared vs R-Squared', fontsize=12, fontweight='bold')
     ax3.grid(True, alpha=0.3)
-    ax3.set_xscale('log')
+    # ax3.set_xscale('log')
     ax3.set_ylim([0, 1.05])
     ax3.legend(fontsize=9)
 
@@ -2700,8 +2704,8 @@ def _plot_goodness_of_fit_analysis(
         )
 
         # Reference lines
-        ax4.axhline(y=2.0, color='blue', linestyle='--', linewidth=1.5, alpha=0.5)
-        ax4_twin.axhline(y=0.90, color='red', linestyle='--', linewidth=1.5, alpha=0.5)
+        ax4.axhline(y=thresh_chisq, color='blue', linestyle='--', linewidth=1.5, alpha=0.5)
+        ax4_twin.axhline(y=thresh_rsq, color='red', linestyle='--', linewidth=1.5, alpha=0.5)
 
         ax4.set_xlabel('Shift Magnitude (nm)', fontsize=11)
         ax4.set_ylabel('Reduced Chi-Squared', fontsize=11, color='blue')
@@ -3179,7 +3183,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             # Determine peak finding mode based on iteration
             # First iteration: use center of mass (histogram not Gaussian yet)
             # Later iterations: use auto (try Gaussian, fall back to CoM)
-            peak_mode = "center_of_mass" if iteration == 0 else "auto"
+            peak_mode = "center_of_mass" if iteration < 2 else "auto"
 
             # snr_threshold is now passed in frame_data tuple (extracted from parameters in outer scope)
 
@@ -4892,7 +4896,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         try:
             # Plot 5: Goodness of fit analysis (chi-squared and R-squared)
             gof_analysis_path = _plot_goodness_of_fit_analysis(
-                iteration_history, results_folder
+                iteration_history, results_folder, fit_quality_thresholds
             )
             if gof_analysis_path:
                 results["goodness_of_fit_analysis"] = gof_analysis_path
