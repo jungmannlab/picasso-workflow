@@ -100,7 +100,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 Continuing on the pre-existing page"""
             )
 
-    def report_error(self, e, module):
+    def report_error(self, e, module, postpone_report=False):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>ERROR OCCURRED</strong></p>
@@ -111,11 +111,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def dummy_module(self, i, parameters, results):
+    def dummy_module(self, i, parameters, results, postpone_report=False):
         """A module that does nothing, for quickly removing
         modules in a workflow without having to renumber the
         following result idcs. Only for workflow debugging,
@@ -135,9 +138,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     @module_decorator
     def conditional_branch(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
@@ -329,7 +335,7 @@ class ConfluenceReporter(AbstractModuleCollection):
     # Single dataset modules
     ##########################################################################
 
-    def convert_zeiss_movie(self, i, parameters, results):
+    def convert_zeiss_movie(self, i, parameters, results, postpone_report=False):
         """Descries converting from Zeiss."""
         logger.debug("Reporting convert_zeiss_movie.")
         text = f"""
@@ -340,11 +346,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s.</p>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def load_dataset_movie(self, i, pars_load, results_load):
+    def load_dataset_movie(self, i, pars_load, results_load, postpone_report=False):
         """Describes the loading
         Args:
             localize_params : dict
@@ -367,11 +376,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+
         if (sample_mov_res := results_load.get("sample_movie")) is not None:
-            text = f"""
+            text += f"""
             <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
             <p>Subsampled Frames</p>
             <ul>
@@ -380,17 +387,28 @@ class ConfluenceReporter(AbstractModuleCollection):
             </ul>
             </ac:layout-cell></ac:layout-section></ac:layout>
             """
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+            # Upload movie attachment immediately
             logger.debug("Uploading movie of subsampled images.")
             self.ci.upload_attachment(
                 self.report_page_id, sample_mov_res["filename"]
             )
-            self.ci.update_page_content_with_movie_attachment(
-                self.report_page_name,
-                self.report_page_id,
-                os.path.split(sample_mov_res["filename"])[1],
+            # Add movie reference to text
+            movie_filename = os.path.split(sample_mov_res["filename"])[1]
+            text += f"""
+            <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+            <p>
+            <ac:structured-macro ac:name="multimedia" ac:schema-version="1">
+            <ac:parameter ac:name="name"><ri:attachment ri:filename="{movie_filename}"/></ac:parameter>
+            </ac:structured-macro>
+            </p>
+            </ac:layout-cell></ac:layout-section></ac:layout>
+            """
+
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
             )
 
     def load_dataset_localizations(self, i, parameters, results, postpone_report=False):
@@ -418,7 +436,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def identify(self, i, parameters, results):
+    def identify(self, i, parameters, results, postpone_report=False):
         """Describes the identify step
         Args:
             localize_params : dict
@@ -444,9 +462,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
         if (res_autonetgrad := results.get("auto_netgrad")) is not None:
             logger.debug("Uploading graph for auto_netgrad.")
             self.ci.upload_attachment(
@@ -466,7 +487,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(res["filename"])[1],
             )
 
-    def localize(self, i, parameters, results):
+    def localize(self, i, parameters, results, postpone_report=False):
         """Describes the Localize section of picasso
         Args:
             localize_params : dict
@@ -483,9 +504,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Locs Column names: {results['locs_columns']}</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
         if (res := results.get("locs_vs_frame")) is not None:
             # print('uploading graph')
@@ -496,7 +520,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(res["filename"])[1],
             )
 
-    def export_brightfield(self, i, parameters, results):
+    def export_brightfield(self, i, parameters, results, postpone_report=False):
         """Describes the export_brightfield section of picasso
         Args:
         """
@@ -512,24 +536,33 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
 
+        # Accumulate images
         for label, fp in results.get("labeled filepaths", {}).items():
-            text = f"""<p><strong>{label}</strong></p>"""
+            text += f"""
+            <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+            <p><strong>{label}</strong></p>
+            """
+            # Upload image immediately
+            self.ci.upload_attachment(self.report_page_id, fp)
+            # Add image reference to text
+            filename = os.path.split(fp)[1]
+            text += f"""
+            <p>
+            <ac:image><ri:attachment ri:filename="{filename}"/></ac:image>
+            </p>
+            </ac:layout-cell></ac:layout-section></ac:layout>
+            """
+
+        if postpone_report:
+            return text
+        else:
             self.ci.update_page_content(
                 self.report_page_name, self.report_page_id, text
             )
-            self.ci.upload_attachment(self.report_page_id, fp)
-            self.ci.update_page_content_with_image_attachment(
-                self.report_page_name,
-                self.report_page_id,
-                os.path.split(fp)[1],
-            )
 
     @module_decorator
-    def render(self, i, parameters, results, parameter_text, result_text):
+    def render(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
         """Renders localizations
         Args:
         """
@@ -581,9 +614,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
+            )
 
     def undrift_rcc(self, i, parameters, results, postpone_report=False):
         """Describes the Localize section of picasso
@@ -618,7 +654,7 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def undrift_rsso(
-        self, i, parameters, results, parameter_text, result_text
+        self, i, parameters, results, parameter_text, result_text, postpone_report=False
     ):
         """Report RSSO undrifting results to Confluence"""
         logger.debug("Reporting undrift_rsso.")
@@ -747,12 +783,15 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
 
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
+            )
 
     @module_decorator
-    def undrift_aim(self, i, parameters, results, parameter_text, result_text):
+    def undrift_aim(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
         """Describes the AIM undrifting
         Args:
         """
@@ -787,11 +826,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
+            )
 
-    def manual(self, i, parameters, results):
+    def manual(self, i, parameters, results, postpone_report=False):
         """ """
         logger.debug("Reporting manual step")
         text = f"""
@@ -813,7 +855,7 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def summarize_dataset(
-        self, i, parameters, results, parameter_text, result_text
+        self, i, parameters, results, parameter_text, result_text, postpone_report=False
     ):
         logger.debug("Reporting summarize dataset.")
         text = f"""
@@ -865,9 +907,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
+            )
 
     # def aggregate_cluster(self, i, parameters, results):
     #     logger.debug("Reporting aggregate_cluster.")
@@ -887,7 +932,7 @@ class ConfluenceReporter(AbstractModuleCollection):
     #         self.report_page_name, self.report_page_id, text
     #     )
 
-    def density(self, i, parameters, results):
+    def density(self, i, parameters, results, postpone_report=False):
         logger.debug("Reporting density.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -902,12 +947,15 @@ class ConfluenceReporter(AbstractModuleCollection):
         <b>TODO: generate plot for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     @module_decorator
-    def dbscan(self, i, parameters, results, parameter_text, result_text):
+    def dbscan(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
         logger.debug("Reporting dbscan.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -937,11 +985,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def hdbscan(self, i, parameters, results):
+    def hdbscan(self, i, parameters, results, postpone_report=False):
         logger.debug("Reporting hdbscan.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -957,9 +1008,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         <b>TODO: generate plot for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     @module_decorator
     def binding_event_analysis(
@@ -1182,7 +1236,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     @module_decorator
-    def nneighbor(self, i, parameters, results, parameter_text, result_text):
+    def nneighbor(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
         logger.debug("Reporting nneighbor.")
         d = len(parameters["dims"])
         density_rdf = results["density_rdf"]
@@ -1262,12 +1316,15 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     @module_decorator
-    def fit_csr(self, i, parameters, results, parameter_text, result_text):
+    def fit_csr(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
         logger.debug("Reporting fit_csr.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1416,11 +1473,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def save_single_dataset(self, i, parameters, results):
+    def save_single_dataset(self, i, parameters, results, postpone_report=False):
         logger.debug("Reporting dataset saving.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1435,15 +1495,18 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     ##########################################################################
     # Aggregation workflow modules
     ##########################################################################
 
-    def load_datasets_to_aggregate(self, i, parameters, results):
+    def load_datasets_to_aggregate(self, i, parameters, results, postpone_report=False):
         logger.debug("Reporting load_datasets_to_aggregate.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1458,9 +1521,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     @module_decorator
     def align_channels(
@@ -1588,7 +1654,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def combine_channels(self, i, parameters, results):
+    def combine_channels(self, i, parameters, results, postpone_report=False):
         """Describes the combine_channels module
         Args:
             parameters : dict
@@ -1609,11 +1675,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def save_datasets_aggregated(self, i, parameters, results):
+    def save_datasets_aggregated(self, i, parameters, results, postpone_report=False):
         """save data of multiple single-dataset workflows from one
         aggregation workflow."""
         logger.debug("Reporting save_datasets_aggregated.")
@@ -1630,11 +1699,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def spinna_manual(self, i, parameters, results):
+    def spinna_manual(self, i, parameters, results, postpone_report=False):
         """ """
         logger.debug("Reporting spinna_manual.")
         text = f"""
@@ -1658,9 +1730,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """</ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
         if results["success"]:
             for fp in results["fp_fig"]:
                 self.ci.upload_attachment(self.report_page_id, fp)
@@ -1671,7 +1746,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 )
 
     @module_decorator
-    def spinna(self, i, parameters, results, parameter_text, result_text):
+    def spinna(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
         """ """
         logger.debug("Reporting spinna_manual.")
         text = f"""
@@ -1719,11 +1794,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def ripleysk(self, i, parameters, results):
+    def ripleysk(self, i, parameters, results, postpone_report=False):
         logger.debug("Reporting ripleysk.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1800,9 +1878,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     # @module_decorator
     # def ripleysk_rafal(
@@ -1913,7 +1994,7 @@ class ConfluenceReporter(AbstractModuleCollection):
     #     )
 
     @module_decorator
-    def ripleysk2(self, i, parameters, results, parameter_text, result_text):
+    def ripleysk2(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
         logger.debug("Reporting ripleysk2.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1985,11 +2066,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def ripleysk_average(self, i, parameters, results):
+    def ripleysk_average(self, i, parameters, results, postpone_report=False):
         logger.debug("Reporting ripleysk_average.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2027,9 +2111,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     @module_decorator
     def ripleysk_average2(
@@ -2104,7 +2191,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def protein_interactions(self, i, parameters, results):
+    def protein_interactions(self, i, parameters, results, postpone_report=False):
         logger.debug("protein_interactions.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2181,11 +2268,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def protein_interactions_average(self, i, parameters, results):
+    def protein_interactions_average(self, i, parameters, results, postpone_report=False):
         logger.debug("protein_interactions_average.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2222,11 +2312,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def create_mask(self, i, parameters, results):
+    def create_mask(self, i, parameters, results, postpone_report=False):
         """Create a density mask"""
         logger.debug("Reporting create_mask.")
         text = f"""
@@ -2271,9 +2364,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     @module_decorator
     def create_mask2(
@@ -2409,7 +2505,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def dbscan_molint(self, i, parameters, results):
+    def dbscan_molint(self, i, parameters, results, postpone_report=False):
         """TO BE CLEANED UP
         dbscan implementation for molecular interactions workflow
         """
@@ -2438,11 +2534,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def CSR_sim_in_mask(self, i, parameters, results):
+    def CSR_sim_in_mask(self, i, parameters, results, postpone_report=False):
         """TO BE CLEANED UP
         simulate CSR within a density mask
         """
@@ -2459,11 +2558,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def dbscan_merge_cells(self, i, parameters, results):
+    def dbscan_merge_cells(self, i, parameters, results, postpone_report=False):
         logger.debug("dbscan_merge_cells.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2478,11 +2580,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def dbscan_merge_stimulations(self, i, parameters, results):
+    def dbscan_merge_stimulations(self, i, parameters, results, postpone_report=False):
         logger.debug("dbscan_merge_stimulations.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2497,11 +2602,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def binary_barcodes(self, i, parameters, results):
+    def binary_barcodes(self, i, parameters, results, postpone_report=False):
         logger.debug("binary_barcodes.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2526,11 +2634,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def plot_densities(self, i, parameters, results):
+    def plot_densities(self, i, parameters, results, postpone_report=False):
         logger.debug("plot_densities.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2566,11 +2677,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def find_cluster_motifs(self, i, parameters, results):
+    def find_cluster_motifs(self, i, parameters, results, postpone_report=False):
         logger.debug("find_cluster_motifs.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2647,11 +2761,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def interaction_graph(self, i, parameters, results):
+    def interaction_graph(self, i, parameters, results, postpone_report=False):
         """TO BE CLEANED UP
         dbscan implementation for molecular interactions workflow
         """
@@ -2679,9 +2796,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     @module_decorator
     def find_gold(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
@@ -2998,7 +3118,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     @module_decorator
-    def filter_locs(self, i, parameters, results, parameter_text, result_text):
+    def filter_locs(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
         """Filter localizations to lie within a min-max range of a metric.
         Args:
             i : int
@@ -3074,9 +3194,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     @module_decorator
     def filter_transient_binding(
@@ -3147,7 +3270,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def link_locs(self, i, parameters, results):
+    def link_locs(self, i, parameters, results, postpone_report=False):
         """Link localizations.
         Args:
             i : int
@@ -3173,11 +3296,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
-    def insert_image(self, fp_fig):
+    def insert_image(self, fp_fig, postpone_report=False):
         try:
             self.ci.upload_attachment(self.report_page_id, fp_fig)
         except ConfluenceInterfaceError:
@@ -3191,7 +3317,7 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def pairwise_module_executor(
-        self, i, parameters, results, parameter_text, result_text
+        self, i, parameters, results, parameter_text, result_text, postpone_report=False
     ):
         """Calls another module (as a sub-module) for all pairs in the
         channel_locs
@@ -3238,18 +3364,21 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
     @module_decorator
-    def random_val(self, i, parameters, results, parameter_text, result_text):
+    def random_val(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
         """This is just for debugging"""
         pass
 
     @module_decorator
     def labeling_efficiency_analysis(
-        self, i, parameters, results, parameter_text, result_text
+        self, i, parameters, results, parameter_text, result_text, postpone_report=False
     ):
         """Analyse for labeling efficiency.
         Args:
@@ -3316,9 +3445,12 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-        )
+            )
 
 
 class UndriftError(Exception):
