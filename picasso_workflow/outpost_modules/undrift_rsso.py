@@ -78,18 +78,19 @@ def _configure_openmp_for_multiprocessing():
 
 def _setup_multiprocessing_context():
     """Setup multiprocessing context to avoid OpenMP conflicts"""
-    try:
-        # Try to set multiprocessing start method to 'spawn' to avoid fork() issues
-        if mp.get_start_method(allow_none=True) != "spawn":
-            mp.set_start_method("spawn", force=True)
-        return mp.get_context("spawn")
-    except RuntimeError:
-        # If already set or unavailable, use default context
-        try:
-            return mp.get_context("spawn")
-        except ValueError:
-            # 'spawn' not available, fall back to default
-            return mp.get_context()
+    # try:
+    #     # Try to set multiprocessing start method to 'spawn' to avoid fork() issues
+    #     if mp.get_start_method(allow_none=True) != "spawn":
+    #         mp.set_start_method("spawn", force=True)
+    #     return mp.get_context("spawn")
+    # except RuntimeError:
+    #     # If already set or unavailable, use default context
+    #     try:
+    #         return mp.get_context("spawn")
+    #     except ValueError:
+    #         # 'spawn' not available, fall back to default
+    #         return mp.get_context()
+    return mp.get_context()
 
 
 # Global variables to hold pre-built data structures in worker processes
