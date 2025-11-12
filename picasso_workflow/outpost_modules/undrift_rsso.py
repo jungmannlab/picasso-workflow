@@ -3277,13 +3277,13 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                         shift_x = shift_x * scale_factor
                         shift_y = shift_y * scale_factor
 
-                        # Log the capping event
-                        logger.debug(
-                            f"Shift capping applied to frames {frame_indices}: "
-                            f"magnitude {current_magnitude:.3f} -> {max_allowed_magnitude:.3f} px "
-                            f"(previous: {previous_shift_magnitude:.3f} px, "
-                            f"factor: {max_shift_change_factor})"
-                        )
+                        # # Log the capping event
+                        # logger.debug(
+                        #     f"Shift capping applied to frames {frame_indices}: "
+                        #     f"magnitude {current_magnitude:.3f} -> {max_allowed_magnitude:.3f} px "
+                        #     f"(previous: {previous_shift_magnitude:.3f} px, "
+                        #     f"factor: {max_shift_change_factor})"
+                        # )
 
                         # Store capping info in uncertainty_info
                         uncertainty_info["shift_capped"] = True

@@ -54,9 +54,9 @@ def split_localizations_random(locs, seed=None):
     locs_1 = locs[indices[:split]]
     locs_2 = locs[indices[split:]]
 
-    logger.debug(
-        f"  Split {n} localizations into {len(locs_1)} and {len(locs_2)}"
-    )
+    # logger.debug(
+    #     f"  Split {n} localizations into {len(locs_1)} and {len(locs_2)}"
+    # )
 
     return locs_1, locs_2
 
@@ -138,7 +138,7 @@ def compute_fft(image):
     # Shift zero frequency to center
     fft_shifted = np.fft.fftshift(fft)
 
-    logger.debug(f"  Computed FFT: {fft_shifted.shape}")
+    # logger.debug(f"  Computed FFT: {fft_shifted.shape}")
 
     return fft_shifted
 
@@ -623,10 +623,10 @@ def compute_frc_curve_vectorized(
 
     # Convert distances to integer bins and clip to max_radius
     mem_start_frc, avail_start_frc = _get_memory_usage_mb()
-    logger.debug(
-        f"      FRC: Starting bincount operations, memory = {mem_start_frc:.1f} MB, "
-        f"available = {avail_start_frc:.1f} MB"
-    )
+    # logger.debug(
+    #     f"      FRC: Starting bincount operations, memory = {mem_start_frc:.1f} MB, "
+    #     f"available = {avail_start_frc:.1f} MB"
+    # )
 
     distance_bins = np.round(distances).astype(int)
     np.clip(distance_bins, 0, max_radius, out=distance_bins)  # In-place clip
@@ -642,11 +642,11 @@ def compute_frc_curve_vectorized(
     cross_product = fft1 * np.conj(fft2)
 
     mem_after_cross, avail_after_cross = _get_memory_usage_mb()
-    logger.debug(
-        f"      FRC: After cross-product, memory = {mem_after_cross:.1f} MB "
-        f"(+{mem_after_cross - mem_start_frc:.1f} MB), "
-        f"available = {avail_after_cross:.1f} MB"
-    )
+    # logger.debug(
+    #     f"      FRC: After cross-product, memory = {mem_after_cross:.1f} MB "
+    #     f"(+{mem_after_cross - mem_start_frc:.1f} MB), "
+    #     f"available = {avail_after_cross:.1f} MB"
+    # )
 
     # Process real part
     cross_real = np.real(cross_product).ravel()
@@ -663,11 +663,11 @@ def compute_frc_curve_vectorized(
     del cross_product, cross_imag
 
     mem_after_numerator, avail_after_numerator = _get_memory_usage_mb()
-    logger.debug(
-        f"      FRC: After numerator, memory = {mem_after_numerator:.1f} MB "
-        f"(freed {mem_after_cross - mem_after_numerator:.1f} MB), "
-        f"available = {avail_after_numerator:.1f} MB"
-    )
+    # logger.debug(
+    #     f"      FRC: After numerator, memory = {mem_after_numerator:.1f} MB "
+    #     f"(freed {mem_after_cross - mem_after_numerator:.1f} MB), "
+    #     f"available = {avail_after_numerator:.1f} MB"
+    # )
 
     # Compute power spectra (denominators) - one at a time to minimize peak memory
     power1 = np.abs(fft1)
@@ -678,10 +678,10 @@ def compute_frc_curve_vectorized(
     del power1_flat
 
     mem_after_power1, avail_after_power1 = _get_memory_usage_mb()
-    logger.debug(
-        f"      FRC: After power1, memory = {mem_after_power1:.1f} MB, "
-        f"available = {avail_after_power1:.1f} MB"
-    )
+    # logger.debug(
+    #     f"      FRC: After power1, memory = {mem_after_power1:.1f} MB, "
+    #     f"available = {avail_after_power1:.1f} MB"
+    # )
 
     power2 = np.abs(fft2)
     power2 *= power2  # In-place square
@@ -691,20 +691,20 @@ def compute_frc_curve_vectorized(
     del power2_flat
 
     mem_after_power2, avail_after_power2 = _get_memory_usage_mb()
-    logger.debug(
-        f"      FRC: After power2, memory = {mem_after_power2:.1f} MB, "
-        f"available = {avail_after_power2:.1f} MB"
-    )
+    # logger.debug(
+    #     f"      FRC: After power2, memory = {mem_after_power2:.1f} MB, "
+    #     f"available = {avail_after_power2:.1f} MB"
+    # )
 
     pixel_counts = np.bincount(bins_flat, minlength=max_bin)
     del bins_flat
 
     mem_after_bincount, avail_after_bincount = _get_memory_usage_mb()
-    logger.debug(
-        f"      FRC: After all bincount ops, memory = {mem_after_bincount:.1f} MB "
-        f"(total: +{mem_after_bincount - mem_start_frc:.1f} MB), "
-        f"available = {avail_after_bincount:.1f} MB"
-    )
+    # logger.debug(
+    #     f"      FRC: After all bincount ops, memory = {mem_after_bincount:.1f} MB "
+    #     f"(total: +{mem_after_bincount - mem_start_frc:.1f} MB), "
+    #     f"available = {avail_after_bincount:.1f} MB"
+    # )
 
     # Compute FRC for each ring (vectorized)
     # FRC = |sum(F1 * conj(F2))| / sqrt(sum(|F1|^2) * sum(|F2|^2))
@@ -725,9 +725,9 @@ def compute_frc_curve_vectorized(
     frc_values = frc_values[1:]
     spatial_frequencies = spatial_frequencies[1:]
 
-    logger.debug(
-        f"  Computed FRC curve: {len(frc_values)} frequency bins (vectorized)"
-    )
+    # logger.debug(
+    #     f"  Computed FRC curve: {len(frc_values)} frequency bins (vectorized)"
+    # )
 
     return frc_values, spatial_frequencies
 
@@ -1050,10 +1050,10 @@ def _process_tile_worker_minimal(tile_task):
         max_frc_range_nm = tile_task["max_frc_range_nm"]
 
         mem_start, avail_start = _get_memory_usage_mb()
-        logger.debug(
-            f"    Tile {tile_id}: Starting, memory = {mem_start:.1f} MB, "
-            f"available = {avail_start:.1f} MB"
-        )
+        # logger.debug(
+        #     f"    Tile {tile_id}: Starting, memory = {mem_start:.1f} MB, "
+        #     f"available = {avail_start:.1f} MB"
+        # )
 
         # Handle empty tile
         if tile_locs is None or len(tile_locs) == 0:
@@ -1094,10 +1094,10 @@ def _process_tile_worker_minimal(tile_task):
 
         # Render images (use tile bounds for consistent sizing)
         mem_before_render, avail_before_render = _get_memory_usage_mb()
-        logger.debug(
-            f"    Tile {tile_id}: Before rendering, memory = {mem_before_render:.1f} MB, "
-            f"available = {avail_before_render:.1f} MB"
-        )
+        # logger.debug(
+        #     f"    Tile {tile_id}: Before rendering, memory = {mem_before_render:.1f} MB, "
+        #     f"available = {avail_before_render:.1f} MB"
+        # )
 
         image_1, _ = render_image_histogram(
             locs_1,
