@@ -786,9 +786,14 @@ class ConfluenceReporter(AbstractModuleCollection):
         if postpone_report:
             return text
         else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+            try:
+                self.ci.update_page_content(
+                    self.report_page_name, self.report_page_id, text
+                )
+            except Exception as e:
+                logger.error(f"Error updating Confluence page {self.report_page_name}, {self.report_page_id}")
+                logger.debug(text)
+                raise e
 
     @module_decorator
     def undrift_aim(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
