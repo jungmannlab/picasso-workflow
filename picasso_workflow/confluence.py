@@ -6,6 +6,7 @@ Initial Date: March 7, 2024
 Description: Interaction with Confluence
 """
 import html
+
 # import logging
 from loguru import logger
 import os
@@ -31,7 +32,9 @@ def module_decorator(method):
             <ul>
             """
         for k, v in parameters.items():
-            parameter_text += f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+            parameter_text += (
+                f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+            )
 
         parameter_text += """
         </ul>
@@ -46,7 +49,9 @@ def module_decorator(method):
             <ul>
             """
         for k, v in results.items():
-            result_text += f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+            result_text += (
+                f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+            )
 
         result_text += """
         </ul>
@@ -56,8 +61,14 @@ def module_decorator(method):
 
         # call the module
         retval = method(
-            self, i, parameters, results,
-            parameter_text, result_text, postpone_report=postpone_report)
+            self,
+            i,
+            parameters,
+            results,
+            parameter_text,
+            result_text,
+            postpone_report=postpone_report,
+        )
         return retval
 
     return module_wrapper
@@ -111,12 +122,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
+        self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
-            )
+        )
 
     def dummy_module(self, i, parameters, results, postpone_report=False):
         """A module that does nothing, for quickly removing
@@ -142,11 +150,19 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     @module_decorator
-    def conditional_branch(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
+    def conditional_branch(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
         """Report on conditional branch execution.
 
         Creates a collapsible section showing the condition evaluation
@@ -255,7 +271,12 @@ class ConfluenceReporter(AbstractModuleCollection):
 
                         # Call the reporter method
                         logger.debug("Now performing the call.")
-                        module_text = reporter_method(sub_idx, sub_module_params, sub_results, postpone_report=True)
+                        module_text = reporter_method(
+                            sub_idx,
+                            sub_module_params,
+                            sub_results,
+                            postpone_report=True,
+                        )
                         # logger.debug(f"not calling {str(reporter_method)}")
 
                         # # Start a new text section after the sub-module report
@@ -313,7 +334,9 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def analysis_documentation(self, i, parameters, results, postpone_report=False):
+    def analysis_documentation(
+        self, i, parameters, results, postpone_report=False
+    ):
         """This module documents where and how analysis is being performed"""
         logger.debug("Reporting analysis_documentation.")
         text = f"""
@@ -335,8 +358,41 @@ class ConfluenceReporter(AbstractModuleCollection):
     # Single dataset modules
     ##########################################################################
 
-    def convert_zeiss_movie(self, i, parameters, results, postpone_report=False):
-        """Descries converting from Zeiss."""
+    def convert_zeiss_movie(
+        self, i, parameters, results, postpone_report=False
+    ):
+        """Converts a DNA-PAINT movie into .raw, as supported by picasso.
+
+        Converts Zeiss .czi movie files to picasso-compatible .raw format
+        for subsequent analysis steps in the workflow.
+        Generates Confluence documentation for the conversion process.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    filepath : str
+                        Path to the input Zeiss .czi file
+                Optional keys:
+                    output_filepath : str
+                        Custom output path for the .raw file
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                Results updated with:
+                    filepath_raw : str
+                        Path to the output .raw file
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with added file path information
+        """
         logger.debug("Reporting convert_zeiss_movie.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -350,11 +406,18 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
-    def load_dataset_movie(self, i, pars_load, results_load, postpone_report=False):
-        """Describes the loading
+    def load_dataset_movie(
+        self, i, pars_load, results_load, postpone_report=False
+    ):
+        """Loads a DNA-PAINT dataset in a format supported by picasso.
+
+        Loads DNA-PAINT movie data and metadata into memory for subsequent
+        analysis. Optionally creates sample movies and loads camera configuration.
+        Generates Confluence documentation for movie loading process.
+
         Args:
             localize_params : dict
                 net_gradient : the net gradient used
@@ -411,8 +474,15 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_name, self.report_page_id, text
             )
 
-    def load_dataset_localizations(self, i, parameters, results, postpone_report=False):
-        """Describes the loading
+    def load_dataset_localizations(
+        self, i, parameters, results, postpone_report=False
+    ):
+        """Loads a DNA-PAINT dataset in a format supported by picasso.
+
+        Loads pre-computed localization data from file for analysis workflows
+        that skip the identification and localization steps.
+        Generates Confluence documentation for loading localization data.
+
         Args:
             i : int
             parameters : dict
@@ -437,7 +507,13 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     def identify(self, i, parameters, results, postpone_report=False):
-        """Describes the identify step
+        """Identifies localizations in a loaded dataset.
+
+        Identifies potential localization sites in the loaded movie using
+        net gradient thresholding. Optionally performs automatic net gradient
+        detection and creates identification vs frame plots.
+        Generates Confluence documentation for the identification process.
+
         Args:
             localize_params : dict
                 net_gradient : the net gradient used
@@ -466,7 +542,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
         if (res_autonetgrad := results.get("auto_netgrad")) is not None:
             logger.debug("Uploading graph for auto_netgrad.")
@@ -508,7 +584,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
         if (res := results.get("locs_vs_frame")) is not None:
@@ -520,7 +596,9 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(res["filename"])[1],
             )
 
-    def export_brightfield(self, i, parameters, results, postpone_report=False):
+    def export_brightfield(
+        self, i, parameters, results, postpone_report=False
+    ):
         """Describes the export_brightfield section of picasso
         Args:
         """
@@ -562,7 +640,15 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     @module_decorator
-    def render(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
+    def render(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
         """Renders localizations
         Args:
         """
@@ -654,7 +740,13 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def undrift_rsso(
-        self, i, parameters, results, parameter_text, result_text, postpone_report=False
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """Report RSSO undrifting results to Confluence"""
         logger.debug("Reporting undrift_rsso.")
@@ -791,12 +883,22 @@ class ConfluenceReporter(AbstractModuleCollection):
                     self.report_page_name, self.report_page_id, text
                 )
             except Exception as e:
-                logger.error(f"Error updating Confluence page {self.report_page_name}, {self.report_page_id}")
+                logger.error(
+                    f"Error updating Confluence page {self.report_page_name}, {self.report_page_id}"
+                )
                 logger.debug(text)
                 raise e
 
     @module_decorator
-    def undrift_aim(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
+    def undrift_aim(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
         """Describes the AIM undrifting
         Args:
         """
@@ -860,7 +962,13 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def summarize_dataset(
-        self, i, parameters, results, parameter_text, result_text, postpone_report=False
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         logger.debug("Reporting summarize dataset.")
         text = f"""
@@ -938,6 +1046,39 @@ class ConfluenceReporter(AbstractModuleCollection):
     #     )
 
     def density(self, i, parameters, results, postpone_report=False):
+        """Document local density computation analysis.
+
+        Generates Confluence documentation for local localization density
+        calculation, including computation parameters and timing information.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    radius : float
+                        Radius for local density calculation in nm
+                Optional keys:
+                    save_locs : bool
+                        Whether to save density-annotated localizations
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    nlocs : int
+                        Number of localizations processed
+                Optional keys:
+                    density_stats : dict
+                        Statistical summary of density calculations
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results (unchanged)
+        """
         logger.debug("Reporting density.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -956,11 +1097,63 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     @module_decorator
-    def dbscan(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
+    def dbscan(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Perform clustering using dbscan.
+
+        Applies DBSCAN clustering algorithm to localizations, optionally
+        replacing localizations with cluster centers for subsequent analysis.
+        Generates Confluence documentation for the DBSCAN clustering analysis.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    radius : float
+                        The DBSCAN radius parameter in nm
+                    min_samples : int
+                        Minimum number of samples required for a cluster
+                    continue_with_centers : bool
+                        Whether to replace localizations with cluster centers
+                Optional keys:
+                    save_locs : bool
+                        Whether to save clustered localization data to results folder
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    fp_fig_clustersizes : str
+                        Filepath to cluster size distribution figure
+                    fp_centers : str
+                        Filepath to cluster centers file
+            parameter_text : str
+                Pre-formatted parameter documentation text
+            result_text : str
+                Pre-formatted results documentation text
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with clustering outputs and file paths
+        """
         logger.debug("Reporting dbscan.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -994,10 +1187,47 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     def hdbscan(self, i, parameters, results, postpone_report=False):
+        """Perform clustering using hdbscan.
+
+        Applies HDBSCAN (Hierarchical DBSCAN) clustering algorithm to localizations.
+        Generates Confluence documentation for HDBSCAN clustering analysis.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    min_cluster : int
+                        Minimum cluster size for HDBSCAN
+                    min_sample : int
+                        Minimum samples parameter for HDBSCAN
+                Optional keys:
+                    continue_with_centers : bool
+                        Whether to use cluster centers for subsequent analysis
+                    save_locs : bool
+                        Whether to save clustered localization data
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                Optional keys:
+                    n_clusters : int
+                        Number of clusters identified
+                    cluster_centers : numpy.ndarray
+                        Coordinates of cluster centers
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results (unchanged)
+        """
         logger.debug("Reporting hdbscan.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1017,12 +1247,18 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     @module_decorator
     def binding_event_analysis(
-        self, i, parameters, results, parameter_text, result_text
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1045,7 +1281,13 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def resolution_analysis(
-        self, i, parameters, results, parameter_text, result_text, postpone_report=False
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """Report resolution analysis results to Confluence"""
 
@@ -1093,7 +1335,13 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def resolution_frc_spatial(
-        self, i, parameters, results, parameter_text, result_text, postpone_report=False
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """Report spatial FRC resolution analysis results to Confluence"""
 
@@ -1147,7 +1395,13 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def smlm_clusterer(
-        self, i, parameters, results, parameter_text, result_text
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1174,7 +1428,13 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def gaussian_mixture_cluster(
-        self, i, parameters, results, parameter_text, result_text
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         logger.debug("Reporting gaussian_mixture_cluster.")
 
@@ -1241,7 +1501,15 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     @module_decorator
-    def nneighbor(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
+    def nneighbor(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
         logger.debug("Reporting nneighbor.")
         d = len(parameters["dims"])
         density_rdf = results["density_rdf"]
@@ -1325,11 +1593,79 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     @module_decorator
-    def fit_csr(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
+    def fit_csr(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Fit a Completely Spatially Random Distribution to nearest neighbors.
+
+        Fits CSR model to nearest neighbor distance distributions and evaluates
+        goodness-of-fit using statistical measures and visualization.
+        Generates Confluence documentation for CSR distribution fitting analysis.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    nneighbors : str or numpy.ndarray or list
+                        If str: filepath to nearest neighbor data file
+                        If array: 2D array (N, k) of kth nearest neighbor distances
+                        If list: multiple datasets or file paths
+                    dimensionality : int
+                        Spatial dimensionality (2 or 3) for CSR model
+                Optional keys:
+                    kmin : int
+                        Minimum k-th nearest neighbor order to fit (default: 1)
+                    min_dist : float
+                        Minimum observable distance in nm due to technical limits
+                    max_dist : float
+                        Maximum distance for filtering analysis
+                    bkg_fraction : float
+                        Background fraction for fitting
+                    fit_bkg : bool
+                        Whether to fit background (default: False)
+            results : dict
+                Required keys:
+                    start time : str
+                        Module execution start timestamp
+                    duration : float
+                        Module execution duration in seconds
+                    folder : str
+                        Output folder for generated files
+                Results updated with:
+                    density : float or list
+                        Fitted spatial density value(s) in units^(-d)
+                    bkg_fraction : list
+                        Background fraction values
+                    fp_fig : str or list
+                        Filepath(s) to CSR fit visualization figure(s)
+                    wasserstein_distances_per_k : list
+                        Wasserstein distances for each k-th nearest neighbor order
+                    mean_wasserstein_distance : float or list
+                        Mean Wasserstein distance across all k orders
+                    ks_pvalues_per_k : list
+                        Kolmogorov-Smirnov p-values for each k-th NN order
+            parameter_text : str
+                Pre-formatted parameter documentation text
+            result_text : str
+                Pre-formatted results documentation text
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Input results with CSR fitting results and goodness-of-fit metrics
+        """
         logger.debug("Reporting fit_csr.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1482,10 +1818,12 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
-    def save_single_dataset(self, i, parameters, results, postpone_report=False):
+    def save_single_dataset(
+        self, i, parameters, results, postpone_report=False
+    ):
         logger.debug("Reporting dataset saving.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1504,14 +1842,16 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     ##########################################################################
     # Aggregation workflow modules
     ##########################################################################
 
-    def load_datasets_to_aggregate(self, i, parameters, results, postpone_report=False):
+    def load_datasets_to_aggregate(
+        self, i, parameters, results, postpone_report=False
+    ):
         logger.debug("Reporting load_datasets_to_aggregate.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -1530,12 +1870,18 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     @module_decorator
     def align_channels(
-        self, i, parameters, results, parameter_text, result_text
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """Describes the align_channels module
         Args:
@@ -1684,10 +2030,12 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
-    def save_datasets_aggregated(self, i, parameters, results, postpone_report=False):
+    def save_datasets_aggregated(
+        self, i, parameters, results, postpone_report=False
+    ):
         """save data of multiple single-dataset workflows from one
         aggregation workflow."""
         logger.debug("Reporting save_datasets_aggregated.")
@@ -1708,7 +2056,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     def spinna_manual(self, i, parameters, results, postpone_report=False):
@@ -1739,7 +2087,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
         if results["success"]:
             for fp in results["fp_fig"]:
@@ -1751,7 +2099,15 @@ class ConfluenceReporter(AbstractModuleCollection):
                 )
 
     @module_decorator
-    def spinna(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
+    def spinna(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
         """ """
         logger.debug("Reporting spinna_manual.")
         text = f"""
@@ -1803,7 +2159,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     def ripleysk(self, i, parameters, results, postpone_report=False):
@@ -1887,7 +2243,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     # @module_decorator
@@ -1999,7 +2355,15 @@ class ConfluenceReporter(AbstractModuleCollection):
     #     )
 
     @module_decorator
-    def ripleysk2(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
+    def ripleysk2(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
         logger.debug("Reporting ripleysk2.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2075,7 +2439,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     def ripleysk_average(self, i, parameters, results, postpone_report=False):
@@ -2120,12 +2484,18 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     @module_decorator
     def ripleysk_average2(
-        self, i, parameters, results, parameter_text, result_text
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         logger.debug("Reporting ripleysk_average2.")
         text = f"""
@@ -2196,7 +2566,9 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def protein_interactions(self, i, parameters, results, postpone_report=False):
+    def protein_interactions(
+        self, i, parameters, results, postpone_report=False
+    ):
         logger.debug("protein_interactions.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2277,10 +2649,12 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
-    def protein_interactions_average(self, i, parameters, results, postpone_report=False):
+    def protein_interactions_average(
+        self, i, parameters, results, postpone_report=False
+    ):
         logger.debug("protein_interactions_average.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2321,7 +2695,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     def create_mask(self, i, parameters, results, postpone_report=False):
@@ -2373,12 +2747,18 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     @module_decorator
     def create_mask2(
-        self, i, parameters, results, parameter_text, result_text
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """Create a density mask"""
         logger.debug("Reporting create_mask2.")
@@ -2442,7 +2822,13 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def refine_mask_by_density(
-        self, i, parameters, results, parameter_text, result_text
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """Create a density mask"""
         logger.debug("Reporting refine_mask_by_density.")
@@ -2543,7 +2929,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     def CSR_sim_in_mask(self, i, parameters, results, postpone_report=False):
@@ -2567,10 +2953,12 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
-    def dbscan_merge_cells(self, i, parameters, results, postpone_report=False):
+    def dbscan_merge_cells(
+        self, i, parameters, results, postpone_report=False
+    ):
         logger.debug("dbscan_merge_cells.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2589,10 +2977,12 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
-    def dbscan_merge_stimulations(self, i, parameters, results, postpone_report=False):
+    def dbscan_merge_stimulations(
+        self, i, parameters, results, postpone_report=False
+    ):
         logger.debug("dbscan_merge_stimulations.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2611,7 +3001,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     def binary_barcodes(self, i, parameters, results, postpone_report=False):
@@ -2643,7 +3033,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     def plot_densities(self, i, parameters, results, postpone_report=False):
@@ -2686,10 +3076,12 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
-    def find_cluster_motifs(self, i, parameters, results, postpone_report=False):
+    def find_cluster_motifs(
+        self, i, parameters, results, postpone_report=False
+    ):
         logger.debug("find_cluster_motifs.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2770,7 +3162,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     def interaction_graph(self, i, parameters, results, postpone_report=False):
@@ -2805,11 +3197,19 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     @module_decorator
-    def find_gold(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
+    def find_gold(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
         """Find localizations stemming from gold beads based on blinking
         kinetics.
         The metrics used are number of locs and rms deviation from mean
@@ -2848,7 +3248,13 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def find_similar(
-        self, i, parameters, results, parameter_text, result_text
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """pick similar on clusters in nlocs/rmsd space
         Args:
@@ -2964,7 +3370,13 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def find_structures(
-        self, i, parameters, results, parameter_text, result_text
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """pick similar on clusters in nlocs/rmsd space
         Args:
@@ -3075,7 +3487,13 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def undrift_from_picked(
-        self, i, parameters, results, parameter_text, result_text, postpone_report=False
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """Performs undrift from piced locs.
         Args:
@@ -3123,7 +3541,15 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     @module_decorator
-    def filter_locs(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
+    def filter_locs(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
         """Filter localizations to lie within a min-max range of a metric.
         Args:
             i : int
@@ -3203,12 +3629,18 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     @module_decorator
     def filter_transient_binding(
-        self, i, parameters, results, parameter_text, result_text
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """Filter molecule positions (after clustering or Gaussian Mixture)
         for those who show transient binding. Specifically, the mean frame
@@ -3305,7 +3737,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     def insert_image(self, fp_fig, postpone_report=False):
@@ -3322,7 +3754,13 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def pairwise_module_executor(
-        self, i, parameters, results, parameter_text, result_text, postpone_report=False
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """Calls another module (as a sub-module) for all pairs in the
         channel_locs
@@ -3373,17 +3811,31 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
     @module_decorator
-    def random_val(self, i, parameters, results, parameter_text, result_text, postpone_report=False):
+    def random_val(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
         """This is just for debugging"""
         pass
 
     @module_decorator
     def labeling_efficiency_analysis(
-        self, i, parameters, results, parameter_text, result_text, postpone_report=False
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
     ):
         """Analyse for labeling efficiency.
         Args:
@@ -3454,7 +3906,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             return text
         else:
             self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+                self.report_page_name, self.report_page_id, text
             )
 
 
@@ -3731,7 +4183,9 @@ class ConfluenceInterface:
             )
         else:
             status = self.confluence.update_page(
-                page_id=page_id, title=page_name, body=body_update,
+                page_id=page_id,
+                title=page_name,
+                body=body_update,
             )
         return status
 

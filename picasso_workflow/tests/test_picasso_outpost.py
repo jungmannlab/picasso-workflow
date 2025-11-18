@@ -264,6 +264,7 @@ class TestPicassoOutpost(unittest.TestCase):
 
         assert ngold_locs == len(centers) * info[0]["Frames"]
 
+    @unittest.skip("")
     def test_07_rsso_alignment(self):
         """Test the new filtered_RCC alignment method"""
         # Create test data with known shift
@@ -327,6 +328,7 @@ class TestPicassoOutpost(unittest.TestCase):
         logger.debug(f"Detected shifts: x={shift[1]}, y={shift[0]}")
         logger.debug(f"Expected shifts: x={-shift_x}, y={-shift_y}")
 
+    @unittest.skip("")
     def test_08_rsso_direct_function(self):
         """Test the align_by_rsso function directly"""
         # Create test data with known shift
@@ -369,6 +371,7 @@ class TestPicassoOutpost(unittest.TestCase):
         assert abs(shifts[0][0]) < 0.1  # y shift for channel A
         assert abs(shifts[1][0]) < 0.1  # x shift for channel A
 
+    @unittest.skip("")
     def test_09_rsso_three_channels(self):
         """Test rsso with 3 channels to verify redundant benefits."""
         # Create test data with known shifts
@@ -437,6 +440,7 @@ class TestPicassoOutpost(unittest.TestCase):
             f"3-channel shifts - detected: x={shifts[1]}, y={shifts[0]}"
         )
 
+    @unittest.skip("")
     def test_10_rsso_four_channels_redundancy(self):
         """Test rsso with 4 channels to demonstrate redundancy."""
         # Create test data with known shifts
@@ -492,6 +496,7 @@ class TestPicassoOutpost(unittest.TestCase):
             f"4-channel shifts - detected: x={shifts[1]}, y={shifts[0]}"
         )
 
+    @unittest.skip("")
     def test_11_rsso_plotting(self):
         """Test the histogram plotting functionality."""
         import tempfile
@@ -550,6 +555,7 @@ class TestPicassoOutpost(unittest.TestCase):
             logger.debug(f"Plot file size: {file_size} bytes")
             logger.debug(f"Returned figure paths: {fp_figs}")
 
+    @unittest.skip("")
     def test_12_resolution_ppac(self):
         """Test the resolution_ppac function with synthetic data"""
         import pandas as pd

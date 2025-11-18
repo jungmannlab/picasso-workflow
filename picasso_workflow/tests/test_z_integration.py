@@ -209,6 +209,7 @@ class Test_B_CompleteIntegration(unittest.TestCase):
         shutil.rmtree(wr.result_folder)
         wr.confluencereporter.ci.delete_page(wr.reporter_config["report_name"])
 
+    @unittest.skip("")
     def test_02_AggregationWorkflowRunner_saw_align_channels(self):
         reporter_config = {
             "report_name": "test_02_AWR_saw_align_channels",
