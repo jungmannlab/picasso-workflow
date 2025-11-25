@@ -3980,7 +3980,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     }
             elif meth.lower() == "median-loc-precision":
                 median_lp = np.median(
-                    np.stack((self.locs['lpx'], self.locs['lpy']), axis=1).mean(1)
+                    np.stack(
+                        (self.locs["lpx"], self.locs["lpy"]), axis=1
+                    ).mean(1)
                 )
                 median_lp = median_lp / meth_pars.get("qe_correction", 1)
                 results["median-loc-precision"] = {
@@ -6317,7 +6319,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # np.savetxt(out_path, np.sort(alldist, axis=1), newline="\r\n")
             # alldist[alldist == 0] = float("inf")
             # nneighbors = np.sort(alldist, axis=1)[:, : parameters["nth"]]
-            nneighbors = alldist[:, 1:parameters["nth_NN"] + 1]
+            nneighbors = alldist[:, 1 : parameters["nth_NN"] + 1]
             out_path = os.path.join(results["folder"], f"{tag}_nneighbors.txt")
             np.savetxt(out_path, nneighbors, newline="\r\n")
             nn_fps.append(out_path)
@@ -6413,7 +6415,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # assuming the RDF converged to the bulk density in
         # its second half
-        density = np.median(rdf[int(len(rs) / 2):])
+        density = np.median(rdf[int(len(rs) / 2) :])
 
         # plot results
         ax.plot(rs, rdf * 1e3**d)
@@ -6442,7 +6444,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # assuming the RDF converged to the bulk density in
         # its second half
-        density = np.median(rdf[int(len(rs) / 2):])
+        density = np.median(rdf[int(len(rs) / 2) :])
 
         # plot results
         ax.plot(rs, rdf * 1e3**d)
@@ -7030,10 +7032,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 zip(self.channel_tags, fp_co_shift_list)
             ):
                 co_shift_locs, co_shift_info = io.load_locs(fp)
-                co_shift_locs['x'] -= cum_shifts[0, i, -1]
-                co_shift_locs['y'] -= cum_shifts[1, i, -1]
+                co_shift_locs["x"] -= cum_shifts[0, i, -1]
+                co_shift_locs["y"] -= cum_shifts[1, i, -1]
                 if len(shifts) == 3:
-                    co_shift_locs['z'] -= cum_shifts[2, i, -1]
+                    co_shift_locs["z"] -= cum_shifts[2, i, -1]
                 _, fn_coshift_locs = os.path.split(fp)
                 fp_co_shift_locs_out.append(
                     os.path.join(results["folder"], f"{tag}_{fn_coshift_locs}")
@@ -7312,12 +7314,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             exp_n_targets[i] = len(locs)
             if "z" in locs.columns:
                 exp_data[target] = np.stack(
-                    (locs['x'] * pixelsize, locs['y'] * pixelsize, locs['z'])
+                    (locs["x"] * pixelsize, locs["y"] * pixelsize, locs["z"])
                 ).T
                 # dim = 3
             else:
                 exp_data[target] = np.stack(
-                    (locs['x'] * pixelsize, locs['y'] * pixelsize)
+                    (locs["x"] * pixelsize, locs["y"] * pixelsize)
                 ).T
 
         data_2d = "z" not in self.channel_locs[0].columns
@@ -8751,12 +8753,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 locs = self.channel_locs[i]
                 if "z" in locs.columns:
                     exp_data[target] = np.stack(
-                        (locs['x'] * pixelsize, locs['y'] * pixelsize, locs['z'])
+                        (
+                            locs["x"] * pixelsize,
+                            locs["y"] * pixelsize,
+                            locs["z"],
+                        )
                     ).T
                     # dim = 3
                 else:
                     exp_data[target] = np.stack(
-                        (locs['x'] * pixelsize, locs['y'] * pixelsize)
+                        (locs["x"] * pixelsize, locs["y"] * pixelsize)
                     ).T
                     # dim = 2
             structures = self._create_spinna_structure(
@@ -10578,8 +10584,18 @@ class AutoPicasso(util.AbstractModuleCollection):
                 #     dt_orig = dt_orig[1]
                 # dtypes = self.locs.dtype + [("group", "<i4")]
                 column_names = [
-                    "frame", "x", "y", "photons", "sx", "sy", "bg",
-                    "lpx", "lpy", "ellipticity", "net_gradient", "group"
+                    "frame",
+                    "x",
+                    "y",
+                    "photons",
+                    "sx",
+                    "sy",
+                    "bg",
+                    "lpx",
+                    "lpy",
+                    "ellipticity",
+                    "net_gradient",
+                    "group",
                 ]
             except Exception as e:
                 raise e
@@ -11059,7 +11075,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 nrows=len(fields) - 1, ncols=len(fields) - 1, squeeze=False
             )
             for i, field_x in enumerate(fields[:-1]):
-                for j, field_y in enumerate(fields[i + 1:]):
+                for j, field_y in enumerate(fields[i + 1 :]):
                     picasso_outpost.plot_2dhist(
                         self.locs, field_x, field_y, fig, ax[i, j]
                     )
@@ -11423,12 +11439,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             locs = self.channel_locs[i]
             if "z" in locs.columns:
                 exp_data[tgt] = np.stack(
-                    (locs['x'] * pixelsize, locs['y'] * pixelsize, locs['z'])
+                    (locs["x"] * pixelsize, locs["y"] * pixelsize, locs["z"])
                 ).T
                 # dim = 3
             else:
                 exp_data[tgt] = np.stack(
-                    (locs['x'] * pixelsize, locs['y'] * pixelsize)
+                    (locs["x"] * pixelsize, locs["y"] * pixelsize)
                 ).T
                 # dim = 2
 
