@@ -444,7 +444,7 @@ def _log_performance_summary(
 # Numba-optimized RSSO computation functions
 # ==============================================================================
 
-if NUMBA_AVAILABLE:
+if False:  # NUMBA_AVAILABLE:
 
     @numba.jit(nopython=True, parallel=True, cache=True)
     def _compute_pairwise_shifts_numba(
@@ -2994,7 +2994,7 @@ def _estimate_subsampling_uncertainty(
             subset_indices = np.random.choice(
                 len(reference_dataset), n_subset, replace=False
             )
-            subset_dataset = reference_dataset[subset_indices]
+            subset_dataset = reference_dataset.iloc[subset_indices]
         else:
             subset_dataset = reference_dataset
 
@@ -3178,7 +3178,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             frame_number = target_frames[0] if len(target_frames) > 0 else None
 
             # Extract frame numbers for temporal filtering
-            frame_locs_frames = frame_locs["frame"] if "frame" in frame_locs.dtype.names else None
+            frame_locs_frames = frame_locs["frame"] if "frame" in frame_locs.columns else None
             ref_frames = _WORKER_FRAMES  # From worker global (or None if not using shared memory)
 
             # Determine peak finding mode based on iteration
@@ -3669,7 +3669,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     # Performance optimization parameters
     subsampling_fraction = parameters.get("subsampling_fraction", 0.1)
     enable_uncertainty_estimation = parameters.get(
-        "enable_uncertainty_estimation", True
+        "enable_uncertainty_estimation", False
     )
     n_uncertainty_trials = parameters.get("n_uncertainty_trials", 3)
     adaptive_subsampling = parameters.get("adaptive_subsampling", False)
@@ -3681,7 +3681,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     )
     progressive_subsampling = parameters.get("progressive_subsampling", False)
     enable_numba_optimization = parameters.get(
-        "enable_numba_optimization", True
+        "enable_numba_optimization", False
     )
     progressive_subsampling_schedule = parameters.get(
         "progressive_subsampling_schedule", [0.05, 0.1, 0.25, 0.5, 1.0]
@@ -3700,7 +3700,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     # Analysis parameters
     confidence_threshold = parameters.get("confidence_threshold", 0.8)
     outlier_detection_enabled = parameters.get(
-        "outlier_detection_enabled", True
+        "outlier_detection_enabled", False
     )
     outlier_z_threshold = parameters.get("outlier_z_threshold", 3.5)
     min_signal_to_noise = parameters.get("min_signal_to_noise", 0.5)
@@ -3769,11 +3769,12 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
     # PRE-COMPUTE frame index mapping (optimization to avoid recomputing every iteration)
     # This maps each localization to its frame index for fast lookup
-    frame_index_map = (original_locs["frame"] - frames[0]).astype(np.int32)
+    frame_index_map = (original_locs["frame"] - frames[0]).astype(np.int32).values
     logger.debug(f"Pre-computed frame index mapping for {len(frame_index_map):,} localizations")
 
     # Estimate memory requirements and warn if needed
-    bytes_per_loc = locs.itemsize * len(locs.dtype)
+    # bytes_per_loc = locs.itemsize * len(locs.dtype)
+    bytes_per_loc = locs.memory_usage(deep=True, index=False).sum() / len(locs)
     estimated_memory_gb = (len(locs) * bytes_per_loc * 3) / (
         1024**3
     )  # Factor for processing
@@ -3967,7 +3968,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         with _Timer("frame_pregrouping") as pregroup_timer:
             # Sort by frame to enable slice-based access
             sort_indices = np.argsort(current_locs["frame"])
-            current_locs = current_locs[sort_indices]
+            current_locs = current_locs.iloc[sort_indices]
 
             # Compute frame boundaries using unique frames
             unique_frames, frame_start_indices, frame_counts = np.unique(

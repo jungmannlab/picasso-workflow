@@ -10,6 +10,7 @@ import logging
 import unittest
 from unittest.mock import patch
 import numpy as np
+import pandas as pd
 
 # import matplotlib.pyplot as plt
 # from matplotlib import cm
@@ -29,29 +30,29 @@ class TestPicassoOutpost(unittest.TestCase):
         pass
 
     def test_01_shift_from_rcc(self):
-        locs_a = np.rec.array(
+        locs_a = pd.DataFrame(np.rec.array(
             [(1, 1), (3, 4)], dtype=[("x", "f4"), ("y", "f4")]
-        )
+        ))
         info_a = [{"Width": 10, "Height": 10}]
-        locs_b = np.rec.array(
+        locs_b = pd.DataFrame(np.rec.array(
             [(2, 2), (4, 5)], dtype=[("x", "f4"), ("y", "f4")]
-        )
+        ))
         info_b = [{"Width": 10, "Height": 10}]
 
         picasso_outpost.shift_from_rcc([locs_a, locs_b], [info_a, info_b])
 
     def test_02_align_channels(self):
-        locs_a = np.rec.array(
+        locs_a = pd.DataFrame(np.rec.array(
             [(1, 1), (3, 4)], dtype=[("x", "f4"), ("y", "f4")]
-        )
+        ))
         info_a = [{"Width": 10, "Height": 10}]
-        locs_b = np.rec.array(
+        locs_b = pd.DataFrame(np.rec.array(
             [(2, 2), (4, 5)], dtype=[("x", "f4"), ("y", "f4")]
-        )
+        ))
         info_b = [{"Width": 10, "Height": 10}]
-        locs_c = np.rec.array(
+        locs_c = pd.DataFrame(np.rec.array(
             [(3, 3), (5, 6)], dtype=[("x", "f4"), ("y", "f4")]
-        )
+        ))
         info_c = [{"Width": 10, "Height": 10}]
 
         (
@@ -180,9 +181,10 @@ class TestPicassoOutpost(unittest.TestCase):
         ]
         width = 20
         height = 42
-        locs = np.lib.recfunctions.stack_arrays(
+        # locs = np.lib.recfunctions.stack_arrays(
+        locs = pd.concat(
             [
-                np.rec.array(
+                pd.DataFrame(np.rec.array(
                     [
                         tuple([f, p, x, y, sx, sy, lpx, lpy])
                         for f, p, x, y, sx, sy, lpx, lpy in zip(
@@ -205,11 +207,10 @@ class TestPicassoOutpost(unittest.TestCase):
                         )
                     ],
                     dtype=locs_dtype,
-                )
+                ))
                 for i in range(nframes)
             ],
-            asrecarray=True,
-            usemask=False,
+            ignore_index=True
         )
         # print(locs)
         # print(locs.dtype)
@@ -272,12 +273,12 @@ class TestPicassoOutpost(unittest.TestCase):
         shift_y = 1.5
 
         # Channel A (reference)
-        locs_a = np.rec.array(
+        locs_a = pd.DataFrame(np.rec.array(
             [(1, 1), (3, 4), (5, 7), (8, 2)], dtype=[("x", "f4"), ("y", "f4")]
-        )
+        ))
 
         # Channel B (shifted version of A with some noise)
-        locs_b = np.rec.array(
+        locs_b = pd.DataFrame(np.rec.array(
             [
                 (1 + shift_x + 0.1, 1 + shift_y + 0.1),
                 (3 + shift_x - 0.1, 4 + shift_y + 0.1),
@@ -285,7 +286,7 @@ class TestPicassoOutpost(unittest.TestCase):
                 (8 + shift_x - 0.05, 2 + shift_y + 0.05),
             ],
             dtype=[("x", "f4"), ("y", "f4")],
-        )
+        ))
 
         info_a = [{"Width": 20, "Height": 20}]
         info_b = [{"Width": 20, "Height": 20}]
@@ -336,19 +337,19 @@ class TestPicassoOutpost(unittest.TestCase):
         shift_y = 0.5
 
         # Channel A (reference)
-        locs_a = np.rec.array(
+        locs_a = pd.DataFrame(np.rec.array(
             [(2, 2), (4, 4), (6, 6)], dtype=[("x", "f4"), ("y", "f4")]
-        )
+        ))
 
         # Channel B (shifted version of A)
-        locs_b = np.rec.array(
+        locs_b = pd.DataFrame(np.rec.array(
             [
                 (2 + shift_x, 2 + shift_y),
                 (4 + shift_x, 4 + shift_y),
                 (6 + shift_x, 6 + shift_y),
             ],
             dtype=[("x", "f4"), ("y", "f4")],
-        )
+        ))
 
         # Test the direct function
         # original_locs_a = locs_a.copy()
@@ -381,13 +382,13 @@ class TestPicassoOutpost(unittest.TestCase):
         shift_y_c = 2.5
 
         # Channel A (reference)
-        locs_a = np.rec.array(
+        locs_a = pd.DataFrame(np.rec.array(
             [(2, 2), (4, 4), (6, 6), (8, 8), (10, 10)],
             dtype=[("x", "f4"), ("y", "f4")],
-        )
+        ))
 
         # Channel B (shifted version of A with small noise)
-        locs_b = np.rec.array(
+        locs_b = pd.DataFrame(np.rec.array(
             [
                 (2 + shift_x_b + 0.05, 2 + shift_y_b - 0.03),
                 (4 + shift_x_b - 0.02, 4 + shift_y_b + 0.04),
@@ -396,10 +397,10 @@ class TestPicassoOutpost(unittest.TestCase):
                 (10 + shift_x_b + 0.04, 10 + shift_y_b - 0.05),
             ],
             dtype=[("x", "f4"), ("y", "f4")],
-        )
+        ))
 
         # Channel C (another shifted version of A with small noise)
-        locs_c = np.rec.array(
+        locs_c = pd.DataFrame(np.rec.array(
             [
                 (2 + shift_x_c - 0.02, 2 + shift_y_c + 0.06),
                 (4 + shift_x_c + 0.03, 4 + shift_y_c - 0.02),
@@ -408,7 +409,7 @@ class TestPicassoOutpost(unittest.TestCase):
                 (10 + shift_x_c - 0.04, 10 + shift_y_c + 0.01),
             ],
             dtype=[("x", "f4"), ("y", "f4")],
-        )
+        ))
 
         # Test with the improved algorithm
         shifts, fp_figs, shift_uncertainties = picasso_outpost.align_by_rsso(
@@ -463,7 +464,8 @@ class TestPicassoOutpost(unittest.TestCase):
                 )
                 for x, y in base_locs
             ]
-            locs = np.rec.array(shifted_locs, dtype=[("x", "f4"), ("y", "f4")])
+            locs = pd.DataFrame(
+                np.rec.array(shifted_locs, dtype=[("x", "f4"), ("y", "f4")]))
             channel_locs.append(locs)
 
         # Test with the improved algorithm
@@ -506,17 +508,17 @@ class TestPicassoOutpost(unittest.TestCase):
         shift_x = 1.5
         shift_y = 0.8
 
-        locs_a = np.rec.array(
+        locs_a = pd.DataFrame(np.rec.array(
             [(2, 2), (4, 4), (6, 6)], dtype=[("x", "f4"), ("y", "f4")]
-        )
-        locs_b = np.rec.array(
+        ))
+        locs_b = pd.DataFrame(np.rec.array(
             [
                 (2 + shift_x, 2 + shift_y),
                 (4 + shift_x, 4 + shift_y),
                 (6 + shift_x, 6 + shift_y),
             ],
             dtype=[("x", "f4"), ("y", "f4")],
-        )
+        ))
 
         # Create temporary directory for plots
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -757,12 +759,12 @@ class TestPicassoOutpost(unittest.TestCase):
         shift_y_c = 1.5
 
         # Channel A (reference)
-        locs_a = np.rec.array(
+        locs_a = pd.DataFrame(np.rec.array(
             [(2, 2), (4, 4), (6, 6), (8, 8)], dtype=[("x", "f4"), ("y", "f4")]
-        )
+        ))
 
         # Channel B (shifted version of A with small noise)
-        locs_b = np.rec.array(
+        locs_b = pd.DataFrame(np.rec.array(
             [
                 (2 + shift_x_b + 0.02, 2 + shift_y_b - 0.01),
                 (4 + shift_x_b - 0.01, 4 + shift_y_b + 0.02),
@@ -770,10 +772,10 @@ class TestPicassoOutpost(unittest.TestCase):
                 (8 + shift_x_b - 0.02, 8 + shift_y_b + 0.01),
             ],
             dtype=[("x", "f4"), ("y", "f4")],
-        )
+        ))
 
         # Channel C (another shifted version of A)
-        locs_c = np.rec.array(
+        locs_c = pd.DataFrame(np.rec.array(
             [
                 (2 + shift_x_c - 0.01, 2 + shift_y_c + 0.02),
                 (4 + shift_x_c + 0.02, 4 + shift_y_c - 0.01),
@@ -781,7 +783,7 @@ class TestPicassoOutpost(unittest.TestCase):
                 (8 + shift_x_c + 0.01, 8 + shift_y_c - 0.02),
             ],
             dtype=[("x", "f4"), ("y", "f4")],
-        )
+        ))
 
         # Test with uncertainty analysis
         shifts, fp_figs, shift_uncertainties = picasso_outpost.align_by_rsso(

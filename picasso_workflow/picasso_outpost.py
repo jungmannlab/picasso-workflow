@@ -3408,7 +3408,7 @@ def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=0.4):
     kwargs["max_rmsd"] = max_rmsd
 
     # pick similar
-    x_similar, y_similar = postprocess.pick_similar(**kwargs)
+    x_similar, y_similar = postprocess._pick_similar(**kwargs)
     # add picks
     similar = list(zip(x_similar, y_similar))
     return similar
@@ -3442,9 +3442,9 @@ def get_block_locs_at(x, y, index_blocks, return_indices=False):
                     )
     indices = list(itertools.chain(*indices))
     if return_indices:
-        return locs[indices], np.array(indices)
+        return locs.iloc[indices], np.array(indices)
     else:
-        return locs[indices]
+        return locs.iloc[indices]
 
 
 def locs_at(x, y, locs, r, return_indices=False):
@@ -3525,20 +3525,26 @@ def picked_locs(
         # print(f'grouplocs: {group_locs}')
         if add_group:
             group = i * np.ones(len(group_locs), dtype=np.int32)
-            group_locs = lib.append_to_rec(group_locs, group, "group")
-        group_locs.sort(kind="mergesort", order="frame")
+            group_locs["group"] = group
+        group_locs.sort_values("frame", kind="mergesort", inplace=True)
         picked_locs.append(group_locs)
 
-    all_picked_locs = np.lib.recfunctions.stack_arrays(
-        picked_locs, asrecarray=True, usemask=False
-    )
+    all_picked_locs = pd.concat(picked_locs, ignore_index=True)
     # all_picked_locs = picked_locs
 
     if return_nonpicked:
-        mask = np.isin(
-            locs[["frame", "x", "y", "photons"]],
-            all_picked_locs[["frame", "x", "y", "photons"]],
+        # Create a merge to identify picked locs
+        locs_with_key = locs.copy()
+        locs_with_key['_key'] = 1
+        picked_with_key = all_picked_locs[["frame", "x", "y", "photons"]].copy()
+        picked_with_key['_picked'] = 1
+
+        merged = locs_with_key.merge(
+            picked_with_key,
+            on=["frame", "x", "y", "photons"],
+            how='left'
         )
+        mask = merged['_picked'].notna()
         non_picked_locs = locs[~mask]
         return all_picked_locs, non_picked_locs
     else:
@@ -3573,8 +3579,8 @@ def _undrift_from_picked_coordinate(info, picked_locs, coordinate):
 
     # Remove center of mass offset
     for i, locs in enumerate(picked_locs):
-        coordinates = getattr(locs, coordinate)
-        drift[i, locs.frame] = coordinates - np.mean(coordinates)
+        coordinates = locs[coordinate]
+        drift[i, locs['frame']] = coordinates - np.mean(coordinates)
 
     # Mean drift over picks
     drift_mean = np.nanmean(drift, 0)
@@ -3611,18 +3617,14 @@ def _undrift_from_picked(locs, info, picked_locs):
     """
     drift_x = _undrift_from_picked_coordinate(info, picked_locs, "x")
     drift_y = _undrift_from_picked_coordinate(info, picked_locs, "y")
-    locs.x -= drift_x[locs.frame]
-    locs.y -= drift_y[locs.frame]
-    dtypes = [("x", "f"), ("y", "f")]
+    locs['x'] -= drift_x[locs['frame']]
+    locs['y'] -= drift_y[locs['frame']]
 
-    drift = [drift_x, drift_y]
-    if hasattr(locs, "z"):
+    drift = {'x': drift_x, 'y': drift_y}
+    if "z" in locs.columns:
         drift_z = _undrift_from_picked_coordinate(info, picked_locs, "z")
-        locs.z -= drift_z[locs.frame]
-        drift.append(drift_z)
-        dtypes.append(("z", "f"))
-
-    drift = np.rec.array(drift, dtype=dtypes)
+        locs['z'] -= drift_z[locs['frame']]
+        drift['z'] = drift_z
     # drift = np.array(drift).T
     return locs, info, drift
 
@@ -4084,7 +4086,7 @@ def plot_1dhist(locs, field, fig, ax):
     # Prepare the figure
     fig.suptitle(field)
     ax.hist(data, bins, rwidth=1, linewidth=0)
-    data_range = data.ptp()
+    data_range = np.ptp(data)
     ax.set_xlim([bins[0] - 0.05 * data_range, data.max() + 0.05 * data_range])
 
 
@@ -4100,9 +4102,9 @@ def plot_2dhist(locs, field_x, field_y, fig, ax):
     counts, x_edges, y_edges, image = ax.hist2d(
         x, y, bins=[bins_x, bins_y], norm=LogNorm()
     )
-    x_range = x.ptp()
+    x_range = np.ptp(x)
     ax.set_xlim([bins_x[0] - 0.05 * x_range, x.max() + 0.05 * x_range])
-    y_range = y.ptp()
+    y_range = np.ptp(y)
     ax.set_ylim([bins_y[0] - 0.05 * y_range, y.max() + 0.05 * y_range])
     fig.colorbar(image, ax=ax)
     ax.grid(False)

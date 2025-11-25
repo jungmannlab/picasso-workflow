@@ -51,8 +51,15 @@ def split_localizations_random(locs, seed=None):
     indices = np.random.permutation(n)
     split = n // 2
 
-    locs_1 = locs[indices[:split]]
-    locs_2 = locs[indices[split:]]
+    # Handle both DataFrame and structured array indexing
+    if hasattr(locs, 'iloc'):
+        # DataFrame indexing
+        locs_1 = locs.iloc[indices[:split]]
+        locs_2 = locs.iloc[indices[split:]]
+    else:
+        # Structured array indexing
+        locs_1 = locs[indices[:split]]
+        locs_2 = locs[indices[split:]]
 
     # logger.debug(
     #     f"  Split {n} localizations into {len(locs_1)} and {len(locs_2)}"

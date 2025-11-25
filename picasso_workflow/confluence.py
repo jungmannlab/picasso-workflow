@@ -1426,79 +1426,79 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    # @module_decorator
-    # def gaussian_mixture_cluster(
-    #     self,
-    #     i,
-    #     parameters,
-    #     results,
-    #     parameter_text,
-    #     result_text,
-    #     postpone_report=False,
-    # ):
-    #     logger.debug("Reporting gaussian_mixture_cluster.")
+    @module_decorator
+    def gaussian_mixture_cluster(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        logger.debug("Reporting gaussian_mixture_cluster.")
 
-    #     pct_discarded = (
-    #         (results["n_locs_in"] - results["n_locs_clustered"])
-    #         / results["n_locs_in"]
-    #         * 100
-    #     )
-    #     locspctr = results["n_locs_clustered"] / results["n_centers"]
-    #     text = f"""
-    #     <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-    #     <p><strong>Module {i:02d}:
-    #     Gaussian Mixture Model clustering</strong></p>
-    #     Keeping centers as new locs.
-    #     Summary:
-    #     <ul>
-    #     <li>Locs discarded: {pct_discarded:.1f} %</li>
-    #     <li>Mean number of locs per center: {locspctr:.1f}</li>
-    #     <li>Duration: {results["duration"] // 60:.0f} min
-    #     {(results["duration"] % 60):.2f} s</li>
-    #     </ul>
-    #     {parameter_text}
-    #     {result_text}
-    #     """
+        pct_discarded = (
+            (results["n_locs_in"] - results["n_locs_clustered"])
+            / results["n_locs_in"]
+            * 100
+        )
+        locspctr = results["n_locs_clustered"] / results["n_centers"]
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}:
+        Gaussian Mixture Model clustering</strong></p>
+        Keeping centers as new locs.
+        Summary:
+        <ul>
+        <li>Locs discarded: {pct_discarded:.1f} %</li>
+        <li>Mean number of locs per center: {locspctr:.1f}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
 
-    #     fig_fps = []
-    #     titles = []
-    #     if fp_fig := results.get("fp_fig_clustersizes"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("Cluster Size Distribution")
-    #     if fp_fig := results.get("fp_fig_subclustering"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("Subcluster-test: sparse vs dense regions")
+        fig_fps = []
+        titles = []
+        if fp_fig := results.get("fp_fig_clustersizes"):
+            fig_fps.append(fp_fig)
+            titles.append("Cluster Size Distribution")
+        if fp_fig := results.get("fp_fig_subclustering"):
+            fig_fps.append(fp_fig)
+            titles.append("Subcluster-test: sparse vs dense regions")
 
-    #     if len(fig_fps) > 1:
-    #         fn_figs = []
-    #         for fp in fig_fps:
-    #             try:
-    #                 self.ci.upload_attachment(self.report_page_id, fp)
-    #             except ConfluenceInterfaceError:
-    #                 pass
-    #             fn_figs.append(os.path.split(fp)[1])
+        if len(fig_fps) > 1:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
 
-    #         text += "<table><tr>"
-    #         for tit in titles:
-    #             text += f"<td><b>{tit}</b></td>"
-    #         text += "</tr>"
-    #         text += "<tr>"
-    #         for fn in fn_figs:
-    #             text += f"""
-    #                 <td>
-    #                       <ac:image ac:height="350">
-    #                       <ri:attachment ri:filename="{fn}" />
-    #                       </ac:image>
-    #                 </td>"""
-    #         text += "</tr>"
-    #         text += "</table>"
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
 
-    #     text += """
-    #     </ac:layout-cell></ac:layout-section></ac:layout>
-    #     """
-    #     self.ci.update_page_content(
-    #         self.report_page_name, self.report_page_id, text
-    #     )
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
 
     @module_decorator
     def nneighbor(

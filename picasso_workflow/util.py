@@ -280,10 +280,10 @@ class AbstractModuleCollection(abc.ABC):
         """Perform clustering using the smlm clusterer"""
         pass
 
-    # @abc.abstractmethod
-    # def gaussian_mixture_cluster(self):
-    #     """Perform clustering using gaussian mixture models"""
-    #     pass
+    @abc.abstractmethod
+    def gaussian_mixture_cluster(self):
+        """Perform clustering using gaussian mixture models"""
+        pass
 
     @abc.abstractmethod
     def nneighbor(self):

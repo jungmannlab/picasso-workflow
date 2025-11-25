@@ -43,6 +43,7 @@ from picasso import (
     postprocess,
     spinna,
 )
+from picasso_workflow.outpost_modules import g5m
 from scipy.ndimage import label
 from scipy.spatial import KDTree, distance
 from scipy.stats import kstest, norm, poisson
@@ -1245,7 +1246,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
             self._save_locs(pars["filename"])
 
-        results["locs_columns"] = self.locs.dtype.names
+        results["locs_columns"] = list(self.locs.columns)
         return parameters, results
 
     def _plot_locs_vs_frame(self, filename):
@@ -1474,6 +1475,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         pixelsize = self.pixelsize
         progress = parameters.get("progress", None)
+        # progress = lib.MockProgress().set_value,  # parameters.get("progress", None)
 
         # dirty debug: picasso.aim.aim expects the existence
         # of info[1]["Pixelsize"]
@@ -3727,7 +3729,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig, ax = plt.subplots()
         frames = np.arange(drift.shape[0])
         for i, dim in enumerate(dimensions):
-            if isinstance(drift, np.recarray):
+            if isinstance(drift, pd.DataFrame):
                 ax.plot(frames, drift[dim] * pixelsize, label=dim)
             else:
                 ax.plot(frames, drift[:, i] * pixelsize, label=dim)
@@ -3903,7 +3905,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     }
             elif meth.lower() == "median-loc-precision":
                 median_lp = np.median(
-                    np.stack((self.locs.lpx, self.locs.lpy), axis=1).mean(1)
+                    np.stack((self.locs['lpx'], self.locs['lpy']), axis=1).mean(1)
                 )
                 median_lp = median_lp / meth_pars.get("qe_correction", 1)
                 results["median-loc-precision"] = {
@@ -6000,125 +6002,125 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    # @profile_resource_usage
-    # @module_decorator
-    # def gaussian_mixture_cluster(self, i, parameters, results):
-    #     """Perform clustering using gaussian mixture modelsAfter this module,
-    #     the standard locs will be the Gaussian centers.
-    #     Args:
-    #         i : int
-    #             the index of the module
-    #         parameters: dict
-    #             with required keys:
-    #                 locs : np.recarray
-    #                     Localizations.
-    #                 info : list
-    #                     Information dictionaries.
-    #                 min_locs : int
-    #                     Minimum number of localizations per component. Used to
-    #                     filter out components with too few localizations that
-    #                     likely  represent background.
-    #             and optional keys:
-    #                 save_locs : bool
-    #                     whether to save the locs into the results folder
-    #                 max_rounds_without_best_bic : int
-    #                     (default=3)
-    #                     Maximum number of rounds without BIC improvement to
-    #                     terminate the optimal GMM search.
-    #                 bootstrap_check : bool (default=False)
-    #                     If True, the standard error of the means (SEM) is
-    #                     calculated using bootstrapping. If False, the standard,
-    #                     single Gaussian SEM is used as approximation.
-    #                 calibration : dict (default=None)
-    #                     Calibration dictionary with x and y coefficients, z
-    #                     step size and the number of frames. Only required for
-    #                     3D data.
-    #                 asynch : bool (default=True)
-    #                     If True, the GMM search is run in parallel using
-    #                     multiprocessing. If False, the GMM search is run
-    #                     without multiprocessing.
-    #                 callback_parent : function (default='silent')
-    #                     Callback function's parent object for displaying
-    #                     progress bar. If None, the progress bar displayed
-    #                     directly to the console. If 'silent', no progress
-    #                     is displayed
-    #                 sigma_bounds : float (not recommended)
-    #                     Minimum standard deviation of the Gaussian components
-    #                     in nanometers. Useful for avoiding overfitting within
-    #                     a single localization cloud. Now using individual
-    #                     loc precision, so min_sigma is not recommended.
-    #                 loc_prec_handle : Literal["local", "global", "abs"]
-    #                     default: local
-    #         results : dict
-    #             the results this function generates. This is created
-    #             in the decorator wrapper
-    #     """
-    #     pixelsize = self.pixelsize
-    #     required_args = ["min_locs"]
-    #     optional_args = [
-    #         ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
-    #         ("bootstrap_check", False),
-    #         ("calibration", None),
-    #         ("pixelsize", pixelsize),
-    #         ("asynch", True),
-    #         ("callback_parent", "silent"),
-    #         ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
-    #         ("loc_prec_handle", "local"),
-    #     ]
-    #     try:
-    #         kwargs = {k: parameters[k] for k in required_args}
-    #     except KeyError as e:
-    #         logger.error(
-    #             f"""All of the following arguments are required for
-    #             picasso.g5m.run_g5m: {required_args}"""
-    #         )
-    #         raise e
-    #     # sigma values are given in nm in parameters but px in gmm
-    #     if "min_sigma" in kwargs.keys():
-    #         kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
-    #         kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
-    #     for oa, default in optional_args:
-    #         kwargs[oa] = parameters.get(oa, default)
+    @profile_resource_usage
+    @module_decorator
+    def gaussian_mixture_cluster(self, i, parameters, results):
+        """Perform clustering using gaussian mixture modelsAfter this module,
+        the standard locs will be the Gaussian centers.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    locs : np.recarray
+                        Localizations.
+                    info : list
+                        Information dictionaries.
+                    min_locs : int
+                        Minimum number of localizations per component. Used to
+                        filter out components with too few localizations that
+                        likely  represent background.
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+                    max_rounds_without_best_bic : int
+                        (default=3)
+                        Maximum number of rounds without BIC improvement to
+                        terminate the optimal GMM search.
+                    bootstrap_check : bool (default=False)
+                        If True, the standard error of the means (SEM) is
+                        calculated using bootstrapping. If False, the standard,
+                        single Gaussian SEM is used as approximation.
+                    calibration : dict (default=None)
+                        Calibration dictionary with x and y coefficients, z
+                        step size and the number of frames. Only required for
+                        3D data.
+                    asynch : bool (default=True)
+                        If True, the GMM search is run in parallel using
+                        multiprocessing. If False, the GMM search is run
+                        without multiprocessing.
+                    callback_parent : function (default='silent')
+                        Callback function's parent object for displaying
+                        progress bar. If None, the progress bar displayed
+                        directly to the console. If 'silent', no progress
+                        is displayed
+                    sigma_bounds : float (not recommended)
+                        Minimum standard deviation of the Gaussian components
+                        in nanometers. Useful for avoiding overfitting within
+                        a single localization cloud. Now using individual
+                        loc precision, so min_sigma is not recommended.
+                    loc_prec_handle : Literal["local", "global", "abs"]
+                        default: local
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        pixelsize = self.pixelsize
+        required_args = ["min_locs"]
+        optional_args = [
+            ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
+            ("bootstrap_check", False),
+            ("calibration", None),
+            ("pixelsize", pixelsize),
+            ("asynch", True),
+            ("callback_parent", "silent"),
+            ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
+            ("loc_prec_handle", "local"),
+        ]
+        try:
+            kwargs = {k: parameters[k] for k in required_args}
+        except KeyError as e:
+            logger.error(
+                f"""All of the following arguments are required for
+                picasso.g5m.run_g5m: {required_args}"""
+            )
+            raise e
+        # sigma values are given in nm in parameters but px in gmm
+        if "min_sigma" in kwargs.keys():
+            kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
+            kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
+        for oa, default in optional_args:
+            kwargs[oa] = parameters.get(oa, default)
 
-    #     results["g5m_args"] = str(kwargs)
+        results["g5m_args"] = str(kwargs)
 
-    #     center_locs, clustered_locs, gmm_info = g5m.run_g5m(
-    #         self.locs, self.info, **kwargs
-    #     )
+        center_locs, clustered_locs, gmm_info = g5m.run_g5m(
+            self.locs, self.info, **kwargs
+        )
 
-    #     if parameters.get("save_locs"):
-    #         fp_centers = os.path.join(results["folder"], "gmm_centers.hdf5")
-    #         io.save_locs(fp_centers, center_locs, gmm_info)
-    #         fp_centers = os.path.join(
-    #             results["folder"], "gmm_clustered_locs.hdf5"
-    #         )
-    #         io.save_locs(fp_centers, clustered_locs, gmm_info)
+        if parameters.get("save_locs"):
+            fp_centers = os.path.join(results["folder"], "gmm_centers.hdf5")
+            io.save_locs(fp_centers, center_locs, gmm_info)
+            fp_centers = os.path.join(
+                results["folder"], "gmm_clustered_locs.hdf5"
+            )
+            io.save_locs(fp_centers, clustered_locs, gmm_info)
 
-    #     # plot: histogram of cluster sizes
-    #     fig, ax = plt.subplots()
-    #     maxbin = int(np.quantile(center_locs["n"], 0.95))
-    #     ax.hist(center_locs["n"], bins=np.arange(maxbin))
-    #     ax.set_xlabel("cluster size [locs]")
-    #     ax.set_ylabel("Frequency")
-    #     results["fp_fig_clustersizes"] = os.path.join(
-    #         results["folder"], "fig_gmm_clustersize.png"
-    #     )
-    #     fig.savefig(results["fp_fig_clustersizes"])
+        # plot: histogram of cluster sizes
+        fig, ax = plt.subplots()
+        maxbin = int(np.quantile(center_locs["n"], 0.95))
+        ax.hist(center_locs["n"], bins=np.arange(maxbin))
+        ax.set_xlabel("cluster size [locs]")
+        ax.set_ylabel("Frequency")
+        results["fp_fig_clustersizes"] = os.path.join(
+            results["folder"], "fig_gmm_clustersize.png"
+        )
+        fig.savefig(results["fp_fig_clustersizes"])
 
-    #     # test for subclustering
-    #     results["fp_fig_subclustering"] = os.path.join(
-    #         results["folder"], "subcluster_test.png"
-    #     )
-    #     g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
+        # test for subclustering
+        results["fp_fig_subclustering"] = os.path.join(
+            results["folder"], "subcluster_test.png"
+        )
+        g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
 
-    #     results["n_locs_in"] = len(self.locs)
-    #     results["n_locs_clustered"] = len(clustered_locs)
-    #     results["n_centers"] = len(center_locs)
+        results["n_locs_in"] = len(self.locs)
+        results["n_locs_clustered"] = len(clustered_locs)
+        results["n_centers"] = len(center_locs)
 
-    #     self.locs = copy.copy(center_locs)
-    #     self.info = gmm_info
+        self.locs = copy.copy(center_locs)
+        self.info = gmm_info
 
-    #     return parameters, results
+        return parameters, results
 
     #    @profile_resource_usage
     @module_decorator
@@ -6166,9 +6168,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         fp_figs = []
         for i, (tag, locs) in enumerate(zip(tags, locs_list)):
             fig, ax = plt.subplots(nrows=2)
-            points = np.array(
-                locs[parameters["dims"]].tolist()
-            )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
+            # points = np.array(
+            #     locs[parameters["dims"]].tolist()
+            # )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
+            points = locs[list(parameters["dims"])].to_numpy()
             # convert all dimensions to nanometers
             pixelsize = self.pixelsize
             for i, dim in enumerate(parameters["dims"]):
@@ -6183,14 +6186,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 if parameters.get("add_column", False):
                     # print(alldist.shape)
                     if sgl_stage:
-                        self.locs = lib.append_to_rec(
-                            locs, alldist[:, 1], "NNdist"
-                        )
+                        self.locs["NNdist"] = alldist[:, 1]
                         # print(locs.dtype)
                     else:
-                        self.channel_locs[i] = lib.append_to_rec(
-                            locs, alldist[:, 1], "NNdist"
-                        )
+                        self.channel_locs[i]["NNdist"] = alldist[:, 1]
                         # print(locs.dtype)
                 alldist = np.sort(alldist, axis=1)
                 logger.debug("sorted all distances")
@@ -6201,15 +6200,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                 if parameters.get("add_column", False):
                     print(alldist.shape)
                     if sgl_stage:
-                        self.locs = lib.append_to_rec(
-                            locs, alldist[:, 1], "NNdist"
-                        )
-                        print(locs.dtype)
+                        self.locs["NNdist"] = alldist[:, 1]
+                        print(self.locs.dtypes)
                     else:
-                        self.channel_locs[i] = lib.append_to_rec(
-                            locs, alldist[:, 1], "NNdist"
-                        )
-                        print(locs.dtype)
+                        self.channel_locs[i]["NNdist"] = alldist[:, 1]
+                        print(self.channel_locs[i].dtypes)
                 alldist = np.sort(alldist, axis=1)
 
             # calculate bins
@@ -6783,11 +6778,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             #     np.full(len(locs), tag, dtype='U10'),
             #     "channel",
             # )
-            locs = lib.append_to_rec(
-                locs,
-                i * np.ones(len(locs), dtype=np.int8),
-                "channel",
-            )
+            locs["channel"] = i * np.ones(len(locs), dtype=np.int8)
             self.channel_locs.append(locs)
             self.channel_info.append(info)
             self.channel_tags.append(tag)
@@ -6913,10 +6904,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 zip(self.channel_tags, fp_co_shift_list)
             ):
                 co_shift_locs, co_shift_info = io.load_locs(fp)
-                co_shift_locs.x -= cum_shifts[0, i, -1]
-                co_shift_locs.y -= cum_shifts[1, i, -1]
+                co_shift_locs['x'] -= cum_shifts[0, i, -1]
+                co_shift_locs['y'] -= cum_shifts[1, i, -1]
                 if len(shifts) == 3:
-                    co_shift_locs[i].z -= cum_shifts[2, i, -1]
+                    co_shift_locs['z'] -= cum_shifts[2, i, -1]
                 _, fn_coshift_locs = os.path.split(fp)
                 fp_co_shift_locs_out.append(
                     os.path.join(results["folder"], f"{tag}_{fn_coshift_locs}")
@@ -7029,17 +7020,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         combine_col = parameters.get("combine_col", "combine_id")
         for i in range(len(self.channel_locs)):
             locs = self.channel_locs[i]
-            self.channel_locs[i] = lib.append_to_rec(
-                locs, data=i * np.ones(len(locs)), name=combine_col
-            )
-        combined_locs = np.lib.recfunctions.stack_arrays(
-            self.channel_locs,
-            asrecarray=True,
-            usemask=False,
-            autoconvert=True,
-        )
+            # Add combine_id column using DataFrame column assignment
+            locs[combine_col] = i * np.ones(len(locs))
+            self.channel_locs[i] = locs
+        # Concatenate all DataFrames
+        combined_locs = pd.concat(self.channel_locs, ignore_index=True)
         # sort like all Picasso localization lists
-        # combined_locs.sort(kind="mergesort", order="frame")
         combined_locs.sort_values("frame", kind="mergesort", inplace=True)
 
         # replace the channel_locs with the one combined dataset
@@ -7174,17 +7160,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         for i, target in enumerate(self.channel_tags):
             locs = self.channel_locs[i]
             exp_n_targets[i] = len(locs)
-            if hasattr(locs, "z"):
+            if "z" in locs.columns:
                 exp_data[target] = np.stack(
-                    (locs.x * pixelsize, locs.y * pixelsize, locs.z)
+                    (locs['x'] * pixelsize, locs['y'] * pixelsize, locs['z'])
                 ).T
                 # dim = 3
             else:
                 exp_data[target] = np.stack(
-                    (locs.x * pixelsize, locs.y * pixelsize)
+                    (locs['x'] * pixelsize, locs['y'] * pixelsize)
                 ).T
 
-        data_2d = "z" not in self.channel_locs[0].dtype.names
+        data_2d = "z" not in self.channel_locs[0].columns
         if not data_2d:
             if self.locs is not None:
                 z_range = int(self.locs["z"].max() - self.locs["z"].min())
@@ -7320,7 +7306,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         if not prepped:
             spinna_config = {}
-            data_2d = "z" not in self.channel_locs[0].dtype.names
+            data_2d = "z" not in self.channel_locs[0].columns
             if data_2d:
                 spinna_config["rotation_mode"] = ["2D"]
                 area = (
@@ -8605,14 +8591,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             exp_data = {}
             for i, target in zip([ia, ib], [A, B]):
                 locs = self.channel_locs[i]
-                if hasattr(locs, "z"):
+                if "z" in locs.columns:
                     exp_data[target] = np.stack(
-                        (locs.x * pixelsize, locs.y * pixelsize, locs.z)
+                        (locs['x'] * pixelsize, locs['y'] * pixelsize, locs['z'])
                     ).T
                     # dim = 3
                 else:
                     exp_data[target] = np.stack(
-                        (locs.x * pixelsize, locs.y * pixelsize)
+                        (locs['x'] * pixelsize, locs['y'] * pixelsize)
                     ).T
                     # dim = 2
             structures = self._create_spinna_structure(
@@ -10257,8 +10243,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Not engouh gold particles found. Skipping further undrifting
                 steps for this file" continue without gold undrifting"""
             )
-            dtypes = self.locs.dtype
-            gold_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
+            gold_locs = pd.DataFrame(columns=self.locs.columns)
             nongold_locs = self.locs
         else:
             # function needs to return the locs in a r radius around the gold
@@ -10434,23 +10419,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # if not isinstance(dt_orig, list) and len(dt_orig) == 2:
                 #     dt_orig = dt_orig[1]
                 # dtypes = self.locs.dtype + [("group", "<i4")]
-                dtypes = [
-                    ("frame", "<u4"),
-                    ("x", "<f4"),
-                    ("y", "<f4"),
-                    ("photons", "<f4"),
-                    ("sx", "<f4"),
-                    ("sy", "<f4"),
-                    ("bg", "<f4"),
-                    ("lpx", "<f4"),
-                    ("lpy", "<f4"),
-                    ("ellipticity", "<f4"),
-                    ("net_gradient", "<f4"),
-                    ("group", "<i4"),
+                column_names = [
+                    "frame", "x", "y", "photons", "sx", "sy", "bg",
+                    "lpx", "lpy", "ellipticity", "net_gradient", "group"
                 ]
             except Exception as e:
                 raise e
-            picked_locs = np.rec.array([[]] * len(dtypes), dtype=dtypes)
+            picked_locs = pd.DataFrame(columns=column_names)
         results["n_picked_locs"] = len(picked_locs)
         results["n_locs"] = len(self.locs)
 
@@ -10715,7 +10690,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         dims = ["x", "y"]
-        if hasattr(picked_locs, "z"):
+        if "z" in picked_locs.columns:
             dims.append("z")
         fp_fig = os.path.join(results["folder"], "undrift_from_picked.png")
         results["fp_fig"] = fp_fig
@@ -11231,7 +11206,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             depth = max([locs["z"].max() for locs in self.channel_locs]) - min(
                 [locs["z"].min() for locs in self.channel_locs]
             )
-        except ValueError:
+        except (ValueError, KeyError):
             depth = None
 
         if isinstance(parameters["density"], list):
@@ -11260,14 +11235,14 @@ class AutoPicasso(util.AbstractModuleCollection):
         exp_data = {}
         for i, tgt in zip([i_target, i_reference], [target, reference]):
             locs = self.channel_locs[i]
-            if hasattr(locs, "z"):
+            if "z" in locs.columns:
                 exp_data[tgt] = np.stack(
-                    (locs.x * pixelsize, locs.y * pixelsize, locs.z)
+                    (locs['x'] * pixelsize, locs['y'] * pixelsize, locs['z'])
                 ).T
                 # dim = 3
             else:
                 exp_data[tgt] = np.stack(
-                    (locs.x * pixelsize, locs.y * pixelsize)
+                    (locs['x'] * pixelsize, locs['y'] * pixelsize)
                 ).T
                 # dim = 2
 
