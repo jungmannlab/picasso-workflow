@@ -7,6 +7,7 @@ Description: This is the picasso interface of picasso-workflow
 """
 import copy
 import gc
+
 # import logging
 from loguru import logger
 import multiprocessing as mp
@@ -34,7 +35,7 @@ from picasso import __version__ as picassoversion
 from picasso import (
     aim,
     clusterer,
-    g5m,
+    # g5m,
     gausslq,
     io,
     lib,
@@ -128,16 +129,16 @@ def get_memory_of(obj):
 
 def profile_resource_usage(method):
     """
-    Decorator that profiles peak memory and CPU usage of a function.
-    Returns results in a dictionary with values in GB and core count.
-    Compatible with Linux, MacOS, and Windows.
+        Decorator that profiles peak memory and CPU usage of a function.
+        Returns results in a dictionary with values in GB and core count.
+        Compatible with Linux, MacOS, and Windows.
 
-    Intended to be used "outside" the module_wrapper, e.g.
+        Intended to be used "outside" the module_wrapper, e.g.
 
-    @profile_resource_usage
-    @module_decorator
-    def undrift(self, i, parameters, results):
-        pass
+    #    @profile_resource_usage
+        @module_decorator
+        def undrift(self, i, parameters, results):
+            pass
     """
 
     @wraps(method)
@@ -434,7 +435,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         raise KeyError("Could not determine #Frames.")
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def dummy_module(self, i, parameters, results):
         """A module that does nothing, for quickly removing
@@ -453,7 +454,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def conditional_branch(self, i, parameters, results):
         """Execute different sub-module sequences based on a condition.
@@ -615,7 +616,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     # Single dataset modules
     ##########################################################################
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def analysis_documentation(self, i, parameters, results):
         """This module documents where and how analysis is being performed
@@ -645,24 +646,24 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["CPU Frequency [MHz]"] = psutil.cpu_freq().current
         results["CPU cores"] = psutil.cpu_count()
         results["Memory total [GB]"] = psutil.virtual_memory().total // (
-            1024 ** 3
+            1024**3
         )
-        results[
-            "Memory available [GB]"
-        ] = psutil.virtual_memory().available // (1024 ** 3)
+        results["Memory available [GB]"] = (
+            psutil.virtual_memory().available // (1024**3)
+        )
         try:
             gpu_info = psutil.virtual_memory().gpu
         except AttributeError:
             gpu_info = None
         if gpu_info:
             results["GPU"] = gpu_info.name
-            results["GPU memory"] = gpu_info.memory_total // (1024 ** 3)
+            results["GPU memory"] = gpu_info.memory_total // (1024**3)
         else:
             results["GPU"] = "N/A"
             results["GPU memory [GB]"] = 0
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def convert_zeiss_movie(self, i, parameters, results):
         """Converts a DNA-PAINT movie into .raw, as supported by picasso.
@@ -696,7 +697,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["filename_raw"] = filename_raw
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def load_dataset_movie(self, i, parameters, results):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
@@ -825,7 +826,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["filename"] = filename
         return results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def load_dataset_localizations(self, i, parameters, results):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
@@ -901,8 +902,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
             )
         # id_list = identifications
-        identifications = np.hstack(identifications).view(np.recarray)
-        identifications.sort(kind="mergesort", order="frame")
+        # identifications = np.hstack(identifications).view(np.recarray)
+        # identifications.sort(kind="mergesort", order="frame")
+        identifications = pd.concat(identifications)
+        identifications.sort_values("frame", kind="mergesort")
 
         # calculate histogram
         if bins is None:
@@ -1014,14 +1017,21 @@ class AutoPicasso(util.AbstractModuleCollection):
         sample_idxs = np.argsort(
             np.abs(identifications["net_gradient"] - estd_net_grad)
         )[:n_spots]
-        sample_identifications = identifications[sample_idxs]
-        sample_identifications = sample_identifications[
-            np.argsort(sample_identifications["net_gradient"])
-        ]
+        # sample_identifications = identifications[sample_idxs]
+        # sample_identifications = sample_identifications[
+        #     np.argsort(sample_identifications["net_gradient"])
+        # ]
+        sample_identifications = identifications.iloc[sample_idxs]
+        sample_identifications = sample_identifications.sort_values(
+            "net_gradient"
+        ).reset_index(drop=True)
 
         # sample_spots = localize.get_spots(
         sample_spots = picasso_outpost.get_spots(
-            self.movie, sample_identifications, box_size, self.camera_info,
+            self.movie,
+            sample_identifications,
+            box_size,
+            self.camera_info,
         )
         ng_start = np.min(sample_identifications["net_gradient"])
         ng_end = np.max(sample_identifications["net_gradient"])
@@ -1040,12 +1050,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             pix = ix * (box_size + border_width)
             piy = iy * (box_size + border_width)
             # logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
-            canvas[
-                pix : pix + box_size, piy : piy + box_size
-            ] = picasso_outpost.normalize_spot(spot)
+            canvas[pix : pix + box_size, piy : piy + box_size] = (
+                picasso_outpost.normalize_spot(spot)
+            )
         return canvas, ng_start, ng_end
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def identify(self, i, parameters, results):
         """Identifies localizations in a loaded dataset.
@@ -1138,7 +1148,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         plt.close(fig)
         return results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def localize(self, i, parameters, results):
         """Localizes Spots previously identified.
@@ -1285,7 +1295,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         plt.close(fig)
         return results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def export_brightfield(self, i, parameters, results):
         """Opens a single-plane tiff image and saves it to png with
@@ -1341,7 +1351,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["success"] = True
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def render(self, i, parameters, results):
         """Renders localizations on the whole field of view, and on
@@ -1427,7 +1437,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def undrift_aim(self, i, parameters, results):
         """Unrift localized data using the AIM algorithm
@@ -1500,7 +1510,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def undrift_rcc(self, i, parameters, results):
         """Undrifts localized data using redundant cross correlation.
@@ -2065,7 +2075,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         change_points = []
 
         # Method 1: Detect large changes in drift magnitude
-        drift_magnitude = np.sqrt(drift_x_valid ** 2 + drift_y_valid ** 2)
+        drift_magnitude = np.sqrt(drift_x_valid**2 + drift_y_valid**2)
         if len(drift_magnitude) > 3:
             # Use moving average and standard deviation for change detection
             window = min(5, len(drift_magnitude) // 3)
@@ -2303,11 +2313,11 @@ class AutoPicasso(util.AbstractModuleCollection):
 
                 uncertainty_x_fine[frame_idx] = np.sqrt(
                     uncertainty_x_fine[frame_idx - 1] ** 2
-                    + scaled_uncertainty_x ** 2
+                    + scaled_uncertainty_x**2
                 )
                 uncertainty_y_fine[frame_idx] = np.sqrt(
                     uncertainty_y_fine[frame_idx - 1] ** 2
-                    + scaled_uncertainty_y ** 2
+                    + scaled_uncertainty_y**2
                 )
 
                 drift_quality[frame_idx] = quality
@@ -2376,7 +2386,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             # Quality metrics for outlier detection
             quality = len(locs_ref) + len(locs_target)
-            shift_magnitude = np.sqrt(shift_x ** 2 + shift_y ** 2)
+            shift_magnitude = np.sqrt(shift_x**2 + shift_y**2)
 
             # Detect RSSO failure and outliers
             if outlier_detection_enabled:
@@ -2445,7 +2455,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if uncertainty_x is not None and uncertainty_y is not None:
             # Flag if uncertainty is comparable to or larger than the shift
             uncertainty_magnitude = np.sqrt(
-                uncertainty_x ** 2 + uncertainty_y ** 2
+                uncertainty_x**2 + uncertainty_y**2
             )
             signal_to_noise = shift_magnitude / (uncertainty_magnitude + 1e-10)
 
@@ -2596,7 +2606,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Calculate instantaneous drift rate
         drift_rate_x = np.diff(drift_x_fine)
         drift_rate_y = np.diff(drift_y_fine)
-        drift_rate_magnitude = np.sqrt(drift_rate_x ** 2 + drift_rate_y ** 2)
+        drift_rate_magnitude = np.sqrt(drift_rate_x**2 + drift_rate_y**2)
 
         # Plot drift rate
         ax2_twin = ax2.twinx()
@@ -2727,7 +2737,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         ax4 = axes[3]
 
         total_uncertainty = np.sqrt(
-            uncertainty_x_fine ** 2 + uncertainty_y_fine ** 2
+            uncertainty_x_fine**2 + uncertainty_y_fine**2
         )
         ax4.plot(
             frame_indices,
@@ -2810,7 +2820,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Plot 1: Drift magnitude histogram
         ax1 = axes[0, 0]
-        drift_magnitude = np.sqrt(drift_x ** 2 + drift_y ** 2)
+        drift_magnitude = np.sqrt(drift_x**2 + drift_y**2)
         ax1.hist(
             drift_magnitude[1:],
             bins=30,
@@ -2841,7 +2851,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Plot 3: Uncertainty vs Window Size
         ax3 = axes[1, 0]
-        total_uncertainty = np.sqrt(uncertainty_x ** 2 + uncertainty_y ** 2)
+        total_uncertainty = np.sqrt(uncertainty_x**2 + uncertainty_y**2)
         ax3.scatter(
             window_sizes[1:],
             total_uncertainty[1:],
@@ -3340,7 +3350,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Plot 4: Drift trajectory comparison
         ax4 = axes[1, 1]
         drift_magnitude = np.sqrt(
-            drift_x_interpolated ** 2 + drift_y_interpolated ** 2
+            drift_x_interpolated**2 + drift_y_interpolated**2
         )
         anchor_magnitude = np.sqrt(
             np.array(anchor_drifts_x) ** 2 + np.array(anchor_drifts_y) ** 2
@@ -3429,11 +3439,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                         # Accumulate uncertainties (assuming independence)
                         uncertainty_x_coarse[frame_idx] = np.sqrt(
                             uncertainty_x_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_x ** 2
+                            + block_uncertainty_x**2
                         )
                         uncertainty_y_coarse[frame_idx] = np.sqrt(
                             uncertainty_y_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_y ** 2
+                            + block_uncertainty_y**2
                         )
                     else:
                         uncertainty_x_coarse[frame_idx] = block_uncertainty_x
@@ -3540,7 +3550,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def undrift_rsso(self, i, parameters, results):
         """Undrift localized data using iterative RSSO-based drift correction
@@ -3816,7 +3826,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig.savefig(filename, dpi=300, bbox_inches="tight")
         plt.close(fig)
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def manual(self, i, parameters, results):
         """Handles a manual step: if the files required are not
@@ -3854,7 +3864,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # raise ManualInputLackingError(f'{filepath} missing.')
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def summarize_dataset(self, i, parameters, results):
         pixelsize = self.pixelsize
@@ -3946,7 +3956,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     #         self._save_locs(os.path.join(results["folder"], "locs.hdf5"))
     #     return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def density(self, i, parameters, results):
         """ACalculate local localization density
@@ -3975,7 +3985,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         self.info.append(density_info)
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def dbscan(self, i, parameters, results):
         """Perform dbscan clustering. After this module, the standard
@@ -4037,7 +4047,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def hdbscan(self, i, parameters, results):
         """Perform hdbscan clustering. After this module, the standard
@@ -4081,7 +4091,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def binding_event_analysis(self, i, parameters, results):
         """Evaluate binding events according to Philipp Steen's methods
@@ -4138,7 +4148,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         for k, v in config.items():
             results[k] = v
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def resolution_analysis(self, i, parameters, results):
         """Perform resolution analysis using point pattern autocorrelation
@@ -4311,7 +4321,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         def gaussian_1d(x, amplitude, sigma, background):
             """1D Gaussian function for radial profile fitting"""
             return (
-                amplitude * np.exp(-((x) ** 2) / (2 * sigma ** 2)) + background
+                amplitude * np.exp(-((x) ** 2) / (2 * sigma**2)) + background
             )
 
         def dblgaussian_1d(
@@ -4319,8 +4329,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         ):
             """Double Gaussian function for radial profile fitting"""
             return (
-                amplitude_1 * np.exp(-((x) ** 2) / (2 * sigma_1 ** 2))
-                + amplitude_2 * np.exp(-((x) ** 2) / (2 * sigma_2 ** 2))
+                amplitude_1 * np.exp(-((x) ** 2) / (2 * sigma_1**2))
+                + amplitude_2 * np.exp(-((x) ** 2) / (2 * sigma_2**2))
             ) + background
 
         # Fit 1D Gaussian to radial profile
@@ -4570,9 +4580,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                             1.0
                             / (
                                 1.0
-                                + np.sqrt(
-                                    uncertainty_x ** 2 + uncertainty_y ** 2
-                                )
+                                + np.sqrt(uncertainty_x**2 + uncertainty_y**2)
                             )
                         ),
                     )
@@ -4660,7 +4668,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # Simple confidence metric based on localization count and uncertainty
                 if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
                     uncertainty_magnitude = np.sqrt(
-                        uncertainty_x ** 2 + uncertainty_y ** 2
+                        uncertainty_x**2 + uncertainty_y**2
                     )
                     confidence = min(
                         1.0,
@@ -4780,7 +4788,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             print(f"      Chunk {chunk_idx} failed: {e}")
             return None
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def resolution_autocorr(self, i, parameters, results):
         """Calculate resolution using 2D autocorrelation analysis
@@ -4875,15 +4883,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         max_shift_pixels = int(np.ceil(max_shift / sampling_res))
         autocorr_size = 2 * max_shift_pixels + 1
 
-        chunk_memory_gb = (chunk_pixels ** 2 * 4 * 8) / (
-            1024 ** 3
+        chunk_memory_gb = (chunk_pixels**2 * 4 * 8) / (
+            1024**3
         )  # float32 * 4 arrays
         logger.debug(f"  Estimated memory per chunk: {chunk_memory_gb:.2f} GB")
 
         if chunk_memory_gb > max_memory_gb:
             # Reduce chunk size to fit memory
             new_chunk_size = (
-                np.sqrt(max_memory_gb * (1024 ** 3) / (4 * 8)) * sampling_res
+                np.sqrt(max_memory_gb * (1024**3) / (4 * 8)) * sampling_res
             )
             chunk_size_nm = max(2000, new_chunk_size)  # At least 2 μm
             logger.debug(
@@ -5060,7 +5068,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Fit Gaussian to extract resolution
         def gaussian_1d(x, amplitude, sigma, background):
             return (
-                amplitude * np.exp(-((x) ** 2) / (2 * sigma ** 2)) + background
+                amplitude * np.exp(-((x) ** 2) / (2 * sigma**2)) + background
             )
 
         # Fit double Gaussian to extract resolution
@@ -5068,8 +5076,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             x, amplitude_1, amplitude_2, sigma_1, sigma_2, background
         ):
             return (
-                amplitude_1 * np.exp(-((x) ** 2) / (2 * sigma_1 ** 2))
-                + amplitude_2 * np.exp(-((x) ** 2) / (2 * sigma_2 ** 2))
+                amplitude_1 * np.exp(-((x) ** 2) / (2 * sigma_1**2))
+                + amplitude_2 * np.exp(-((x) ** 2) / (2 * sigma_2**2))
             ) + background
 
         def gaussian_2d_fit(
@@ -5080,8 +5088,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 amplitude
                 * np.exp(
                     -(
-                        (x - x0) ** 2 / (2 * sigma_x ** 2)
-                        + (y - y0) ** 2 / (2 * sigma_y ** 2)
+                        (x - x0) ** 2 / (2 * sigma_x**2)
+                        + (y - y0) ** 2 / (2 * sigma_y**2)
                     )
                 )
                 # + background
@@ -5328,7 +5336,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         gc.collect()
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def resolution_frc(self, i, parameters, results):
         """Calculate resolution using Fourier Ring Correlation (FRC)
@@ -5583,7 +5591,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def resolution_frc_spatial(self, i, parameters, results):
         """Calculate resolution using spatial FRC approach
@@ -5692,7 +5700,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def resolution_decorr_spatial(self, i, parameters, results):
         """Calculate resolution using spatial image decorrelation approach
@@ -5863,7 +5871,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def smlm_clusterer(self, i, parameters, results):
         """Perform smlm clustering. After this module, the standard
@@ -5992,127 +6000,127 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
-    @module_decorator
-    def gaussian_mixture_cluster(self, i, parameters, results):
-        """Perform clustering using gaussian mixture modelsAfter this module,
-        the standard locs will be the Gaussian centers.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    locs : np.recarray
-                        Localizations.
-                    info : list
-                        Information dictionaries.
-                    min_locs : int
-                        Minimum number of localizations per component. Used to
-                        filter out components with too few localizations that
-                        likely  represent background.
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-                    max_rounds_without_best_bic : int
-                        (default=3)
-                        Maximum number of rounds without BIC improvement to
-                        terminate the optimal GMM search.
-                    bootstrap_check : bool (default=False)
-                        If True, the standard error of the means (SEM) is
-                        calculated using bootstrapping. If False, the standard,
-                        single Gaussian SEM is used as approximation.
-                    calibration : dict (default=None)
-                        Calibration dictionary with x and y coefficients, z
-                        step size and the number of frames. Only required for
-                        3D data.
-                    asynch : bool (default=True)
-                        If True, the GMM search is run in parallel using
-                        multiprocessing. If False, the GMM search is run
-                        without multiprocessing.
-                    callback_parent : function (default='silent')
-                        Callback function's parent object for displaying
-                        progress bar. If None, the progress bar displayed
-                        directly to the console. If 'silent', no progress
-                        is displayed
-                    sigma_bounds : float (not recommended)
-                        Minimum standard deviation of the Gaussian components
-                        in nanometers. Useful for avoiding overfitting within
-                        a single localization cloud. Now using individual
-                        loc precision, so min_sigma is not recommended.
-                    loc_prec_handle : Literal["local", "global", "abs"]
-                        default: local
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
-        """
-        pixelsize = self.pixelsize
-        required_args = ["min_locs"]
-        optional_args = [
-            ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
-            ("bootstrap_check", False),
-            ("calibration", None),
-            ("pixelsize", pixelsize),
-            ("asynch", True),
-            ("callback_parent", "silent"),
-            ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
-            ("loc_prec_handle", "local"),
-        ]
-        try:
-            kwargs = {k: parameters[k] for k in required_args}
-        except KeyError as e:
-            logger.error(
-                f"""All of the following arguments are required for
-                picasso.g5m.run_g5m: {required_args}"""
-            )
-            raise e
-        # sigma values are given in nm in parameters but px in gmm
-        if "min_sigma" in kwargs.keys():
-            kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
-            kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
-        for oa, default in optional_args:
-            kwargs[oa] = parameters.get(oa, default)
+    # @profile_resource_usage
+    # @module_decorator
+    # def gaussian_mixture_cluster(self, i, parameters, results):
+    #     """Perform clustering using gaussian mixture modelsAfter this module,
+    #     the standard locs will be the Gaussian centers.
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #                 locs : np.recarray
+    #                     Localizations.
+    #                 info : list
+    #                     Information dictionaries.
+    #                 min_locs : int
+    #                     Minimum number of localizations per component. Used to
+    #                     filter out components with too few localizations that
+    #                     likely  represent background.
+    #             and optional keys:
+    #                 save_locs : bool
+    #                     whether to save the locs into the results folder
+    #                 max_rounds_without_best_bic : int
+    #                     (default=3)
+    #                     Maximum number of rounds without BIC improvement to
+    #                     terminate the optimal GMM search.
+    #                 bootstrap_check : bool (default=False)
+    #                     If True, the standard error of the means (SEM) is
+    #                     calculated using bootstrapping. If False, the standard,
+    #                     single Gaussian SEM is used as approximation.
+    #                 calibration : dict (default=None)
+    #                     Calibration dictionary with x and y coefficients, z
+    #                     step size and the number of frames. Only required for
+    #                     3D data.
+    #                 asynch : bool (default=True)
+    #                     If True, the GMM search is run in parallel using
+    #                     multiprocessing. If False, the GMM search is run
+    #                     without multiprocessing.
+    #                 callback_parent : function (default='silent')
+    #                     Callback function's parent object for displaying
+    #                     progress bar. If None, the progress bar displayed
+    #                     directly to the console. If 'silent', no progress
+    #                     is displayed
+    #                 sigma_bounds : float (not recommended)
+    #                     Minimum standard deviation of the Gaussian components
+    #                     in nanometers. Useful for avoiding overfitting within
+    #                     a single localization cloud. Now using individual
+    #                     loc precision, so min_sigma is not recommended.
+    #                 loc_prec_handle : Literal["local", "global", "abs"]
+    #                     default: local
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     pixelsize = self.pixelsize
+    #     required_args = ["min_locs"]
+    #     optional_args = [
+    #         ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
+    #         ("bootstrap_check", False),
+    #         ("calibration", None),
+    #         ("pixelsize", pixelsize),
+    #         ("asynch", True),
+    #         ("callback_parent", "silent"),
+    #         ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
+    #         ("loc_prec_handle", "local"),
+    #     ]
+    #     try:
+    #         kwargs = {k: parameters[k] for k in required_args}
+    #     except KeyError as e:
+    #         logger.error(
+    #             f"""All of the following arguments are required for
+    #             picasso.g5m.run_g5m: {required_args}"""
+    #         )
+    #         raise e
+    #     # sigma values are given in nm in parameters but px in gmm
+    #     if "min_sigma" in kwargs.keys():
+    #         kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
+    #         kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
+    #     for oa, default in optional_args:
+    #         kwargs[oa] = parameters.get(oa, default)
 
-        results["g5m_args"] = str(kwargs)
+    #     results["g5m_args"] = str(kwargs)
 
-        center_locs, clustered_locs, gmm_info = g5m.run_g5m(
-            self.locs, self.info, **kwargs
-        )
+    #     center_locs, clustered_locs, gmm_info = g5m.run_g5m(
+    #         self.locs, self.info, **kwargs
+    #     )
 
-        if parameters.get("save_locs"):
-            fp_centers = os.path.join(results["folder"], "gmm_centers.hdf5")
-            io.save_locs(fp_centers, center_locs, gmm_info)
-            fp_centers = os.path.join(
-                results["folder"], "gmm_clustered_locs.hdf5"
-            )
-            io.save_locs(fp_centers, clustered_locs, gmm_info)
+    #     if parameters.get("save_locs"):
+    #         fp_centers = os.path.join(results["folder"], "gmm_centers.hdf5")
+    #         io.save_locs(fp_centers, center_locs, gmm_info)
+    #         fp_centers = os.path.join(
+    #             results["folder"], "gmm_clustered_locs.hdf5"
+    #         )
+    #         io.save_locs(fp_centers, clustered_locs, gmm_info)
 
-        # plot: histogram of cluster sizes
-        fig, ax = plt.subplots()
-        maxbin = int(np.quantile(center_locs["n"], 0.95))
-        ax.hist(center_locs["n"], bins=np.arange(maxbin))
-        ax.set_xlabel("cluster size [locs]")
-        ax.set_ylabel("Frequency")
-        results["fp_fig_clustersizes"] = os.path.join(
-            results["folder"], "fig_gmm_clustersize.png"
-        )
-        fig.savefig(results["fp_fig_clustersizes"])
+    #     # plot: histogram of cluster sizes
+    #     fig, ax = plt.subplots()
+    #     maxbin = int(np.quantile(center_locs["n"], 0.95))
+    #     ax.hist(center_locs["n"], bins=np.arange(maxbin))
+    #     ax.set_xlabel("cluster size [locs]")
+    #     ax.set_ylabel("Frequency")
+    #     results["fp_fig_clustersizes"] = os.path.join(
+    #         results["folder"], "fig_gmm_clustersize.png"
+    #     )
+    #     fig.savefig(results["fp_fig_clustersizes"])
 
-        # test for subclustering
-        results["fp_fig_subclustering"] = os.path.join(
-            results["folder"], "subcluster_test.png"
-        )
-        g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
+    #     # test for subclustering
+    #     results["fp_fig_subclustering"] = os.path.join(
+    #         results["folder"], "subcluster_test.png"
+    #     )
+    #     g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
 
-        results["n_locs_in"] = len(self.locs)
-        results["n_locs_clustered"] = len(clustered_locs)
-        results["n_centers"] = len(center_locs)
+    #     results["n_locs_in"] = len(self.locs)
+    #     results["n_locs_clustered"] = len(clustered_locs)
+    #     results["n_centers"] = len(center_locs)
 
-        self.locs = copy.copy(center_locs)
-        self.info = gmm_info
+    #     self.locs = copy.copy(center_locs)
+    #     self.info = gmm_info
 
-        return parameters, results
+    #     return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def nneighbor(self, i, parameters, results):
         """Perform nearest neighbor calculation
@@ -6284,7 +6292,11 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _calc_radial_distribution_function_legacy(
         self, alldist, deltar, rmax, nspots, d=2, ax=None
     ):
-        rs = np.arange(0, rmax + deltar, deltar,)
+        rs = np.arange(
+            0,
+            rmax + deltar,
+            deltar,
+        )
         # n_means = np.zeros_like(rs)
         # d_areas = np.zeros_like(rs)
 
@@ -6311,7 +6323,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         density = np.median(rdf[int(len(rs) / 2) :])
 
         # plot results
-        ax.plot(rs, rdf * 1e3 ** d)
+        ax.plot(rs, rdf * 1e3**d)
         ax.set_xlabel("Radius [nm]")
         ax.set_ylabel(f"density [µm^{-d}]")
         ax.set_title("Radial Distribution Function")
@@ -6320,7 +6332,11 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _calc_radial_distribution_function(  # _KD(
         self, locs, deltar, rmax, nspots, d=2, ax=None
     ):
-        rs = np.arange(0, rmax + deltar, deltar,)
+        rs = np.arange(
+            0,
+            rmax + deltar,
+            deltar,
+        )
 
         tree = KDTree(locs)
         n_means = tree.count_neighbors(tree, rs) / nspots - 1
@@ -6336,13 +6352,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         density = np.median(rdf[int(len(rs) / 2) :])
 
         # plot results
-        ax.plot(rs, rdf * 1e3 ** d)
+        ax.plot(rs, rdf * 1e3**d)
         ax.set_xlabel("Radius [nm]")
         ax.set_ylabel(f"density [µm^{-d}]")
         ax.set_title("Radial Distribution Function")
         return rs, rdf, density
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def fit_csr(self, i, parameters, results):
         """Fit a Completely Spatially Random Distribution to
@@ -6691,7 +6707,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #     return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def save_single_dataset(self, i, parameters, results):
         """Saves the locs and info of a single dataset; makes loading
@@ -6737,7 +6753,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     # Aggregation workflow modules
     ##########################################################################
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def load_datasets_to_aggregate(self, i, parameters, results):
         """Loads the results of single-dataset workflows
@@ -6768,7 +6784,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             #     "channel",
             # )
             locs = lib.append_to_rec(
-                locs, i * np.ones(len(locs), dtype=np.int8), "channel",
+                locs,
+                i * np.ones(len(locs), dtype=np.int8),
+                "channel",
             )
             self.channel_locs.append(locs)
             self.channel_info.append(info)
@@ -6777,7 +6795,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["tags"] = parameters["tags"]
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def align_channels(self, i, parameters, results):
         """Aligns multiple channels to each other (part of an aggregation
@@ -6983,7 +7001,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def combine_channels(self, i, parameters, results):
         """Combines multiple channels into one dataset. This is relevant
@@ -7021,7 +7039,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             autoconvert=True,
         )
         # sort like all Picasso localization lists
-        combined_locs.sort(kind="mergesort", order="frame")
+        # combined_locs.sort(kind="mergesort", order="frame")
+        combined_locs.sort_values("frame", kind="mergesort", inplace=True)
 
         # replace the channel_locs with the one combined dataset
         self.channel_locs = [combined_locs]
@@ -7036,7 +7055,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def save_datasets_aggregated(self, i, parameters, results):
         """save data of multiple single-dataset workflows from one
@@ -7067,7 +7086,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             allfps.append(filepath)
         return allfps
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def spinna(self, i, parameters, results):
         """Direct implementation of spinna batch analysis.
@@ -7240,7 +7259,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def spinna_manual(self, i, parameters, results):
         """Direct implementation of spinna batch analysis.
@@ -7415,8 +7434,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 uz = np.array([0, 0, 1])
                 edgelength = int(np.ceil(n ** (1 / dimensionality)))
                 for i in range(n):
-                    iz = i // (edgelength ** 2)
-                    iy = i % (edgelength ** 2)
+                    iz = i // (edgelength**2)
+                    iy = i % (edgelength**2)
                     ix = i % edgelength
                     positions[:, i] = ix * ux + iy * uy + iz * uz
                 positions[0, :] -= np.mean(positions[0, :])
@@ -7434,7 +7453,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 spinna_structs.append(struct)
         return spinna_structs
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def ripleysk(self, i, parameters, results):
         """Perforn Ripley's K analysis between the channels using
@@ -7524,7 +7543,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         results["ripleys_significant"] = self._find_ripleys_significant(
-            ripleysMeanVal, parameters["ripleys_threshold"], self.channel_tags,
+            ripleysMeanVal,
+            parameters["ripleys_threshold"],
+            self.channel_tags,
         )
 
         return parameters, results
@@ -7730,7 +7751,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #     return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def ripleysk2(self, i, parameters, results):
         """Perforn Ripley's K analysis between the channels using
@@ -7989,7 +8010,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 if std is not None:
                     txt += f"\n+-{std[i, j]:.2f}"
                 ax.text(
-                    j, i, txt, ha="center", va="center", color="black", size=8,
+                    j,
+                    i,
+                    txt,
+                    ha="center",
+                    va="center",
+                    color="black",
+                    size=8,
                 )
         ax.set_xticklabels(channel_tags, rotation=45)
         ax.set_yticklabels(channel_tags, rotation=45)
@@ -8018,7 +8045,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     )
         return significant_pairs
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def ripleysk_average(self, i, parameters, results):
         """Average the results of multiple Ripley's K Analyses, analyse
@@ -8172,7 +8199,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def ripleysk_average2(self, i, parameters, results):
         """Average the results of multiple Ripley's K Analyses, analyse
@@ -8236,7 +8263,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 parameters["swkfl_ripleysk_key"],
                 "fp_ripleys_meanval",
             ): fp_ripleys_meanvals,
-            (parameters["swkfl_ripleysk_key"], "fp_curves",): fp_curves,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "fp_curves",
+            ): fp_curves,
             (
                 parameters["swkfl_ripleysk_key"],
                 "fp_curves_norm",
@@ -8272,12 +8302,18 @@ class AutoPicasso(util.AbstractModuleCollection):
                 parameters["swkfl_ripleysk_key"],
                 "ripleys_threshold",
             ): ripleys_thresholds,
-            (parameters["swkfl_ripleysk_key"], "metric",): ripleys_metrics,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "metric",
+            ): ripleys_metrics,
             (
                 parameters["swkfl_ripleysk_key"],
                 "controltype",
             ): ripleys_controltypes,
-            (parameters["swkfl_ripleysk_key"], "radii",): ripleys_radii,
+            (
+                parameters["swkfl_ripleysk_key"],
+                "radii",
+            ): ripleys_radii,
             (
                 parameters["swkfl_ripleysk_key"],
                 "significance_threshold",
@@ -8430,7 +8466,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def protein_interactions(self, i, parameters, results):
         """Perform interaction analysis on those dataset pairs that showed
@@ -8780,7 +8816,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 if std is not None:
                     txt += f"\n+-{std.loc[A, B]:.2f}"
                 ax.text(
-                    j, i, txt, ha="center", va="center", color="black", size=8,
+                    j,
+                    i,
+                    txt,
+                    ha="center",
+                    va="center",
+                    color="black",
+                    size=8,
                 )
         ax.set_xticklabels(direct_interaction.columns, rotation=45)
         ax.set_yticklabels(direct_interaction.index, rotation=45)
@@ -8791,7 +8833,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig.savefig(fp_imap)
         return fp_imap
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def protein_interactions_average(self, i, parameters, results):
         """Average the results of multiple "protein_interactions" analyses.
@@ -8865,7 +8907,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def create_mask(self, i, parameters, results):
         """
@@ -8931,7 +8973,9 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # get exp coordinates in mask
         new_info = combined_info + [
-            {"Generated by": "picasso-workflow: create_mask",}
+            {
+                "Generated by": "picasso-workflow: create_mask",
+            }
         ]
         # self.channel_info = [new_info]
         df_merge_mask, mask_dict = mask.exp_data_in_mask(
@@ -8976,7 +9020,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def create_mask2(self, i, parameters, results):
         """
@@ -9155,7 +9199,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def refine_mask_by_density(self, i, parameters, results):
         """
@@ -9194,7 +9238,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize = self.pixelsize
         nth_largest = parameters.get("nth_largest", 0)
         mask = outpost_modules.mask.CellMask.load(parameters["fp_mask"])
-        mask_pixel_area = mask._upsample ** 2
+        mask_pixel_area = mask._upsample**2
         densities = mask.densities
 
         nbins = parameters.get("nbins", 20)
@@ -9325,7 +9369,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             color="r",
             label="selection boundaries",
         )
-        mask_pixel_area = mask._upsample ** 2
+        mask_pixel_area = mask._upsample**2
         xlim = ax.get_xlim()
         x_density = np.linspace(xlim[0], xlim[1], 100) * 1e-6
         x_nlocs = x_density * mask_pixel_area
@@ -9385,7 +9429,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def dbscan_molint(self, i, parameters, results):
         """TO BE CLEANED UP
@@ -9513,9 +9557,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     search_i = int(search_i)
                     if search_i == i and search_name == module_name:
                         parameter_val = module_pars.get(search_parname)
-                        loaded_data[
-                            (search_module, search_parname)
-                        ] = parameter_val
+                        loaded_data[(search_module, search_parname)] = (
+                            parameter_val
+                        )
 
         # find AggregationWorkflowRunner config
         fp_wr_cfg = os.path.join(
@@ -9531,7 +9575,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return loaded_data, channel_tags
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def CSR_sim_in_mask(self, i, parameters, results):
         """TO BE CLEANED UP
@@ -9622,7 +9666,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def plot_densities(self, i, parameters, results):
         """Aggregate densities and cell areas of multiple datasets and
@@ -9754,7 +9798,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def find_cluster_motifs(self, i, parameters, results):
         """Analyses the binary barcode results of _do_dbscan_molint.
@@ -9802,14 +9846,38 @@ class AutoPicasso(util.AbstractModuleCollection):
         exp_key = parameters["swkfl_dbscan_molint_key"]
         csr_key = parameters["swkfl_CSR_sim_in_mask_key"]
         search_dict = {
-            (exp_key, "fp_barcode",): fp_exp_bc,
-            (exp_key, "fp_barcode_agg",): fp_exp_bcagg,
-            (exp_key, "fp_barcode_map",): fp_exp_bcmap,
-            (exp_key, "fp_cluster_info",): fp_cluster_info_exp,
-            (csr_key, "fp_barcode",): fp_csr_bc,
-            (csr_key, "fp_barcode_agg",): fp_csr_bcagg,
-            (csr_key, "fp_barcode_map",): fp_csr_bcmap,
-            (csr_key, "fp_cluster_info",): fp_cluster_info_csr,
+            (
+                exp_key,
+                "fp_barcode",
+            ): fp_exp_bc,
+            (
+                exp_key,
+                "fp_barcode_agg",
+            ): fp_exp_bcagg,
+            (
+                exp_key,
+                "fp_barcode_map",
+            ): fp_exp_bcmap,
+            (
+                exp_key,
+                "fp_cluster_info",
+            ): fp_cluster_info_exp,
+            (
+                csr_key,
+                "fp_barcode",
+            ): fp_csr_bc,
+            (
+                csr_key,
+                "fp_barcode_agg",
+            ): fp_csr_bcagg,
+            (
+                csr_key,
+                "fp_barcode_map",
+            ): fp_csr_bcmap,
+            (
+                csr_key,
+                "fp_cluster_info",
+            ): fp_cluster_info_csr,
         }
         for folder, name in zip(
             parameters["fp_workflows"], parameters["report_names"]
@@ -10062,7 +10130,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def interaction_graph(self, i, parameters, results):
         """Plot the interaction graph, displaying the different targets
@@ -10147,7 +10215,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig.savefig(results["fp_fig"])
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def find_gold(self, i, parameters, results):
         """Find localizations stemming from gold beads based on blinking
@@ -10238,7 +10306,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def find_similar(self, i, parameters, results):
         """pick similar in nlocs/rmsd space (with specified limits in
@@ -10441,7 +10509,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def find_structures(self, i, parameters, results):
         """pick similar on clusters in nlocs/rmsd space.
@@ -10611,7 +10679,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def undrift_from_picked(self, i, parameters, results):
         """Performs undrift from piced locs.
@@ -10666,7 +10734,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # self._save_locs(fp_locs)
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def filter_locs(self, i, parameters, results):
         """Filter localizations to lie within a min-max range of a metric.
@@ -10761,7 +10829,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def filter_transient_binding(self, i, parameters, results):
         """Filter molecule positions (after clustering or Gaussian Mixture)
@@ -10868,7 +10936,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return fig, ax
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def link_locs(self, i, parameters, results):
         """Link localizations.
@@ -10902,7 +10970,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def pairwise_module_executor(self, i, parameters, results):
         """Calls another module (as a sub-module) for all pairs in the
@@ -11006,7 +11074,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def random_val(self, i, parameters, results):
         """For debugging and testing the pairwise module"""
@@ -11047,7 +11115,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         structures.append(struct)
         return structures
 
-    @profile_resource_usage
+    #    @profile_resource_usage
     @module_decorator
     def labeling_efficiency_analysis(self, i, parameters, results):
         """Analyse for labeling efficiency.

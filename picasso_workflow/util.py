@@ -8,6 +8,7 @@ Description: Utility functions for the package
 import abc
 import copy
 import inspect
+
 # import logging
 from loguru import logger
 import os
@@ -279,10 +280,10 @@ class AbstractModuleCollection(abc.ABC):
         """Perform clustering using the smlm clusterer"""
         pass
 
-    @abc.abstractmethod
-    def gaussian_mixture_cluster(self):
-        """Perform clustering using gaussian mixture models"""
-        pass
+    # @abc.abstractmethod
+    # def gaussian_mixture_cluster(self):
+    #     """Perform clustering using gaussian mixture models"""
+    #     pass
 
     @abc.abstractmethod
     def nneighbor(self):

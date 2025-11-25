@@ -11,6 +11,7 @@ import os
 import shutil
 import inspect
 import numpy as np
+import pandas as pd
 from unittest.mock import patch, MagicMock
 
 from picasso_workflow import analyse, util
@@ -171,6 +172,9 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=self.locs_dtype,
         )
+        mock_locs_from_fits.return_value = pd.DataFrame(
+            mock_locs_from_fits.return_value
+        )
         self.ap.info = []
 
         parameters = {"box_size": 7, "fit_parallel": False}
@@ -197,12 +201,14 @@ class TestAnalyseModules(unittest.TestCase):
         nspots = 5
         mock_undrift_rcc.return_value = (
             np.random.rand(2, len(self.ap.movie)),
-            np.rec.array(
-                [
-                    tuple(np.random.rand(len(self.locs_dtype)))
-                    for i in range(nspots)
-                ],
-                dtype=self.locs_dtype,
+            pd.DataFrame(
+                np.rec.array(
+                    [
+                        tuple(np.random.rand(len(self.locs_dtype)))
+                        for i in range(nspots)
+                    ],
+                    dtype=self.locs_dtype,
+                )
             ),
         )
         parameters = {
@@ -219,12 +225,14 @@ class TestAnalyseModules(unittest.TestCase):
         mock_undrift_aim.return_value = (
             np.random.rand(2, len(self.ap.movie)),
             [{"name": "info"}, {"Pixelsize": 130}],
-            np.rec.array(
-                [
-                    tuple(np.random.rand(len(self.locs_dtype)))
-                    for i in range(nspots)
-                ],
-                dtype=self.locs_dtype,
+            pd.DataFrame(
+                np.rec.array(
+                    [
+                        tuple(np.random.rand(len(self.locs_dtype)))
+                        for i in range(nspots)
+                    ],
+                    dtype=self.locs_dtype,
+                )
             ),
         )
         parameters = {
@@ -323,6 +331,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs = pd.DataFrame(locs)
         mock_load.return_value = (locs, {"info": 4})
         parameters = {
             "filepaths": ["/my/path/to/locs.hdf5", "/my/path/to2/locs.hdf5"],
@@ -375,6 +384,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs1 = pd.DataFrame(locs1)
         locs2 = np.rec.array(
             [
                 tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
@@ -382,6 +392,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs2 = pd.DataFrame(locs2)
         self.ap.channel_locs = [locs1, locs2]
         self.ap.channel_info = [["info1"], ["info2"]]
         self.ap.channel_tags = ["1", "2"]
@@ -448,6 +459,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         mock_dbscan.return_value = self.ap.locs
         mock_fcc.return_value = self.ap.locs
 
@@ -483,6 +495,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         mock_hdbscan.return_value = self.ap.locs
         mock_fcc.return_value = self.ap.locs
 
@@ -520,6 +533,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         mock_clusterer.return_value = self.ap.locs
         mock_fcc.return_value = self.ap.locs
 
@@ -552,6 +566,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         mock_gmms.return_value = self.ap.locs, self.ap.locs, self.ap.info
         mock_test_subclustering.return_value = None
 
@@ -590,6 +605,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         self.ap.channel_locs = [self.ap.locs]
         self.ap.tags = ["mytag"]
         parameters, results = self.ap.nneighbor(0, parameters)
@@ -635,6 +651,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs = pd.DataFrame(locs)
         self.ap.channel_locs = [locs]
         self.ap.channel_info = [info]
         self.ap.channel_tags = ["CD86"]
@@ -691,6 +708,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs = pd.DataFrame(locs)
         self.ap.channel_locs = [locs]
         self.ap.channel_info = [info]
         self.ap.channel_tags = ["CD86"]
@@ -882,6 +900,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
 
         parameters, results = self.ap.filter_locs(0, parameters)
 
@@ -907,6 +926,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         self.ap.info = [{"Frames": 1000}]
 
         parameters, results = self.ap.filter_transient_binding(0, parameters)
@@ -970,6 +990,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs_a = pd.DataFrame(locs_a)
         locs_b = np.rec.array(
             [
                 tuple([i] + list(1000 * np.random.rand(len(locs_dtype) - 1)))
@@ -977,6 +998,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs_b = pd.DataFrame(locs_b)
         self.ap.channel_locs = [locs_a, locs_b]
 
         parameters, results = self.ap.labeling_efficiency_analysis(
@@ -1037,6 +1059,7 @@ class TestAnalyseModules(unittest.TestCase):
                 ],
                 dtype=self.locs_dtype,
             )
+            frame_locs = pd.DataFrame(rame_locs)
 
             all_locs.append(frame_locs)
 
@@ -1044,6 +1067,7 @@ class TestAnalyseModules(unittest.TestCase):
         synthetic_locs = np.lib.recfunctions.stack_arrays(
             all_locs, asrecarray=True, usemask=False
         )
+        synthetic_locs = pd.DataFrame(synthetic_locs)
 
         # Create AutoPicasso instance with synthetic data
         analysis_config = {
@@ -1148,6 +1172,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=self.locs_dtype,
         )
+        minimal_locs = pd.DataFrame(minimal_locs)
 
         ap.locs = minimal_locs
         ap.info = [{"Frames": 2, "Width": 64, "Height": 64, "Pixelsize": 100}]
@@ -1170,6 +1195,7 @@ class TestAnalyseModules(unittest.TestCase):
 
         # Test with no localizations
         empty_locs = np.array([], dtype=self.locs_dtype).view(np.recarray)
+        empty_locs = pd.DataFrame(empty_locs)
         ap.locs = empty_locs
 
         parameters, results = ap.undrift_rsso(0, parameters)
@@ -1212,6 +1238,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=self.locs_dtype + [("group", "<i4")],
         )
+        test_locs = pd.DataFrame(test_locs)
         mock_picked_locs.return_value = test_locs
 
         # Set up test data
@@ -1235,6 +1262,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=self.locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         self.ap.info = [{"Width": 64, "Height": 64, "Pixelsize": 130}]
 
         # Test parameters
@@ -1395,6 +1423,7 @@ class TestAnalyse(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         # logger.debug(self.ap.locs)
 
         filepath = os.path.join(self.results_folder, "lvf.png")
