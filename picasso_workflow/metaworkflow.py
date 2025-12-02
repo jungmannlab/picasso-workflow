@@ -120,6 +120,52 @@ class PathParser:
         is_posix = num_fwd > num_bwd
         return is_posix
 
+    def convert_path(self, src_path, dest_machine):
+        """Convert a path from a source machine style to a dest
+        machine style and volume notation
+        """
+        if dest_machine not in self.drive_paths.keys():
+            raise ValueError(
+                f"Machine {dest_machine} not defined in .env! \
+                ({self.drive_paths.keys()})"
+            )
+
+        # find current machine key
+        if dest_machine is None:
+            for dest_machine in self.drive_paths.keys():
+                if dest_machine in platform.node():
+                    break
+
+        for src_machine, drivepaths in self.drive_paths.items():
+            src_on_machine = any([p in src_path for p in drivepaths])
+            if src_on_machine:
+                # src_machine has all drive paths defined
+                break
+
+        logger.debug(f"found src machine: {src_machine}")
+        logger.debug(f"dest machine: {dest_machine}")
+
+        drive_map = {}
+        for src_p, dest_p in zip(
+            self.drive_paths[src_machine], self.drive_paths[dest_machine]
+        ):
+            drive_map[src_p] = dest_p
+
+        logger.debug(f"drive map is {drive_map}")
+
+        # check whether input path is windows or posix style
+        is_posix = self.check_path_style(src_path)
+        if is_posix:
+            dest_path = self.posix_path_to_curr_os(
+                src_path, drive_map=drive_map
+            )
+        else:
+            dest_path = self.windows_path_to_curr_os(
+                src_path, drive_map=drive_map
+            )
+        return dest_path
+
+
     def parse_source(
         self, src_loc, receptors, dest_machine=None, underscores=[1, 0, 0]
     ):

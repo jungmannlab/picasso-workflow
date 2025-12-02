@@ -11,6 +11,8 @@ import logging
 import subprocess
 import os
 import sys
+import yaml
+import importlib.util
 
 # import pkgutil
 # import importlib
@@ -21,6 +23,8 @@ import inspect
 import textwrap
 from picasso import lib
 from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5.QtCore import Qt, QEvent
+
 
 logger = logging.getLogger(__name__)
 __GUIVERSION__ = "0.1.0"
@@ -765,7 +769,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "Minimum net gradient threshold for detection",
                 "min": 0.0,
-                "max": 10000.0,
+                "max": 100000.0,
                 "required": True,
                 "note": "Required unless auto_netgrad is provided",
             },
@@ -4597,6 +4601,8 @@ class SlurmCommunicator:
 
         commands.append(f"srun {scriptname}")
 
+        return commands
+
     def create_slurm_script(
         self,
         job_name,
@@ -4684,16 +4690,24 @@ class SlurmCommunicator:
 
         return "\n".join(script_lines)
 
-    def write_slurm_script(self, script_content, remote_path):
+    def write_slurm_script(self, script_content, folder, local=True):
         """Write SLURM script content to a file on the remote host.
 
         Args:
             script_content (str): Complete SLURM script content
-            remote_path (str): Path where to save the script on remote host
+            folder (str): Path where to save the script on remote host
+            local (bool): whether the folder is available on the local system
 
         Returns:
             dict: Result of the write operation (see execute_ssh_command)
         """
+        if local:
+            filepath = os.path.join(folder, "run_workflow_slurm.sh")
+            with open(filepath, "w") as f:
+                f.write(script_content)
+            return filepath
+
+        # otherwise, copy to remote host
         # Create a temporary local file
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".sh", delete=False
@@ -4719,7 +4733,7 @@ class SlurmCommunicator:
             scp_cmd.extend(
                 [
                     tmp_file_path,
-                    f"{self.username}@{self.hostname}:{remote_path}",
+                    f"{self.username}@{self.hostname}:{folder}",
                 ]
             )
 
@@ -4732,14 +4746,14 @@ class SlurmCommunicator:
             if result.returncode == 0:
                 # Make script executable
                 chmod_result = self.execute_ssh_command(
-                    f"chmod +x {remote_path}"
+                    f"chmod +x {folder}"
                 )
                 if chmod_result["success"]:
                     logger.info(
-                        f"SLURM script written successfully to {remote_path}"
+                        f"SLURM script written successfully to {folder}"
                     )
                     return {
-                        "stdout": f"Script written to {remote_path}",
+                        "stdout": f"Script written to {folder}",
                         "stderr": "",
                         "return_code": 0,
                         "success": True,
@@ -4770,7 +4784,7 @@ class SlurmCommunicator:
             except OSError:
                 pass
 
-    def submit_job(self, script_path, additional_options=None):
+    def submit_job(self, script_path, dest_machine, additional_options=None):
         """Submit a SLURM job using sbatch.
 
         Args:
@@ -4784,6 +4798,12 @@ class SlurmCommunicator:
                 - stderr (str): sbatch errors
                 - success (bool): True if job submitted successfully
         """
+        # check script path. if it is local, convert to its location on
+        # the remote host
+        from picasso_workflow.metaworkflow import PathParser
+        pp = PathParser()
+        script_path = pp.convert_path(script_path, dest_machine)
+
         sbatch_cmd = "sbatch"
 
         if additional_options:
@@ -5107,6 +5127,152 @@ def dict_to_table(d, table):
         table.setItem(row, 1, value_item)
 
 
+class ToolTipDelegate(QtWidgets.QStyledItemDelegate):
+    def helpEvent(self, event, view, option, index):
+        if event.type() == QEvent.ToolTip:
+            tooltip = index.data(Qt.ToolTipRole)
+            if tooltip:
+                QtWidgets.QToolTip.showText(event.globalPos(), tooltip)
+                return True
+        return super().helpEvent(event, view, option, index)
+
+
+class ParameterWidgetInfo:
+    """Container for parameter widget information."""
+
+    def __init__(self, widget, cmd_button, row_widget, metadata, original_type, sub_parameters=None, toggle_function=None):
+        """Initialize parameter widget info.
+
+        Args:
+            widget: The Qt widget for parameter input
+            cmd_button: QPushButton for opening command dialog
+            row_widget: Container QWidget for the row
+            metadata: Parameter metadata dictionary
+            original_type: Original type string ('int', 'float', 'bool', 'str', 'dict')
+            sub_parameters: Dict of nested ParameterWidgetInfo for dict types (optional)
+            toggle_function: Function to show/hide nested parameters (for dict types, optional)
+        """
+        self.widget = widget
+        self.cmd_button = cmd_button
+        self.row_widget = row_widget
+        self.metadata = metadata
+        self.original_type = original_type
+        self.sub_parameters = sub_parameters or {}  # For nested dict parameters
+        self.toggle_function = toggle_function  # For dict parameters with checkboxes
+
+
+class ParameterCmdDialog(QtWidgets.QDialog):
+    """Dialog for selecting a command as parameter value."""
+
+    def __init__(self, workflow_modules, module_descriptor, parent=None):
+        """Initialize the prior result dialog.
+
+        Args:
+            workflow_modules: List of tuples (module_name, param_dict) from workflow
+            module_descriptor: ModuleDescriptor instance to get result specs
+            parent: Parent widget
+        """
+        super().__init__(parent)
+        self.setWindowTitle("Select Command")
+        self.setModal(True)
+        self.workflow_modules = workflow_modules
+        self.module_descriptor = module_descriptor
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Timing selection
+        layout.addWidget(QtWidgets.QLabel("Collection timing:"))
+        self.timing_group = QtWidgets.QButtonGroup(self)
+
+        self.timing_before_radio = QtWidgets.QRadioButton("Collect directly before module execution")
+        self.timing_start_radio = QtWidgets.QRadioButton("Collect at start of workflow stage")
+        self.timing_before_radio.setChecked(True)  # Default
+
+        self.timing_group.addButton(self.timing_before_radio, 0)
+        self.timing_group.addButton(self.timing_start_radio, 1)
+
+        layout.addWidget(self.timing_before_radio)
+        layout.addWidget(self.timing_start_radio)
+        layout.addSpacing(10)
+
+        # Command type selection
+        layout.addWidget(QtWidgets.QLabel("Command type:"))
+        self.command_combo = QtWidgets.QComboBox()
+        self.command_combo.addItems(["Previous Result", "sum", "max", "min"])
+        layout.addWidget(self.command_combo)
+        layout.addSpacing(10)
+
+        # Module selection
+        layout.addWidget(QtWidgets.QLabel("Select module:"))
+        self.module_combo = QtWidgets.QComboBox()
+        for i, (module_name, params) in enumerate(workflow_modules):
+            self.module_combo.addItem(f"{i}: {module_name}")
+        self.module_combo.currentIndexChanged.connect(self._on_module_selected)
+        layout.addWidget(self.module_combo)
+
+        # Result selection (combo box instead of text input)
+        layout.addWidget(QtWidgets.QLabel("Select result:"))
+        self.result_combo = QtWidgets.QComboBox()
+        self.result_combo.setPlaceholderText("Select a result")
+        layout.addWidget(self.result_combo)
+
+        # Populate results for initially selected module
+        self._on_module_selected(0)
+
+        # Buttons
+        button_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def _on_module_selected(self, index):
+        """Populate result combo box when module is selected.
+
+        Args:
+            index: Index of selected module in workflow
+        """
+        if index < 0 or index >= len(self.workflow_modules):
+            return
+
+        module_name = self.workflow_modules[index][0]
+
+        # Clear current results
+        self.result_combo.clear()
+
+        # Get results spec from module descriptor
+        try:
+            desc_fun = getattr(self.module_descriptor, module_name, None)
+            if desc_fun and callable(desc_fun):
+                _, results_spec = desc_fun()
+
+                # Populate combo box with result names
+                if results_spec:
+                    for result_name in results_spec.keys():
+                        self.result_combo.addItem(result_name)
+                else:
+                    self.result_combo.addItem("(no results defined)")
+            else:
+                self.result_combo.addItem("(module not found)")
+        except Exception as e:
+            self.result_combo.addItem(f"(error: {str(e)})")
+
+    def get_selection(self):
+        """Get the selected module index, result name, command type, and timing.
+
+        Returns:
+            tuple: (module_index: int, result_name: str, command_type: str, timing: str)
+                   command_type is "Previous Result", "sum", "max", or "min"
+                   timing is either "before" or "start"
+        """
+        module_index = self.module_combo.currentIndex()
+        result_name = self.result_combo.currentText()
+        command_type = self.command_combo.currentText()
+        timing = "before" if self.timing_before_radio.isChecked() else "start"
+        return module_index, result_name, command_type, timing
+
+
 class Window(QtWidgets.QMainWindow):
     """Main window for the picasso-workflow GUI application."""
 
@@ -5145,6 +5311,13 @@ class Window(QtWidgets.QMainWindow):
         self.workflow_type.addItem("Single Workflow")
         self.workflow_type.addItem("Aggregation Workflow")
         self.workflow_type.addItem("Investigation Workflow")
+        # disable Investigation workflow, which is in Development
+        index = self.workflow_type.model().index(2, 0)
+        self.workflow_type.model().setData(index, 0, Qt.UserRole - 1)  # 0 disables the item
+        self.workflow_type.setItemDelegate(ToolTipDelegate(self.workflow_type))
+        self.workflow_type.model().setData(index, "Not Implemented yet", Qt.ToolTipRole)  # Tooltip
+
+        self.workflow_type.currentIndexChanged.connect(self._on_workflow_type_changed)
         layout.addWidget(self.workflow_type, 0, 3)
 
         # Create tab widget
@@ -5168,6 +5341,8 @@ class Window(QtWidgets.QMainWindow):
         results_tab = QtWidgets.QWidget()
         results_layout = QtWidgets.QVBoxLayout(results_tab)
         self.tabs.addTab(results_tab, "Results")
+        self.tabs.setTabEnabled(1, False)  # in development
+        self.tabs.setTabToolTip(1, "Not Implemented yet")
 
         # select files to process
         self.add_files_button = QtWidgets.QPushButton("Add files")
@@ -5264,6 +5439,17 @@ class Window(QtWidgets.QMainWindow):
             self._on_workflow_tab_changed
         )
 
+        investigation_workflow_tab = QtWidgets.QWidget()
+        investigation_workflow_layout = QtWidgets.QVBoxLayout(
+            investigation_workflow_tab
+        )
+        self.workflow_tabs.addTab(
+            investigation_workflow_tab, "Investigation"
+        )
+
+        # Set initial tab states based on default workflow type
+        self._on_workflow_type_changed(self.workflow_type.currentIndex())
+
         # buttons for workflow manipulation
         workflow_buttons = QtWidgets.QHBoxLayout()
         self.workflow_buttons_widget = QtWidgets.QWidget()
@@ -5294,9 +5480,55 @@ class Window(QtWidgets.QMainWindow):
         slurm_buttons.addWidget(start_slurm_button)
         start_slurm_button.clicked.connect(self.start_slurm)
 
+        # Job management buttons
+        job_management_buttons = QtWidgets.QHBoxLayout()
+        job_management_widget = QtWidgets.QWidget()
+        job_management_widget.setLayout(job_management_buttons)
+        run_on_cluster_layout.addWidget(job_management_widget)
+
+        cancel_job_button = QtWidgets.QPushButton("Cancel Job")
+        cancel_job_button.clicked.connect(self.on_cancel_job)
+        job_management_buttons.addWidget(cancel_job_button)
+
+        job_status_button = QtWidgets.QPushButton("Show Job Status")
+        job_status_button.clicked.connect(self.on_show_job_status)
+        job_management_buttons.addWidget(job_status_button)
+
+        list_jobs_button = QtWidgets.QPushButton("List All Jobs")
+        list_jobs_button.clicked.connect(self.on_list_jobs)
+        job_management_buttons.addWidget(list_jobs_button)
+
+        queue_info_button = QtWidgets.QPushButton("Show Queue Info")
+        queue_info_button.clicked.connect(self.on_show_queue_info)
+        job_management_buttons.addWidget(queue_info_button)
+
+        # Job ID input field
+        job_id_layout = QtWidgets.QHBoxLayout()
+        job_id_widget = QtWidgets.QWidget()
+        job_id_widget.setLayout(job_id_layout)
+        run_on_cluster_layout.addWidget(job_id_widget)
+
+        job_id_label = QtWidgets.QLabel("Current Job ID:")
+        job_id_layout.addWidget(job_id_label)
+
+        self.job_id_input = QtWidgets.QLineEdit()
+        self.job_id_input.setPlaceholderText("Enter job ID or auto-filled from submission")
+        job_id_layout.addWidget(self.job_id_input, stretch=1)
+
+        # Display area for job information
+        job_display_label = QtWidgets.QLabel("Job Information:")
+        run_on_cluster_layout.addWidget(job_display_label)
+
+        self.job_info_display = QtWidgets.QTextEdit()
+        self.job_info_display.setReadOnly(True)
+        self.job_info_display.setMaximumHeight(200)
+        run_on_cluster_layout.addWidget(self.job_info_display)
+
         run_locally_tab = QtWidgets.QWidget()
         run_locally_layout = QtWidgets.QVBoxLayout(run_locally_tab)
         self.run_tabs.addTab(run_locally_tab, "Run locally")
+        self.run_tabs.setTabEnabled(1, False)  # in development
+        self.run_tabs.setTabToolTip(1, "Not Implemented yet")
         local_buttons = QtWidgets.QHBoxLayout()
         self.local_buttons_widget = QtWidgets.QWidget()
         self.local_buttons_widget.setLayout(local_buttons)
@@ -5387,10 +5619,196 @@ class Window(QtWidgets.QMainWindow):
             self.results_folder_display.setText(folder)
             # Enable widgets when a folder is selected
             self._set_widgets_enabled(True)
+
+            # Search for YAML files and load file list
+            self._load_yaml_file_list(folder)
+
+            # Search for workflow definition and load it
+            self._load_workflow_definition(folder)
         else:
             # If dialog was cancelled and no folder is selected, disable widgets
             if not self.results_folder_display.text():
                 self._set_widgets_enabled(False)
+
+    def _load_yaml_file_list(self, folder):
+        """Search for YAML files in folder and load file list if found.
+
+        Args:
+            folder: Path to the folder to search
+        """
+        # Search for specific YAML files
+        yaml_files = ["src_loc.yaml", "raw_locs_list.yaml"]
+
+        for yaml_file in yaml_files:
+            yaml_path = os.path.join(folder, yaml_file)
+            if os.path.exists(yaml_path):
+                try:
+                    # Load YAML file
+                    with open(yaml_path, 'r') as f:
+                        file_dict = yaml.safe_load(f)
+
+                    # Validate that it's a dictionary
+                    if isinstance(file_dict, dict):
+                        # Clear existing file list
+                        self.files_table.setRowCount(0)
+
+                        # Populate table with YAML content
+                        # Key -> Name, Value -> File Path
+                        dict_to_table(file_dict, self.files_table)
+
+                        logger.info(f"Loaded file list from {yaml_file}")
+                        return  # Stop after loading first matching file
+                    else:
+                        logger.warning(f"{yaml_file} does not contain a dictionary")
+
+                except Exception as e:
+                    logger.error(f"Error loading {yaml_file}: {e}")
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "YAML Load Error",
+                        f"Failed to load {yaml_file}:\n{str(e)}"
+                    )
+
+        # No YAML files found - this is normal, no action needed
+        logger.debug("No src_loc.yaml or raw_locs_list.yaml found in folder")
+
+    def _load_workflow_definition(self, folder):
+        """Search for workflow definition file and load workflow modules.
+
+        Args:
+            folder: Path to the folder to search
+        """
+        workflow_file = os.path.join(folder, "start_workflow.py")
+
+        if not os.path.exists(workflow_file):
+            logger.debug("No start_workflow.py found in folder")
+            return
+
+        try:
+            # Dynamically load the Python file
+            spec = importlib.util.spec_from_file_location("start_workflow", workflow_file)
+            if spec is None or spec.loader is None:
+                logger.warning("Could not load start_workflow.py")
+                return
+
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            # Extract workflow definitions
+            workflow_modules_sgl = getattr(module, 'workflow_modules_sgl', None)
+            workflow_modules_agg = getattr(module, 'workflow_modules_agg', None)
+
+            # Load single dataset workflow if present
+            if workflow_modules_sgl is not None and isinstance(workflow_modules_sgl, list):
+                self._populate_workflow_from_definition(
+                    workflow_modules_sgl,
+                    self.single_workflow_modules,
+                    self.single_workflow_list,
+                    "Single Dataset"
+                )
+                logger.info(f"Loaded {len(workflow_modules_sgl)} modules to Single Dataset workflow")
+
+            # Load aggregation workflow if present
+            if workflow_modules_agg is not None and isinstance(workflow_modules_agg, list):
+                self._populate_workflow_from_definition(
+                    workflow_modules_agg,
+                    self.aggregation_workflow_modules,
+                    self.aggregation_workflow_list,
+                    "Aggregation"
+                )
+                logger.info(f"Loaded {len(workflow_modules_agg)} modules to Aggregation workflow")
+
+        except Exception as e:
+            logger.error(f"Error loading start_workflow.py: {e}")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Workflow Load Error",
+                f"Failed to load workflow from start_workflow.py:\n{str(e)}"
+            )
+
+    def _populate_workflow_from_definition(self, workflow_def, workflow_list, list_widget, workflow_name):
+        """Populate workflow from loaded definition.
+
+        Args:
+            workflow_def: List of (module_name, params_dict) tuples
+            workflow_list: Target workflow list (single_workflow_modules or aggregation_workflow_modules)
+            list_widget: Target QListWidget for display
+            workflow_name: Name of the workflow (for logging)
+        """
+        # Clear existing workflow
+        workflow_list.clear()
+        list_widget.clear()
+
+        for module_name, params in workflow_def:
+            # Convert parameters to GUI format: {param: (value, command)}
+            converted_params = {}
+
+            for param_name, param_value in params.items():
+                # Convert parameter value to GUI format
+                value_str, command_str = self._convert_param_to_gui_format(param_value)
+                converted_params[param_name] = value_str  # (value_str, command_str)
+            # print(converted_params)
+
+            # Add to workflow
+            workflow_list.append((module_name, converted_params))
+            index = len(workflow_list) - 1
+            list_widget.addItem(f"{index}: {module_name}")
+
+    def _convert_param_to_gui_format(self, param_value):
+        """Convert parameter value from workflow definition to GUI format.
+
+        Args:
+            param_value: Parameter value from workflow definition
+
+        Returns:
+            tuple: (value_data, command_string)
+                   value_data can be a string, dict (for nested params), or other type
+        """
+        # # Handle tuples - check for special commands first
+        # if isinstance(param_value, tuple) and len(param_value) >= 2:
+        #     first_elem = param_value[0]
+
+        #     # Check for special command markers
+        #     if isinstance(first_elem, str):
+        #         if first_elem.startswith("$$"):
+        #             # Special map command: ("$$map", "key")
+        #             command = first_elem[2:]  # Remove $$ prefix
+        #             value = str(param_value[1])
+        #             return value, command
+
+        #         elif first_elem.startswith("$"):
+        #             # Prior result reference: ("$get_previous_module_result", "module, result")
+        #             # Convert to GUI format
+        #             value = str(param_value[1]) if len(param_value) > 1 else ""
+        #             return value, "prior result"
+
+        #     # Not a special command - convert whole tuple to string
+        #     return str(param_value), ""
+
+        if isinstance(param_value, tuple):
+            if len(param_value) == 1:
+                return str(param_value[0]), ""
+            elif (len(param_value) == 2) and param_value[1] == "":
+                return str(param_value[0]), ""
+            else:
+                return str(param_value), ""
+
+        # Handle nested dictionaries (for dict parameters)
+        if isinstance(param_value, dict):
+            # Recursively convert nested parameters
+            nested_converted = {}
+            for nested_param_name, nested_param_value in param_value.items():
+                nested_value, nested_command = self._convert_param_to_gui_format(nested_param_value)
+                nested_converted[nested_param_name] = nested_value  # (nested_value, nested_command)
+            # Return dict as value (not as string)
+            return nested_converted, ""
+
+        # Handle lists - convert to string
+        if isinstance(param_value, list):
+            return str(param_value), ""
+
+        # Default: plain value, no command
+        return str(param_value), ""
 
     def add_module(self):
         """Add the currently selected module to the workflow."""
@@ -5398,11 +5816,14 @@ class Window(QtWidgets.QMainWindow):
 
         # Capture current parameter values
         param_values = {}
-        for param_name, (textbox, metadata) in self.parameter_widgets.items():
-            param_values[param_name] = textbox.text()
+        for param_name, widget_info in self.parameter_widgets.items():
+            value = self._get_widget_value(widget_info.widget, widget_info.original_type, widget_info)
+            # Skip None values (from unchecked optional dicts)
+            if value is not None:
+                param_values[param_name] = value
 
         # Add to the appropriate workflow list based on selected tab
-        # Store as tuple: (module_name, param_values_dict)
+        # Store as tuple: (module_name, {param: value})
         current_tab_index = self.workflow_tabs.currentIndex()
         if current_tab_index == 0:  # Single Dataset Workflow
             self.single_workflow_modules.append((module_name, param_values))
@@ -5439,10 +5860,18 @@ class Window(QtWidgets.QMainWindow):
                 # Update module combobox to show this module
                 index = self.module_combobox.findText(module_name)
                 if index >= 0:
-                    self.module_combobox.setCurrentIndex(index)
-                    # Populate parameters with stored values
-                    self._populate_stored_parameters(param_values)
-                    self._validate_parameters()  # Clear red borders from filled fields
+                    # Block signals to prevent on_module_changed from firing
+                    self.module_combobox.blockSignals(True)
+                    try:
+                        self.module_combobox.setCurrentIndex(index)
+                        # Manually trigger widget update since signal is blocked
+                        self.on_module_changed(module_name)
+                        # Populate parameters with stored values
+                        self._populate_stored_parameters(param_values)
+                        self._validate_parameters()  # Clear red borders from filled fields
+                    finally:
+                        # Always unblock signals, even if exception occurs
+                        self.module_combobox.blockSignals(False)
         elif current_tab_index == 1:  # Aggregation Workflow
             if current_row < len(self.aggregation_workflow_modules):
                 module_name, param_values = self.aggregation_workflow_modules[
@@ -5451,16 +5880,36 @@ class Window(QtWidgets.QMainWindow):
                 # Update module combobox to show this module
                 index = self.module_combobox.findText(module_name)
                 if index >= 0:
-                    self.module_combobox.setCurrentIndex(index)
-                    # Populate parameters with stored values
-                    self._populate_stored_parameters(param_values)
-                    self._validate_parameters()  # Clear red borders from filled fields
+                    # Block signals to prevent on_module_changed from firing
+                    self.module_combobox.blockSignals(True)
+                    try:
+                        self.module_combobox.setCurrentIndex(index)
+                        # Manually trigger widget update since signal is blocked
+                        self.on_module_changed(module_name)
+                        # Populate parameters with stored values
+                        self._populate_stored_parameters(param_values)
+                        self._validate_parameters()  # Clear red borders from filled fields
+                    finally:
+                        # Always unblock signals, even if exception occurs
+                        self.module_combobox.blockSignals(False)
 
     def _populate_stored_parameters(self, param_values):
-        """Populate parameter widgets with stored values from a workflow module."""
-        for param_name, (textbox, metadata) in self.parameter_widgets.items():
+        """Populate parameter widgets with stored values from a workflow module.
+
+        Args:
+            param_values: Dict of {param_name: value}
+        """
+        for param_name, widget_info in self.parameter_widgets.items():
             if param_name in param_values:
-                textbox.setText(param_values[param_name])
+                value_data = param_values[param_name]
+
+                # Set value in widget
+                self._set_widget_value(
+                    widget_info.widget,
+                    value_data,
+                    widget_info.original_type,
+                    widget_info
+                )
 
     def _on_workflow_tab_changed(self, tab_index):
         """Handle workflow tab change - display selected module if any."""
@@ -5474,9 +5923,18 @@ class Window(QtWidgets.QMainWindow):
                 ]
                 index = self.module_combobox.findText(module_name)
                 if index >= 0:
-                    self.module_combobox.setCurrentIndex(index)
-                    self._populate_stored_parameters(param_values)
-                    self._validate_parameters()  # Clear red borders from filled fields
+                    # Block signals to prevent on_module_changed from firing
+                    self.module_combobox.blockSignals(True)
+                    try:
+                        self.module_combobox.setCurrentIndex(index)
+                        # Manually trigger widget update since signal is blocked
+                        self.on_module_changed(module_name)
+                        # Populate parameters with stored values
+                        self._populate_stored_parameters(param_values)
+                        self._validate_parameters()  # Clear red borders from filled fields
+                    finally:
+                        # Always unblock signals, even if exception occurs
+                        self.module_combobox.blockSignals(False)
         elif tab_index == 1:  # Aggregation Workflow
             current_row = self.aggregation_workflow_list.currentRow()
             if current_row >= 0 and current_row < len(
@@ -5487,9 +5945,56 @@ class Window(QtWidgets.QMainWindow):
                 ]
                 index = self.module_combobox.findText(module_name)
                 if index >= 0:
-                    self.module_combobox.setCurrentIndex(index)
-                    self._populate_stored_parameters(param_values)
-                    self._validate_parameters()  # Clear red borders from filled fields
+                    # Block signals to prevent on_module_changed from firing
+                    self.module_combobox.blockSignals(True)
+                    try:
+                        self.module_combobox.setCurrentIndex(index)
+                        # Manually trigger widget update since signal is blocked
+                        self.on_module_changed(module_name)
+                        # Populate parameters with stored values
+                        self._populate_stored_parameters(param_values)
+                        self._validate_parameters()  # Clear red borders from filled fields
+                    finally:
+                        # Always unblock signals, even if exception occurs
+                        self.module_combobox.blockSignals(False)
+
+    def _on_workflow_type_changed(self, type_index):
+        """Handle workflow type change - enable/disable workflow tabs accordingly.
+
+        Args:
+            type_index: Index of selected workflow type
+                       0 = Single Workflow
+                       1 = Aggregation Workflow
+                       2 = Investigation Workflow
+        """
+        # Tab indices:
+        # 0 = Single Dataset Workflow
+        # 1 = Aggregation Workflow
+        # 2 = Investigation
+
+        if type_index == 0:  # Single Workflow
+            # Enable only Single Dataset Workflow tab
+            self.workflow_tabs.setTabEnabled(0, True)   # Single Dataset: enabled
+            self.workflow_tabs.setTabEnabled(1, False)  # Aggregation: disabled
+            self.workflow_tabs.setTabEnabled(2, False)  # Investigation: disabled
+            # Switch to Single Dataset tab if currently on a disabled tab
+            if self.workflow_tabs.currentIndex() != 0:
+                self.workflow_tabs.setCurrentIndex(0)
+
+        elif type_index == 1:  # Aggregation Workflow
+            # Enable Single Dataset and Aggregation, disable Investigation
+            self.workflow_tabs.setTabEnabled(0, True)   # Single Dataset: enabled
+            self.workflow_tabs.setTabEnabled(1, True)   # Aggregation: enabled
+            self.workflow_tabs.setTabEnabled(2, False)  # Investigation: disabled
+            # Switch to Aggregation tab if currently on Investigation
+            if self.workflow_tabs.currentIndex() == 2:
+                self.workflow_tabs.setCurrentIndex(1)
+
+        elif type_index == 2:  # Investigation Workflow
+            # Enable all tabs
+            self.workflow_tabs.setTabEnabled(0, True)   # Single Dataset: enabled
+            self.workflow_tabs.setTabEnabled(1, True)   # Aggregation: enabled
+            self.workflow_tabs.setTabEnabled(2, True)   # Investigation: enabled
 
     def remove_selected(self):
         """Remove the selected module from the workflow."""
@@ -5591,15 +6096,391 @@ class Window(QtWidgets.QMainWindow):
                 )
                 self.aggregation_workflow_list.setCurrentRow(current_row + 1)
 
+    def create_python_script(self, filename="start_workflow.py"):
+        """Generate a Python workflow script from current GUI settings.
+
+        Args:
+            filename: Name of the output script file
+        """
+        import json
+        from datetime import datetime
+
+        # Get workflow type
+        workflow_type_index = self.workflow_type.currentIndex()
+        workflow_type_names = [
+            "Single Workflow",
+            "Aggregation Workflow",
+            "Investigation Workflow"]
+        workflow_type_name = workflow_type_names[workflow_type_index] if workflow_type_index < len(workflow_type_names) else "Unknown"
+
+        # Build datasets dict from files table
+        datasets = {}
+        for row in range(self.files_table.rowCount()):
+            name_item = self.files_table.item(row, 0)
+            path_item = self.files_table.item(row, 1)
+            if name_item and path_item:
+                name = name_item.text()
+                path = path_item.text()
+
+                # Create lists for values
+                if name not in datasets:
+                    datasets[name] = []
+                datasets[name].append(path)
+
+        # Helper function to format parameter values
+        def format_value(value):
+            """Format a parameter value for Python code."""
+            if isinstance(value, str):
+                # # Check if it's a command reference
+                # if value.startswith(("before@", "start@", "sum(", "max(", "min(")):
+                #     # Command references are stored as strings but should be tuples in code
+                #     # Parse the format: "timing@index: module.result" or "cmd(timing@...)"
+                #     if "(" in value:
+                #         # Extract command and reference
+                #         cmd = value.split("(")[0]
+                #         ref = value[len(cmd)+1:-1]  # Remove cmd( and )
+                #         return f'("{cmd}", "{ref}")'
+                #     else:
+                #         # Direct reference like "before@0: module.result"
+                #         return f'("$get_previous_module_result", "{value}")'
+
+                # Check if it looks like a path
+                if "/" in value or "\\" in value or value.endswith(('.yaml', '.hdf5', '.h5', '.tif', '.png', '.jpg')):
+                    # Use os.path.join for path-like strings
+                    parts = value.replace("\\", "/").split("/")
+                    if len(parts) > 1:
+                        return f"os.path.join({', '.join(repr(p) for p in parts)})"
+
+                return repr(value)
+            elif isinstance(value, dict):
+                # Format nested dicts recursively
+                items = [f"{repr(k)}: {format_value(v)}" for k, v in value.items()]
+                return "{" + ", ".join(items) + "}"
+            elif isinstance(value, (list, tuple)):
+                items = [format_value(v) for v in value]
+                bracket = "[" if isinstance(value, list) else "("
+                close = "]" if isinstance(value, list) else ")"
+                return bracket + ", ".join(items) + close
+            elif value is None:
+                return "None"
+            elif isinstance(value, bool):
+                return "True" if value else "False"
+            else:
+                return str(value)
+
+        # Format workflow modules
+        def format_modules(modules):
+            """Format list of (module_name, params) tuples as Python code."""
+            if not modules:
+                return "[]"
+
+            lines = ["["]
+            for module_name, params in modules:
+                lines.append("    (")
+                lines.append(f'        "{module_name}",')
+                lines.append("        {")
+
+                for param_name, param_value in params.items():
+                    formatted_value = format_value(param_value)
+                    lines.append(f'            "{param_name}": {formatted_value},')
+
+                lines.append("        },")
+                lines.append("    ),")
+            lines.append("]")
+            return "\n".join(lines)
+
+        # Generate script content
+        script_lines = [
+            "#!/usr/bin/env python",
+            '"""',
+            f"Script Name: {filename}",
+            f"Generated by: picasso-workflow GUI",
+            f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Workflow type: {workflow_type_name}",
+            '"""',
+            "import os",
+            "from picasso import io",
+        ]
+
+        # Add appropriate import based on workflow type
+        if workflow_type_index == 0:  # Single Workflow
+            script_lines.append("from picasso_workflow.workflow import WorkflowRunner")
+        elif workflow_type_index == 1:  # Aggregation Workflow
+            script_lines.append("from picasso_workflow.metaworkflow import AggregationWorkflowCoordinator")
+        elif workflow_type_index == 2:  # Investigation Workflow
+            script_lines.append("from picasso_workflow.metaworkflow import InvestigationWorkflowCoordinator")
+
+        script_lines.extend([
+            "",
+            "",
+            "# Confluence configuration (set via environment variables)",
+            "confluence_url = os.getenv('CONFLUENCE_URL')",
+            "confluence_token = os.getenv('CONFLUENCE_BEARER')",
+            "confluence_space = os.getenv('CONFLUENCE_SPACE')",
+            "base_page = os.getenv('CONFLUENCE_BASE_PAGE')",
+            "",
+            "",
+            "# Dataset configuration",
+            "datasets = {",
+        ])
+
+        # Add datasets
+        for key, values in datasets.items():
+            script_lines.append(f"    {repr(key)}: [")
+            for value in values:
+                formatted = format_value(value)
+                script_lines.append(f"        {formatted},")
+            script_lines.append("    ],")
+        script_lines.append("}")
+
+        script_lines.extend([
+            "",
+            "",
+            "# Single dataset workflow modules",
+        ])
+        script_lines.append("workflow_modules_sgl = " + format_modules(self.single_workflow_modules))
+
+        script_lines.extend([
+            "",
+            "",
+            "# Aggregation workflow modules",
+        ])
+        script_lines.append("workflow_modules_agg = " + format_modules(self.aggregation_workflow_modules))
+
+        script_lines.extend([
+            "",
+            "",
+            'if __name__ == "__main__":',
+            "    # Get working directory",
+            "    working_folder = os.path.dirname(os.path.abspath(__file__))",
+            "    src_loc_file = os.path.join(working_folder, 'src_loc.yaml')",
+            "    io.save_info(src_loc_file, [datasets])",
+            "",
+            "    print('datasets', datasets)",
+            "    print('src_loc', src_loc_file)",
+            "    analysis_name = os.path.split(working_folder)[-1]",
+            "",
+        ])
+
+        # Add coordinator creation based on workflow type
+        if workflow_type_index == 0:  # Single Workflow
+            script_lines.extend([
+                "    # Create single workflow runner",
+                "    runner = WorkflowRunner(",
+                "        working_folder=working_folder,",
+                "        analysis_name=analysis_name,",
+                "        confluence_url=confluence_url,",
+                "        confluence_space=confluence_space,",
+                "        confluence_token=confluence_token,",
+                "        base_page=base_page,",
+                "    )",
+                "",
+                "    # Run workflow",
+                "    runner.run_workflow(workflow_modules_sgl)",
+            ])
+        elif workflow_type_index == 1:  # Aggregation Workflow
+            script_lines.extend([
+                "    # Create aggregation workflow coordinator",
+                "    coordinator = AggregationWorkflowCoordinator(",
+                "        src_loc_file, analysis_name, working_folder,",
+                "        confluence_url, confluence_space, confluence_token,",
+                "        base_page,",
+                "        always_save=False",
+                "    )",
+                "",
+                "    # Run analysis",
+                "    coordinator.run_analysis(workflow_modules_sgl, workflow_modules_agg)",
+            ])
+        elif workflow_type_index == 2:  # Investigation Workflow
+            script_lines.extend([
+                "    # Create investigation workflow coordinator",
+                "    coordinator = InvestigationWorkflowCoordinator(",
+                "        src_loc_file, analysis_name, working_folder,",
+                "        confluence_url, confluence_space, confluence_token,",
+                "        base_page,",
+                "        always_save=False",
+                "    )",
+                "",
+                "    # Run investigation",
+                "    coordinator.run_investigation(workflow_modules_sgl, workflow_modules_agg)",
+            ])
+
+        script_lines.append("")  # Final newline
+
+        # Write script to file
+        script_content = "\n".join(script_lines)
+
+        # Get output path from results folder
+        results_folder = self.results_folder_display.text()
+        if results_folder:
+            output_path = os.path.join(results_folder, filename)
+        else:
+            output_path = filename
+
+        with open(output_path, "w") as f:
+            f.write(script_content)
+
+        # Make script executable on Unix systems
+        import stat
+        try:
+            st = os.stat(output_path)
+            os.chmod(output_path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        except:
+            pass  # Windows doesn't support chmod
+
+        print(f"Created workflow script: {output_path}")
+        return output_path
+
     def start_slurm(self):
         """"""
-        # TODO: load workflow
-        print("starting SLURM on Cluster")
+        import getpass
+        hostname = "hpcl8001"
+        host_cluster = "hpcl8"
+        username = getpass.getuser()
+        ssh_key_path = '~/.ssh/id_rsa'
+        self.slurm_communicator = SlurmCommunicator(
+            hostname, username, port=22, ssh_key_path=ssh_key_path)
+
+        assert self.slurm_communicator.test_connection()
+
+        scriptname = "start_workflow.py"
+        self.create_python_script(scriptname)
+
+        job_name = "mypwjob"
+        slurm_options = {
+            "nodes": 2,
+            # "ntasks": Number of tasks,
+            "cpus-per-task": 12,
+            "mem": "50G",
+            "time": "24:00:00",
+            # "mail-type": "ALL",
+            # "mail-user": f"{username}@biochem.mpg.de",
+
+        }
+
+        commands = self.slurm_communicator.assemble_slurm_commands(
+            scriptname=scriptname, use_pw_module=True)
+        script_content = self.slurm_communicator.create_slurm_script(
+            job_name, commands, slurm_options=slurm_options, output_file=None,
+            error_file=None, working_directory=None)
+        script_path = self.slurm_communicator.write_slurm_script(
+            script_content, self.results_folder_display.text())
+        result = self.slurm_communicator.submit_job(
+            script_path, host_cluster, additional_options=None)
+
+        # Store and display job ID
+        if result["success"] and result["job_id"]:
+            self.job_id_input.setText(str(result["job_id"]))
+            self.job_info_display.append(f"Job submitted successfully!\nJob ID: {result['job_id']}")
+            print(f"Starting SLURM on Cluster - Job ID: {result['job_id']}")
+        else:
+            self.job_info_display.append(f"Job submission failed!\n{result['stderr']}")
+            print("Failed to start SLURM on Cluster")
 
     def start_locally(self):
         """"""
         # TODO: load workflow
         print("starting workflow locally")
+
+    def on_cancel_job(self):
+        """Cancel the current SLURM job."""
+        if not hasattr(self, 'slurm_communicator') or self.slurm_communicator is None:
+            self.job_info_display.append("Error: Not connected to SLURM cluster.\nPlease submit a job first.")
+            return
+
+        job_id = self.job_id_input.text().strip()
+        if not job_id:
+            self.job_info_display.append("Error: No job ID specified.\nPlease enter a job ID.")
+            return
+
+        try:
+            job_id_int = int(job_id)
+            result = self.slurm_communicator.cancel_job(job_id_int)
+
+            if result["success"]:
+                self.job_info_display.append(f"Job {job_id} cancelled successfully.")
+            else:
+                self.job_info_display.append(f"Failed to cancel job {job_id}:\n{result['stderr']}")
+        except ValueError:
+            self.job_info_display.append(f"Error: Invalid job ID '{job_id}'. Must be a number.")
+
+    def on_show_job_status(self):
+        """Display the status of the current SLURM job."""
+        if not hasattr(self, 'slurm_communicator') or self.slurm_communicator is None:
+            self.job_info_display.append("Error: Not connected to SLURM cluster.\nPlease submit a job first.")
+            return
+
+        job_id = self.job_id_input.text().strip()
+        if not job_id:
+            self.job_info_display.append("Error: No job ID specified.\nPlease enter a job ID.")
+            return
+
+        try:
+            job_id_int = int(job_id)
+            result = self.slurm_communicator.get_job_status(job_id_int)
+
+            if result["success"]:
+                self.job_info_display.append(f"\n=== Job {job_id} Status ===")
+                self.job_info_display.append(f"Status: {result['status']}")
+                if result['details']:
+                    self.job_info_display.append("Details:")
+                    for key, value in result['details'].items():
+                        if value:  # Only show non-empty values
+                            self.job_info_display.append(f"  {key}: {value}")
+            else:
+                self.job_info_display.append(f"Failed to get status for job {job_id}:\n{result.get('error', 'Unknown error')}")
+        except ValueError:
+            self.job_info_display.append(f"Error: Invalid job ID '{job_id}'. Must be a number.")
+
+    def on_list_jobs(self):
+        """List all SLURM jobs for the current user."""
+        if not hasattr(self, 'slurm_communicator') or self.slurm_communicator is None:
+            self.job_info_display.append("Error: Not connected to SLURM cluster.\nPlease submit a job first.")
+            return
+
+        result = self.slurm_communicator.list_jobs()
+
+        if result["success"]:
+            jobs = result.get("jobs", [])
+            if jobs:
+                self.job_info_display.append("\n=== Your SLURM Jobs ===")
+                self.job_info_display.append(f"{'Job ID':<10} {'Status':<12} {'Name':<20} {'Time':<10}")
+                self.job_info_display.append("-" * 52)
+                for job in jobs:
+                    job_id = job.get("job_id", "N/A")
+                    status = job.get("status", "N/A")
+                    name = job.get("job_name", "N/A")
+                    time = job.get("time", "N/A")
+                    self.job_info_display.append(f"{job_id:<10} {status:<12} {name:<20} {time:<10}")
+            else:
+                self.job_info_display.append("No jobs found for current user.")
+        else:
+            self.job_info_display.append(f"Failed to list jobs:\n{result.get('error', 'Unknown error')}")
+
+    def on_show_queue_info(self):
+        """Display SLURM queue/partition information."""
+        if not hasattr(self, 'slurm_communicator') or self.slurm_communicator is None:
+            self.job_info_display.append("Error: Not connected to SLURM cluster.\nPlease submit a job first.")
+            return
+
+        result = self.slurm_communicator.get_queue_info()
+
+        if result["success"]:
+            partitions = result.get("partitions", [])
+            if partitions:
+                self.job_info_display.append("\n=== SLURM Queue Information ===")
+                self.job_info_display.append(f"{'Partition':<15} {'Avail':<8} {'Nodes':<8} {'State':<12}")
+                self.job_info_display.append("-" * 43)
+                for partition in partitions:
+                    name = partition.get("name", "N/A")
+                    avail = partition.get("availability", "N/A")
+                    nodes = partition.get("nodes", "N/A")
+                    state = partition.get("state", "N/A")
+                    self.job_info_display.append(f"{name:<15} {avail:<8} {nodes:<8} {state:<12}")
+            else:
+                self.job_info_display.append("No partition information available.")
+        else:
+            self.job_info_display.append(f"Failed to get queue info:\n{result.get('error', 'Unknown error')}")
 
     def _clear_parameter_layout(self):
         """Clear all widgets from the module parameters layout."""
@@ -5607,6 +6488,408 @@ class Window(QtWidgets.QMainWindow):
             item = self.module_parameters_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+
+    def _create_parameter_widget(self, param_name, param_metadata):
+        """Factory method to create appropriate widget based on parameter type.
+
+        Args:
+            param_name: Name of the parameter
+            param_metadata: Metadata dict with 'type', 'default', 'min', 'max', etc.
+
+        Returns:
+            tuple: (widget, original_type_string)
+        """
+        # Check for options first - if present, use combo box regardless of type
+        if "options" in param_metadata:
+            widget = QtWidgets.QComboBox()
+            options = param_metadata["options"]
+            widget.addItems([str(opt) for opt in options])
+            default = param_metadata.get("default")
+            if default is not None:
+                index = widget.findText(str(default))
+                if index >= 0:
+                    widget.setCurrentIndex(index)
+            return widget, "options"
+
+        param_type = param_metadata.get("type", "str")
+
+        if param_type == "int":
+            widget = QtWidgets.QSpinBox()
+            widget.setMinimum(param_metadata.get("min", -2147483648))
+            widget.setMaximum(param_metadata.get("max", 2147483647))
+            widget.setSingleStep(param_metadata.get("step", 1))
+            default = param_metadata.get("default")
+            if default is not None:
+                widget.setValue(int(default))
+            return widget, "int"
+
+        elif param_type == "float":
+            widget = QtWidgets.QDoubleSpinBox()
+            widget.setMinimum(param_metadata.get("min", -1e308))
+            widget.setMaximum(param_metadata.get("max", 1e308))
+            widget.setSingleStep(param_metadata.get("step", 0.1))
+            widget.setDecimals(6)
+            default = param_metadata.get("default")
+            if default is not None:
+                widget.setValue(float(default))
+            return widget, "float"
+
+        elif param_type == "bool":
+            widget = QtWidgets.QCheckBox()
+            default = param_metadata.get("default", False)
+            widget.setChecked(bool(default))
+            return widget, "bool"
+
+        else:  # str or fallback
+            widget = QtWidgets.QLineEdit()
+            default = param_metadata.get("default", "")
+            if default is not None:
+                widget.setText(str(default))
+            if param_metadata.get("required", False):
+                widget.setPlaceholderText("Required")
+            return widget, "str"
+
+    def _get_widget_value(self, widget, original_type, widget_info=None):
+        """Get value from widget based on its original type.
+
+        Args:
+            widget: The Qt widget
+            original_type: Original type string ('int', 'float', 'bool', 'str', 'options', 'dict')
+            widget_info: ParameterWidgetInfo (needed for dict types)
+
+        Returns:
+            str or dict: String representation of the value, or dict for nested parameters
+        """
+        if original_type == "dict" and widget_info and widget_info.sub_parameters:
+            # For dict types with nested parameters
+            if isinstance(widget, QtWidgets.QCheckBox):
+                # Optional dict: only include if checkbox is checked
+                if not widget.isChecked():
+                    return None
+
+            # Recursively get values from sub-parameters
+            nested_values = {}
+            for sub_param_name, sub_widget_info in widget_info.sub_parameters.items():
+                sub_value = self._get_widget_value(
+                    sub_widget_info.widget,
+                    sub_widget_info.original_type,
+                    sub_widget_info
+                )
+                if sub_value is not None:  # Only include non-None values
+                    nested_values[sub_param_name] = sub_value
+            return nested_values
+
+        elif isinstance(widget, QtWidgets.QLineEdit):
+            return widget.text()
+        elif isinstance(widget, QtWidgets.QComboBox):
+            return widget.currentText()
+        elif isinstance(widget, QtWidgets.QSpinBox):
+            return str(widget.value())
+        elif isinstance(widget, QtWidgets.QDoubleSpinBox):
+            return str(widget.value())
+        elif isinstance(widget, QtWidgets.QCheckBox):
+            return str(widget.isChecked())
+        else:
+            raise TypeError(f"Unknown widget type: {type(widget)}")
+
+    def _set_widget_value(self, widget, value_data, original_type, widget_info=None):
+        """Set widget value from string based on original type.
+
+        Args:
+            widget: The Qt widget
+            value_data: String representation of value, or dict for nested parameters
+            original_type: Original type string ('int', 'float', 'bool', 'str', 'options', 'dict')
+            widget_info: ParameterWidgetInfo (needed for dict types)
+        """
+        if original_type == "dict" and widget_info and widget_info.sub_parameters:
+            # For dict types with nested parameters
+            if isinstance(value_data, dict):
+                # value_data is a dict of nested values
+                if isinstance(widget, QtWidgets.QCheckBox):
+                    # Optional dict: check the checkbox to show nested params
+                    widget.setChecked(True)
+
+                    # Manually call the toggle function to ensure rows are shown
+                    # (signal may not fire properly when loading)
+                    if widget_info.toggle_function:
+                        widget_info.toggle_function(2)  # 2 = Qt.Checked
+
+                # Explicitly show nested rows using both methods as fallback
+                # Method 1: Through sub_parameters
+                for sub_widget_info in widget_info.sub_parameters.values():
+                    if sub_widget_info.row_widget:
+                        sub_widget_info.row_widget.setVisible(True)
+
+                # Method 2: Through nested_rows attribute (if it exists)
+                if hasattr(widget_info.row_widget, 'nested_rows'):
+                    for nested_row in widget_info.row_widget.nested_rows:
+                        nested_row.setVisible(True)
+
+                # Recursively set values in sub-parameters
+                for sub_param_name, sub_widget_info in widget_info.sub_parameters.items():
+                    if sub_param_name in value_data:
+                        sub_value_data = value_data[sub_param_name]
+
+                        # Recursively set nested parameter value
+                        self._set_widget_value(
+                            sub_widget_info.widget,
+                            sub_value_data,
+                            sub_widget_info.original_type,
+                            sub_widget_info
+                        )
+            # If value_data is None or not a dict, leave dict parameter unchecked/empty
+
+        elif isinstance(widget, QtWidgets.QLineEdit):
+            widget.setText(str(value_data))
+        elif isinstance(widget, QtWidgets.QComboBox):
+            index = widget.findText(str(value_data))
+            if index >= 0:
+                widget.setCurrentIndex(index)
+        elif isinstance(widget, QtWidgets.QSpinBox):
+            try:
+                widget.setValue(int(value_data))
+            except (ValueError, TypeError):
+                widget.setValue(widget.minimum())
+        elif isinstance(widget, QtWidgets.QDoubleSpinBox):
+            try:
+                widget.setValue(float(value_data))
+            except (ValueError, TypeError):
+                widget.setValue(widget.minimum())
+        elif isinstance(widget, QtWidgets.QCheckBox):
+            # Handle both bool strings and Python bool repr
+            is_checked = str(value_data).lower() in ('true', '1', 'yes', 'on')
+            widget.setChecked(is_checked)
+
+    def _on_cmd_button_clicked(self, param_name):
+        """Handle cmd button click - opens prior result dialog.
+
+        Args:
+            param_name: Name of the parameter to populate
+        """
+        # Determine which workflow list to use
+        current_tab_index = self.workflow_tabs.currentIndex()
+        if current_tab_index == 0:
+            workflow_modules = self.single_workflow_modules
+        elif current_tab_index == 1:
+            workflow_modules = self.aggregation_workflow_modules
+        else:
+            return
+
+        # Create dialog
+        dialog = ParameterCmdDialog(workflow_modules, self.module_descriptor, self)
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            module_index, result_name, command_type, timing = dialog.get_selection()
+            if module_index is not None and result_name:
+                # Format base reference: "timing@index: module_name.result_name"
+                # e.g., "before@1: localize.net_gradient" or "start@0: identify.locs"
+                # e.g. "('$get_prior_result', 'all_results,01_testmodule,myresult')"
+                module_name = workflow_modules[module_index][0]
+                if timing == "before":
+                    timing_cmd = "$"
+                else:
+                    timing_cmd = "$$"
+                base_reference = f"{timing}@{module_index}: {module_name}.{result_name}"
+
+                # Wrap in command function if not "Previous Result"
+                if command_type == "Previous Result":
+                    reference_string = f"('{timing_cmd}get_prior_result', 'all_results, {module_index}_{module_name}, {result_name}')"
+                else:
+                    # Format as command(reference)
+                    # e.g., "sum(before@1: localize.net_gradient)"
+                    reference_string = f"{command_type.lower()}({base_reference})"
+
+                # Convert widget to QLineEdit and populate
+                self._convert_widget_to_textbox(param_name, reference_string)
+
+    # def _handle_prior_result_command(self, param_name):
+    #     """Open dialog for selecting prior result reference.
+
+    #     Args:
+    #         param_name: Name of the parameter to populate
+    #     """
+
+    #     if not workflow_modules:
+    #         QtWidgets.QMessageBox.warning(
+    #             self,
+    #             "No Prior Modules",
+    #             "There are no prior modules in the workflow to reference."
+    #         )
+    #         # Reset command combo
+    #         widget_info = self.parameter_widgets[param_name]
+    #         widget_info.command_combo.setCurrentIndex(0)
+    #         return
+
+
+    def _convert_widget_to_textbox(self, param_name, initial_value=""):
+        """Convert parameter widget to QLineEdit for command values.
+
+        Args:
+            param_name: Name of the parameter
+            initial_value: Initial text to populate
+        """
+        widget_info = self.parameter_widgets[param_name]
+        row_widget = widget_info.row_widget
+        row_layout = row_widget.layout()
+
+        # Remove old widget (at index 1, between label and command combo)
+        old_widget = widget_info.widget
+        row_layout.removeWidget(old_widget)
+        old_widget.deleteLater()
+
+        # Create new QLineEdit
+        new_widget = QtWidgets.QLineEdit()
+        new_widget.setText(initial_value)
+        new_widget.setToolTip(widget_info.metadata.get("description", ""))
+        new_widget.editingFinished.connect(self._on_parameter_changed)
+
+        # Insert at position 1 (after label, before command combo)
+        row_layout.insertWidget(1, new_widget, stretch=2)
+
+        # Update stored reference
+        widget_info.widget = new_widget
+
+        # Trigger validation update
+        self._on_parameter_changed()
+
+    def _create_parameter_row(self, param_name, param_metadata, indent_level=0):
+        """Create a parameter row with widgets, supporting nested dicts.
+
+        Args:
+            param_name: Name of the parameter
+            param_metadata: Metadata dict with type, description, default, etc.
+            indent_level: Indentation level for nested parameters (0 = top level)
+
+        Returns:
+            ParameterWidgetInfo: Widget info for this parameter
+        """
+        # Create row container
+        row_widget = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(indent_level * 20, 2, 0, 2)
+
+        # Create label
+        label = QtWidgets.QLabel(param_name)
+        if param_metadata.get("required", False):
+            font = label.font()
+            font.setBold(True)
+            label.setFont(font)
+        row_layout.addWidget(label, stretch=0)
+
+        # Check if this is a dict with nested properties
+        param_type = param_metadata.get("type", "str")
+        properties = param_metadata.get("properties", {})
+
+        if param_type == "dict" and properties:
+            # Handle nested dict parameter
+            is_required = param_metadata.get("required", False)
+            sub_parameters = {}
+            sub_rows = []
+
+            if is_required:
+                # # Required dict: show label, create nested rows immediately
+                # placeholder_widget = QtWidgets.QLabel("(nested parameters below)")
+                # placeholder_widget.setStyleSheet("color: gray; font-style: italic;")
+                # row_layout.addWidget(placeholder_widget, stretch=2)
+                checkbox = QtWidgets.QCheckBox("Enable")
+                checkbox.setChecked(True)
+                row_layout.addWidget(checkbox, stretch=2)
+
+                # Create cmd button (disabled for dict types)
+                cmd_button = QtWidgets.QPushButton("cmd")
+                cmd_button.setFixedWidth(50)
+                cmd_button.setEnabled(False)  # Disable for dict types
+                row_layout.addWidget(cmd_button, stretch=0)
+
+                # Create nested parameter rows
+                for sub_param_name, sub_param_metadata in properties.items():
+                    sub_widget_info = self._create_parameter_row(
+                        sub_param_name, sub_param_metadata, indent_level + 1
+                    )
+                    sub_parameters[sub_param_name] = sub_widget_info
+                    sub_rows.append(sub_widget_info.row_widget)
+
+            else:
+                # Optional dict: show checkbox, create nested rows (initially hidden)
+                checkbox = QtWidgets.QCheckBox("Enable")
+                checkbox.setChecked(False)
+                row_layout.addWidget(checkbox, stretch=2)
+
+                # Create cmd button (disabled for dict types)
+                cmd_button = QtWidgets.QPushButton("cmd")
+                cmd_button.setFixedWidth(50)
+                cmd_button.setEnabled(False)
+                row_layout.addWidget(cmd_button, stretch=0)
+
+                # Create nested parameter rows (initially hidden)
+                for sub_param_name, sub_param_metadata in properties.items():
+                    sub_widget_info = self._create_parameter_row(
+                        sub_param_name, sub_param_metadata, indent_level + 1
+                    )
+                    sub_parameters[sub_param_name] = sub_widget_info
+                    sub_rows.append(sub_widget_info.row_widget)
+                    sub_widget_info.row_widget.setVisible(False)  # Hide initially
+
+                # Connect checkbox to toggle visibility
+                def toggle_nested_params(state):
+                    # stateChanged passes int (0=unchecked, 2=checked), convert to bool
+                    is_checked = bool(state)
+                    for sub_row in sub_rows:
+                        sub_row.setVisible(is_checked)
+
+                checkbox.stateChanged.connect(toggle_nested_params)
+
+            # Store nested rows in row_widget for later access
+            row_widget.nested_rows = sub_rows
+
+            widget_info = ParameterWidgetInfo(
+                widget=checkbox,
+                cmd_button=cmd_button,
+                row_widget=row_widget,
+                metadata=param_metadata,
+                original_type="dict",
+                sub_parameters=sub_parameters,
+                toggle_function=toggle_nested_params if not is_required else None
+            )
+            return widget_info
+
+        else:
+            # Regular parameter (not a dict)
+            widget, original_type = self._create_parameter_widget(param_name, param_metadata)
+
+            # Set tooltip
+            description = param_metadata.get("description", "")
+            if description:
+                widget.setToolTip(description)
+                label.setToolTip(description)
+
+            # Connect type-specific validation signal
+            if isinstance(widget, QtWidgets.QLineEdit):
+                widget.editingFinished.connect(self._on_parameter_changed)
+            elif isinstance(widget, QtWidgets.QComboBox):
+                widget.currentTextChanged.connect(self._on_parameter_changed)
+            elif isinstance(widget, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)):
+                widget.valueChanged.connect(self._on_parameter_changed)
+            elif isinstance(widget, QtWidgets.QCheckBox):
+                widget.stateChanged.connect(self._on_parameter_changed)
+
+            row_layout.addWidget(widget, stretch=2)
+
+            # Create cmd button
+            cmd_button = QtWidgets.QPushButton("cmd")
+            cmd_button.setFixedWidth(50)
+            cmd_button.clicked.connect(
+                lambda checked, pn=param_name: self._on_cmd_button_clicked(pn)
+            )
+            row_layout.addWidget(cmd_button, stretch=0)
+
+            widget_info = ParameterWidgetInfo(
+                widget=widget,
+                cmd_button=cmd_button,
+                row_widget=row_widget,
+                metadata=param_metadata,
+                original_type=original_type
+            )
+            return widget_info
 
     def _populate_parameter_widgets(self, module_params):
         """Create and populate parameter entry widgets from module parameters.
@@ -5625,46 +6908,17 @@ class Window(QtWidgets.QMainWindow):
             return
 
         for param_name, param_metadata in module_params.items():
-            # Create row container
-            row_widget = QtWidgets.QWidget()
-            row_layout = QtWidgets.QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 2, 0, 2)
+            # Create parameter row (handles nested dicts recursively)
+            widget_info = self._create_parameter_row(param_name, param_metadata, indent_level=0)
+            self.parameter_widgets[param_name] = widget_info
 
-            # Create label
-            label = QtWidgets.QLabel(param_name)
-            if param_metadata.get("required", False):
-                # Make label bold for required parameters
-                font = label.font()
-                font.setBold(True)
-                label.setFont(font)
-            row_layout.addWidget(label)
+            # Add main row to layout
+            self.module_parameters_layout.addWidget(widget_info.row_widget)
 
-            # Create textbox
-            textbox = QtWidgets.QLineEdit()
-            default_value = param_metadata.get("default", "")
-            if default_value is not None:
-                textbox.setText(str(default_value))
-
-            # Set tooltip with description
-            description = param_metadata.get("description", "")
-            if description:
-                textbox.setToolTip(description)
-                label.setToolTip(description)
-
-            # Set placeholder for required params
-            if param_metadata.get("required", False):
-                textbox.setPlaceholderText("Required")
-
-            # Connect validation signal
-            textbox.editingFinished.connect(self._on_parameter_changed)
-
-            row_layout.addWidget(textbox)
-
-            # Store widget reference with metadata
-            self.parameter_widgets[param_name] = (textbox, param_metadata)
-
-            # Add row to layout
-            self.module_parameters_layout.addWidget(row_widget)
+            # Add nested rows if this is a dict parameter
+            if hasattr(widget_info.row_widget, 'nested_rows'):
+                for sub_row in widget_info.row_widget.nested_rows:
+                    self.module_parameters_layout.addWidget(sub_row)
 
         # Add stretch at the end to push widgets to the top
         self.module_parameters_layout.addStretch()
@@ -5676,20 +6930,31 @@ class Window(QtWidgets.QMainWindow):
             bool: True if all required parameters have values, False otherwise
         """
         all_valid = True
-        for param_name, (
-            textbox,
-            param_metadata,
-        ) in self.parameter_widgets.items():
-            is_required = param_metadata.get("required", False)
-            is_empty = not textbox.text().strip()
+        for param_name, widget_info in self.parameter_widgets.items():
+            is_required = widget_info.metadata.get("required", False)
+            widget = widget_info.widget
+
+            # Check if empty based on widget type
+            is_empty = False
+            if isinstance(widget, QtWidgets.QLineEdit):
+                is_empty = not widget.text().strip()
+            elif isinstance(widget, QtWidgets.QComboBox):
+                # Combo boxes always have a selection, never considered "empty"
+                is_empty = False
+            elif isinstance(widget, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)):
+                # Spinboxes always have a value, never considered "empty"
+                is_empty = False
+            elif isinstance(widget, QtWidgets.QCheckBox):
+                # Checkboxes always have a state, never considered "empty"
+                is_empty = False
 
             if is_required and is_empty:
-                # Visual feedback: red border for empty required fields
-                textbox.setStyleSheet("border: 1px solid red;")
+                # Visual feedback: red border for empty required fields (only QLineEdit)
+                widget.setStyleSheet("border: 1px solid red;")
                 all_valid = False
             else:
                 # Clear styling if valid
-                textbox.setStyleSheet("")
+                widget.setStyleSheet("")
 
         # Enable/disable "Add module" button based on validation
         self.add_module_button.setEnabled(all_valid)
