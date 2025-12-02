@@ -6,7 +6,8 @@ Initial Date: March 7, 2024
 Description: This is the picasso interface of picasso-workflow
 """
 from picasso import lib, io, localize, gausslq, postprocess, clusterer
-from picasso import aim, spinna, g5m
+from picasso import aim, spinna
+from picasso_workflow.outpost_modules import g5m
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import copy

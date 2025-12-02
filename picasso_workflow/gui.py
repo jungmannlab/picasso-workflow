@@ -11,12 +11,16 @@ import logging
 import subprocess
 import os
 import sys
+
 # import pkgutil
 # import importlib
 import traceback
 import tempfile
+import functools
+import inspect
+import textwrap
 from picasso import lib
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 
 logger = logging.getLogger(__name__)
 __GUIVERSION__ = "0.1.0"
@@ -298,6 +302,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         excluded_methods = {
             "__init__",
             "get_module_names",
+            "get_docstring",
             "__class__",
             "__delattr__",
             "__dict__",
@@ -336,7 +341,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         # Sort alphabetically for consistent ordering
         return sorted(module_methods)
 
-    def dummy_module(self, i, parameters, results):
+    def get_docstring(self, module):
+        """Reads and returns the docstring of a module"""
+        fun = getattr(self, module)
+        return fun.__doc__
+
+    def dummy_module(self):
         """A module that does nothing, for quickly removing
         modules in a workflow without having to renumber the
         following result idcs. Only for workflow debugging,
@@ -377,7 +387,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def analysis_documentation(self, i, parameters, results):
+    def analysis_documentation(self):
         """Document the parameters of the analysis machine and software.
 
         Creates documentation of the analysis environment including system
@@ -426,7 +436,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def convert_zeiss_movie(self, i, parameters, results):
+    def convert_zeiss_movie(self):
         """Converts a DNA-PAINT movie into .raw, as supported by picasso.
 
         Converts Zeiss .czi movie files to picasso-compatible .raw format
@@ -492,7 +502,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def load_dataset_movie(self, i, parameters, results):
+    def load_dataset_movie(self):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
 
         Loads DNA-PAINT movie data and metadata into memory for subsequent
@@ -610,7 +620,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def load_dataset_localizations(self, i, parameters, results):
+    def load_dataset_localizations(self):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
 
         Loads pre-computed localization data from file for analysis workflows
@@ -681,7 +691,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def identify(self, i, parameters, results):
+    def identify(self):
         """Identifies localizations in a loaded dataset.
 
         Identifies potential localization sites in the loaded movie using
@@ -858,7 +868,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def localize(self, i, parameters, results):
+    def localize(self):
         """Localizes Spots previously identified.
 
         Performs sub-pixel localization of identified spots using various
@@ -938,7 +948,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def export_brightfield(self, i, parameters, results):
+    def export_brightfield(self):
         """Opens a single-plane tiff image and saves it to png with
         contrast adjustment.
 
@@ -1017,7 +1027,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def render(self, i, parameters, results):
+    def render(self):
         """Renders localizations.
 
         Creates rendered images of localization data using various
@@ -1116,7 +1126,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def undrift_rcc(self, i, parameters, results):
+    def undrift_rcc(self):
         """Undrifts localized data using redundant cross correlation.
 
         Corrects sample drift during acquisition using redundant
@@ -1189,7 +1199,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def undrift_aim(self, i, parameters, results):
+    def undrift_aim(self):
         """Unrift localized data using the AIM algorithm.
 
         Corrects sample drift using the AIM (Accelerated Iterative Method)
@@ -1258,7 +1268,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def manual(self, i, parameters, results):
+    def manual(self):
         """Describes a manual step, for which the workflow is paused.
 
         Pauses the workflow for manual intervention or user input before
@@ -1315,7 +1325,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def summarize_dataset(self, i, parameters, results):
+    def summarize_dataset(self):
         """Summarizes the results of a dataset analysis.
 
         Creates a comprehensive summary of the analysis results including
@@ -1371,7 +1381,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def density(self, i, parameters, results):
+    def density(self):
         """Calculate local localization density.
 
         Computes local density of localizations using various methods
@@ -1448,7 +1458,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def dbscan(self, i, parameters, results):
+    def dbscan(self):
         """Perform clustering using dbscan.
 
         Applies DBSCAN clustering algorithm to localizations, optionally
@@ -1553,7 +1563,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def hdbscan(self, i, parameters, results):
+    def hdbscan(self):
         """Perform clustering using hdbscan.
 
         Applies HDBSCAN (Hierarchical DBSCAN) clustering algorithm to
@@ -1649,7 +1659,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def binding_event_analysis(self, i, parameters, results):
+    def binding_event_analysis(self):
         """Perform clustering using the smlm clusterer.
 
         Analyzes binding events in single-molecule localization data
@@ -1719,7 +1729,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def smlm_clusterer(self, i, parameters, results):
+    def smlm_clusterer(self):
         """Perform clustering using the smlm clusterer.
 
         Applies specialized SMLM clustering algorithms for single-molecule
@@ -1787,7 +1797,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def gaussian_mixture_cluster(self, i, parameters, results):
+    def gaussian_mixture_cluster(self):
         """Perform clustering using gaussian mixture models.
 
         Applies Gaussian Mixture Model clustering to localization data
@@ -1855,7 +1865,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def nneighbor(self, i, parameters, results):
+    def nneighbor(self):
         """Calculate Nearest Neighbor distances.
 
         Computes k-nearest neighbor distances for spatial randomness
@@ -1922,7 +1932,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def fit_csr(self, i, parameters, results):
+    def fit_csr(self):
         """Fit a Completely Spatially Random Distribution to nearest neighbors.
 
         Fits CSR model to nearest neighbor distance distributions and evaluates
@@ -2087,7 +2097,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def save_single_dataset(self, i, parameters, results):
+    def save_single_dataset(self):
         """Saves the locs and info of a single dataset; makes loading
         for the aggregation workflow more straightforward.
 
@@ -2144,7 +2154,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     # Aggregation workflow modules
-    def load_datasets_to_aggregate(self, i, parameters, results):
+    def load_datasets_to_aggregate(self):
         """Loads data of multiple single-dataset workflows into one
         aggregation workflow.
 
@@ -2212,7 +2222,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def align_channels(self, i, parameters, results):
+    def align_channels(self):
         """Saves the locs and info of a single dataset; makes loading
         for the aggregation workflow more straightforward.
 
@@ -2280,7 +2290,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def combine_channels(self, i, parameters, results):
+    def combine_channels(self):
         """Combines multiple channels into one dataset. This is relevant
         e.g. for RESI.
 
@@ -2342,7 +2352,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def save_datasets_aggregated(self, i, parameters, results):
+    def save_datasets_aggregated(self):
         """save data of multiple single-dataset workflows from one
         aggregation workflow.
 
@@ -2391,7 +2401,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def spinna_manual(self, i, parameters, results):
+    def spinna_manual(self):
         """Direct implementation of spinna batch analysis.
 
         Performs SPINNA (Spatial Point Pattern Analysis) using manual
@@ -2460,7 +2470,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def spinna(self, i, parameters, results):
+    def spinna(self):
         """implementation of a single spinna run.
 
         Performs a single SPINNA (Spatial Point Pattern Analysis) run
@@ -2528,7 +2538,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def ripleysk(self, i, parameters, results):
+    def ripleysk(self):
         """Ripley's K analysis implementation.
 
         Performs Ripley's K-function analysis for spatial point pattern
@@ -2596,7 +2606,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def ripleysk2(self, i, parameters, results):
+    def ripleysk2(self):
         """Alternative Ripley's K analysis implementation.
 
         Performs Ripley's K-function analysis using alternative algorithms
@@ -2664,7 +2674,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def ripleysk_average(self, i, parameters, results):
+    def ripleysk_average(self):
         """Averages multiple Ripley's K analyses.
 
         Computes average Ripley's K values across multiple datasets
@@ -2721,7 +2731,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def ripleysk_average2(self, i, parameters, results):
+    def ripleysk_average2(self):
         """Alternative averaging of multiple Ripley's K analyses.
 
         Computes alternative average Ripley's K values using different
@@ -2778,7 +2788,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def protein_interactions(self, i, parameters, results):
+    def protein_interactions(self):
         """Protein interaction analysis.
 
         Analyzes protein-protein interactions in multi-color SMLM data
@@ -2847,7 +2857,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def protein_interactions_average(self, i, parameters, results):
+    def protein_interactions_average(self):
         """Average protein interaction analysis across datasets.
 
         Computes averaged protein interaction statistics across multiple
@@ -2904,7 +2914,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def create_mask(self, i, parameters, results):
+    def create_mask(self):
         """Create a density mask.
 
         Creates spatial masks based on localization density for
@@ -2972,7 +2982,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def create_mask2(self, i, parameters, results):
+    def create_mask2(self):
         """Create a density mask.
 
         Creates spatial masks using alternative algorithms for
@@ -3036,7 +3046,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def refine_mask_by_density(self, i, parameters, results):
+    def refine_mask_by_density(self):
         """refine a mask by a given density range.
 
         Refines existing spatial masks using density criteria
@@ -3103,7 +3113,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def dbscan_molint(self, i, parameters, results):
+    def dbscan_molint(self):
         """TO BE CLEANED UP
         dbscan implementation for molecular interactions workflow.
 
@@ -3183,7 +3193,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def CSR_sim_in_mask(self, i, parameters, results):
+    def CSR_sim_in_mask(self):
         """TO BE CLEANED UP
         simulate CSR within a density mask.
 
@@ -3253,7 +3263,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def find_cluster_motifs(self, i, parameters, results):
+    def find_cluster_motifs(self):
         """TO BE CLEANED UP
         simulate CSR within a density mask.
 
@@ -3324,7 +3334,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def interaction_graph(self, i, parameters, results):
+    def interaction_graph(self):
         """TO BE CLEANED UP
         simulate CSR within a density mask.
 
@@ -3391,7 +3401,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def plot_densities(self, i, parameters, results):
+    def plot_densities(self):
         """TO BE CLEANED UP
         simulate CSR within a density mask.
 
@@ -3459,7 +3469,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def find_gold(self, i, parameters, results):
+    def find_gold(self):
         """Find localizations stemming from gold beads based on blinking
         kinetics. The metrics used are number of locs and rms deviation
         from mean frame.
@@ -3542,7 +3552,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def find_similar(self, i, parameters, results):
+    def find_similar(self):
         """pick similar in nlocs/rmsd space.
 
         Identifies structures with similar characteristics in
@@ -3618,7 +3628,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def find_structures(self, i, parameters, results):
+    def find_structures(self):
         """pick similar on clusters in nlocs/rmsd space.
 
         Identifies structural patterns in clustered data using
@@ -3686,7 +3696,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def undrift_from_picked(self, i, parameters, results):
+    def undrift_from_picked(self):
         """Performs undrift from piced locs.
 
         Corrects sample drift using manually picked or automatically
@@ -3752,7 +3762,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def filter_locs(self, i, parameters, results):
+    def filter_locs(self):
         """Filter localizations to lie within a min-max range of a metric.
 
         Filters localization data based on specified metrics and
@@ -3839,7 +3849,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def filter_transient_binding(self, i, parameters, results):
+    def filter_transient_binding(self):
         """Filter molecule positions (after clustering or Gaussian Mixture)
         for those who show transient binding. Specifically, the mean frame
         should not be at extreme positions.
@@ -3911,7 +3921,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def link_locs(self, i, parameters, results):
+    def link_locs(self):
         """Link localizations.
 
         Links localizations across frames to track molecular trajectories
@@ -3990,7 +4000,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def pairwise_module_executor(self, i, parameters, results):
+    def pairwise_module_executor(self):
         """Calls another module (as a sub-module) for all pairs in the
         channel_locs.
 
@@ -4054,7 +4064,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def random_val(self, i, parameters, results):
+    def random_val(self):
         """For debugging and testing the pairwise module.
 
         Generate random values and plot for debugging and testing the pairwise
@@ -4114,7 +4124,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def labeling_efficiency_analysis(self, i, parameters, results):
+    def labeling_efficiency_analysis(self):
         """Analyse for labeling efficiency.
 
         Analyzes labeling efficiency in DNA-PAINT experiments using
@@ -4183,6 +4193,246 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Calculated labeling efficiency",
                 "min": 0.0,
                 "max": 1.0,
+            },
+        }
+
+        return parameters_spec, results_spec
+
+    def conditional_branch(self):
+        """For debugging and testing the pairwise module.
+
+        Generate random values and plot for debugging and testing the pairwise
+        module.
+        Creates a random value and generates a test plot with random data
+        for debugging purposes in pairwise module workflows.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    xlabel : str
+                        Label for the x-axis of the test plot
+                    ylabel : str
+                        Label for the y-axis of the test plot
+                Optional keys: (none)
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Updated results dictionary with random value and figure path
+        """
+        parameters_spec = {
+            "xlabel": {
+                "type": "str",
+                "description": "Label for the x-axis of the test plot",
+                "required": True,
+            },
+            "ylabel": {
+                "type": "str",
+                "description": "Label for the y-axis of the test plot",
+                "required": True,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "random_val": {
+                "type": "float",
+                "description": "A random value between 0 and 1",
+            },
+            "fp_fig": {
+                "type": "str",
+                "description": "Filepath to the generated test figure",
+            },
+        }
+
+        return parameters_spec, results_spec
+
+    def resolution_analysis(self):
+        """For debugging and testing the pairwise module.
+
+        Generate random values and plot for debugging and testing the pairwise
+        module.
+        Creates a random value and generates a test plot with random data
+        for debugging purposes in pairwise module workflows.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    xlabel : str
+                        Label for the x-axis of the test plot
+                    ylabel : str
+                        Label for the y-axis of the test plot
+                Optional keys: (none)
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Updated results dictionary with random value and figure path
+        """
+        parameters_spec = {
+            "xlabel": {
+                "type": "str",
+                "description": "Label for the x-axis of the test plot",
+                "required": True,
+            },
+            "ylabel": {
+                "type": "str",
+                "description": "Label for the y-axis of the test plot",
+                "required": True,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "random_val": {
+                "type": "float",
+                "description": "A random value between 0 and 1",
+            },
+            "fp_fig": {
+                "type": "str",
+                "description": "Filepath to the generated test figure",
+            },
+        }
+
+        return parameters_spec, results_spec
+
+    def resolution_frc_spatial(self):
+        """For debugging and testing the pairwise module.
+
+        Generate random values and plot for debugging and testing the pairwise
+        module.
+        Creates a random value and generates a test plot with random data
+        for debugging purposes in pairwise module workflows.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    xlabel : str
+                        Label for the x-axis of the test plot
+                    ylabel : str
+                        Label for the y-axis of the test plot
+                Optional keys: (none)
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Updated results dictionary with random value and figure path
+        """
+        parameters_spec = {
+            "xlabel": {
+                "type": "str",
+                "description": "Label for the x-axis of the test plot",
+                "required": True,
+            },
+            "ylabel": {
+                "type": "str",
+                "description": "Label for the y-axis of the test plot",
+                "required": True,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "random_val": {
+                "type": "float",
+                "description": "A random value between 0 and 1",
+            },
+            "fp_fig": {
+                "type": "str",
+                "description": "Filepath to the generated test figure",
+            },
+        }
+
+        return parameters_spec, results_spec
+
+    def undrift_rsso(self):
+        """For debugging and testing the pairwise module.
+
+        Generate random values and plot for debugging and testing the pairwise
+        module.
+        Creates a random value and generates a test plot with random data
+        for debugging purposes in pairwise module workflows.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    xlabel : str
+                        Label for the x-axis of the test plot
+                    ylabel : str
+                        Label for the y-axis of the test plot
+                Optional keys: (none)
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Updated results dictionary with random value and figure path
+        """
+        parameters_spec = {
+            "xlabel": {
+                "type": "str",
+                "description": "Label for the x-axis of the test plot",
+                "required": True,
+            },
+            "ylabel": {
+                "type": "str",
+                "description": "Label for the y-axis of the test plot",
+                "required": True,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "random_val": {
+                "type": "float",
+                "description": "A random value between 0 and 1",
+            },
+            "fp_fig": {
+                "type": "str",
+                "description": "Filepath to the generated test figure",
             },
         }
 
@@ -4717,62 +4967,265 @@ class SlurmCommunicator:
         }
 
 
+class FilePathEditor(QtWidgets.QWidget):
+    """Custom editor widget for file path selection with browse button."""
+
+    editingFinished = QtCore.pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Set up the layout
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        # Create line edit and button
+        self.lineEdit = QtWidgets.QLineEdit(self)
+        self.button = QtWidgets.QPushButton("Browse", self)
+        self.button.setFocusPolicy(QtCore.Qt.NoFocus)  # Prevent focus issues
+
+        # Add widgets to layout
+        layout.addWidget(self.lineEdit)
+        layout.addWidget(self.button)
+
+        # Connect signals
+        self.button.clicked.connect(self.browse)
+        self.lineEdit.editingFinished.connect(self.on_edit_finished)
+
+        # Track if we're in the browse dialog
+        self._browsing = False
+
+    def browse(self):
+        """Open file dialog to select a file path."""
+        self._browsing = True
+        try:
+            # Store current value in case widget gets deleted
+            current_text = self.lineEdit.text()
+
+            # Use window() to get the top-level window as a stable parent
+            # This prevents memory issues with temporary editor widgets
+            parent_window = self.window()
+
+            # Open file dialog - this is a blocking call
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                parent_window,
+                "Select File",
+                current_text if current_text else "",
+            )
+
+            # Check if widget is still valid (might have been deleted during dialog)
+            if path and not self.isHidden():
+                try:
+                    self.lineEdit.setText(path)
+                    # Use QTimer to safely emit signal after returning to event loop
+                    QtCore.QTimer.singleShot(0, self.editingFinished.emit)
+                except RuntimeError:
+                    # Widget was deleted, nothing we can do
+                    pass
+        finally:
+            self._browsing = False
+
+    def on_edit_finished(self):
+        """Handle line edit finished signal, but not during browse."""
+        if not self._browsing:
+            self.editingFinished.emit()
+
+    def setText(self, text):
+        """Set the text in the line edit."""
+        if text:
+            self.lineEdit.setText(str(text))
+
+    def text(self):
+        """Get the current text from the line edit."""
+        return self.lineEdit.text()
+
+
+class FilePathDelegate(QtWidgets.QStyledItemDelegate):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._current_editor = None
+
+    def createEditor(self, parent, option, index):
+        editor = FilePathEditor(parent)
+        # Keep a reference to prevent premature deletion
+        self._current_editor = editor
+        # Install event filter to prevent premature closure
+        editor.installEventFilter(self)
+        # Use functools.partial for cleaner signal connection
+        editor.editingFinished.connect(
+            functools.partial(self.commitAndCloseEditor, editor)
+        )
+        return editor
+
+    def destroyEditor(self, editor, index):
+        """Override to clean up our reference."""
+        if self._current_editor == editor:
+            self._current_editor = None
+        super().destroyEditor(editor, index)
+
+    def setEditorData(self, editor, index):
+        value = index.model().data(index, QtCore.Qt.EditRole)
+        if value:
+            editor.setText(str(value))
+
+    def setModelData(self, editor, model, index):
+        # Check if editor is still valid
+        try:
+            text = editor.text()
+            model.setData(index, text, QtCore.Qt.EditRole)
+        except RuntimeError:
+            pass  # Editor was deleted
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect)
+
+    def commitAndCloseEditor(self, editor):
+        # Check if editor still exists and is not browsing
+        try:
+            if hasattr(editor, "_browsing") and not editor._browsing:
+                # Commit and close the editor
+                self.commitData.emit(editor)
+                self.closeEditor.emit(editor)
+        except RuntimeError:
+            pass  # Editor was already deleted
+
+    def eventFilter(self, editor, event):
+        """Prevent editor from closing when file dialog opens."""
+        # Don't let focus out events close the editor if we're browsing
+        if event.type() == QtCore.QEvent.FocusOut:
+            if hasattr(editor, "_browsing") and editor._browsing:
+                return True  # Ignore the event
+        return super().eventFilter(editor, event)
+
+
+def dict_to_table(d, table):
+    table.setRowCount(len(d))
+    for row, (key, value) in enumerate(d.items()):
+        key_item = QtWidgets.QTableWidgetItem(key)
+        value_item = QtWidgets.QTableWidgetItem(value)
+        table.setItem(row, 0, key_item)
+        table.setItem(row, 1, value_item)
+
+
 class Window(QtWidgets.QMainWindow):
     """Main window for the picasso-workflow GUI application."""
 
     def __init__(self):
         super().__init__()
+        self.module_descriptor = ModuleDescriptor()
+
         self.setWindowTitle(f"picasso-workflow {__GUIVERSION__}")
         self.resize(1024, 600)
 
-        self.workflow = []
+        self.single_workflow = []
+        self.aggregation_workflow = []
+        self.single_workflow_modules = []  # List of module name strings
+        self.aggregation_workflow_modules = []  # List of module name strings
+        self.parameter_widgets = (
+            {}
+        )  # Dict[param_name, (QLineEdit, param_metadata)]
 
         layout = QtWidgets.QGridLayout()
         central_widget = QtWidgets.QWidget()
         self.setCentralWidget(central_widget)
         central_widget.setLayout(layout)
-        # self.files_box = lib.ScrollableGroupBox("Files", self)
+
+        # Results folder selection
+        results_folder_button = QtWidgets.QPushButton("Results Folder")
+        # self.files_box.addWidget(results_folder_button, 2, 0)
+        layout.addWidget(results_folder_button, 0, 0)
+        results_folder_button.clicked.connect(self.select_results_folder)
+        self.results_folder_display = QtWidgets.QLineEdit()
+        self.results_folder_display.setReadOnly(True)
+        self.results_folder_display.setPlaceholderText("No folder selected")
+        # self.files_box.addWidget(self.results_folder_display, 2, 1, 1, 2)
+        layout.addWidget(self.results_folder_display, 0, 1, 1, 2)
+        # Investigation type
+        self.workflow_type = QtWidgets.QComboBox()
+        self.workflow_type.addItem("Single Workflow")
+        self.workflow_type.addItem("Aggregation Workflow")
+        self.workflow_type.addItem("Investigation Workflow")
+        layout.addWidget(self.workflow_type, 0, 3)
+
+        # Create tab widget
+        self.tabs = QtWidgets.QTabWidget()
+        layout.addWidget(self.tabs, 1, 0, 1, 4)
+
+        # Config tab
+        config_tab = QtWidgets.QWidget()
+        config_layout = QtWidgets.QGridLayout(config_tab)
+        self.tabs.addTab(config_tab, "Config")
+
+        # Files and modules boxes in config tab
         self._files_box = QtWidgets.QGroupBox("Files")
         self.files_box = QtWidgets.QGridLayout(self._files_box)
-        layout.addWidget(self._files_box, 0, 0)
+        config_layout.addWidget(self._files_box, 0, 0, 1, 2)
         self._modules_box = QtWidgets.QGroupBox("Modules")
         self.modules_box = QtWidgets.QGridLayout(self._modules_box)
-        layout.addWidget(self._modules_box, 0, 1)
+        config_layout.addWidget(self._modules_box, 0, 2, 1, 2)
+
+        # Results tab
+        results_tab = QtWidgets.QWidget()
+        results_layout = QtWidgets.QVBoxLayout(results_tab)
+        self.tabs.addTab(results_tab, "Results")
 
         # select files to process
-        add_files_button = QtWidgets.QPushButton("Add files")
-        self.files_box.addWidget(add_files_button, 0, 0)
-        add_files_button.clicked.connect(self.add_files)
-        remove_files_button = QtWidgets.QPushButton("Remove selected")
-        self.files_box.addWidget(remove_files_button, 0, 1)
-        remove_files_button.clicked.connect(self.remove_selected_files)
-        clear_files_button = QtWidgets.QPushButton("Clear list")
-        self.files_box.addWidget(clear_files_button, 0, 2)
-        clear_files_button.clicked.connect(self.clear_file_list)
-        self.files_list = QtWidgets.QListWidget()
-        self.files_list.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
-        )
-        self.files_box.addWidget(self.files_list, 1, 0, 1, 3)
+        self.add_files_button = QtWidgets.QPushButton("Add files")
+        self.files_box.addWidget(self.add_files_button, 0, 0)
+        self.add_files_button.clicked.connect(self.add_files)
+        self.remove_files_button = QtWidgets.QPushButton("Remove selected")
+        self.files_box.addWidget(self.remove_files_button, 0, 1)
+        self.remove_files_button.clicked.connect(self.remove_selected_files)
+        self.clear_files_button = QtWidgets.QPushButton("Clear list")
+        self.files_box.addWidget(self.clear_files_button, 0, 2)
+        self.clear_files_button.clicked.connect(self.clear_file_list)
+
+        d = {"Name1": "/path/to/file1.txt", "Name2": "/path/to/file2.txt"}
+        self.files_table = QtWidgets.QTableWidget()
+        self.files_table.setColumnCount(2)
+        self.files_table.setHorizontalHeaderLabels(["Name", "File Path"])
+        # Configure column stretching - Name column resizes to contents, File Path column stretches
+        header = self.files_table.horizontalHeader()
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        dict_to_table(d, self.files_table)
+        # Store delegate as instance variable to prevent garbage collection
+        self.file_path_delegate = FilePathDelegate(self)
+        self.files_table.setItemDelegateForColumn(1, self.file_path_delegate)
+        self.files_box.addWidget(self.files_table, 1, 0, 1, 3)
 
         # adding modules
-        current_module = QtWidgets.QGroupBox("Current Module")
-        current_layout = QtWidgets.QVBoxLayout(current_module)
-        self.modules_box.addWidget(current_module, 0, 0)
-        # module_descriptor = ModuleDescriptor()
-        # modules = module_descriptor.get_module_names()
-        modules = [
-            "Localize", "Undrift AIM", "Undrift picked", "Undrift RCC",
-            "Filter", "Average", "DBSCAN", "SMLM clusterer", "G5M",
-        ]  # TODO: get actual modules
+        self.current_module = QtWidgets.QGroupBox("Current Module")
+        current_layout = QtWidgets.QVBoxLayout(self.current_module)
+        self.modules_box.addWidget(self.current_module, 0, 0)
+
         self.module_combobox = QtWidgets.QComboBox()
         self.module_combobox.addItem("Select module")
-        self.module_combobox.addItems(modules)
+        self.module_combobox.addItems(
+            self.module_descriptor.get_module_names()
+        )
         self.module_combobox.currentTextChanged.connect(self.on_module_changed)
         current_layout.addWidget(self.module_combobox)
         # label describing the module selected
         self.current_module_desc = QtWidgets.QLabel("No module selected")
         current_layout.addWidget(self.current_module_desc)
+        # parameters section (scrollable)
+        module_parameters = QtWidgets.QWidget()
+        self.module_parameters_layout = QtWidgets.QVBoxLayout(
+            module_parameters
+        )
+        self.module_parameters_layout.addStretch()  # Push widgets to top
+
+        # Wrap in scroll area
+        parameters_scroll = QtWidgets.QScrollArea()
+        parameters_scroll.setWidget(module_parameters)
+        parameters_scroll.setWidgetResizable(True)
+        parameters_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAlwaysOff
+        )
+        parameters_scroll.setMinimumHeight(100)
+        parameters_scroll.setMaximumHeight(300)
+        current_layout.addWidget(parameters_scroll)
         # button to add the selected module
         self.add_module_button = QtWidgets.QPushButton("Add module")
         current_layout.addWidget(self.add_module_button)
@@ -4780,108 +5233,577 @@ class Window(QtWidgets.QMainWindow):
         self.add_module_button.setEnabled(False)
 
         # widget showing the workflow
-        self.workflow_box = lib.ScrollableGroupBox("Selected workflow", self)
-        self.modules_box.addWidget(self.workflow_box, 1, 0)
+        self.workflow_tabs = QtWidgets.QTabWidget()
+        single_workflow_tab = QtWidgets.QWidget()
+        single_workflow_layout = QtWidgets.QVBoxLayout(single_workflow_tab)
+        self.workflow_tabs.addTab(
+            single_workflow_tab, "Single Dataset Workflow"
+        )
+        self.single_workflow_list = QtWidgets.QListWidget()
+        self.single_workflow_list.currentRowChanged.connect(
+            self._on_workflow_selection_changed
+        )
+        single_workflow_layout.addWidget(self.single_workflow_list)
 
-        # buttons to remove the last element, save and load workflow
+        aggregation_workflow_tab = QtWidgets.QWidget()
+        aggregation_workflow_layout = QtWidgets.QVBoxLayout(
+            aggregation_workflow_tab
+        )
+        self.workflow_tabs.addTab(
+            aggregation_workflow_tab, "Aggregation Workflow"
+        )
+        self.aggregation_workflow_list = QtWidgets.QListWidget()
+        self.aggregation_workflow_list.currentRowChanged.connect(
+            self._on_workflow_selection_changed
+        )
+        aggregation_workflow_layout.addWidget(self.aggregation_workflow_list)
+        # Add workflow tabs to modules box
+        self.modules_box.addWidget(self.workflow_tabs, 1, 0)
+        # Connect tab change signal
+        self.workflow_tabs.currentChanged.connect(
+            self._on_workflow_tab_changed
+        )
+
+        # buttons for workflow manipulation
         workflow_buttons = QtWidgets.QHBoxLayout()
-        workflow_buttons_widget = QtWidgets.QWidget()
-        workflow_buttons_widget.setLayout(workflow_buttons)
-        self.modules_box.addWidget(workflow_buttons_widget, 2, 0)
-        remove_last_button = QtWidgets.QPushButton("Remove last")
-        workflow_buttons.addWidget(remove_last_button)
-        remove_last_button.clicked.connect(self.remove_last)
-        save_workflow_button = QtWidgets.QPushButton("Save workflow")
-        workflow_buttons.addWidget(save_workflow_button)
-        save_workflow_button.clicked.connect(self.save_workflow)
-        load_workflow_button = QtWidgets.QPushButton("Load workflow")
-        workflow_buttons.addWidget(load_workflow_button)
-        load_workflow_button.clicked.connect(self.load_workflow)
+        self.workflow_buttons_widget = QtWidgets.QWidget()
+        self.workflow_buttons_widget.setLayout(workflow_buttons)
+        self.modules_box.addWidget(self.workflow_buttons_widget, 2, 0)
+        remove_selected_button = QtWidgets.QPushButton("Remove selected")
+        workflow_buttons.addWidget(remove_selected_button)
+        remove_selected_button.clicked.connect(self.remove_selected)
+        move_up_button = QtWidgets.QPushButton("Move up")
+        workflow_buttons.addWidget(move_up_button)
+        move_up_button.clicked.connect(self.move_up)
+        move_down_button = QtWidgets.QPushButton("Move down")
+        workflow_buttons.addWidget(move_down_button)
+        move_down_button.clicked.connect(self.move_down)
+
+        # run configuration
+        self.run_tabs = QtWidgets.QTabWidget()
+        config_layout.addWidget(self.run_tabs, 2, 0, 1, 4)
+
+        run_on_cluster_tab = QtWidgets.QWidget()
+        run_on_cluster_layout = QtWidgets.QVBoxLayout(run_on_cluster_tab)
+        self.run_tabs.addTab(run_on_cluster_tab, "Run on SLURM Cluster")
+        slurm_buttons = QtWidgets.QHBoxLayout()
+        self.slurm_buttons_widget = QtWidgets.QWidget()
+        self.slurm_buttons_widget.setLayout(slurm_buttons)
+        run_on_cluster_layout.addWidget(self.slurm_buttons_widget)
+        start_slurm_button = QtWidgets.QPushButton("Start Workflow on Cluster")
+        slurm_buttons.addWidget(start_slurm_button)
+        start_slurm_button.clicked.connect(self.start_slurm)
+
+        run_locally_tab = QtWidgets.QWidget()
+        run_locally_layout = QtWidgets.QVBoxLayout(run_locally_tab)
+        self.run_tabs.addTab(run_locally_tab, "Run locally")
+        local_buttons = QtWidgets.QHBoxLayout()
+        self.local_buttons_widget = QtWidgets.QWidget()
+        self.local_buttons_widget.setLayout(local_buttons)
+        run_locally_layout.addWidget(self.local_buttons_widget)
+        start_locally_button = QtWidgets.QPushButton("Start Workflow locally")
+        local_buttons.addWidget(start_locally_button)
+        start_locally_button.clicked.connect(self.start_locally)
 
         # resize the widgets
         # Set fixed size for the group box
-        current_module.setMinimumSize(500, 300)
+        self.current_module.setMinimumSize(500, 300)
+
+        # Initially disable file and module widgets until results folder is selected
+        self._set_widgets_enabled(False)
+
+    def _set_widgets_enabled(self, enabled):
+        """Enable or disable file and module widgets based on results folder selection."""
+        self.workflow_type.setEnabled(enabled)
+        # Files box widgets
+        self.add_files_button.setEnabled(enabled)
+        self.remove_files_button.setEnabled(enabled)
+        self.clear_files_button.setEnabled(enabled)
+        self.files_table.setEnabled(enabled)
+
+        # Modules box widgets
+        self.current_module.setEnabled(enabled)
+        self.workflow_tabs.setEnabled(enabled)
+        self.workflow_buttons_widget.setEnabled(enabled)
+
+        # runing config
+        self.run_tabs.setEnabled(enabled)
 
     def add_files(self):
-        """Add file(s)/directory to the file list."""
-        # TODO: allow for the selection of the directory
-        # TODO: change allowed formats!
-        options = QtWidgets.QFileDialog.Options()
-        options |= QtWidgets.QFileDialog.ReadOnly
-        files, _ = QtWidgets.QFileDialog.getOpenFileNames(
-            self,
-            "Select Files",
-            "",
-            "All Files (*);;Text Files (*.txt);;CSV Files (*.csv)",
-            options=options,
+        """Add a new row to the table below the selected row or at the end."""
+        # Determine insertion position
+        selected_indexes = self.files_table.selectionModel().selectedIndexes()
+        if selected_indexes:
+            # Get the maximum row number from selected cells and insert below it
+            max_selected_row = max(index.row() for index in selected_indexes)
+            insert_position = max_selected_row + 1
+        else:
+            # No selection, insert at the end
+            insert_position = self.files_table.rowCount()
+
+        # Insert new row
+        self.files_table.insertRow(insert_position)
+
+        # Add empty items to the new row
+        self.files_table.setItem(
+            insert_position, 0, QtWidgets.QTableWidgetItem("")
         )
-        if files:
-            for file in files:
-                if not self.files_list.findItems(file, QtCore.Qt.MatchExactly):
-                    self.files_list.addItem(file)
+        self.files_table.setItem(
+            insert_position, 1, QtWidgets.QTableWidgetItem("")
+        )
 
     def remove_selected_files(self):
-        """Remove the selected files from the file list."""
-        selected_items = self.files_list.selectedItems()
-        if not selected_items:
+        """Remove the selected row(s) from the table based on any selected cells."""
+        selected_indexes = self.files_table.selectionModel().selectedIndexes()
+        if not selected_indexes:
             return
-        for item in selected_items:
-            self.files_list.takeItem(self.files_list.row(item))
+        # Get unique row numbers from selected cells
+        selected_row_numbers = sorted(
+            set(index.row() for index in selected_indexes), reverse=True
+        )
+        # Remove rows in reverse order to avoid index shifting issues
+        for row in selected_row_numbers:
+            self.files_table.removeRow(row)
 
     def clear_file_list(self):
-        """Clear the file list."""
-        if self.files_list.count() == 0:
+        """Clear all rows from the table."""
+        if self.files_table.rowCount() == 0:
             return
-        reply = QtWidgets.QMessageBox.question(
+        self.files_table.setRowCount(0)
+
+    def select_results_folder(self):
+        """Open a folder selection dialog and display the selected folder."""
+        current_folder = self.results_folder_display.text()
+        folder = QtWidgets.QFileDialog.getExistingDirectory(
             self,
-            "Clear file list",
-            "Are you sure you want to clear the file list?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
+            "Select Results Folder",
+            (
+                current_folder
+                if current_folder and current_folder != "No folder selected"
+                else ""
+            ),
         )
-        if reply == QtWidgets.QMessageBox.Yes:
-            self.files_list.clear()
+        if folder:
+            self.results_folder_display.setText(folder)
+            # Enable widgets when a folder is selected
+            self._set_widgets_enabled(True)
+        else:
+            # If dialog was cancelled and no folder is selected, disable widgets
+            if not self.results_folder_display.text():
+                self._set_widgets_enabled(False)
 
     def add_module(self):
         """Add the currently selected module to the workflow."""
         module_name = self.module_combobox.currentText()
-        added_workflow = QtWidgets.QLabel(
-            f"{len(self.workflow)}: {module_name}"
-        )
-        self.workflow.append(added_workflow)
-        self.workflow_box.add_widget(added_workflow, len(self.workflow) - 1, 0)
 
-    def remove_last(self):
-        """Remove the last module from the workflow."""
-        # print("removing last module")
-        if not self.workflow:
-            QtWidgets.QMessageBox.warning(
-                self, "Workflow empty", "No modules to remove."
+        # Capture current parameter values
+        param_values = {}
+        for param_name, (textbox, metadata) in self.parameter_widgets.items():
+            param_values[param_name] = textbox.text()
+
+        # Add to the appropriate workflow list based on selected tab
+        # Store as tuple: (module_name, param_values_dict)
+        current_tab_index = self.workflow_tabs.currentIndex()
+        if current_tab_index == 0:  # Single Dataset Workflow
+            self.single_workflow_modules.append((module_name, param_values))
+            index = len(self.single_workflow_modules) - 1
+            self.single_workflow_list.addItem(f"{index}: {module_name}")
+        elif current_tab_index == 1:  # Aggregation Workflow
+            self.aggregation_workflow_modules.append(
+                (module_name, param_values)
             )
+            index = len(self.aggregation_workflow_modules) - 1
+            self.aggregation_workflow_list.addItem(f"{index}: {module_name}")
+
+    def _renumber_workflow_items(self, list_widget, modules):
+        """Update QListWidget items with correct numbering after reordering."""
+        for i in range(len(modules)):
+            module_name = modules[i][
+                0
+            ]  # Extract name from (name, params) tuple
+            list_widget.item(i).setText(f"{i}: {module_name}")
+
+    def _on_workflow_selection_changed(self, current_row):
+        """Handle selection change in workflow list - display module in Current Module section."""
+        if current_row < 0:
             return
-        self.workflow_box.content_layout.removeWidget(self.workflow[-1])
-        del self.workflow[-1]
 
-    def save_workflow(self):
-        """Save the current workflow to a YAML file."""
-        # TODO: save workflow
-        print("saving workflow")
+        # Get the current tab to determine which workflow list to use
+        current_tab_index = self.workflow_tabs.currentIndex()
 
-    def load_workflow(self):
-        """Load a workflow from a YAML file."""
+        if current_tab_index == 0:  # Single Dataset Workflow
+            if current_row < len(self.single_workflow_modules):
+                module_name, param_values = self.single_workflow_modules[
+                    current_row
+                ]
+                # Update module combobox to show this module
+                index = self.module_combobox.findText(module_name)
+                if index >= 0:
+                    self.module_combobox.setCurrentIndex(index)
+                    # Populate parameters with stored values
+                    self._populate_stored_parameters(param_values)
+                    self._validate_parameters()  # Clear red borders from filled fields
+        elif current_tab_index == 1:  # Aggregation Workflow
+            if current_row < len(self.aggregation_workflow_modules):
+                module_name, param_values = self.aggregation_workflow_modules[
+                    current_row
+                ]
+                # Update module combobox to show this module
+                index = self.module_combobox.findText(module_name)
+                if index >= 0:
+                    self.module_combobox.setCurrentIndex(index)
+                    # Populate parameters with stored values
+                    self._populate_stored_parameters(param_values)
+                    self._validate_parameters()  # Clear red borders from filled fields
+
+    def _populate_stored_parameters(self, param_values):
+        """Populate parameter widgets with stored values from a workflow module."""
+        for param_name, (textbox, metadata) in self.parameter_widgets.items():
+            if param_name in param_values:
+                textbox.setText(param_values[param_name])
+
+    def _on_workflow_tab_changed(self, tab_index):
+        """Handle workflow tab change - display selected module if any."""
+        if tab_index == 0:  # Single Dataset Workflow
+            current_row = self.single_workflow_list.currentRow()
+            if current_row >= 0 and current_row < len(
+                self.single_workflow_modules
+            ):
+                module_name, param_values = self.single_workflow_modules[
+                    current_row
+                ]
+                index = self.module_combobox.findText(module_name)
+                if index >= 0:
+                    self.module_combobox.setCurrentIndex(index)
+                    self._populate_stored_parameters(param_values)
+                    self._validate_parameters()  # Clear red borders from filled fields
+        elif tab_index == 1:  # Aggregation Workflow
+            current_row = self.aggregation_workflow_list.currentRow()
+            if current_row >= 0 and current_row < len(
+                self.aggregation_workflow_modules
+            ):
+                module_name, param_values = self.aggregation_workflow_modules[
+                    current_row
+                ]
+                index = self.module_combobox.findText(module_name)
+                if index >= 0:
+                    self.module_combobox.setCurrentIndex(index)
+                    self._populate_stored_parameters(param_values)
+                    self._validate_parameters()  # Clear red borders from filled fields
+
+    def remove_selected(self):
+        """Remove the selected module from the workflow."""
+        current_tab_index = self.workflow_tabs.currentIndex()
+
+        if current_tab_index == 0:  # Single Dataset Workflow
+            current_row = self.single_workflow_list.currentRow()
+            if current_row >= 0:
+                self.single_workflow_list.takeItem(current_row)
+                del self.single_workflow_modules[current_row]
+                self._renumber_workflow_items(
+                    self.single_workflow_list, self.single_workflow_modules
+                )
+        elif current_tab_index == 1:  # Aggregation Workflow
+            current_row = self.aggregation_workflow_list.currentRow()
+            if current_row >= 0:
+                self.aggregation_workflow_list.takeItem(current_row)
+                del self.aggregation_workflow_modules[current_row]
+                self._renumber_workflow_items(
+                    self.aggregation_workflow_list,
+                    self.aggregation_workflow_modules,
+                )
+
+    def move_up(self):
+        """Move the selected module up in the workflow order."""
+        current_tab_index = self.workflow_tabs.currentIndex()
+
+        if current_tab_index == 0:  # Single Dataset Workflow
+            current_row = self.single_workflow_list.currentRow()
+            if current_row > 0:  # Can't move first item up
+                # Swap in list
+                (
+                    self.single_workflow_modules[current_row],
+                    self.single_workflow_modules[current_row - 1],
+                ) = (
+                    self.single_workflow_modules[current_row - 1],
+                    self.single_workflow_modules[current_row],
+                )
+                # Update display and maintain selection
+                self._renumber_workflow_items(
+                    self.single_workflow_list, self.single_workflow_modules
+                )
+                self.single_workflow_list.setCurrentRow(current_row - 1)
+        elif current_tab_index == 1:  # Aggregation Workflow
+            current_row = self.aggregation_workflow_list.currentRow()
+            if current_row > 0:  # Can't move first item up
+                # Swap in list
+                (
+                    self.aggregation_workflow_modules[current_row],
+                    self.aggregation_workflow_modules[current_row - 1],
+                ) = (
+                    self.aggregation_workflow_modules[current_row - 1],
+                    self.aggregation_workflow_modules[current_row],
+                )
+                # Update display and maintain selection
+                self._renumber_workflow_items(
+                    self.aggregation_workflow_list,
+                    self.aggregation_workflow_modules,
+                )
+                self.aggregation_workflow_list.setCurrentRow(current_row - 1)
+
+    def move_down(self):
+        """Move the selected module down in the workflow order."""
+        current_tab_index = self.workflow_tabs.currentIndex()
+
+        if current_tab_index == 0:  # Single Dataset Workflow
+            current_row = self.single_workflow_list.currentRow()
+            max_row = len(self.single_workflow_modules) - 1
+            if 0 <= current_row < max_row:  # Can't move last item down
+                # Swap in list
+                (
+                    self.single_workflow_modules[current_row],
+                    self.single_workflow_modules[current_row + 1],
+                ) = (
+                    self.single_workflow_modules[current_row + 1],
+                    self.single_workflow_modules[current_row],
+                )
+                # Update display and maintain selection
+                self._renumber_workflow_items(
+                    self.single_workflow_list, self.single_workflow_modules
+                )
+                self.single_workflow_list.setCurrentRow(current_row + 1)
+        elif current_tab_index == 1:  # Aggregation Workflow
+            current_row = self.aggregation_workflow_list.currentRow()
+            max_row = len(self.aggregation_workflow_modules) - 1
+            if 0 <= current_row < max_row:  # Can't move last item down
+                # Swap in list
+                (
+                    self.aggregation_workflow_modules[current_row],
+                    self.aggregation_workflow_modules[current_row + 1],
+                ) = (
+                    self.aggregation_workflow_modules[current_row + 1],
+                    self.aggregation_workflow_modules[current_row],
+                )
+                # Update display and maintain selection
+                self._renumber_workflow_items(
+                    self.aggregation_workflow_list,
+                    self.aggregation_workflow_modules,
+                )
+                self.aggregation_workflow_list.setCurrentRow(current_row + 1)
+
+    def start_slurm(self):
+        """"""
         # TODO: load workflow
-        print("loading workflow")
+        print("starting SLURM on Cluster")
+
+    def start_locally(self):
+        """"""
+        # TODO: load workflow
+        print("starting workflow locally")
+
+    def _clear_parameter_layout(self):
+        """Clear all widgets from the module parameters layout."""
+        while self.module_parameters_layout.count():
+            item = self.module_parameters_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _populate_parameter_widgets(self, module_params):
+        """Create and populate parameter entry widgets from module parameters.
+
+        Args:
+            module_params: Dict of parameter definitions with keys as parameter names
+                           and values as dicts containing 'type', 'description', 'default',
+                           'required', etc.
+        """
+        if not module_params:
+            # Show "No parameters" message if module has no parameters
+            no_params_label = QtWidgets.QLabel("No parameters")
+            no_params_label.setStyleSheet("color: gray; font-style: italic;")
+            self.module_parameters_layout.addWidget(no_params_label)
+            self.module_parameters_layout.addStretch()
+            return
+
+        for param_name, param_metadata in module_params.items():
+            # Create row container
+            row_widget = QtWidgets.QWidget()
+            row_layout = QtWidgets.QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 2, 0, 2)
+
+            # Create label
+            label = QtWidgets.QLabel(param_name)
+            if param_metadata.get("required", False):
+                # Make label bold for required parameters
+                font = label.font()
+                font.setBold(True)
+                label.setFont(font)
+            row_layout.addWidget(label)
+
+            # Create textbox
+            textbox = QtWidgets.QLineEdit()
+            default_value = param_metadata.get("default", "")
+            if default_value is not None:
+                textbox.setText(str(default_value))
+
+            # Set tooltip with description
+            description = param_metadata.get("description", "")
+            if description:
+                textbox.setToolTip(description)
+                label.setToolTip(description)
+
+            # Set placeholder for required params
+            if param_metadata.get("required", False):
+                textbox.setPlaceholderText("Required")
+
+            # Connect validation signal
+            textbox.editingFinished.connect(self._on_parameter_changed)
+
+            row_layout.addWidget(textbox)
+
+            # Store widget reference with metadata
+            self.parameter_widgets[param_name] = (textbox, param_metadata)
+
+            # Add row to layout
+            self.module_parameters_layout.addWidget(row_widget)
+
+        # Add stretch at the end to push widgets to the top
+        self.module_parameters_layout.addStretch()
+
+    def _validate_parameters(self):
+        """Validate that all required parameters are filled.
+
+        Returns:
+            bool: True if all required parameters have values, False otherwise
+        """
+        all_valid = True
+        for param_name, (
+            textbox,
+            param_metadata,
+        ) in self.parameter_widgets.items():
+            is_required = param_metadata.get("required", False)
+            is_empty = not textbox.text().strip()
+
+            if is_required and is_empty:
+                # Visual feedback: red border for empty required fields
+                textbox.setStyleSheet("border: 1px solid red;")
+                all_valid = False
+            else:
+                # Clear styling if valid
+                textbox.setStyleSheet("")
+
+        # Enable/disable "Add module" button based on validation
+        self.add_module_button.setEnabled(all_valid)
+        return all_valid
+
+    def _on_parameter_changed(self):
+        """Called when a parameter textbox loses focus (editingFinished signal)."""
+        self._validate_parameters()
 
     def on_module_changed(self, text):
+        import textwrap
+
         """Update the module description when a new module is selected."""
         if text == "Select module":
             self.current_module_desc.setText("No module selected")
             self.add_module_button.setEnabled(False)
         else:
-            self.current_module_desc.setText(
-                f"The description of the module {text} will be shown here."
-            )
-            self.add_module_button.setEnabled(True)
+            try:
+                desc = self.module_descriptor.get_docstring(text)
+
+                # Use inspect.cleandoc to properly handle docstrings with unindented first line
+                desc = inspect.cleandoc(desc)
+
+                # Extract only the summary part before Args/Returns/etc sections
+                section_headers = [
+                    "Args:",
+                    "Arguments:",
+                    "Parameters:",
+                    "Params:",
+                    "Returns:",
+                    "Return:",
+                    "Yields:",
+                    "Yield:",
+                    "Raises:",
+                    "Raise:",
+                    "Note:",
+                    "Notes:",
+                    "Example:",
+                    "Examples:",
+                    "See Also:",
+                    "Attributes:",
+                    "References:",
+                    "Warnings:",
+                    "Warning:",
+                ]
+
+                # Find the first occurrence of any section header
+                min_index = len(desc)
+                for header in section_headers:
+                    index = desc.find(header)
+                    if index != -1 and index < min_index:
+                        min_index = index
+
+                # Crop to summary only
+                if min_index < len(desc):
+                    desc = desc[:min_index].strip()
+
+                # Join lines unless they end with a full stop
+                lines = desc.split("\n")
+                processed_lines = []
+                current_para = []
+
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    current_para.append(line)
+                    if line.endswith("."):
+                        processed_lines.append(" ".join(current_para))
+                        current_para = []
+
+                # Add any remaining paragraph
+                if current_para:
+                    processed_lines.append(" ".join(current_para))
+
+                desc = "\n".join(processed_lines)
+
+                # Calculate text width based on widget width
+                font_metrics = QtGui.QFontMetrics(
+                    self.current_module_desc.font()
+                )
+                widget_width = self.current_module_desc.width()
+                avg_char_width = font_metrics.averageCharWidth()
+                char_width = max(
+                    40, int(1.33 * widget_width / avg_char_width - 2)
+                )  # -2 for margin
+
+                # Apply text wrapping with calculated width, preserving paragraph breaks
+                wrapped_paragraphs = [
+                    textwrap.fill(para, width=char_width)
+                    for para in processed_lines
+                ]
+                desc = "\n".join(wrapped_paragraphs)
+
+                self.current_module_desc.setText(desc)
+            except Exception as e:
+                raise e
+                self.current_module_desc.setText(
+                    f"There was an error loading the description of the module {text}."
+                )
+
+            # Set up parameter entry widgets
+            desc_fun = getattr(self.module_descriptor, text)
+            module_params, _ = desc_fun()
+
+            # Clear existing parameter widgets
+            self._clear_parameter_layout()
+            self.parameter_widgets.clear()
+
+            # Populate new parameter widgets
+            self._populate_parameter_widgets(module_params)
+
+            # Validate parameters and update button state
+            self._validate_parameters()
 
 
 def main():
