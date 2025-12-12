@@ -5291,6 +5291,10 @@ class Window(QtWidgets.QMainWindow):
             {}
         )  # Dict[param_name, (QLineEdit, param_metadata)]
 
+        # Track currently editing workflow item for auto-save
+        self.editing_workflow_index = -1  # -1 means not editing an existing item
+        self.editing_workflow_tab = -1  # 0 = single, 1 = aggregation
+
         layout = QtWidgets.QGridLayout()
         central_widget = QtWidgets.QWidget()
         self.setCentralWidget(central_widget)
@@ -5337,12 +5341,89 @@ class Window(QtWidgets.QMainWindow):
         self.modules_box = QtWidgets.QGridLayout(self._modules_box)
         config_layout.addWidget(self._modules_box, 0, 2, 1, 2)
 
+        # Run tab
+        run_tab = QtWidgets.QWidget()
+        run_layout = QtWidgets.QGridLayout(run_tab)
+        self.tabs.addTab(run_tab, "Run")
+
+        # run configuration
+        self.run_tabs = QtWidgets.QTabWidget()
+        run_layout.addWidget(self.run_tabs, 2, 0, 1, 4)
+
+        run_on_cluster_tab = QtWidgets.QWidget()
+        run_on_cluster_layout = QtWidgets.QVBoxLayout(run_on_cluster_tab)
+        self.run_tabs.addTab(run_on_cluster_tab, "Run on SLURM Cluster")
+        slurm_buttons = QtWidgets.QHBoxLayout()
+        self.slurm_buttons_widget = QtWidgets.QWidget()
+        self.slurm_buttons_widget.setLayout(slurm_buttons)
+        run_on_cluster_layout.addWidget(self.slurm_buttons_widget)
+        start_slurm_button = QtWidgets.QPushButton("Start Workflow on Cluster")
+        slurm_buttons.addWidget(start_slurm_button)
+        start_slurm_button.clicked.connect(self.start_slurm)
+
+        # Job management buttons
+        job_management_buttons = QtWidgets.QHBoxLayout()
+        job_management_widget = QtWidgets.QWidget()
+        job_management_widget.setLayout(job_management_buttons)
+        run_on_cluster_layout.addWidget(job_management_widget)
+
+        cancel_job_button = QtWidgets.QPushButton("Cancel Job")
+        cancel_job_button.clicked.connect(self.on_cancel_job)
+        job_management_buttons.addWidget(cancel_job_button)
+
+        job_status_button = QtWidgets.QPushButton("Show Job Status")
+        job_status_button.clicked.connect(self.on_show_job_status)
+        job_management_buttons.addWidget(job_status_button)
+
+        list_jobs_button = QtWidgets.QPushButton("List All Jobs")
+        list_jobs_button.clicked.connect(self.on_list_jobs)
+        job_management_buttons.addWidget(list_jobs_button)
+
+        queue_info_button = QtWidgets.QPushButton("Show Queue Info")
+        queue_info_button.clicked.connect(self.on_show_queue_info)
+        job_management_buttons.addWidget(queue_info_button)
+
+        # Job ID input field
+        job_id_layout = QtWidgets.QHBoxLayout()
+        job_id_widget = QtWidgets.QWidget()
+        job_id_widget.setLayout(job_id_layout)
+        run_on_cluster_layout.addWidget(job_id_widget)
+
+        job_id_label = QtWidgets.QLabel("Current Job ID:")
+        job_id_layout.addWidget(job_id_label)
+
+        self.job_id_input = QtWidgets.QLineEdit()
+        self.job_id_input.setPlaceholderText("Enter job ID or auto-filled from submission")
+        job_id_layout.addWidget(self.job_id_input, stretch=1)
+
+        # Display area for job information
+        job_display_label = QtWidgets.QLabel("Job Information:")
+        run_on_cluster_layout.addWidget(job_display_label)
+
+        self.job_info_display = QtWidgets.QTextEdit()
+        self.job_info_display.setReadOnly(True)
+        self.job_info_display.setMaximumHeight(200)
+        run_on_cluster_layout.addWidget(self.job_info_display)
+
+        run_locally_tab = QtWidgets.QWidget()
+        run_locally_layout = QtWidgets.QVBoxLayout(run_locally_tab)
+        self.run_tabs.addTab(run_locally_tab, "Run locally")
+        self.run_tabs.setTabEnabled(1, False)  # in development
+        self.run_tabs.setTabToolTip(1, "Not Implemented yet")
+        local_buttons = QtWidgets.QHBoxLayout()
+        self.local_buttons_widget = QtWidgets.QWidget()
+        self.local_buttons_widget.setLayout(local_buttons)
+        run_locally_layout.addWidget(self.local_buttons_widget)
+        start_locally_button = QtWidgets.QPushButton("Start Workflow locally")
+        local_buttons.addWidget(start_locally_button)
+        start_locally_button.clicked.connect(self.start_locally)
+
         # Results tab
         results_tab = QtWidgets.QWidget()
         results_layout = QtWidgets.QVBoxLayout(results_tab)
         self.tabs.addTab(results_tab, "Results")
-        self.tabs.setTabEnabled(1, False)  # in development
-        self.tabs.setTabToolTip(1, "Not Implemented yet")
+        self.tabs.setTabEnabled(2, False)  # in development
+        self.tabs.setTabToolTip(2, "Not Implemented yet")
 
         # select files to process
         self.add_files_button = QtWidgets.QPushButton("Add files")
@@ -5465,77 +5546,6 @@ class Window(QtWidgets.QMainWindow):
         workflow_buttons.addWidget(move_down_button)
         move_down_button.clicked.connect(self.move_down)
 
-        # run configuration
-        self.run_tabs = QtWidgets.QTabWidget()
-        config_layout.addWidget(self.run_tabs, 2, 0, 1, 4)
-
-        run_on_cluster_tab = QtWidgets.QWidget()
-        run_on_cluster_layout = QtWidgets.QVBoxLayout(run_on_cluster_tab)
-        self.run_tabs.addTab(run_on_cluster_tab, "Run on SLURM Cluster")
-        slurm_buttons = QtWidgets.QHBoxLayout()
-        self.slurm_buttons_widget = QtWidgets.QWidget()
-        self.slurm_buttons_widget.setLayout(slurm_buttons)
-        run_on_cluster_layout.addWidget(self.slurm_buttons_widget)
-        start_slurm_button = QtWidgets.QPushButton("Start Workflow on Cluster")
-        slurm_buttons.addWidget(start_slurm_button)
-        start_slurm_button.clicked.connect(self.start_slurm)
-
-        # Job management buttons
-        job_management_buttons = QtWidgets.QHBoxLayout()
-        job_management_widget = QtWidgets.QWidget()
-        job_management_widget.setLayout(job_management_buttons)
-        run_on_cluster_layout.addWidget(job_management_widget)
-
-        cancel_job_button = QtWidgets.QPushButton("Cancel Job")
-        cancel_job_button.clicked.connect(self.on_cancel_job)
-        job_management_buttons.addWidget(cancel_job_button)
-
-        job_status_button = QtWidgets.QPushButton("Show Job Status")
-        job_status_button.clicked.connect(self.on_show_job_status)
-        job_management_buttons.addWidget(job_status_button)
-
-        list_jobs_button = QtWidgets.QPushButton("List All Jobs")
-        list_jobs_button.clicked.connect(self.on_list_jobs)
-        job_management_buttons.addWidget(list_jobs_button)
-
-        queue_info_button = QtWidgets.QPushButton("Show Queue Info")
-        queue_info_button.clicked.connect(self.on_show_queue_info)
-        job_management_buttons.addWidget(queue_info_button)
-
-        # Job ID input field
-        job_id_layout = QtWidgets.QHBoxLayout()
-        job_id_widget = QtWidgets.QWidget()
-        job_id_widget.setLayout(job_id_layout)
-        run_on_cluster_layout.addWidget(job_id_widget)
-
-        job_id_label = QtWidgets.QLabel("Current Job ID:")
-        job_id_layout.addWidget(job_id_label)
-
-        self.job_id_input = QtWidgets.QLineEdit()
-        self.job_id_input.setPlaceholderText("Enter job ID or auto-filled from submission")
-        job_id_layout.addWidget(self.job_id_input, stretch=1)
-
-        # Display area for job information
-        job_display_label = QtWidgets.QLabel("Job Information:")
-        run_on_cluster_layout.addWidget(job_display_label)
-
-        self.job_info_display = QtWidgets.QTextEdit()
-        self.job_info_display.setReadOnly(True)
-        self.job_info_display.setMaximumHeight(200)
-        run_on_cluster_layout.addWidget(self.job_info_display)
-
-        run_locally_tab = QtWidgets.QWidget()
-        run_locally_layout = QtWidgets.QVBoxLayout(run_locally_tab)
-        self.run_tabs.addTab(run_locally_tab, "Run locally")
-        self.run_tabs.setTabEnabled(1, False)  # in development
-        self.run_tabs.setTabToolTip(1, "Not Implemented yet")
-        local_buttons = QtWidgets.QHBoxLayout()
-        self.local_buttons_widget = QtWidgets.QWidget()
-        self.local_buttons_widget.setLayout(local_buttons)
-        run_locally_layout.addWidget(self.local_buttons_widget)
-        start_locally_button = QtWidgets.QPushButton("Start Workflow locally")
-        local_buttons.addWidget(start_locally_button)
-        start_locally_button.clicked.connect(self.start_locally)
 
         # resize the widgets
         # Set fixed size for the group box
@@ -5847,10 +5857,17 @@ class Window(QtWidgets.QMainWindow):
     def _on_workflow_selection_changed(self, current_row):
         """Handle selection change in workflow list - display module in Current Module section."""
         if current_row < 0:
+            # Clear editing state when nothing is selected
+            self.editing_workflow_index = -1
+            self.editing_workflow_tab = -1
             return
 
         # Get the current tab to determine which workflow list to use
         current_tab_index = self.workflow_tabs.currentIndex()
+
+        # Track which workflow item is being edited
+        self.editing_workflow_index = current_row
+        self.editing_workflow_tab = current_tab_index
 
         if current_tab_index == 0:  # Single Dataset Workflow
             if current_row < len(self.single_workflow_modules):
@@ -6328,12 +6345,15 @@ class Window(QtWidgets.QMainWindow):
         except:
             pass  # Windows doesn't support chmod
 
-        print(f"Created workflow script: {output_path}")
+        # print(f"Created workflow script: {output_path}")
         return output_path
 
     def start_slurm(self):
         """"""
         import getpass
+        from picasso_workflow.metaworkflow import PathParser
+        pp = PathParser()
+
         hostname = "hpcl8001"
         host_cluster = "hpcl8"
         username = getpass.getuser()
@@ -6355,16 +6375,20 @@ class Window(QtWidgets.QMainWindow):
             "time": "24:00:00",
             # "mail-type": "ALL",
             # "mail-user": f"{username}@biochem.mpg.de",
-
         }
+
+        results_folder_local = self.results_folder_display.text()
+        results_folder_host = pp.convert_path(results_folder_local, host_cluster)
 
         commands = self.slurm_communicator.assemble_slurm_commands(
             scriptname=scriptname, use_pw_module=True)
         script_content = self.slurm_communicator.create_slurm_script(
-            job_name, commands, slurm_options=slurm_options, output_file=None,
-            error_file=None, working_directory=None)
+            job_name, commands, slurm_options=slurm_options,
+            output_file=f"{results_folder_host}/logs/%A.log",
+            error_file=f"{results_folder_host}/logs/%A_err.log",
+            working_directory=results_folder_host)
         script_path = self.slurm_communicator.write_slurm_script(
-            script_content, self.results_folder_display.text())
+            script_content, results_folder_local)
         result = self.slurm_communicator.submit_job(
             script_path, host_cluster, additional_options=None)
 
@@ -6372,7 +6396,7 @@ class Window(QtWidgets.QMainWindow):
         if result["success"] and result["job_id"]:
             self.job_id_input.setText(str(result["job_id"]))
             self.job_info_display.append(f"Job submitted successfully!\nJob ID: {result['job_id']}")
-            print(f"Starting SLURM on Cluster - Job ID: {result['job_id']}")
+            # print(f"Starting SLURM on Cluster - Job ID: {result['job_id']}")
         else:
             self.job_info_display.append(f"Job submission failed!\n{result['stderr']}")
             print("Failed to start SLURM on Cluster")
@@ -6808,6 +6832,9 @@ class Window(QtWidgets.QMainWindow):
                     sub_parameters[sub_param_name] = sub_widget_info
                     sub_rows.append(sub_widget_info.row_widget)
 
+                # Connect checkbox to trigger auto-save
+                checkbox.stateChanged.connect(self._on_parameter_changed)
+
             else:
                 # Optional dict: show checkbox, create nested rows (initially hidden)
                 checkbox = QtWidgets.QCheckBox("Enable")
@@ -6835,6 +6862,8 @@ class Window(QtWidgets.QMainWindow):
                     is_checked = bool(state)
                     for sub_row in sub_rows:
                         sub_row.setVisible(is_checked)
+                    # Also trigger parameter update for auto-save
+                    self._on_parameter_changed()
 
                 checkbox.stateChanged.connect(toggle_nested_params)
 
@@ -6960,14 +6989,48 @@ class Window(QtWidgets.QMainWindow):
         self.add_module_button.setEnabled(all_valid)
         return all_valid
 
+    def _update_editing_workflow_item(self):
+        """Update parameters in workflow list if currently editing an existing item."""
+        # Only update if we're editing an existing workflow item
+        if self.editing_workflow_index < 0 or self.editing_workflow_tab < 0:
+            return
+
+        # Capture current parameter values from widgets
+        param_values = {}
+        for param_name, widget_info in self.parameter_widgets.items():
+            value = self._get_widget_value(widget_info.widget, widget_info.original_type, widget_info)
+            # Skip None values (from unchecked optional dicts)
+            if value is not None:
+                param_values[param_name] = value
+
+        # Update the appropriate workflow list
+        if self.editing_workflow_tab == 0:  # Single Dataset Workflow
+            if self.editing_workflow_index < len(self.single_workflow_modules):
+                module_name = self.single_workflow_modules[self.editing_workflow_index][0]
+                # Update parameters while keeping module name
+                self.single_workflow_modules[self.editing_workflow_index] = (module_name, param_values)
+        elif self.editing_workflow_tab == 1:  # Aggregation Workflow
+            if self.editing_workflow_index < len(self.aggregation_workflow_modules):
+                module_name = self.aggregation_workflow_modules[self.editing_workflow_index][0]
+                # Update parameters while keeping module name
+                self.aggregation_workflow_modules[self.editing_workflow_index] = (module_name, param_values)
+
     def _on_parameter_changed(self):
         """Called when a parameter textbox loses focus (editingFinished signal)."""
         self._validate_parameters()
+        # Auto-save parameters if editing an existing workflow item
+        self._update_editing_workflow_item()
 
     def on_module_changed(self, text):
         import textwrap
 
         """Update the module description when a new module is selected."""
+        # Clear editing state when user manually changes module
+        # (This is only called via signal when not blocked, i.e., manual user action)
+        if not self.module_combobox.signalsBlocked():
+            self.editing_workflow_index = -1
+            self.editing_workflow_tab = -1
+
         if text == "Select module":
             self.current_module_desc.setText("No module selected")
             self.add_module_button.setEnabled(False)
