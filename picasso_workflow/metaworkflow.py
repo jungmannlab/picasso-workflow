@@ -508,6 +508,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
                 (execution item {execution_item})"""
             text = textwrap.fill(textwrap.dedent(text), width=70)
             print(text)
+            logger.debug(text)
             try:
                 confpagid_cn = self.ci.create_page(report_name, "")
             except confluence.ConfluenceInterfaceError:

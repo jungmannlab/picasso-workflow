@@ -5371,6 +5371,50 @@ class Window(QtWidgets.QMainWindow):
         run_on_cluster_tab = QtWidgets.QWidget()
         run_on_cluster_layout = QtWidgets.QVBoxLayout(run_on_cluster_tab)
         self.run_tabs.addTab(run_on_cluster_tab, "Run on SLURM Cluster")
+
+        # Cluster configuration widgets
+        cluster_config_layout = QtWidgets.QHBoxLayout()
+        cluster_config_widget = QtWidgets.QWidget()
+        cluster_config_widget.setLayout(cluster_config_layout)
+        run_on_cluster_layout.addWidget(cluster_config_widget)
+
+        # Cluster Host dropdown
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Cluster Host:"))
+        self.cluster_host_combo = QtWidgets.QComboBox()
+        self.cluster_host_combo.setEditable(True)
+        self.cluster_host_combo.addItems(["localhost", "cluster.example.com"])
+        cluster_config_layout.addWidget(self.cluster_host_combo)
+
+        # Number of nodes
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#nodes:"))
+        self.cluster_nodes_spin = QtWidgets.QSpinBox()
+        self.cluster_nodes_spin.setMinimum(1)
+        self.cluster_nodes_spin.setMaximum(1000)
+        self.cluster_nodes_spin.setValue(1)
+        cluster_config_layout.addWidget(self.cluster_nodes_spin)
+
+        # Number of cores per node
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#cores/node:"))
+        self.cluster_cores_spin = QtWidgets.QSpinBox()
+        self.cluster_cores_spin.setMinimum(1)
+        self.cluster_cores_spin.setMaximum(256)
+        self.cluster_cores_spin.setValue(1)
+        cluster_config_layout.addWidget(self.cluster_cores_spin)
+
+        # Memory
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"))
+        self.cluster_memory_edit = QtWidgets.QLineEdit()
+        self.cluster_memory_edit.setPlaceholderText("e.g., 4GB")
+        self.cluster_memory_edit.setMaximumWidth(100)
+        cluster_config_layout.addWidget(self.cluster_memory_edit)
+
+        # Timeout
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Timeout:"))
+        self.cluster_timeout_edit = QtWidgets.QLineEdit()
+        self.cluster_timeout_edit.setPlaceholderText("e.g., 24:00:00")
+        self.cluster_timeout_edit.setMaximumWidth(100)
+        cluster_config_layout.addWidget(self.cluster_timeout_edit)
+
         slurm_buttons = QtWidgets.QHBoxLayout()
         self.slurm_buttons_widget = QtWidgets.QWidget()
         self.slurm_buttons_widget.setLayout(slurm_buttons)

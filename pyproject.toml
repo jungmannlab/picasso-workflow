@@ -30,7 +30,10 @@ dependencies = [
     "psutil",
     "atlassian-python-api",
     "memory-profiler>=0.61.0",
-    "loguru>=0.7.3"
+    "loguru>=0.7.3",
+    "h5py",
+    "mpi4py",
+    "openmpi"
 ]
 keywords = ["picasso"]
 
