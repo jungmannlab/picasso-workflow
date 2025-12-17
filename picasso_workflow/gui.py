@@ -564,17 +564,27 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "filename": {
                         "type": "str",
                         "description": "Output filename for sample movie",
+                        "default": "selected_frames.mp4",
                     },
-                    "frames": {
+                    "n_sample": {
                         "type": "int",
                         "description": "Number of frames to sample",
                         "min": 1,
+                        "default": 40,
                     },
-                    "step": {
-                        "type": "int",
-                        "description": "Frame step size",
+                    "max_quantile": {
+                        "type": "float",
+                        "description": "max quantile for display",
+                        "min": 0,
+                        "max": 1,
+                        "default": 0.9998,
+                    },
+                    "fps": {
+                        "type": "float",
+                        "description": "frames per second for replay of subsampled movie",
                         "min": 1,
-                        "default": 1,
+                        "max": 100,
+                        "default": 2,
                     },
                 },
             },
@@ -5277,7 +5287,10 @@ class Window(QtWidgets.QMainWindow):
     """Main window for the picasso-workflow GUI application."""
 
     def __init__(self):
+        from picasso_workflow.metaworkflow import PathParser
+
         super().__init__()
+        self.pathparser = PathParser()
         self.module_descriptor = ModuleDescriptor()
 
         self.setWindowTitle(f"picasso-workflow {__GUIVERSION__}")
@@ -5328,10 +5341,10 @@ class Window(QtWidgets.QMainWindow):
         self.tabs = QtWidgets.QTabWidget()
         layout.addWidget(self.tabs, 1, 0, 1, 4)
 
-        # Config tab
+        # Workflow Config tab
         config_tab = QtWidgets.QWidget()
         config_layout = QtWidgets.QGridLayout(config_tab)
-        self.tabs.addTab(config_tab, "Config")
+        self.tabs.addTab(config_tab, "Workflow Config")
 
         # Files and modules boxes in config tab
         self._files_box = QtWidgets.QGroupBox("Files")
@@ -5340,6 +5353,11 @@ class Window(QtWidgets.QMainWindow):
         self._modules_box = QtWidgets.QGroupBox("Modules")
         self.modules_box = QtWidgets.QGridLayout(self._modules_box)
         config_layout.addWidget(self._modules_box, 0, 2, 1, 2)
+
+        # Documentation Config tab
+        docconfig_tab = QtWidgets.QWidget()
+        docconfig_layout = QtWidgets.QGridLayout(docconfig_tab)
+        self.tabs.addTab(docconfig_tab, "Documentation Config")
 
         # Run tab
         run_tab = QtWidgets.QWidget()
@@ -5422,19 +5440,27 @@ class Window(QtWidgets.QMainWindow):
         results_tab = QtWidgets.QWidget()
         results_layout = QtWidgets.QVBoxLayout(results_tab)
         self.tabs.addTab(results_tab, "Results")
-        self.tabs.setTabEnabled(2, False)  # in development
-        self.tabs.setTabToolTip(2, "Not Implemented yet")
+        self.tabs.setTabEnabled(3, False)  # in development
+        self.tabs.setTabToolTip(3, "Not Implemented yet")
 
         # select files to process
+        # Create button container for dynamic button layout
+        self.file_buttons_widget = QtWidgets.QWidget()
+        self.file_buttons_layout = QtWidgets.QHBoxLayout(self.file_buttons_widget)
+        self.file_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        self.files_box.addWidget(self.file_buttons_widget, 0, 0, 1, 3)
+
+        # Initial buttons for Single Workflow (will be managed by _update_file_buttons)
         self.add_files_button = QtWidgets.QPushButton("Add files")
-        self.files_box.addWidget(self.add_files_button, 0, 0)
         self.add_files_button.clicked.connect(self.add_files)
         self.remove_files_button = QtWidgets.QPushButton("Remove selected")
-        self.files_box.addWidget(self.remove_files_button, 0, 1)
         self.remove_files_button.clicked.connect(self.remove_selected_files)
         self.clear_files_button = QtWidgets.QPushButton("Clear list")
-        self.files_box.addWidget(self.clear_files_button, 0, 2)
         self.clear_files_button.clicked.connect(self.clear_file_list)
+
+        self.file_buttons_layout.addWidget(self.add_files_button)
+        self.file_buttons_layout.addWidget(self.remove_files_button)
+        self.file_buttons_layout.addWidget(self.clear_files_button)
 
         d = {"Name1": "/path/to/file1.txt", "Name2": "/path/to/file2.txt"}
         self.files_table = QtWidgets.QTableWidget()
@@ -5448,7 +5474,54 @@ class Window(QtWidgets.QMainWindow):
         # Store delegate as instance variable to prevent garbage collection
         self.file_path_delegate = FilePathDelegate(self)
         self.files_table.setItemDelegateForColumn(1, self.file_path_delegate)
-        self.files_box.addWidget(self.files_table, 1, 0, 1, 3)
+
+        # Create QStackedWidget to hold all file selection widgets
+        self.files_stack = QtWidgets.QStackedWidget()
+        self.files_box.addWidget(self.files_stack, 1, 0, 1, 3)
+
+        # Add existing table to stack (index 0 - Single Workflow)
+        self.files_stack.addWidget(self.files_table)
+
+        # Create tree for Aggregation Workflow (index 1)
+        self.files_tree_agg = QtWidgets.QTreeWidget()
+        self.files_tree_agg.setColumnCount(3)
+        self.files_tree_agg.setHeaderLabels(["Dataset", "Channel", "File Path"])
+        header_agg = self.files_tree_agg.header()
+        header_agg.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        header_agg.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+        header_agg.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        self.file_path_delegate_tree_agg = FilePathDelegate(self)
+        self.files_tree_agg.setItemDelegateForColumn(2, self.file_path_delegate_tree_agg)
+        self.files_tree_agg.setAlternatingRowColors(True)
+        self.files_tree_agg.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.files_stack.addWidget(self.files_tree_agg)
+
+        # Create tree for Investigation Workflow (index 2)
+        self.files_tree_inv = QtWidgets.QTreeWidget()
+        self.files_tree_inv.setColumnCount(4)
+        self.files_tree_inv.setHeaderLabels(["Dataset", "Channel", "File Path", "Condition"])
+        header_inv = self.files_tree_inv.header()
+        header_inv.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        header_inv.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+        header_inv.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        header_inv.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
+        self.file_path_delegate_tree_inv = FilePathDelegate(self)
+        self.files_tree_inv.setItemDelegateForColumn(2, self.file_path_delegate_tree_inv)
+        self.files_tree_inv.setAlternatingRowColors(True)
+        self.files_tree_inv.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.files_stack.addWidget(self.files_tree_inv)
+
+        # Initialize tree data structure
+        self.tree_data = {
+            "datasets": [],
+            "channels": [],
+            "file_paths": {},
+            "conditions": {}
+        }
+
+        # Connect item changed signal for real-time updates
+        self.files_tree_agg.itemChanged.connect(self._on_tree_item_changed)
+        self.files_tree_inv.itemChanged.connect(self._on_tree_item_changed)
 
         # adding modules
         self.current_module = QtWidgets.QGroupBox("Current Module")
@@ -5553,6 +5626,516 @@ class Window(QtWidgets.QMainWindow):
 
         # Initially disable file and module widgets until results folder is selected
         self._set_widgets_enabled(False)
+
+    def add_dataset(self):
+        """Add new dataset with prompt for name."""
+        dataset_name, ok = QtWidgets.QInputDialog.getText(
+            self, "Add Dataset", "Enter dataset name:"
+        )
+
+        if not ok or not dataset_name.strip():
+            return
+
+        dataset_name = dataset_name.strip()
+
+        # Validate no underscores
+        if "_" in dataset_name:
+            QtWidgets.QMessageBox.warning(
+                self, "Invalid Name",
+                "Dataset names cannot contain underscores.\n\n"
+                "Underscores are used to separate dataset and channel names "
+                "in the {dataset}_{channel} format."
+            )
+            return
+
+        if dataset_name in self.tree_data["datasets"]:
+            QtWidgets.QMessageBox.warning(self, "Duplicate", f"Dataset '{dataset_name}' exists.")
+            return
+
+        # Add to data structure
+        self.tree_data["datasets"].append(dataset_name)
+        self.tree_data["file_paths"][dataset_name] = {}
+
+        # Initialize all existing channels with empty paths
+        for channel in self.tree_data["channels"]:
+            self.tree_data["file_paths"][dataset_name][channel] = ""
+
+        # Add to tree
+        self._populate_tree_from_data()
+
+    def add_channel(self):
+        """Add new channel to ALL datasets."""
+        channel_name, ok = QtWidgets.QInputDialog.getText(
+            self, "Add Channel", "Enter channel name:"
+        )
+
+        if not ok or not channel_name.strip():
+            return
+
+        channel_name = channel_name.strip()
+
+        # Validate no underscores
+        if "_" in channel_name:
+            QtWidgets.QMessageBox.warning(
+                self, "Invalid Name",
+                "Channel names cannot contain underscores.\n\n"
+                "Underscores are used to separate dataset and channel names "
+                "in the {dataset}_{channel} format."
+            )
+            return
+
+        if channel_name in self.tree_data["channels"]:
+            QtWidgets.QMessageBox.warning(self, "Duplicate", f"Channel '{channel_name}' exists.")
+            return
+
+        # Add to channels list
+        self.tree_data["channels"].append(channel_name)
+
+        # Add to all datasets
+        for dataset in self.tree_data["datasets"]:
+            self.tree_data["file_paths"][dataset][channel_name] = ""
+
+        # Refresh tree
+        self._populate_tree_from_data()
+
+    def remove_channel(self):
+        """Remove selected channel from ALL datasets."""
+        current_tree = self._get_current_tree_widget()
+        if not current_tree:
+            return
+
+        selected = current_tree.selectedItems()
+
+        if not selected:
+            QtWidgets.QMessageBox.information(
+                self, "No Selection", "Please select a channel to remove."
+            )
+            return
+
+        # Get channel name from first selected item
+        # Channel items are child items (have a parent)
+        item = selected[0]
+        if item.parent() is None:
+            QtWidgets.QMessageBox.information(
+                self, "Invalid Selection",
+                "Please select a channel (not a dataset) to remove."
+            )
+            return
+
+        channel_name = item.text(1)
+
+        if not channel_name:
+            return
+
+        # Confirm removal
+        msg = f"Remove channel '{channel_name}' from all datasets?"
+        if QtWidgets.QMessageBox.question(
+            self, "Confirm", msg
+        ) != QtWidgets.QMessageBox.Yes:
+            return
+
+        # Remove from channels list
+        if channel_name in self.tree_data["channels"]:
+            self.tree_data["channels"].remove(channel_name)
+
+        # Remove from all datasets
+        for dataset in self.tree_data["datasets"]:
+            if channel_name in self.tree_data["file_paths"][dataset]:
+                del self.tree_data["file_paths"][dataset][channel_name]
+
+        # Refresh tree
+        self._populate_tree_from_data()
+
+    def rename_dataset(self):
+        """Rename selected dataset with validation (no underscores)."""
+        current_tree = self._get_current_tree_widget()
+        if not current_tree:
+            return
+
+        selected = current_tree.selectedItems()
+
+        if not selected:
+            QtWidgets.QMessageBox.information(
+                self, "No Selection", "Please select a dataset to rename."
+            )
+            return
+
+        # Get dataset item (must be top-level, no parent)
+        item = selected[0]
+        if item.parent() is not None:
+            QtWidgets.QMessageBox.information(
+                self, "Invalid Selection",
+                "Please select a dataset (not a channel) to rename."
+            )
+            return
+
+        old_name = item.text(0)
+
+        # Prompt for new name
+        new_name, ok = QtWidgets.QInputDialog.getText(
+            self, "Rename Dataset", f"Enter new name for '{old_name}':",
+            text=old_name
+        )
+
+        if not ok or not new_name.strip():
+            return
+
+        new_name = new_name.strip()
+
+        # Validate no underscores
+        if "_" in new_name:
+            QtWidgets.QMessageBox.warning(
+                self, "Invalid Name",
+                "Dataset names cannot contain underscores.\n\n"
+                "Underscores are used to separate dataset and channel names "
+                "in the {dataset}_{channel} format."
+            )
+            return
+
+        # Check if already exists
+        if new_name in self.tree_data["datasets"] and new_name != old_name:
+            QtWidgets.QMessageBox.warning(
+                self, "Duplicate", f"Dataset '{new_name}' already exists."
+            )
+            return
+
+        # Update datasets list
+        idx = self.tree_data["datasets"].index(old_name)
+        self.tree_data["datasets"][idx] = new_name
+
+        # Update file_paths (rename key)
+        self.tree_data["file_paths"][new_name] = self.tree_data["file_paths"].pop(old_name)
+
+        # Update conditions if exists (Investigation workflow)
+        if old_name in self.tree_data["conditions"]:
+            self.tree_data["conditions"][new_name] = self.tree_data["conditions"].pop(old_name)
+
+        # Refresh tree
+        self._populate_tree_from_data()
+
+    def rename_channel(self):
+        """Rename selected channel in ALL datasets with validation (no underscores)."""
+        current_tree = self._get_current_tree_widget()
+        if not current_tree:
+            return
+
+        selected = current_tree.selectedItems()
+
+        if not selected:
+            QtWidgets.QMessageBox.information(
+                self, "No Selection", "Please select a channel to rename."
+            )
+            return
+
+        # Get channel item (must have parent)
+        item = selected[0]
+        if item.parent() is None:
+            QtWidgets.QMessageBox.information(
+                self, "Invalid Selection",
+                "Please select a channel (not a dataset) to rename."
+            )
+            return
+
+        old_name = item.text(1)
+
+        # Prompt for new name
+        new_name, ok = QtWidgets.QInputDialog.getText(
+            self, "Rename Channel", f"Enter new name for channel '{old_name}':",
+            text=old_name
+        )
+
+        if not ok or not new_name.strip():
+            return
+
+        new_name = new_name.strip()
+
+        # Validate no underscores
+        if "_" in new_name:
+            QtWidgets.QMessageBox.warning(
+                self, "Invalid Name",
+                "Channel names cannot contain underscores.\n\n"
+                "Underscores are used to separate dataset and channel names "
+                "in the {dataset}_{channel} format."
+            )
+            return
+
+        # Check if already exists
+        if new_name in self.tree_data["channels"] and new_name != old_name:
+            QtWidgets.QMessageBox.warning(
+                self, "Duplicate", f"Channel '{new_name}' already exists."
+            )
+            return
+
+        # Update channels list
+        idx = self.tree_data["channels"].index(old_name)
+        self.tree_data["channels"][idx] = new_name
+
+        # Update file_paths for all datasets (rename inner key)
+        for dataset in self.tree_data["datasets"]:
+            if old_name in self.tree_data["file_paths"][dataset]:
+                self.tree_data["file_paths"][dataset][new_name] = \
+                    self.tree_data["file_paths"][dataset].pop(old_name)
+
+        # Refresh tree
+        self._populate_tree_from_data()
+
+    def remove_tree_items(self):
+        """Remove selected datasets or channels."""
+        current_tree = self._get_current_tree_widget()
+        if not current_tree:
+            return
+
+        selected = current_tree.selectedItems()
+
+        if not selected:
+            return
+
+        datasets_to_remove = []
+
+        for item in selected:
+            if item.parent() is None:  # Top-level = dataset
+                dataset_name = item.text(0)
+                datasets_to_remove.append(dataset_name)
+
+        if not datasets_to_remove:
+            return
+
+        msg = f"Remove {len(datasets_to_remove)} dataset(s)?"
+        if QtWidgets.QMessageBox.question(self, "Confirm", msg) != QtWidgets.QMessageBox.Yes:
+            return
+
+        for dataset_name in datasets_to_remove:
+            self.tree_data["datasets"].remove(dataset_name)
+            del self.tree_data["file_paths"][dataset_name]
+            if dataset_name in self.tree_data["conditions"]:
+                del self.tree_data["conditions"][dataset_name]
+
+        self._populate_tree_from_data()
+
+    def clear_tree(self):
+        """Clear all items from the tree."""
+        current_tree = self._get_current_tree_widget()
+        if not current_tree:
+            return
+
+        if current_tree.topLevelItemCount() == 0:
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Clear Tree",
+            "Clear all datasets and channels?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        current_tree.clear()
+        self.tree_data = {
+            "datasets": [],
+            "channels": [],
+            "file_paths": {},
+            "conditions": {}
+        }
+
+    def _get_current_tree_widget(self):
+        """Get currently visible tree widget based on workflow type."""
+        workflow_type = self.workflow_type.currentIndex()
+        if workflow_type == 1:
+            return self.files_tree_agg
+        elif workflow_type == 2:
+            return self.files_tree_inv
+        return None
+
+    def _populate_tree_from_data(self):
+        """Populate tree widget from self.tree_data."""
+        current_tree = self._get_current_tree_widget()
+        if not current_tree:
+            return
+
+        # Block signals during population to avoid triggering itemChanged
+        current_tree.blockSignals(True)
+        try:
+            current_tree.clear()
+
+            for dataset in self.tree_data["datasets"]:
+                dataset_item = QtWidgets.QTreeWidgetItem(current_tree)
+                dataset_item.setText(0, dataset)
+                dataset_item.setFlags(dataset_item.flags() & ~Qt.ItemIsEditable)
+
+                for channel in self.tree_data["channels"]:
+                    channel_item = QtWidgets.QTreeWidgetItem(dataset_item)
+                    channel_item.setText(1, channel)
+                    channel_item.setText(2, self.tree_data["file_paths"][dataset].get(channel, ""))
+
+                    # Investigation workflow: add condition
+                    if self.workflow_type.currentIndex() == 2:
+                        channel_item.setText(3, self.tree_data["conditions"].get(dataset, ""))
+
+                    # Make only File Path (and Condition) editable
+                    flags = channel_item.flags() | Qt.ItemIsEditable
+                    channel_item.setFlags(flags)
+
+                dataset_item.setExpanded(True)
+
+        finally:
+            current_tree.blockSignals(False)
+
+        self._update_validation_display()
+
+    def _on_tree_item_changed(self, item, column):
+        """Handle tree item changes to update data structure."""
+        if item.parent() is None:  # Dataset item
+            return
+
+        dataset_item = item.parent()
+        dataset_name = dataset_item.text(0)
+        channel_name = item.text(1)
+
+        # Update data structure
+        if column == 2:  # File Path
+            file_path = item.text(2)
+            self.tree_data["file_paths"][dataset_name][channel_name] = file_path
+        elif column == 3:  # Condition (Investigation only)
+            condition = item.text(3)
+            self.tree_data["conditions"][dataset_name] = condition
+
+        self._update_validation_display()
+
+    def _update_validation_display(self):
+        """Update visual indicators for missing file paths."""
+        current_tree = self._get_current_tree_widget()
+        if not current_tree:
+            return
+
+        root = current_tree.invisibleRootItem()
+
+        for dataset_idx in range(root.childCount()):
+            dataset_item = root.child(dataset_idx)
+
+            for channel_idx in range(dataset_item.childCount()):
+                channel_item = dataset_item.child(channel_idx)
+                file_path = channel_item.text(2)
+
+                # Red text if empty, black otherwise
+                color = QtGui.QColor("red") if not file_path.strip() else QtGui.QColor("black")
+
+                for col in range(channel_item.columnCount()):
+                    channel_item.setForeground(col, color)
+
+    def _simple_to_tree(self):
+        """Convert simple table to tree format using {dataset}_{channel} naming."""
+        table_data = {}
+
+        for row in range(self.files_table.rowCount()):
+            name_item = self.files_table.item(row, 0)
+            path_item = self.files_table.item(row, 1)
+
+            if not name_item or not path_item:
+                continue
+
+            name = name_item.text()
+            path = path_item.text()
+
+            # Parse using rightmost underscore
+            if "_" in name:
+                dataset, channel = name.rsplit("_", 1)
+            else:
+                dataset, channel = name, "default"
+
+            if dataset not in table_data:
+                table_data[dataset] = {}
+            table_data[dataset][channel] = path
+
+        # Build tree data
+        self.tree_data["datasets"] = list(table_data.keys())
+        self.tree_data["channels"] = sorted(set(
+            ch for ds in table_data.values() for ch in ds.keys()
+        ))
+        self.tree_data["file_paths"] = table_data
+
+        # Ensure all datasets have all channels
+        for dataset in self.tree_data["datasets"]:
+            for channel in self.tree_data["channels"]:
+                if channel not in self.tree_data["file_paths"][dataset]:
+                    self.tree_data["file_paths"][dataset][channel] = ""
+
+        self._populate_tree_from_data()
+
+    def _tree_to_simple(self):
+        """Convert tree to simple table using {dataset}_{channel} naming."""
+        self.files_table.setRowCount(0)
+
+        row = 0
+        for dataset in self.tree_data["datasets"]:
+            for channel in self.tree_data["channels"]:
+                file_path = self.tree_data["file_paths"][dataset].get(channel, "")
+                name = f"{dataset}_{channel}"
+
+                self.files_table.insertRow(row)
+                self.files_table.setItem(row, 0, QtWidgets.QTableWidgetItem(name))
+                self.files_table.setItem(row, 1, QtWidgets.QTableWidgetItem(file_path))
+                row += 1
+
+    def _validate_tree_data(self):
+        """Validate tree data and return list of errors."""
+        errors = []
+
+        for dataset in self.tree_data["datasets"]:
+            for channel in self.tree_data["channels"]:
+                path = self.tree_data["file_paths"][dataset].get(channel, "")
+
+                if not path.strip():
+                    errors.append(f"Missing path: {dataset}_{channel}")
+                # elif not os.path.exists(path):
+                #     errors.append(f"File not found: {path} ({dataset}_{channel})")
+
+        return errors
+
+    def _update_file_buttons(self, workflow_type_index):
+        """Update button layout based on workflow type."""
+        # Clear existing buttons
+        while self.file_buttons_layout.count():
+            item = self.file_buttons_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if workflow_type_index == 0:  # Single Workflow
+            self.add_files_button = QtWidgets.QPushButton("Add files")
+            self.add_files_button.clicked.connect(self.add_files)
+            self.remove_files_button = QtWidgets.QPushButton("Remove selected")
+            self.remove_files_button.clicked.connect(self.remove_selected_files)
+            self.clear_files_button = QtWidgets.QPushButton("Clear list")
+            self.clear_files_button.clicked.connect(self.clear_file_list)
+
+            self.file_buttons_layout.addWidget(self.add_files_button)
+            self.file_buttons_layout.addWidget(self.remove_files_button)
+            self.file_buttons_layout.addWidget(self.clear_files_button)
+
+        else:  # Aggregation or Investigation
+            self.add_dataset_button = QtWidgets.QPushButton("Add Dataset")
+            self.add_dataset_button.clicked.connect(self.add_dataset)
+            self.add_channel_button = QtWidgets.QPushButton("Add Channel")
+            self.add_channel_button.clicked.connect(self.add_channel)
+            self.rename_dataset_button = QtWidgets.QPushButton("Rename Dataset")
+            self.rename_dataset_button.clicked.connect(self.rename_dataset)
+            self.rename_channel_button = QtWidgets.QPushButton("Rename Channel")
+            self.rename_channel_button.clicked.connect(self.rename_channel)
+            self.remove_channel_button = QtWidgets.QPushButton("Remove Channel")
+            self.remove_channel_button.clicked.connect(self.remove_channel)
+            self.remove_dataset_button = QtWidgets.QPushButton("Remove Dataset")
+            self.remove_dataset_button.clicked.connect(self.remove_tree_items)
+            self.clear_tree_button = QtWidgets.QPushButton("Clear")
+            self.clear_tree_button.clicked.connect(self.clear_tree)
+
+            self.file_buttons_layout.addWidget(self.add_dataset_button)
+            self.file_buttons_layout.addWidget(self.add_channel_button)
+            self.file_buttons_layout.addWidget(self.rename_dataset_button)
+            self.file_buttons_layout.addWidget(self.rename_channel_button)
+            self.file_buttons_layout.addWidget(self.remove_channel_button)
+            self.file_buttons_layout.addWidget(self.remove_dataset_button)
+            self.file_buttons_layout.addWidget(self.clear_tree_button)
 
     def _set_widgets_enabled(self, enabled):
         """Enable or disable file and module widgets based on results folder selection."""
@@ -5750,17 +6333,9 @@ class Window(QtWidgets.QMainWindow):
         list_widget.clear()
 
         for module_name, params in workflow_def:
-            # Convert parameters to GUI format: {param: (value, command)}
-            converted_params = {}
-
-            for param_name, param_value in params.items():
-                # Convert parameter value to GUI format
-                value_str, command_str = self._convert_param_to_gui_format(param_value)
-                converted_params[param_name] = value_str  # (value_str, command_str)
-            # print(converted_params)
-
-            # Add to workflow
-            workflow_list.append((module_name, converted_params))
+            # Store parameters in actionable format (no conversion)
+            # Tuples remain tuples, dicts remain dicts, etc.
+            workflow_list.append((module_name, params))
             index = len(workflow_list) - 1
             list_widget.addItem(f"{index}: {module_name}")
 
@@ -5984,6 +6559,20 @@ class Window(QtWidgets.QMainWindow):
                        1 = Aggregation Workflow
                        2 = Investigation Workflow
         """
+        # Convert data format if needed
+        if type_index == 0:  # Switching TO Single
+            if self.tree_data["datasets"]:
+                self._tree_to_simple()
+        else:  # Switching TO Aggregation/Investigation
+            if self.files_table.rowCount() > 0:
+                self._simple_to_tree()
+
+        # Switch visible widget
+        self.files_stack.setCurrentIndex(type_index)
+
+        # Update buttons
+        self._update_file_buttons(type_index)
+
         # Tab indices:
         # 0 = Single Dataset Workflow
         # 1 = Aggregation Workflow
@@ -6113,7 +6702,7 @@ class Window(QtWidgets.QMainWindow):
                 )
                 self.aggregation_workflow_list.setCurrentRow(current_row + 1)
 
-    def create_python_script(self, filename="start_workflow.py"):
+    def create_python_script(self, host_cluster, filename="start_workflow.py"):
         """Generate a Python workflow script from current GUI settings.
 
         Args:
@@ -6130,19 +6719,70 @@ class Window(QtWidgets.QMainWindow):
             "Investigation Workflow"]
         workflow_type_name = workflow_type_names[workflow_type_index] if workflow_type_index < len(workflow_type_names) else "Unknown"
 
-        # Build datasets dict from files table
-        datasets = {}
-        for row in range(self.files_table.rowCount()):
-            name_item = self.files_table.item(row, 0)
-            path_item = self.files_table.item(row, 1)
-            if name_item and path_item:
-                name = name_item.text()
-                path = path_item.text()
+        # Validate tree data for Aggregation/Investigation workflows
+        if workflow_type_index > 0:  # Tree-based workflows
+            errors = self._validate_tree_data()
+            if errors:
+                QtWidgets.QMessageBox.warning(
+                    self, "Validation Errors",
+                    "Cannot generate script:\n\n" + "\n".join(errors[:10])
+                )
+                return None
 
-                # Create lists for values
-                if name not in datasets:
-                    datasets[name] = []
-                datasets[name].append(path)
+        # Build datasets dict based on workflow type
+        datasets = {}
+
+        if workflow_type_index == 0:  # Single Workflow
+            # Use simple table format
+            for row in range(self.files_table.rowCount()):
+                name_item = self.files_table.item(row, 0)
+                path_item = self.files_table.item(row, 1)
+                if name_item and path_item:
+                    name = name_item.text()
+                    path = path_item.text()
+                    path = self.pathparser.convert_path(path, host_cluster)
+
+                    # Create lists for values
+                    if name not in datasets:
+                        datasets[name] = []
+                    datasets[name].append(path)
+
+        elif workflow_type_index ==1:  # Aggregation Workflow
+            # Build datasets from tree structure
+            tags = []
+            filepaths = []
+
+            for dataset in self.tree_data["datasets"]:
+                for channel in self.tree_data["channels"]:
+                    # Create tag in {dataset}_{channel} format
+                    tag = f"{dataset}_{channel}"
+                    tags.append(tag)
+
+                    # Get file path
+                    file_path = self.tree_data["file_paths"][dataset][channel]
+                    file_path = self.pathparser.convert_path(file_path, host_cluster)
+                    filepaths.append(file_path)
+        else:  # Investigation Workflow
+            # Build datasets from tree structure
+            tags = []
+            filepaths = []
+
+            for condition in self.tree_data["condition"]:
+                for dataset in self.tree_data["datasets"]:
+                    for channel in self.tree_data["channels"]:
+                        # Create tag in {dataset}_{channel} format
+                        tag = f"{condition}_{dataset}_{channel}"
+                        tags.append(tag)
+
+                        # Get file path
+                        file_path = self.tree_data["file_paths"][condition][dataset][channel]
+                        file_path = self.pathparser.convert_path(file_path, host_cluster)
+                        filepaths.append(file_path)
+
+            datasets = {
+                "#tags": tags,
+                "filepath": filepaths
+            }
 
         # Helper function to format parameter values
         def format_value(value):
@@ -6166,6 +6806,8 @@ class Window(QtWidgets.QMainWindow):
                     # Use os.path.join for path-like strings
                     parts = value.replace("\\", "/").split("/")
                     if len(parts) > 1:
+                        if parts[0] == "":
+                            parts[0] = "/"
                         return f"os.path.join({', '.join(repr(p) for p in parts)})"
 
                 return repr(value)
@@ -6221,7 +6863,7 @@ class Window(QtWidgets.QMainWindow):
 
         # Add appropriate import based on workflow type
         if workflow_type_index == 0:  # Single Workflow
-            script_lines.append("from picasso_workflow.workflow import WorkflowRunner")
+            script_lines.append("from picasso_workflow.metaworkflow import SingleWorkflowCoordinator")
         elif workflow_type_index == 1:  # Aggregation Workflow
             script_lines.append("from picasso_workflow.metaworkflow import AggregationWorkflowCoordinator")
         elif workflow_type_index == 2:  # Investigation Workflow
@@ -6243,11 +6885,12 @@ class Window(QtWidgets.QMainWindow):
 
         # Add datasets
         for key, values in datasets.items():
-            script_lines.append(f"    {repr(key)}: [")
-            for value in values:
-                formatted = format_value(value)
-                script_lines.append(f"        {formatted},")
-            script_lines.append("    ],")
+            # script_lines.append(f"    {repr(key)}: [")
+            if isinstance(values, list):
+                value = values[0]
+            formatted = format_value(value)
+            script_lines.append(f"    {repr(key)}: {formatted},")
+            # script_lines.append("    ],")
         script_lines.append("}")
 
         script_lines.extend([
@@ -6281,19 +6924,31 @@ class Window(QtWidgets.QMainWindow):
 
         # Add coordinator creation based on workflow type
         if workflow_type_index == 0:  # Single Workflow
+            # script_lines.extend([
+            #     "    # Create single workflow runner",
+            #     "    runner = WorkflowRunner(",
+            #     "        working_folder=working_folder,",
+            #     "        analysis_name=analysis_name,",
+            #     "        confluence_url=confluence_url,",
+            #     "        confluence_space=confluence_space,",
+            #     "        confluence_token=confluence_token,",
+            #     "        base_page=base_page,",
+            #     "    )",
+            #     "",
+            #     "    # Run workflow",
+            #     "    runner.run_workflow(workflow_modules_sgl)",
+            # ])
             script_lines.extend([
-                "    # Create single workflow runner",
-                "    runner = WorkflowRunner(",
-                "        working_folder=working_folder,",
-                "        analysis_name=analysis_name,",
-                "        confluence_url=confluence_url,",
-                "        confluence_space=confluence_space,",
-                "        confluence_token=confluence_token,",
-                "        base_page=base_page,",
+                "    # Create single workflow coordinator",
+                "    coordinator = SingleWorkflowCoordinator(",
+                "        src_loc_file, analysis_name, working_folder,",
+                "        confluence_url, confluence_space, confluence_token,",
+                "        base_page,",
+                "        always_save=True",
                 "    )",
                 "",
                 "    # Run workflow",
-                "    runner.run_workflow(workflow_modules_sgl)",
+                "    coordinator.run_analysis(workflow_modules_sgl)",
             ])
         elif workflow_type_index == 1:  # Aggregation Workflow
             script_lines.extend([
@@ -6351,8 +7006,6 @@ class Window(QtWidgets.QMainWindow):
     def start_slurm(self):
         """"""
         import getpass
-        from picasso_workflow.metaworkflow import PathParser
-        pp = PathParser()
 
         hostname = "hpcl8001"
         host_cluster = "hpcl8"
@@ -6364,7 +7017,7 @@ class Window(QtWidgets.QMainWindow):
         assert self.slurm_communicator.test_connection()
 
         scriptname = "start_workflow.py"
-        self.create_python_script(scriptname)
+        self.create_python_script(host_cluster, scriptname)
 
         job_name = "mypwjob"
         slurm_options = {
@@ -6378,10 +7031,11 @@ class Window(QtWidgets.QMainWindow):
         }
 
         results_folder_local = self.results_folder_display.text()
-        results_folder_host = pp.convert_path(results_folder_local, host_cluster)
+        results_folder_host = self.pathparser.convert_path(results_folder_local, host_cluster)
 
         commands = self.slurm_communicator.assemble_slurm_commands(
-            scriptname=scriptname, use_pw_module=True)
+            # scriptname=scriptname, use_pw_module=True)
+            scriptname=scriptname, use_pw_module=False)
         script_content = self.slurm_communicator.create_slurm_script(
             job_name, commands, slurm_options=slurm_options,
             output_file=f"{results_folder_host}/logs/%A.log",
@@ -6573,6 +7227,47 @@ class Window(QtWidgets.QMainWindow):
                 widget.setPlaceholderText("Required")
             return widget, "str"
 
+    def _parse_literal_string(self, text):
+        """Try to parse a string representation of a Python literal back into its actual type.
+
+        Handles tuples, lists, dicts, numbers, bools, None, etc.
+
+        Args:
+            text: String that might be a Python literal, e.g.,
+                  "('$$map', 'filepath')", "[1, 2, 3]", "{'key': 'value'}"
+
+        Returns:
+            Parsed Python object if successful, original string otherwise
+        """
+        if not isinstance(text, str):
+            return text
+
+        stripped = text.strip()
+
+        # Check if it looks like a Python literal
+        # (starts with bracket/paren/brace or looks like a number/bool/None)
+        if not stripped:
+            return text
+
+        first_char = stripped[0]
+        # Check for likely Python literals
+        if first_char not in ('(', '[', '{', '-', '+') and not stripped[0].isdigit():
+            # Could still be None, True, False
+            if stripped not in ('None', 'True', 'False'):
+                return text
+
+        try:
+            # Try to safely evaluate the string as a Python literal
+            import ast
+            result = ast.literal_eval(stripped)
+            # Return the parsed result (tuple, list, dict, number, bool, None, etc.)
+            return result
+        except (ValueError, SyntaxError):
+            # If parsing fails, return original string
+            pass
+
+        return text
+
     def _get_widget_value(self, widget, original_type, widget_info=None):
         """Get value from widget based on its original type.
 
@@ -6582,7 +7277,8 @@ class Window(QtWidgets.QMainWindow):
             widget_info: ParameterWidgetInfo (needed for dict types)
 
         Returns:
-            str or dict: String representation of the value, or dict for nested parameters
+            str or dict or tuple: String representation of the value, dict for nested parameters,
+                                  or tuple for command references
         """
         if original_type == "dict" and widget_info and widget_info.sub_parameters:
             # For dict types with nested parameters
@@ -6604,24 +7300,26 @@ class Window(QtWidgets.QMainWindow):
             return nested_values
 
         elif isinstance(widget, QtWidgets.QLineEdit):
-            return widget.text()
+            text = widget.text()
+            # Try to parse as Python literal (tuple, list, dict, etc.)
+            return self._parse_literal_string(text)
         elif isinstance(widget, QtWidgets.QComboBox):
             return widget.currentText()
         elif isinstance(widget, QtWidgets.QSpinBox):
-            return str(widget.value())
+            return widget.value()  # Return native int
         elif isinstance(widget, QtWidgets.QDoubleSpinBox):
-            return str(widget.value())
+            return widget.value()  # Return native float
         elif isinstance(widget, QtWidgets.QCheckBox):
-            return str(widget.isChecked())
+            return widget.isChecked()  # Return native bool
         else:
             raise TypeError(f"Unknown widget type: {type(widget)}")
 
     def _set_widget_value(self, widget, value_data, original_type, widget_info=None):
-        """Set widget value from string based on original type.
+        """Set widget value from actionable format (native Python types).
 
         Args:
             widget: The Qt widget
-            value_data: String representation of value, or dict for nested parameters
+            value_data: Value in actionable format (int, float, bool, str, tuple, list, dict, etc.)
             original_type: Original type string ('int', 'float', 'bool', 'str', 'options', 'dict')
             widget_info: ParameterWidgetInfo (needed for dict types)
         """
@@ -6680,9 +7378,13 @@ class Window(QtWidgets.QMainWindow):
             except (ValueError, TypeError):
                 widget.setValue(widget.minimum())
         elif isinstance(widget, QtWidgets.QCheckBox):
-            # Handle both bool strings and Python bool repr
-            is_checked = str(value_data).lower() in ('true', '1', 'yes', 'on')
-            widget.setChecked(is_checked)
+            # Handle native bools and string representations
+            if isinstance(value_data, bool):
+                widget.setChecked(value_data)
+            else:
+                # Handle string representations
+                is_checked = str(value_data).lower() in ('true', '1', 'yes', 'on')
+                widget.setChecked(is_checked)
 
     def _on_cmd_button_clicked(self, param_name):
         """Handle cmd button click - opens prior result dialog.

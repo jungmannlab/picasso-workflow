@@ -1497,3 +1497,4 @@ def stripplot(data, positions, jitter, ax, color, alpha=1):
         x = pos * np.ones(len(d))
         x += np.random.uniform(-jitter / 2, jitter / 2, size=len(d))
         ax.scatter(x, d, color=color, alpha=alpha)
+
