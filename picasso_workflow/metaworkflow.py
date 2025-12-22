@@ -28,8 +28,8 @@ import re
 import abc
 
 
-if ON_CLUSTER:
-    from mpi4py import MPI
+# if ON_CLUSTER:
+#     from mpi4py import MPI
 
 
 # logger = logging.getLogger(__name__)
@@ -339,9 +339,11 @@ class AbstractWorkflowCoordinator(abc.ABC):
         self.always_save = always_save
 
         if ON_CLUSTER:
-            comm = MPI.COMM_WORLD
-            self.rank = comm.Get_rank()  # Get the rank of the process
-            self.size = comm.Get_size()  # Get the total number of processes
+            # comm = MPI.COMM_WORLD
+            # self.rank = comm.Get_rank()  # Get the rank of the process
+            # self.size = comm.Get_size()  # Get the total number of processes
+            self.rank = os.getenv("SLURM_PROCID")
+            self.size = os.getenv("SLURM_NTASKS")
         else:
             self.rank = 0
             self.size = 1
