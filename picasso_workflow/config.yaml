@@ -1,0 +1,26 @@
+# default located in picasso-workflow/picasso_workflow folder
+# user-specific version can be in ~/.config/my_package/config.yaml or %APPDATA%\my_package\config.yaml
+Confluence:
+  URL: "https://mibwiki.biochem.mpg.de"
+  Space: "~hgrabmayr"
+  DefaultPage: "test page"
+SlurmHosts:
+  - "hpcl8XXX"
+SlurmDefault:
+  nodes: 2
+  cores: 12
+  memory: "50GB"
+  timeout: "24:00:00"
+Drivepaths:
+  pcjuXX.local:
+    - "/Volumes/pool-miblab"
+    - "/Volumes/pool-miblab4"
+    - "/Volumes/pool-miblab1"
+  hpcl8XXX:
+    - "/fs/mpib/pool-miblab"
+    - "/fs/mpib/pool-miblab4"
+    - "/fs/mpib/pool-miblab1"
+  ipsjuXX:
+    - "W:"
+    - "X:"
+    - "V:"

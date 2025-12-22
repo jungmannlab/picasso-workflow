@@ -5381,8 +5381,10 @@ class Window(QtWidgets.QMainWindow):
         # Cluster Host dropdown
         cluster_config_layout.addWidget(QtWidgets.QLabel("Cluster Host:"))
         self.cluster_host_combo = QtWidgets.QComboBox()
+        for host in CONFIG["SlurmHosts"]:
+            self.cluster_host_combo.addItem(host)
         self.cluster_host_combo.setEditable(True)
-        self.cluster_host_combo.addItems(["localhost", "cluster.example.com"])
+        # self.cluster_host_combo.addItems(["localhost", "cluster.example.com"])
         cluster_config_layout.addWidget(self.cluster_host_combo)
 
         # Number of nodes
@@ -5390,7 +5392,7 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_nodes_spin = QtWidgets.QSpinBox()
         self.cluster_nodes_spin.setMinimum(1)
         self.cluster_nodes_spin.setMaximum(1000)
-        self.cluster_nodes_spin.setValue(1)
+        self.cluster_nodes_spin.setValue(CONFIG["SlurmDefault"].get("nodes", 1))
         cluster_config_layout.addWidget(self.cluster_nodes_spin)
 
         # Number of cores per node
@@ -5398,13 +5400,14 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_cores_spin = QtWidgets.QSpinBox()
         self.cluster_cores_spin.setMinimum(1)
         self.cluster_cores_spin.setMaximum(256)
-        self.cluster_cores_spin.setValue(1)
+        self.cluster_cores_spin.setValue(CONFIG["SlurmDefault"].get("cores", 1))
         cluster_config_layout.addWidget(self.cluster_cores_spin)
 
         # Memory
         cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"))
         self.cluster_memory_edit = QtWidgets.QLineEdit()
         self.cluster_memory_edit.setPlaceholderText("e.g., 4GB")
+        self.cluster_memory_edit.setValue(CONFIG["SlurmDefault"].get("memory", "4GB"))
         self.cluster_memory_edit.setMaximumWidth(100)
         cluster_config_layout.addWidget(self.cluster_memory_edit)
 
@@ -5412,6 +5415,7 @@ class Window(QtWidgets.QMainWindow):
         cluster_config_layout.addWidget(QtWidgets.QLabel("Timeout:"))
         self.cluster_timeout_edit = QtWidgets.QLineEdit()
         self.cluster_timeout_edit.setPlaceholderText("e.g., 24:00:00")
+        self.cluster_memory_edit.setValue(CONFIG["SlurmDefault"].get("timeout", "24:00:00"))
         self.cluster_timeout_edit.setMaximumWidth(100)
         cluster_config_layout.addWidget(self.cluster_timeout_edit)
 
