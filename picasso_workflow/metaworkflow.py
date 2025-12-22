@@ -232,6 +232,7 @@ class PathParser:
         drive_map = {}
         for src_p, dest_p in zip(self.drive_paths[src_machine], dest_paths):
             drive_map[src_p] = dest_p
+        drive_map = self.
 
         logger.debug(f"drive map is {drive_map}")
 
