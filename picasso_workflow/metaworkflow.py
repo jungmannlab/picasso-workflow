@@ -342,8 +342,9 @@ class AbstractWorkflowCoordinator(abc.ABC):
             # comm = MPI.COMM_WORLD
             # self.rank = comm.Get_rank()  # Get the rank of the process
             # self.size = comm.Get_size()  # Get the total number of processes
-            self.rank = os.getenv("SLURM_PROCID")
-            self.size = os.getenv("SLURM_NTASKS")
+            self.rank = int(os.getenv("SLURM_PROCID"))
+            self.size = int(os.getenv("SLURM_NTASKS"))
+            logger.debug(f"Assigned rank {self.rank}, size {self.size}.")
         else:
             self.rank = 0
             self.size = 1
