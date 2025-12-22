@@ -131,11 +131,13 @@ class PathParser:
         """
         regex = pattern.replace("X", r"\d")
         regex = f"^{regex}$"
+        # print('machine', machine, 'pattern', pattern, 'regex', regex)
         return re.fullmatch(regex, machine) is not None
 
     def get_machine_drivepaths(self, machine):
+        # print('drive paths', self.drive_paths)
         for pattern, paths in self.drive_paths.items():
-            if check_machine(machine, pattern):
+            if self.check_machine(machine, pattern):
                 return paths
         else:
             return None
@@ -149,13 +151,14 @@ class PathParser:
         #         f"Machine {dest_machine} not defined in .env! \
         #         ({self.drive_paths.keys()})"
         #     )
-
+        # print(CONFIG)
         # find current machine key
         if dest_machine is None:
             for dest_machine in self.drive_paths.keys():
                 if self.check_machine(platform.node(), dest_machine):
                     break
         dest_paths = self.get_machine_drivepaths(dest_machine)
+        # print('dest_machine', dest_machine, 'paths', dest_paths)
 
         for src_machine, drivepaths in self.drive_paths.items():
             src_on_machine = any([p in src_path for p in drivepaths])
@@ -232,7 +235,6 @@ class PathParser:
         drive_map = {}
         for src_p, dest_p in zip(self.drive_paths[src_machine], dest_paths):
             drive_map[src_p] = dest_p
-        drive_map = self.
 
         logger.debug(f"drive map is {drive_map}")
 

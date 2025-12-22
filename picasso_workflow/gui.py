@@ -7247,7 +7247,7 @@ class Window(QtWidgets.QMainWindow):
         import getpass
 
         hostname = "hpcl8001"
-        host_cluster = "hpcl8"
+        host_cluster = hostname  # "hpcl8"
         username = getpass.getuser()
         ssh_key_path = "~/.ssh/id_rsa"
         self.slurm_communicator = SlurmCommunicator(
@@ -7261,11 +7261,11 @@ class Window(QtWidgets.QMainWindow):
 
         job_name = "mypwjob"
         slurm_options = {
-            "nodes": 2,
+            "nodes": self.cluster_nodes_spin.getValue(),
             # "ntasks": Number of tasks,
-            "cpus-per-task": 12,
-            "mem": "50G",
-            "time": "24:00:00",
+            "cpus-per-task": self.cluster_cores_spin.getValue(),
+            "mem": self.cluster_memory_edit.getText(),
+            "time": self.cluster_timeout_edit.getText(),
             # "mail-type": "ALL",
             # "mail-user": f"{username}@biochem.mpg.de",
         }
