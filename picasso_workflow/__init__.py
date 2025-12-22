@@ -1,8 +1,12 @@
 from dotenv import load_dotenv
+
 # import logging
 from loguru import logger
 import os
 import sys
+import yaml
+from pathlib import Path
+import importlib.resources
 from logging import handlers
 from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
 from picasso_workflow import standard_singledataset_workflows
@@ -44,16 +48,37 @@ def config_logger():
     logger.add(
         logfile,
         format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {name} | {function} | {level} -> {message}",
-        rotation="1 MB", retention=5, enqueue=True, serialize=False)
+        rotation="1 MB",
+        retention=5,
+        enqueue=True,
+        serialize=False,
+    )
     logger.add(
         sys.stderr,
         format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {name} | {function} | {level} -> {message}",
-        level="ERROR")
+        level="ERROR",
+    )
 
+
+def load_config():
+    """Load the picasso-workflow configuration yaml file"""
+    # 1. User config path
+    user_config = Path.home() / ".config" / "picasso_workflow" / "config.yaml"
+    if user_config.exists():
+        with open(user_config, "r") as f:
+            return yaml.safe_load(f)
+    # 2. Fallback to package default
+    default_config = importlib.resources.files("picasso_workflow").joinpath(
+        "config.yaml"
+    )
+    with open(default_config, "r") as f:
+        return yaml.safe_load(f)
 
 
 config_logger()
 # logger = logging.getLogger(__name__)
+
+CONFIG = load_config()
 
 
 if __name__ == "__main__":

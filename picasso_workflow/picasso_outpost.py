@@ -4023,7 +4023,7 @@ def pick_similar_analysis(
                 x_range, y_range, K, L, block_starts, block_ends
             )
             if n_block_locs >= min_n_locs:
-                block_locs_xy = postprocess._get_block_locs_at(
+                block_locs_xy = postprocess.get_block_locs_at(
                     x_range,
                     y_range,
                     locs_xy,

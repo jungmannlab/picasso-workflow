@@ -6,7 +6,7 @@ Initial Date: August 4, 2024
 Description: GUI descriptor module for picasso-workflow
 """
 
-from picasso_workflow import util
+from picasso_workflow import util, CONFIG
 import logging
 import subprocess
 import os
@@ -4755,9 +4755,7 @@ class SlurmCommunicator:
 
             if result.returncode == 0:
                 # Make script executable
-                chmod_result = self.execute_ssh_command(
-                    f"chmod +x {folder}"
-                )
+                chmod_result = self.execute_ssh_command(f"chmod +x {folder}")
                 if chmod_result["success"]:
                     logger.info(
                         f"SLURM script written successfully to {folder}"
@@ -4811,6 +4809,7 @@ class SlurmCommunicator:
         # check script path. if it is local, convert to its location on
         # the remote host
         from picasso_workflow.metaworkflow import PathParser
+
         pp = PathParser()
         script_path = pp.convert_path(script_path, dest_machine)
 
@@ -5150,7 +5149,16 @@ class ToolTipDelegate(QtWidgets.QStyledItemDelegate):
 class ParameterWidgetInfo:
     """Container for parameter widget information."""
 
-    def __init__(self, widget, cmd_button, row_widget, metadata, original_type, sub_parameters=None, toggle_function=None):
+    def __init__(
+        self,
+        widget,
+        cmd_button,
+        row_widget,
+        metadata,
+        original_type,
+        sub_parameters=None,
+        toggle_function=None,
+    ):
         """Initialize parameter widget info.
 
         Args:
@@ -5167,8 +5175,12 @@ class ParameterWidgetInfo:
         self.row_widget = row_widget
         self.metadata = metadata
         self.original_type = original_type
-        self.sub_parameters = sub_parameters or {}  # For nested dict parameters
-        self.toggle_function = toggle_function  # For dict parameters with checkboxes
+        self.sub_parameters = (
+            sub_parameters or {}
+        )  # For nested dict parameters
+        self.toggle_function = (
+            toggle_function  # For dict parameters with checkboxes
+        )
 
 
 class ParameterCmdDialog(QtWidgets.QDialog):
@@ -5194,8 +5206,12 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         layout.addWidget(QtWidgets.QLabel("Collection timing:"))
         self.timing_group = QtWidgets.QButtonGroup(self)
 
-        self.timing_before_radio = QtWidgets.QRadioButton("Collect directly before module execution")
-        self.timing_start_radio = QtWidgets.QRadioButton("Collect at start of workflow stage")
+        self.timing_before_radio = QtWidgets.QRadioButton(
+            "Collect directly before module execution"
+        )
+        self.timing_start_radio = QtWidgets.QRadioButton(
+            "Collect at start of workflow stage"
+        )
         self.timing_before_radio.setChecked(True)  # Default
 
         self.timing_group.addButton(self.timing_before_radio, 0)
@@ -5305,7 +5321,9 @@ class Window(QtWidgets.QMainWindow):
         )  # Dict[param_name, (QLineEdit, param_metadata)]
 
         # Track currently editing workflow item for auto-save
-        self.editing_workflow_index = -1  # -1 means not editing an existing item
+        self.editing_workflow_index = (
+            -1
+        )  # -1 means not editing an existing item
         self.editing_workflow_tab = -1  # 0 = single, 1 = aggregation
 
         layout = QtWidgets.QGridLayout()
@@ -5330,11 +5348,17 @@ class Window(QtWidgets.QMainWindow):
         self.workflow_type.addItem("Investigation Workflow")
         # disable Investigation workflow, which is in Development
         index = self.workflow_type.model().index(2, 0)
-        self.workflow_type.model().setData(index, 0, Qt.UserRole - 1)  # 0 disables the item
+        self.workflow_type.model().setData(
+            index, 0, Qt.UserRole - 1
+        )  # 0 disables the item
         self.workflow_type.setItemDelegate(ToolTipDelegate(self.workflow_type))
-        self.workflow_type.model().setData(index, "Not Implemented yet", Qt.ToolTipRole)  # Tooltip
+        self.workflow_type.model().setData(
+            index, "Not Implemented yet", Qt.ToolTipRole
+        )  # Tooltip
 
-        self.workflow_type.currentIndexChanged.connect(self._on_workflow_type_changed)
+        self.workflow_type.currentIndexChanged.connect(
+            self._on_workflow_type_changed
+        )
         layout.addWidget(self.workflow_type, 0, 3)
 
         # Create tab widget
@@ -5381,8 +5405,10 @@ class Window(QtWidgets.QMainWindow):
         # Cluster Host dropdown
         cluster_config_layout.addWidget(QtWidgets.QLabel("Cluster Host:"))
         self.cluster_host_combo = QtWidgets.QComboBox()
+        for host in CONFIG["SlurmHosts"]:
+            self.cluster_host_combo.addItem(host)
         self.cluster_host_combo.setEditable(True)
-        self.cluster_host_combo.addItems(["localhost", "cluster.example.com"])
+        # self.cluster_host_combo.addItems(["localhost", "cluster.example.com"])
         cluster_config_layout.addWidget(self.cluster_host_combo)
 
         # Number of nodes
@@ -5390,7 +5416,9 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_nodes_spin = QtWidgets.QSpinBox()
         self.cluster_nodes_spin.setMinimum(1)
         self.cluster_nodes_spin.setMaximum(1000)
-        self.cluster_nodes_spin.setValue(1)
+        self.cluster_nodes_spin.setValue(
+            CONFIG["SlurmDefault"].get("nodes", 1)
+        )
         cluster_config_layout.addWidget(self.cluster_nodes_spin)
 
         # Number of cores per node
@@ -5398,13 +5426,18 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_cores_spin = QtWidgets.QSpinBox()
         self.cluster_cores_spin.setMinimum(1)
         self.cluster_cores_spin.setMaximum(256)
-        self.cluster_cores_spin.setValue(1)
+        self.cluster_cores_spin.setValue(
+            CONFIG["SlurmDefault"].get("cores", 1)
+        )
         cluster_config_layout.addWidget(self.cluster_cores_spin)
 
         # Memory
         cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"))
         self.cluster_memory_edit = QtWidgets.QLineEdit()
         self.cluster_memory_edit.setPlaceholderText("e.g., 4GB")
+        self.cluster_memory_edit.setText(
+            CONFIG["SlurmDefault"].get("memory", "4GB")
+        )
         self.cluster_memory_edit.setMaximumWidth(100)
         cluster_config_layout.addWidget(self.cluster_memory_edit)
 
@@ -5412,6 +5445,9 @@ class Window(QtWidgets.QMainWindow):
         cluster_config_layout.addWidget(QtWidgets.QLabel("Timeout:"))
         self.cluster_timeout_edit = QtWidgets.QLineEdit()
         self.cluster_timeout_edit.setPlaceholderText("e.g., 24:00:00")
+        self.cluster_memory_edit.setText(
+            CONFIG["SlurmDefault"].get("timeout", "24:00:00")
+        )
         self.cluster_timeout_edit.setMaximumWidth(100)
         cluster_config_layout.addWidget(self.cluster_timeout_edit)
 
@@ -5455,7 +5491,9 @@ class Window(QtWidgets.QMainWindow):
         job_id_layout.addWidget(job_id_label)
 
         self.job_id_input = QtWidgets.QLineEdit()
-        self.job_id_input.setPlaceholderText("Enter job ID or auto-filled from submission")
+        self.job_id_input.setPlaceholderText(
+            "Enter job ID or auto-filled from submission"
+        )
         job_id_layout.addWidget(self.job_id_input, stretch=1)
 
         # Display area for job information
@@ -5490,7 +5528,9 @@ class Window(QtWidgets.QMainWindow):
         # select files to process
         # Create button container for dynamic button layout
         self.file_buttons_widget = QtWidgets.QWidget()
-        self.file_buttons_layout = QtWidgets.QHBoxLayout(self.file_buttons_widget)
+        self.file_buttons_layout = QtWidgets.QHBoxLayout(
+            self.file_buttons_widget
+        )
         self.file_buttons_layout.setContentsMargins(0, 0, 0, 0)
         self.files_box.addWidget(self.file_buttons_widget, 0, 0, 1, 3)
 
@@ -5529,30 +5569,52 @@ class Window(QtWidgets.QMainWindow):
         # Create tree for Aggregation Workflow (index 1)
         self.files_tree_agg = QtWidgets.QTreeWidget()
         self.files_tree_agg.setColumnCount(3)
-        self.files_tree_agg.setHeaderLabels(["Dataset", "Channel", "File Path"])
+        self.files_tree_agg.setHeaderLabels(
+            ["Dataset", "Channel", "File Path"]
+        )
         header_agg = self.files_tree_agg.header()
-        header_agg.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        header_agg.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+        header_agg.setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeToContents
+        )
+        header_agg.setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeToContents
+        )
         header_agg.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
         self.file_path_delegate_tree_agg = FilePathDelegate(self)
-        self.files_tree_agg.setItemDelegateForColumn(2, self.file_path_delegate_tree_agg)
+        self.files_tree_agg.setItemDelegateForColumn(
+            2, self.file_path_delegate_tree_agg
+        )
         self.files_tree_agg.setAlternatingRowColors(True)
-        self.files_tree_agg.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.files_tree_agg.setSelectionMode(
+            QtWidgets.QAbstractItemView.ExtendedSelection
+        )
         self.files_stack.addWidget(self.files_tree_agg)
 
         # Create tree for Investigation Workflow (index 2)
         self.files_tree_inv = QtWidgets.QTreeWidget()
         self.files_tree_inv.setColumnCount(4)
-        self.files_tree_inv.setHeaderLabels(["Dataset", "Channel", "File Path", "Condition"])
+        self.files_tree_inv.setHeaderLabels(
+            ["Dataset", "Channel", "File Path", "Condition"]
+        )
         header_inv = self.files_tree_inv.header()
-        header_inv.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        header_inv.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+        header_inv.setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeToContents
+        )
+        header_inv.setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeToContents
+        )
         header_inv.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
-        header_inv.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
+        header_inv.setSectionResizeMode(
+            3, QtWidgets.QHeaderView.ResizeToContents
+        )
         self.file_path_delegate_tree_inv = FilePathDelegate(self)
-        self.files_tree_inv.setItemDelegateForColumn(2, self.file_path_delegate_tree_inv)
+        self.files_tree_inv.setItemDelegateForColumn(
+            2, self.file_path_delegate_tree_inv
+        )
         self.files_tree_inv.setAlternatingRowColors(True)
-        self.files_tree_inv.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.files_tree_inv.setSelectionMode(
+            QtWidgets.QAbstractItemView.ExtendedSelection
+        )
         self.files_stack.addWidget(self.files_tree_inv)
 
         # Initialize tree data structure
@@ -5560,7 +5622,7 @@ class Window(QtWidgets.QMainWindow):
             "datasets": [],
             "channels": [],
             "file_paths": {},
-            "conditions": {}
+            "conditions": {},
         }
 
         # Connect item changed signal for real-time updates
@@ -5641,9 +5703,7 @@ class Window(QtWidgets.QMainWindow):
         investigation_workflow_layout = QtWidgets.QVBoxLayout(
             investigation_workflow_tab
         )
-        self.workflow_tabs.addTab(
-            investigation_workflow_tab, "Investigation"
-        )
+        self.workflow_tabs.addTab(investigation_workflow_tab, "Investigation")
 
         # Set initial tab states based on default workflow type
         self._on_workflow_type_changed(self.workflow_type.currentIndex())
@@ -5662,7 +5722,6 @@ class Window(QtWidgets.QMainWindow):
         move_down_button = QtWidgets.QPushButton("Move down")
         workflow_buttons.addWidget(move_down_button)
         move_down_button.clicked.connect(self.move_down)
-
 
         # resize the widgets
         # Set fixed size for the group box
@@ -5685,15 +5744,18 @@ class Window(QtWidgets.QMainWindow):
         # Validate no underscores
         if "_" in dataset_name:
             QtWidgets.QMessageBox.warning(
-                self, "Invalid Name",
+                self,
+                "Invalid Name",
                 "Dataset names cannot contain underscores.\n\n"
                 "Underscores are used to separate dataset and channel names "
-                "in the {dataset}_{channel} format."
+                "in the {dataset}_{channel} format.",
             )
             return
 
         if dataset_name in self.tree_data["datasets"]:
-            QtWidgets.QMessageBox.warning(self, "Duplicate", f"Dataset '{dataset_name}' exists.")
+            QtWidgets.QMessageBox.warning(
+                self, "Duplicate", f"Dataset '{dataset_name}' exists."
+            )
             return
 
         # Add to data structure
@@ -5721,15 +5783,18 @@ class Window(QtWidgets.QMainWindow):
         # Validate no underscores
         if "_" in channel_name:
             QtWidgets.QMessageBox.warning(
-                self, "Invalid Name",
+                self,
+                "Invalid Name",
                 "Channel names cannot contain underscores.\n\n"
                 "Underscores are used to separate dataset and channel names "
-                "in the {dataset}_{channel} format."
+                "in the {dataset}_{channel} format.",
             )
             return
 
         if channel_name in self.tree_data["channels"]:
-            QtWidgets.QMessageBox.warning(self, "Duplicate", f"Channel '{channel_name}' exists.")
+            QtWidgets.QMessageBox.warning(
+                self, "Duplicate", f"Channel '{channel_name}' exists."
+            )
             return
 
         # Add to channels list
@@ -5761,8 +5826,9 @@ class Window(QtWidgets.QMainWindow):
         item = selected[0]
         if item.parent() is None:
             QtWidgets.QMessageBox.information(
-                self, "Invalid Selection",
-                "Please select a channel (not a dataset) to remove."
+                self,
+                "Invalid Selection",
+                "Please select a channel (not a dataset) to remove.",
             )
             return
 
@@ -5773,9 +5839,10 @@ class Window(QtWidgets.QMainWindow):
 
         # Confirm removal
         msg = f"Remove channel '{channel_name}' from all datasets?"
-        if QtWidgets.QMessageBox.question(
-            self, "Confirm", msg
-        ) != QtWidgets.QMessageBox.Yes:
+        if (
+            QtWidgets.QMessageBox.question(self, "Confirm", msg)
+            != QtWidgets.QMessageBox.Yes
+        ):
             return
 
         # Remove from channels list
@@ -5808,8 +5875,9 @@ class Window(QtWidgets.QMainWindow):
         item = selected[0]
         if item.parent() is not None:
             QtWidgets.QMessageBox.information(
-                self, "Invalid Selection",
-                "Please select a dataset (not a channel) to rename."
+                self,
+                "Invalid Selection",
+                "Please select a dataset (not a channel) to rename.",
             )
             return
 
@@ -5817,8 +5885,10 @@ class Window(QtWidgets.QMainWindow):
 
         # Prompt for new name
         new_name, ok = QtWidgets.QInputDialog.getText(
-            self, "Rename Dataset", f"Enter new name for '{old_name}':",
-            text=old_name
+            self,
+            "Rename Dataset",
+            f"Enter new name for '{old_name}':",
+            text=old_name,
         )
 
         if not ok or not new_name.strip():
@@ -5829,10 +5899,11 @@ class Window(QtWidgets.QMainWindow):
         # Validate no underscores
         if "_" in new_name:
             QtWidgets.QMessageBox.warning(
-                self, "Invalid Name",
+                self,
+                "Invalid Name",
                 "Dataset names cannot contain underscores.\n\n"
                 "Underscores are used to separate dataset and channel names "
-                "in the {dataset}_{channel} format."
+                "in the {dataset}_{channel} format.",
             )
             return
 
@@ -5848,11 +5919,15 @@ class Window(QtWidgets.QMainWindow):
         self.tree_data["datasets"][idx] = new_name
 
         # Update file_paths (rename key)
-        self.tree_data["file_paths"][new_name] = self.tree_data["file_paths"].pop(old_name)
+        self.tree_data["file_paths"][new_name] = self.tree_data[
+            "file_paths"
+        ].pop(old_name)
 
         # Update conditions if exists (Investigation workflow)
         if old_name in self.tree_data["conditions"]:
-            self.tree_data["conditions"][new_name] = self.tree_data["conditions"].pop(old_name)
+            self.tree_data["conditions"][new_name] = self.tree_data[
+                "conditions"
+            ].pop(old_name)
 
         # Refresh tree
         self._populate_tree_from_data()
@@ -5875,8 +5950,9 @@ class Window(QtWidgets.QMainWindow):
         item = selected[0]
         if item.parent() is None:
             QtWidgets.QMessageBox.information(
-                self, "Invalid Selection",
-                "Please select a channel (not a dataset) to rename."
+                self,
+                "Invalid Selection",
+                "Please select a channel (not a dataset) to rename.",
             )
             return
 
@@ -5884,8 +5960,10 @@ class Window(QtWidgets.QMainWindow):
 
         # Prompt for new name
         new_name, ok = QtWidgets.QInputDialog.getText(
-            self, "Rename Channel", f"Enter new name for channel '{old_name}':",
-            text=old_name
+            self,
+            "Rename Channel",
+            f"Enter new name for channel '{old_name}':",
+            text=old_name,
         )
 
         if not ok or not new_name.strip():
@@ -5896,10 +5974,11 @@ class Window(QtWidgets.QMainWindow):
         # Validate no underscores
         if "_" in new_name:
             QtWidgets.QMessageBox.warning(
-                self, "Invalid Name",
+                self,
+                "Invalid Name",
                 "Channel names cannot contain underscores.\n\n"
                 "Underscores are used to separate dataset and channel names "
-                "in the {dataset}_{channel} format."
+                "in the {dataset}_{channel} format.",
             )
             return
 
@@ -5917,8 +5996,9 @@ class Window(QtWidgets.QMainWindow):
         # Update file_paths for all datasets (rename inner key)
         for dataset in self.tree_data["datasets"]:
             if old_name in self.tree_data["file_paths"][dataset]:
-                self.tree_data["file_paths"][dataset][new_name] = \
+                self.tree_data["file_paths"][dataset][new_name] = (
                     self.tree_data["file_paths"][dataset].pop(old_name)
+                )
 
         # Refresh tree
         self._populate_tree_from_data()
@@ -5945,7 +6025,10 @@ class Window(QtWidgets.QMainWindow):
             return
 
         msg = f"Remove {len(datasets_to_remove)} dataset(s)?"
-        if QtWidgets.QMessageBox.question(self, "Confirm", msg) != QtWidgets.QMessageBox.Yes:
+        if (
+            QtWidgets.QMessageBox.question(self, "Confirm", msg)
+            != QtWidgets.QMessageBox.Yes
+        ):
             return
 
         for dataset_name in datasets_to_remove:
@@ -5969,7 +6052,7 @@ class Window(QtWidgets.QMainWindow):
             self,
             "Clear Tree",
             "Clear all datasets and channels?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
         )
 
         if reply != QtWidgets.QMessageBox.Yes:
@@ -5980,7 +6063,7 @@ class Window(QtWidgets.QMainWindow):
             "datasets": [],
             "channels": [],
             "file_paths": {},
-            "conditions": {}
+            "conditions": {},
         }
 
     def _get_current_tree_widget(self):
@@ -6006,16 +6089,23 @@ class Window(QtWidgets.QMainWindow):
             for dataset in self.tree_data["datasets"]:
                 dataset_item = QtWidgets.QTreeWidgetItem(current_tree)
                 dataset_item.setText(0, dataset)
-                dataset_item.setFlags(dataset_item.flags() & ~Qt.ItemIsEditable)
+                dataset_item.setFlags(
+                    dataset_item.flags() & ~Qt.ItemIsEditable
+                )
 
                 for channel in self.tree_data["channels"]:
                     channel_item = QtWidgets.QTreeWidgetItem(dataset_item)
                     channel_item.setText(1, channel)
-                    channel_item.setText(2, self.tree_data["file_paths"][dataset].get(channel, ""))
+                    channel_item.setText(
+                        2,
+                        self.tree_data["file_paths"][dataset].get(channel, ""),
+                    )
 
                     # Investigation workflow: add condition
                     if self.workflow_type.currentIndex() == 2:
-                        channel_item.setText(3, self.tree_data["conditions"].get(dataset, ""))
+                        channel_item.setText(
+                            3, self.tree_data["conditions"].get(dataset, "")
+                        )
 
                     # Make only File Path (and Condition) editable
                     flags = channel_item.flags() | Qt.ItemIsEditable
@@ -6040,7 +6130,9 @@ class Window(QtWidgets.QMainWindow):
         # Update data structure
         if column == 2:  # File Path
             file_path = item.text(2)
-            self.tree_data["file_paths"][dataset_name][channel_name] = file_path
+            self.tree_data["file_paths"][dataset_name][
+                channel_name
+            ] = file_path
         elif column == 3:  # Condition (Investigation only)
             condition = item.text(3)
             self.tree_data["conditions"][dataset_name] = condition
@@ -6063,7 +6155,11 @@ class Window(QtWidgets.QMainWindow):
                 file_path = channel_item.text(2)
 
                 # Red text if empty, black otherwise
-                color = QtGui.QColor("red") if not file_path.strip() else QtGui.QColor("black")
+                color = (
+                    QtGui.QColor("red")
+                    if not file_path.strip()
+                    else QtGui.QColor("black")
+                )
 
                 for col in range(channel_item.columnCount()):
                     channel_item.setForeground(col, color)
@@ -6094,9 +6190,9 @@ class Window(QtWidgets.QMainWindow):
 
         # Build tree data
         self.tree_data["datasets"] = list(table_data.keys())
-        self.tree_data["channels"] = sorted(set(
-            ch for ds in table_data.values() for ch in ds.keys()
-        ))
+        self.tree_data["channels"] = sorted(
+            set(ch for ds in table_data.values() for ch in ds.keys())
+        )
         self.tree_data["file_paths"] = table_data
 
         # Ensure all datasets have all channels
@@ -6114,12 +6210,18 @@ class Window(QtWidgets.QMainWindow):
         row = 0
         for dataset in self.tree_data["datasets"]:
             for channel in self.tree_data["channels"]:
-                file_path = self.tree_data["file_paths"][dataset].get(channel, "")
+                file_path = self.tree_data["file_paths"][dataset].get(
+                    channel, ""
+                )
                 name = f"{dataset}_{channel}"
 
                 self.files_table.insertRow(row)
-                self.files_table.setItem(row, 0, QtWidgets.QTableWidgetItem(name))
-                self.files_table.setItem(row, 1, QtWidgets.QTableWidgetItem(file_path))
+                self.files_table.setItem(
+                    row, 0, QtWidgets.QTableWidgetItem(name)
+                )
+                self.files_table.setItem(
+                    row, 1, QtWidgets.QTableWidgetItem(file_path)
+                )
                 row += 1
 
     def _validate_tree_data(self):
@@ -6149,7 +6251,9 @@ class Window(QtWidgets.QMainWindow):
             self.add_files_button = QtWidgets.QPushButton("Add files")
             self.add_files_button.clicked.connect(self.add_files)
             self.remove_files_button = QtWidgets.QPushButton("Remove selected")
-            self.remove_files_button.clicked.connect(self.remove_selected_files)
+            self.remove_files_button.clicked.connect(
+                self.remove_selected_files
+            )
             self.clear_files_button = QtWidgets.QPushButton("Clear list")
             self.clear_files_button.clicked.connect(self.clear_file_list)
 
@@ -6162,13 +6266,21 @@ class Window(QtWidgets.QMainWindow):
             self.add_dataset_button.clicked.connect(self.add_dataset)
             self.add_channel_button = QtWidgets.QPushButton("Add Channel")
             self.add_channel_button.clicked.connect(self.add_channel)
-            self.rename_dataset_button = QtWidgets.QPushButton("Rename Dataset")
+            self.rename_dataset_button = QtWidgets.QPushButton(
+                "Rename Dataset"
+            )
             self.rename_dataset_button.clicked.connect(self.rename_dataset)
-            self.rename_channel_button = QtWidgets.QPushButton("Rename Channel")
+            self.rename_channel_button = QtWidgets.QPushButton(
+                "Rename Channel"
+            )
             self.rename_channel_button.clicked.connect(self.rename_channel)
-            self.remove_channel_button = QtWidgets.QPushButton("Remove Channel")
+            self.remove_channel_button = QtWidgets.QPushButton(
+                "Remove Channel"
+            )
             self.remove_channel_button.clicked.connect(self.remove_channel)
-            self.remove_dataset_button = QtWidgets.QPushButton("Remove Dataset")
+            self.remove_dataset_button = QtWidgets.QPushButton(
+                "Remove Dataset"
+            )
             self.remove_dataset_button.clicked.connect(self.remove_tree_items)
             self.clear_tree_button = QtWidgets.QPushButton("Clear")
             self.clear_tree_button.clicked.connect(self.clear_tree)
@@ -6281,7 +6393,7 @@ class Window(QtWidgets.QMainWindow):
             if os.path.exists(yaml_path):
                 try:
                     # Load YAML file
-                    with open(yaml_path, 'r') as f:
+                    with open(yaml_path, "r") as f:
                         file_dict = yaml.safe_load(f)
 
                     # Validate that it's a dictionary
@@ -6296,14 +6408,16 @@ class Window(QtWidgets.QMainWindow):
                         logger.info(f"Loaded file list from {yaml_file}")
                         return  # Stop after loading first matching file
                     else:
-                        logger.warning(f"{yaml_file} does not contain a dictionary")
+                        logger.warning(
+                            f"{yaml_file} does not contain a dictionary"
+                        )
 
                 except Exception as e:
                     logger.error(f"Error loading {yaml_file}: {e}")
                     QtWidgets.QMessageBox.warning(
                         self,
                         "YAML Load Error",
-                        f"Failed to load {yaml_file}:\n{str(e)}"
+                        f"Failed to load {yaml_file}:\n{str(e)}",
                     )
 
         # No YAML files found - this is normal, no action needed
@@ -6323,7 +6437,9 @@ class Window(QtWidgets.QMainWindow):
 
         try:
             # Dynamically load the Python file
-            spec = importlib.util.spec_from_file_location("start_workflow", workflow_file)
+            spec = importlib.util.spec_from_file_location(
+                "start_workflow", workflow_file
+            )
             if spec is None or spec.loader is None:
                 logger.warning("Could not load start_workflow.py")
                 return
@@ -6332,38 +6448,52 @@ class Window(QtWidgets.QMainWindow):
             spec.loader.exec_module(module)
 
             # Extract workflow definitions
-            workflow_modules_sgl = getattr(module, 'workflow_modules_sgl', None)
-            workflow_modules_agg = getattr(module, 'workflow_modules_agg', None)
+            workflow_modules_sgl = getattr(
+                module, "workflow_modules_sgl", None
+            )
+            workflow_modules_agg = getattr(
+                module, "workflow_modules_agg", None
+            )
 
             # Load single dataset workflow if present
-            if workflow_modules_sgl is not None and isinstance(workflow_modules_sgl, list):
+            if workflow_modules_sgl is not None and isinstance(
+                workflow_modules_sgl, list
+            ):
                 self._populate_workflow_from_definition(
                     workflow_modules_sgl,
                     self.single_workflow_modules,
                     self.single_workflow_list,
-                    "Single Dataset"
+                    "Single Dataset",
                 )
-                logger.info(f"Loaded {len(workflow_modules_sgl)} modules to Single Dataset workflow")
+                logger.info(
+                    f"Loaded {len(workflow_modules_sgl)} modules to Single Dataset workflow"
+                )
 
             # Load aggregation workflow if present
-            if workflow_modules_agg is not None and isinstance(workflow_modules_agg, list):
+            if workflow_modules_agg is not None and isinstance(
+                workflow_modules_agg, list
+            ):
                 self._populate_workflow_from_definition(
                     workflow_modules_agg,
                     self.aggregation_workflow_modules,
                     self.aggregation_workflow_list,
-                    "Aggregation"
+                    "Aggregation",
                 )
-                logger.info(f"Loaded {len(workflow_modules_agg)} modules to Aggregation workflow")
+                logger.info(
+                    f"Loaded {len(workflow_modules_agg)} modules to Aggregation workflow"
+                )
 
         except Exception as e:
             logger.error(f"Error loading start_workflow.py: {e}")
             QtWidgets.QMessageBox.warning(
                 self,
                 "Workflow Load Error",
-                f"Failed to load workflow from start_workflow.py:\n{str(e)}"
+                f"Failed to load workflow from start_workflow.py:\n{str(e)}",
             )
 
-    def _populate_workflow_from_definition(self, workflow_def, workflow_list, list_widget, workflow_name):
+    def _populate_workflow_from_definition(
+        self, workflow_def, workflow_list, list_widget, workflow_name
+    ):
         """Populate workflow from loaded definition.
 
         Args:
@@ -6427,8 +6557,12 @@ class Window(QtWidgets.QMainWindow):
             # Recursively convert nested parameters
             nested_converted = {}
             for nested_param_name, nested_param_value in param_value.items():
-                nested_value, nested_command = self._convert_param_to_gui_format(nested_param_value)
-                nested_converted[nested_param_name] = nested_value  # (nested_value, nested_command)
+                nested_value, nested_command = (
+                    self._convert_param_to_gui_format(nested_param_value)
+                )
+                nested_converted[nested_param_name] = (
+                    nested_value  # (nested_value, nested_command)
+                )
             # Return dict as value (not as string)
             return nested_converted, ""
 
@@ -6446,7 +6580,9 @@ class Window(QtWidgets.QMainWindow):
         # Capture current parameter values
         param_values = {}
         for param_name, widget_info in self.parameter_widgets.items():
-            value = self._get_widget_value(widget_info.widget, widget_info.original_type, widget_info)
+            value = self._get_widget_value(
+                widget_info.widget, widget_info.original_type, widget_info
+            )
             # Skip None values (from unchecked optional dicts)
             if value is not None:
                 param_values[param_name] = value
@@ -6544,7 +6680,7 @@ class Window(QtWidgets.QMainWindow):
                     widget_info.widget,
                     value_data,
                     widget_info.original_type,
-                    widget_info
+                    widget_info,
                 )
 
     def _on_workflow_tab_changed(self, tab_index):
@@ -6624,27 +6760,37 @@ class Window(QtWidgets.QMainWindow):
 
         if type_index == 0:  # Single Workflow
             # Enable only Single Dataset Workflow tab
-            self.workflow_tabs.setTabEnabled(0, True)   # Single Dataset: enabled
+            self.workflow_tabs.setTabEnabled(
+                0, True
+            )  # Single Dataset: enabled
             self.workflow_tabs.setTabEnabled(1, False)  # Aggregation: disabled
-            self.workflow_tabs.setTabEnabled(2, False)  # Investigation: disabled
+            self.workflow_tabs.setTabEnabled(
+                2, False
+            )  # Investigation: disabled
             # Switch to Single Dataset tab if currently on a disabled tab
             if self.workflow_tabs.currentIndex() != 0:
                 self.workflow_tabs.setCurrentIndex(0)
 
         elif type_index == 1:  # Aggregation Workflow
             # Enable Single Dataset and Aggregation, disable Investigation
-            self.workflow_tabs.setTabEnabled(0, True)   # Single Dataset: enabled
-            self.workflow_tabs.setTabEnabled(1, True)   # Aggregation: enabled
-            self.workflow_tabs.setTabEnabled(2, False)  # Investigation: disabled
+            self.workflow_tabs.setTabEnabled(
+                0, True
+            )  # Single Dataset: enabled
+            self.workflow_tabs.setTabEnabled(1, True)  # Aggregation: enabled
+            self.workflow_tabs.setTabEnabled(
+                2, False
+            )  # Investigation: disabled
             # Switch to Aggregation tab if currently on Investigation
             if self.workflow_tabs.currentIndex() == 2:
                 self.workflow_tabs.setCurrentIndex(1)
 
         elif type_index == 2:  # Investigation Workflow
             # Enable all tabs
-            self.workflow_tabs.setTabEnabled(0, True)   # Single Dataset: enabled
-            self.workflow_tabs.setTabEnabled(1, True)   # Aggregation: enabled
-            self.workflow_tabs.setTabEnabled(2, True)   # Investigation: enabled
+            self.workflow_tabs.setTabEnabled(
+                0, True
+            )  # Single Dataset: enabled
+            self.workflow_tabs.setTabEnabled(1, True)  # Aggregation: enabled
+            self.workflow_tabs.setTabEnabled(2, True)  # Investigation: enabled
 
     def remove_selected(self):
         """Remove the selected module from the workflow."""
@@ -6760,16 +6906,22 @@ class Window(QtWidgets.QMainWindow):
         workflow_type_names = [
             "Single Workflow",
             "Aggregation Workflow",
-            "Investigation Workflow"]
-        workflow_type_name = workflow_type_names[workflow_type_index] if workflow_type_index < len(workflow_type_names) else "Unknown"
+            "Investigation Workflow",
+        ]
+        workflow_type_name = (
+            workflow_type_names[workflow_type_index]
+            if workflow_type_index < len(workflow_type_names)
+            else "Unknown"
+        )
 
         # Validate tree data for Aggregation/Investigation workflows
         if workflow_type_index > 0:  # Tree-based workflows
             errors = self._validate_tree_data()
             if errors:
                 QtWidgets.QMessageBox.warning(
-                    self, "Validation Errors",
-                    "Cannot generate script:\n\n" + "\n".join(errors[:10])
+                    self,
+                    "Validation Errors",
+                    "Cannot generate script:\n\n" + "\n".join(errors[:10]),
                 )
                 return None
 
@@ -6791,7 +6943,7 @@ class Window(QtWidgets.QMainWindow):
                         datasets[name] = []
                     datasets[name].append(path)
 
-        elif workflow_type_index ==1:  # Aggregation Workflow
+        elif workflow_type_index == 1:  # Aggregation Workflow
             # Build datasets from tree structure
             tags = []
             filepaths = []
@@ -6804,7 +6956,9 @@ class Window(QtWidgets.QMainWindow):
 
                     # Get file path
                     file_path = self.tree_data["file_paths"][dataset][channel]
-                    file_path = self.pathparser.convert_path(file_path, host_cluster)
+                    file_path = self.pathparser.convert_path(
+                        file_path, host_cluster
+                    )
                     filepaths.append(file_path)
         else:  # Investigation Workflow
             # Build datasets from tree structure
@@ -6819,14 +6973,15 @@ class Window(QtWidgets.QMainWindow):
                         tags.append(tag)
 
                         # Get file path
-                        file_path = self.tree_data["file_paths"][condition][dataset][channel]
-                        file_path = self.pathparser.convert_path(file_path, host_cluster)
+                        file_path = self.tree_data["file_paths"][condition][
+                            dataset
+                        ][channel]
+                        file_path = self.pathparser.convert_path(
+                            file_path, host_cluster
+                        )
                         filepaths.append(file_path)
 
-            datasets = {
-                "#tags": tags,
-                "filepath": filepaths
-            }
+            datasets = {"#tags": tags, "filepath": filepaths}
 
         # Helper function to format parameter values
         def format_value(value):
@@ -6846,7 +7001,13 @@ class Window(QtWidgets.QMainWindow):
                 #         return f'("$get_previous_module_result", "{value}")'
 
                 # Check if it looks like a path
-                if "/" in value or "\\" in value or value.endswith(('.yaml', '.hdf5', '.h5', '.tif', '.png', '.jpg')):
+                if (
+                    "/" in value
+                    or "\\" in value
+                    or value.endswith(
+                        (".yaml", ".hdf5", ".h5", ".tif", ".png", ".jpg")
+                    )
+                ):
                     # Use os.path.join for path-like strings
                     parts = value.replace("\\", "/").split("/")
                     if len(parts) > 1:
@@ -6857,7 +7018,9 @@ class Window(QtWidgets.QMainWindow):
                 return repr(value)
             elif isinstance(value, dict):
                 # Format nested dicts recursively
-                items = [f"{repr(k)}: {format_value(v)}" for k, v in value.items()]
+                items = [
+                    f"{repr(k)}: {format_value(v)}" for k, v in value.items()
+                ]
                 return "{" + ", ".join(items) + "}"
             elif isinstance(value, (list, tuple)):
                 items = [format_value(v) for v in value]
@@ -6885,7 +7048,9 @@ class Window(QtWidgets.QMainWindow):
 
                 for param_name, param_value in params.items():
                     formatted_value = format_value(param_value)
-                    lines.append(f'            "{param_name}": {formatted_value},')
+                    lines.append(
+                        f'            "{param_name}": {formatted_value},'
+                    )
 
                 lines.append("        },")
                 lines.append("    ),")
@@ -6907,25 +7072,33 @@ class Window(QtWidgets.QMainWindow):
 
         # Add appropriate import based on workflow type
         if workflow_type_index == 0:  # Single Workflow
-            script_lines.append("from picasso_workflow.metaworkflow import SingleWorkflowCoordinator")
+            script_lines.append(
+                "from picasso_workflow.metaworkflow import SingleWorkflowCoordinator"
+            )
         elif workflow_type_index == 1:  # Aggregation Workflow
-            script_lines.append("from picasso_workflow.metaworkflow import AggregationWorkflowCoordinator")
+            script_lines.append(
+                "from picasso_workflow.metaworkflow import AggregationWorkflowCoordinator"
+            )
         elif workflow_type_index == 2:  # Investigation Workflow
-            script_lines.append("from picasso_workflow.metaworkflow import InvestigationWorkflowCoordinator")
+            script_lines.append(
+                "from picasso_workflow.metaworkflow import InvestigationWorkflowCoordinator"
+            )
 
-        script_lines.extend([
-            "",
-            "",
-            "# Confluence configuration (set via environment variables)",
-            "confluence_url = os.getenv('CONFLUENCE_URL')",
-            "confluence_token = os.getenv('CONFLUENCE_BEARER')",
-            "confluence_space = os.getenv('CONFLUENCE_SPACE')",
-            "base_page = os.getenv('CONFLUENCE_BASE_PAGE')",
-            "",
-            "",
-            "# Dataset configuration",
-            "datasets = {",
-        ])
+        script_lines.extend(
+            [
+                "",
+                "",
+                "# Confluence configuration (set via environment variables)",
+                "confluence_url = os.getenv('CONFLUENCE_URL')",
+                "confluence_token = os.getenv('CONFLUENCE_BEARER')",
+                "confluence_space = os.getenv('CONFLUENCE_SPACE')",
+                "base_page = os.getenv('CONFLUENCE_BASE_PAGE')",
+                "",
+                "",
+                "# Dataset configuration",
+                "datasets = {",
+            ]
+        )
 
         # Add datasets
         for key, values in datasets.items():
@@ -6937,34 +7110,46 @@ class Window(QtWidgets.QMainWindow):
             # script_lines.append("    ],")
         script_lines.append("}")
 
-        script_lines.extend([
-            "",
-            "",
-            "# Single dataset workflow modules",
-        ])
-        script_lines.append("workflow_modules_sgl = " + format_modules(self.single_workflow_modules))
+        script_lines.extend(
+            [
+                "",
+                "",
+                "# Single dataset workflow modules",
+            ]
+        )
+        script_lines.append(
+            "workflow_modules_sgl = "
+            + format_modules(self.single_workflow_modules)
+        )
 
-        script_lines.extend([
-            "",
-            "",
-            "# Aggregation workflow modules",
-        ])
-        script_lines.append("workflow_modules_agg = " + format_modules(self.aggregation_workflow_modules))
+        script_lines.extend(
+            [
+                "",
+                "",
+                "# Aggregation workflow modules",
+            ]
+        )
+        script_lines.append(
+            "workflow_modules_agg = "
+            + format_modules(self.aggregation_workflow_modules)
+        )
 
-        script_lines.extend([
-            "",
-            "",
-            'if __name__ == "__main__":',
-            "    # Get working directory",
-            "    working_folder = os.path.dirname(os.path.abspath(__file__))",
-            "    src_loc_file = os.path.join(working_folder, 'src_loc.yaml')",
-            "    io.save_info(src_loc_file, [datasets])",
-            "",
-            "    print('datasets', datasets)",
-            "    print('src_loc', src_loc_file)",
-            "    analysis_name = os.path.split(working_folder)[-1]",
-            "",
-        ])
+        script_lines.extend(
+            [
+                "",
+                "",
+                'if __name__ == "__main__":',
+                "    # Get working directory",
+                "    working_folder = os.path.dirname(os.path.abspath(__file__))",
+                "    src_loc_file = os.path.join(working_folder, 'src_loc.yaml')",
+                "    io.save_info(src_loc_file, [datasets])",
+                "",
+                "    print('datasets', datasets)",
+                "    print('src_loc', src_loc_file)",
+                "    analysis_name = os.path.split(working_folder)[-1]",
+                "",
+            ]
+        )
 
         # Add coordinator creation based on workflow type
         if workflow_type_index == 0:  # Single Workflow
@@ -6982,44 +7167,50 @@ class Window(QtWidgets.QMainWindow):
             #     "    # Run workflow",
             #     "    runner.run_workflow(workflow_modules_sgl)",
             # ])
-            script_lines.extend([
-                "    # Create single workflow coordinator",
-                "    coordinator = SingleWorkflowCoordinator(",
-                "        src_loc_file, analysis_name, working_folder,",
-                "        confluence_url, confluence_space, confluence_token,",
-                "        base_page,",
-                "        always_save=True",
-                "    )",
-                "",
-                "    # Run workflow",
-                "    coordinator.run_analysis(workflow_modules_sgl)",
-            ])
+            script_lines.extend(
+                [
+                    "    # Create single workflow coordinator",
+                    "    coordinator = SingleWorkflowCoordinator(",
+                    "        src_loc_file, analysis_name, working_folder,",
+                    "        confluence_url, confluence_space, confluence_token,",
+                    "        base_page,",
+                    "        always_save=True",
+                    "    )",
+                    "",
+                    "    # Run workflow",
+                    "    coordinator.run_analysis(workflow_modules_sgl)",
+                ]
+            )
         elif workflow_type_index == 1:  # Aggregation Workflow
-            script_lines.extend([
-                "    # Create aggregation workflow coordinator",
-                "    coordinator = AggregationWorkflowCoordinator(",
-                "        src_loc_file, analysis_name, working_folder,",
-                "        confluence_url, confluence_space, confluence_token,",
-                "        base_page,",
-                "        always_save=False",
-                "    )",
-                "",
-                "    # Run analysis",
-                "    coordinator.run_analysis(workflow_modules_sgl, workflow_modules_agg)",
-            ])
+            script_lines.extend(
+                [
+                    "    # Create aggregation workflow coordinator",
+                    "    coordinator = AggregationWorkflowCoordinator(",
+                    "        src_loc_file, analysis_name, working_folder,",
+                    "        confluence_url, confluence_space, confluence_token,",
+                    "        base_page,",
+                    "        always_save=False",
+                    "    )",
+                    "",
+                    "    # Run analysis",
+                    "    coordinator.run_analysis(workflow_modules_sgl, workflow_modules_agg)",
+                ]
+            )
         elif workflow_type_index == 2:  # Investigation Workflow
-            script_lines.extend([
-                "    # Create investigation workflow coordinator",
-                "    coordinator = InvestigationWorkflowCoordinator(",
-                "        src_loc_file, analysis_name, working_folder,",
-                "        confluence_url, confluence_space, confluence_token,",
-                "        base_page,",
-                "        always_save=False",
-                "    )",
-                "",
-                "    # Run investigation",
-                "    coordinator.run_investigation(workflow_modules_sgl, workflow_modules_agg)",
-            ])
+            script_lines.extend(
+                [
+                    "    # Create investigation workflow coordinator",
+                    "    coordinator = InvestigationWorkflowCoordinator(",
+                    "        src_loc_file, analysis_name, working_folder,",
+                    "        confluence_url, confluence_space, confluence_token,",
+                    "        base_page,",
+                    "        always_save=False",
+                    "    )",
+                    "",
+                    "    # Run investigation",
+                    "    coordinator.run_investigation(workflow_modules_sgl, workflow_modules_agg)",
+                ]
+            )
 
         script_lines.append("")  # Final newline
 
@@ -7038,9 +7229,13 @@ class Window(QtWidgets.QMainWindow):
 
         # Make script executable on Unix systems
         import stat
+
         try:
             st = os.stat(output_path)
-            os.chmod(output_path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+            os.chmod(
+                output_path,
+                st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH,
+            )
         except:
             pass  # Windows doesn't support chmod
 
@@ -7054,9 +7249,10 @@ class Window(QtWidgets.QMainWindow):
         hostname = "hpcl8001"
         host_cluster = "hpcl8"
         username = getpass.getuser()
-        ssh_key_path = '~/.ssh/id_rsa'
+        ssh_key_path = "~/.ssh/id_rsa"
         self.slurm_communicator = SlurmCommunicator(
-            hostname, username, port=22, ssh_key_path=ssh_key_path)
+            hostname, username, port=22, ssh_key_path=ssh_key_path
+        )
 
         assert self.slurm_communicator.test_connection()
 
@@ -7075,28 +7271,41 @@ class Window(QtWidgets.QMainWindow):
         }
 
         results_folder_local = self.results_folder_display.text()
-        results_folder_host = self.pathparser.convert_path(results_folder_local, host_cluster)
+        results_folder_host = self.pathparser.convert_path(
+            results_folder_local, host_cluster
+        )
 
         commands = self.slurm_communicator.assemble_slurm_commands(
             # scriptname=scriptname, use_pw_module=True)
-            scriptname=scriptname, use_pw_module=False)
+            scriptname=scriptname,
+            use_pw_module=False,
+        )
         script_content = self.slurm_communicator.create_slurm_script(
-            job_name, commands, slurm_options=slurm_options,
+            job_name,
+            commands,
+            slurm_options=slurm_options,
             output_file=f"{results_folder_host}/logs/%A.log",
             error_file=f"{results_folder_host}/logs/%A_err.log",
-            working_directory=results_folder_host)
+            working_directory=results_folder_host,
+        )
         script_path = self.slurm_communicator.write_slurm_script(
-            script_content, results_folder_local)
+            script_content, results_folder_local
+        )
         result = self.slurm_communicator.submit_job(
-            script_path, host_cluster, additional_options=None)
+            script_path, host_cluster, additional_options=None
+        )
 
         # Store and display job ID
         if result["success"] and result["job_id"]:
             self.job_id_input.setText(str(result["job_id"]))
-            self.job_info_display.append(f"Job submitted successfully!\nJob ID: {result['job_id']}")
+            self.job_info_display.append(
+                f"Job submitted successfully!\nJob ID: {result['job_id']}"
+            )
             # print(f"Starting SLURM on Cluster - Job ID: {result['job_id']}")
         else:
-            self.job_info_display.append(f"Job submission failed!\n{result['stderr']}")
+            self.job_info_display.append(
+                f"Job submission failed!\n{result['stderr']}"
+            )
             print("Failed to start SLURM on Cluster")
 
     def start_locally(self):
@@ -7106,13 +7315,20 @@ class Window(QtWidgets.QMainWindow):
 
     def on_cancel_job(self):
         """Cancel the current SLURM job."""
-        if not hasattr(self, 'slurm_communicator') or self.slurm_communicator is None:
-            self.job_info_display.append("Error: Not connected to SLURM cluster.\nPlease submit a job first.")
+        if (
+            not hasattr(self, "slurm_communicator")
+            or self.slurm_communicator is None
+        ):
+            self.job_info_display.append(
+                "Error: Not connected to SLURM cluster.\nPlease submit a job first."
+            )
             return
 
         job_id = self.job_id_input.text().strip()
         if not job_id:
-            self.job_info_display.append("Error: No job ID specified.\nPlease enter a job ID.")
+            self.job_info_display.append(
+                "Error: No job ID specified.\nPlease enter a job ID."
+            )
             return
 
         try:
@@ -7120,21 +7336,34 @@ class Window(QtWidgets.QMainWindow):
             result = self.slurm_communicator.cancel_job(job_id_int)
 
             if result["success"]:
-                self.job_info_display.append(f"Job {job_id} cancelled successfully.")
+                self.job_info_display.append(
+                    f"Job {job_id} cancelled successfully."
+                )
             else:
-                self.job_info_display.append(f"Failed to cancel job {job_id}:\n{result['stderr']}")
+                self.job_info_display.append(
+                    f"Failed to cancel job {job_id}:\n{result['stderr']}"
+                )
         except ValueError:
-            self.job_info_display.append(f"Error: Invalid job ID '{job_id}'. Must be a number.")
+            self.job_info_display.append(
+                f"Error: Invalid job ID '{job_id}'. Must be a number."
+            )
 
     def on_show_job_status(self):
         """Display the status of the current SLURM job."""
-        if not hasattr(self, 'slurm_communicator') or self.slurm_communicator is None:
-            self.job_info_display.append("Error: Not connected to SLURM cluster.\nPlease submit a job first.")
+        if (
+            not hasattr(self, "slurm_communicator")
+            or self.slurm_communicator is None
+        ):
+            self.job_info_display.append(
+                "Error: Not connected to SLURM cluster.\nPlease submit a job first."
+            )
             return
 
         job_id = self.job_id_input.text().strip()
         if not job_id:
-            self.job_info_display.append("Error: No job ID specified.\nPlease enter a job ID.")
+            self.job_info_display.append(
+                "Error: No job ID specified.\nPlease enter a job ID."
+            )
             return
 
         try:
@@ -7144,20 +7373,29 @@ class Window(QtWidgets.QMainWindow):
             if result["success"]:
                 self.job_info_display.append(f"\n=== Job {job_id} Status ===")
                 self.job_info_display.append(f"Status: {result['status']}")
-                if result['details']:
+                if result["details"]:
                     self.job_info_display.append("Details:")
-                    for key, value in result['details'].items():
+                    for key, value in result["details"].items():
                         if value:  # Only show non-empty values
                             self.job_info_display.append(f"  {key}: {value}")
             else:
-                self.job_info_display.append(f"Failed to get status for job {job_id}:\n{result.get('error', 'Unknown error')}")
+                self.job_info_display.append(
+                    f"Failed to get status for job {job_id}:\n{result.get('error', 'Unknown error')}"
+                )
         except ValueError:
-            self.job_info_display.append(f"Error: Invalid job ID '{job_id}'. Must be a number.")
+            self.job_info_display.append(
+                f"Error: Invalid job ID '{job_id}'. Must be a number."
+            )
 
     def on_list_jobs(self):
         """List all SLURM jobs for the current user."""
-        if not hasattr(self, 'slurm_communicator') or self.slurm_communicator is None:
-            self.job_info_display.append("Error: Not connected to SLURM cluster.\nPlease submit a job first.")
+        if (
+            not hasattr(self, "slurm_communicator")
+            or self.slurm_communicator is None
+        ):
+            self.job_info_display.append(
+                "Error: Not connected to SLURM cluster.\nPlease submit a job first."
+            )
             return
 
         result = self.slurm_communicator.list_jobs()
@@ -7166,23 +7404,34 @@ class Window(QtWidgets.QMainWindow):
             jobs = result.get("jobs", [])
             if jobs:
                 self.job_info_display.append("\n=== Your SLURM Jobs ===")
-                self.job_info_display.append(f"{'Job ID':<10} {'Status':<12} {'Name':<20} {'Time':<10}")
+                self.job_info_display.append(
+                    f"{'Job ID':<10} {'Status':<12} {'Name':<20} {'Time':<10}"
+                )
                 self.job_info_display.append("-" * 52)
                 for job in jobs:
                     job_id = job.get("job_id", "N/A")
                     status = job.get("status", "N/A")
                     name = job.get("job_name", "N/A")
                     time = job.get("time", "N/A")
-                    self.job_info_display.append(f"{job_id:<10} {status:<12} {name:<20} {time:<10}")
+                    self.job_info_display.append(
+                        f"{job_id:<10} {status:<12} {name:<20} {time:<10}"
+                    )
             else:
                 self.job_info_display.append("No jobs found for current user.")
         else:
-            self.job_info_display.append(f"Failed to list jobs:\n{result.get('error', 'Unknown error')}")
+            self.job_info_display.append(
+                f"Failed to list jobs:\n{result.get('error', 'Unknown error')}"
+            )
 
     def on_show_queue_info(self):
         """Display SLURM queue/partition information."""
-        if not hasattr(self, 'slurm_communicator') or self.slurm_communicator is None:
-            self.job_info_display.append("Error: Not connected to SLURM cluster.\nPlease submit a job first.")
+        if (
+            not hasattr(self, "slurm_communicator")
+            or self.slurm_communicator is None
+        ):
+            self.job_info_display.append(
+                "Error: Not connected to SLURM cluster.\nPlease submit a job first."
+            )
             return
 
         result = self.slurm_communicator.get_queue_info()
@@ -7190,19 +7439,29 @@ class Window(QtWidgets.QMainWindow):
         if result["success"]:
             partitions = result.get("partitions", [])
             if partitions:
-                self.job_info_display.append("\n=== SLURM Queue Information ===")
-                self.job_info_display.append(f"{'Partition':<15} {'Avail':<8} {'Nodes':<8} {'State':<12}")
+                self.job_info_display.append(
+                    "\n=== SLURM Queue Information ==="
+                )
+                self.job_info_display.append(
+                    f"{'Partition':<15} {'Avail':<8} {'Nodes':<8} {'State':<12}"
+                )
                 self.job_info_display.append("-" * 43)
                 for partition in partitions:
                     name = partition.get("name", "N/A")
                     avail = partition.get("availability", "N/A")
                     nodes = partition.get("nodes", "N/A")
                     state = partition.get("state", "N/A")
-                    self.job_info_display.append(f"{name:<15} {avail:<8} {nodes:<8} {state:<12}")
+                    self.job_info_display.append(
+                        f"{name:<15} {avail:<8} {nodes:<8} {state:<12}"
+                    )
             else:
-                self.job_info_display.append("No partition information available.")
+                self.job_info_display.append(
+                    "No partition information available."
+                )
         else:
-            self.job_info_display.append(f"Failed to get queue info:\n{result.get('error', 'Unknown error')}")
+            self.job_info_display.append(
+                f"Failed to get queue info:\n{result.get('error', 'Unknown error')}"
+            )
 
     def _clear_parameter_layout(self):
         """Clear all widgets from the module parameters layout."""
@@ -7295,14 +7554,18 @@ class Window(QtWidgets.QMainWindow):
 
         first_char = stripped[0]
         # Check for likely Python literals
-        if first_char not in ('(', '[', '{', '-', '+') and not stripped[0].isdigit():
+        if (
+            first_char not in ("(", "[", "{", "-", "+")
+            and not stripped[0].isdigit()
+        ):
             # Could still be None, True, False
-            if stripped not in ('None', 'True', 'False'):
+            if stripped not in ("None", "True", "False"):
                 return text
 
         try:
             # Try to safely evaluate the string as a Python literal
             import ast
+
             result = ast.literal_eval(stripped)
             # Return the parsed result (tuple, list, dict, number, bool, None, etc.)
             return result
@@ -7324,7 +7587,11 @@ class Window(QtWidgets.QMainWindow):
             str or dict or tuple: String representation of the value, dict for nested parameters,
                                   or tuple for command references
         """
-        if original_type == "dict" and widget_info and widget_info.sub_parameters:
+        if (
+            original_type == "dict"
+            and widget_info
+            and widget_info.sub_parameters
+        ):
             # For dict types with nested parameters
             if isinstance(widget, QtWidgets.QCheckBox):
                 # Optional dict: only include if checkbox is checked
@@ -7333,11 +7600,14 @@ class Window(QtWidgets.QMainWindow):
 
             # Recursively get values from sub-parameters
             nested_values = {}
-            for sub_param_name, sub_widget_info in widget_info.sub_parameters.items():
+            for (
+                sub_param_name,
+                sub_widget_info,
+            ) in widget_info.sub_parameters.items():
                 sub_value = self._get_widget_value(
                     sub_widget_info.widget,
                     sub_widget_info.original_type,
-                    sub_widget_info
+                    sub_widget_info,
                 )
                 if sub_value is not None:  # Only include non-None values
                     nested_values[sub_param_name] = sub_value
@@ -7358,7 +7628,9 @@ class Window(QtWidgets.QMainWindow):
         else:
             raise TypeError(f"Unknown widget type: {type(widget)}")
 
-    def _set_widget_value(self, widget, value_data, original_type, widget_info=None):
+    def _set_widget_value(
+        self, widget, value_data, original_type, widget_info=None
+    ):
         """Set widget value from actionable format (native Python types).
 
         Args:
@@ -7367,7 +7639,11 @@ class Window(QtWidgets.QMainWindow):
             original_type: Original type string ('int', 'float', 'bool', 'str', 'options', 'dict')
             widget_info: ParameterWidgetInfo (needed for dict types)
         """
-        if original_type == "dict" and widget_info and widget_info.sub_parameters:
+        if (
+            original_type == "dict"
+            and widget_info
+            and widget_info.sub_parameters
+        ):
             # For dict types with nested parameters
             if isinstance(value_data, dict):
                 # value_data is a dict of nested values
@@ -7387,12 +7663,15 @@ class Window(QtWidgets.QMainWindow):
                         sub_widget_info.row_widget.setVisible(True)
 
                 # Method 2: Through nested_rows attribute (if it exists)
-                if hasattr(widget_info.row_widget, 'nested_rows'):
+                if hasattr(widget_info.row_widget, "nested_rows"):
                     for nested_row in widget_info.row_widget.nested_rows:
                         nested_row.setVisible(True)
 
                 # Recursively set values in sub-parameters
-                for sub_param_name, sub_widget_info in widget_info.sub_parameters.items():
+                for (
+                    sub_param_name,
+                    sub_widget_info,
+                ) in widget_info.sub_parameters.items():
                     if sub_param_name in value_data:
                         sub_value_data = value_data[sub_param_name]
 
@@ -7401,7 +7680,7 @@ class Window(QtWidgets.QMainWindow):
                             sub_widget_info.widget,
                             sub_value_data,
                             sub_widget_info.original_type,
-                            sub_widget_info
+                            sub_widget_info,
                         )
             # If value_data is None or not a dict, leave dict parameter unchecked/empty
 
@@ -7427,7 +7706,12 @@ class Window(QtWidgets.QMainWindow):
                 widget.setChecked(value_data)
             else:
                 # Handle string representations
-                is_checked = str(value_data).lower() in ('true', '1', 'yes', 'on')
+                is_checked = str(value_data).lower() in (
+                    "true",
+                    "1",
+                    "yes",
+                    "on",
+                )
                 widget.setChecked(is_checked)
 
     def _on_cmd_button_clicked(self, param_name):
@@ -7446,9 +7730,13 @@ class Window(QtWidgets.QMainWindow):
             return
 
         # Create dialog
-        dialog = ParameterCmdDialog(workflow_modules, self.module_descriptor, self)
+        dialog = ParameterCmdDialog(
+            workflow_modules, self.module_descriptor, self
+        )
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
-            module_index, result_name, command_type, timing = dialog.get_selection()
+            module_index, result_name, command_type, timing = (
+                dialog.get_selection()
+            )
             if module_index is not None and result_name:
                 # Format base reference: "timing@index: module_name.result_name"
                 # e.g., "before@1: localize.net_gradient" or "start@0: identify.locs"
@@ -7458,7 +7746,9 @@ class Window(QtWidgets.QMainWindow):
                     timing_cmd = "$"
                 else:
                     timing_cmd = "$$"
-                base_reference = f"{timing}@{module_index}: {module_name}.{result_name}"
+                base_reference = (
+                    f"{timing}@{module_index}: {module_name}.{result_name}"
+                )
 
                 # Wrap in command function if not "Previous Result"
                 if command_type == "Previous Result":
@@ -7466,7 +7756,9 @@ class Window(QtWidgets.QMainWindow):
                 else:
                     # Format as command(reference)
                     # e.g., "sum(before@1: localize.net_gradient)"
-                    reference_string = f"{command_type.lower()}({base_reference})"
+                    reference_string = (
+                        f"{command_type.lower()}({base_reference})"
+                    )
 
                 # Convert widget to QLineEdit and populate
                 self._convert_widget_to_textbox(param_name, reference_string)
@@ -7488,7 +7780,6 @@ class Window(QtWidgets.QMainWindow):
     #         widget_info = self.parameter_widgets[param_name]
     #         widget_info.command_combo.setCurrentIndex(0)
     #         return
-
 
     def _convert_widget_to_textbox(self, param_name, initial_value=""):
         """Convert parameter widget to QLineEdit for command values.
@@ -7521,7 +7812,9 @@ class Window(QtWidgets.QMainWindow):
         # Trigger validation update
         self._on_parameter_changed()
 
-    def _create_parameter_row(self, param_name, param_metadata, indent_level=0):
+    def _create_parameter_row(
+        self, param_name, param_metadata, indent_level=0
+    ):
         """Create a parameter row with widgets, supporting nested dicts.
 
         Args:
@@ -7600,7 +7893,9 @@ class Window(QtWidgets.QMainWindow):
                     )
                     sub_parameters[sub_param_name] = sub_widget_info
                     sub_rows.append(sub_widget_info.row_widget)
-                    sub_widget_info.row_widget.setVisible(False)  # Hide initially
+                    sub_widget_info.row_widget.setVisible(
+                        False
+                    )  # Hide initially
 
                 # Connect checkbox to toggle visibility
                 def toggle_nested_params(state):
@@ -7623,13 +7918,17 @@ class Window(QtWidgets.QMainWindow):
                 metadata=param_metadata,
                 original_type="dict",
                 sub_parameters=sub_parameters,
-                toggle_function=toggle_nested_params if not is_required else None
+                toggle_function=(
+                    toggle_nested_params if not is_required else None
+                ),
             )
             return widget_info
 
         else:
             # Regular parameter (not a dict)
-            widget, original_type = self._create_parameter_widget(param_name, param_metadata)
+            widget, original_type = self._create_parameter_widget(
+                param_name, param_metadata
+            )
 
             # Set tooltip
             description = param_metadata.get("description", "")
@@ -7642,7 +7941,9 @@ class Window(QtWidgets.QMainWindow):
                 widget.editingFinished.connect(self._on_parameter_changed)
             elif isinstance(widget, QtWidgets.QComboBox):
                 widget.currentTextChanged.connect(self._on_parameter_changed)
-            elif isinstance(widget, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)):
+            elif isinstance(
+                widget, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)
+            ):
                 widget.valueChanged.connect(self._on_parameter_changed)
             elif isinstance(widget, QtWidgets.QCheckBox):
                 widget.stateChanged.connect(self._on_parameter_changed)
@@ -7662,7 +7963,7 @@ class Window(QtWidgets.QMainWindow):
                 cmd_button=cmd_button,
                 row_widget=row_widget,
                 metadata=param_metadata,
-                original_type=original_type
+                original_type=original_type,
             )
             return widget_info
 
@@ -7684,14 +7985,16 @@ class Window(QtWidgets.QMainWindow):
 
         for param_name, param_metadata in module_params.items():
             # Create parameter row (handles nested dicts recursively)
-            widget_info = self._create_parameter_row(param_name, param_metadata, indent_level=0)
+            widget_info = self._create_parameter_row(
+                param_name, param_metadata, indent_level=0
+            )
             self.parameter_widgets[param_name] = widget_info
 
             # Add main row to layout
             self.module_parameters_layout.addWidget(widget_info.row_widget)
 
             # Add nested rows if this is a dict parameter
-            if hasattr(widget_info.row_widget, 'nested_rows'):
+            if hasattr(widget_info.row_widget, "nested_rows"):
                 for sub_row in widget_info.row_widget.nested_rows:
                     self.module_parameters_layout.addWidget(sub_row)
 
@@ -7716,7 +8019,9 @@ class Window(QtWidgets.QMainWindow):
             elif isinstance(widget, QtWidgets.QComboBox):
                 # Combo boxes always have a selection, never considered "empty"
                 is_empty = False
-            elif isinstance(widget, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)):
+            elif isinstance(
+                widget, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)
+            ):
                 # Spinboxes always have a value, never considered "empty"
                 is_empty = False
             elif isinstance(widget, QtWidgets.QCheckBox):
@@ -7744,7 +8049,9 @@ class Window(QtWidgets.QMainWindow):
         # Capture current parameter values from widgets
         param_values = {}
         for param_name, widget_info in self.parameter_widgets.items():
-            value = self._get_widget_value(widget_info.widget, widget_info.original_type, widget_info)
+            value = self._get_widget_value(
+                widget_info.widget, widget_info.original_type, widget_info
+            )
             # Skip None values (from unchecked optional dicts)
             if value is not None:
                 param_values[param_name] = value
@@ -7752,14 +8059,25 @@ class Window(QtWidgets.QMainWindow):
         # Update the appropriate workflow list
         if self.editing_workflow_tab == 0:  # Single Dataset Workflow
             if self.editing_workflow_index < len(self.single_workflow_modules):
-                module_name = self.single_workflow_modules[self.editing_workflow_index][0]
+                module_name = self.single_workflow_modules[
+                    self.editing_workflow_index
+                ][0]
                 # Update parameters while keeping module name
-                self.single_workflow_modules[self.editing_workflow_index] = (module_name, param_values)
+                self.single_workflow_modules[self.editing_workflow_index] = (
+                    module_name,
+                    param_values,
+                )
         elif self.editing_workflow_tab == 1:  # Aggregation Workflow
-            if self.editing_workflow_index < len(self.aggregation_workflow_modules):
-                module_name = self.aggregation_workflow_modules[self.editing_workflow_index][0]
+            if self.editing_workflow_index < len(
+                self.aggregation_workflow_modules
+            ):
+                module_name = self.aggregation_workflow_modules[
+                    self.editing_workflow_index
+                ][0]
                 # Update parameters while keeping module name
-                self.aggregation_workflow_modules[self.editing_workflow_index] = (module_name, param_values)
+                self.aggregation_workflow_modules[
+                    self.editing_workflow_index
+                ] = (module_name, param_values)
 
     def _on_parameter_changed(self):
         """Called when a parameter textbox loses focus (editingFinished signal)."""

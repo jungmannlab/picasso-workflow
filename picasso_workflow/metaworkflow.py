@@ -14,6 +14,7 @@ from picasso_workflow import confluence, util
 import matplotlib.pyplot as plt
 import multiprocessing
 import pandas as pd
+
 # import logging
 from loguru import logger
 import time
@@ -26,6 +27,7 @@ import textwrap
 import platform
 import re
 import abc
+from picasso_workflow import CONFIG
 
 
 # if ON_CLUSTER:
@@ -46,15 +48,18 @@ class PathParser:
 
     def __init__(self):
         # as loaded in picasso_workflow.__init__ from .env file
-        drivepaths = os.environ["DRIVEPATHS"]
-        self.drive_paths = {}
-        for machinepaths in drivepaths.split(";"):
-            try:
-                machine, paths = machinepaths.strip().split("::")
-            except (IndexError, ValueError):
-                continue
-            paths = [p.strip() for p in paths.split(",")]
-            self.drive_paths[machine] = paths
+
+        # drivepaths = os.environ["DRIVEPATHS"]
+        # self.drive_paths = {}
+        # for machinepaths in drivepaths.split(";"):
+        #     try:
+        #         machine, paths = machinepaths.strip().split("::")
+        #     except (IndexError, ValueError):
+        #         continue
+        #     paths = [p.strip() for p in paths.split(",")]
+        #     self.drive_paths[machine] = paths
+
+        self.drive_paths = CONFIG["Drivepaths"]
         logger.debug(f"drivepaths: {self.drive_paths}")
 
     def windows_path_to_curr_os(self, winpath, drive_map):
@@ -120,21 +125,37 @@ class PathParser:
         is_posix = num_fwd > num_bwd
         return is_posix
 
+    def check_machine(self, machine, pattern):
+        """Checks a machine against a machine pattern, for example
+        'mymachine6234' against 'mymachine6XXX', with X being a digit
+        """
+        regex = pattern.replace("X", r"\d")
+        regex = f"^{regex}$"
+        return re.fullmatch(regex, machine) is not None
+
+    def get_machine_drivepaths(self, machine):
+        for pattern, paths in self.drive_paths.items():
+            if check_machine(machine, pattern):
+                return paths
+        else:
+            return None
+
     def convert_path(self, src_path, dest_machine):
         """Convert a path from a source machine style to a dest
         machine style and volume notation
         """
-        if dest_machine not in self.drive_paths.keys():
-            raise ValueError(
-                f"Machine {dest_machine} not defined in .env! \
-                ({self.drive_paths.keys()})"
-            )
+        # if dest_machine not in self.drive_paths.keys():
+        #     raise ValueError(
+        #         f"Machine {dest_machine} not defined in .env! \
+        #         ({self.drive_paths.keys()})"
+        #     )
 
         # find current machine key
         if dest_machine is None:
             for dest_machine in self.drive_paths.keys():
-                if dest_machine in platform.node():
+                if self.check_machine(platform.node(), dest_machine):
                     break
+        dest_paths = self.get_machine_drivepaths(dest_machine)
 
         for src_machine, drivepaths in self.drive_paths.items():
             src_on_machine = any([p in src_path for p in drivepaths])
@@ -146,9 +167,10 @@ class PathParser:
         logger.debug(f"dest machine: {dest_machine}")
 
         drive_map = {}
-        for src_p, dest_p in zip(
-            self.drive_paths[src_machine], self.drive_paths[dest_machine]
-        ):
+        # for src_p, dest_p in zip(
+        #     self.drive_paths[src_machine], self.drive_paths[dest_machine]
+        # ):
+        for src_p, dest_p in zip(self.drive_paths[src_machine], dest_paths):
             drive_map[src_p] = dest_p
 
         logger.debug(f"drive map is {drive_map}")
@@ -164,7 +186,6 @@ class PathParser:
                 src_path, drive_map=drive_map
             )
         return dest_path
-
 
     def parse_source(
         self, src_loc, receptors, dest_machine=None, underscores=[1, 0, 0]
@@ -184,17 +205,18 @@ class PathParser:
                 the number of underscores in the different levels.
         """
         src_dict = io.load_info(src_loc)[0]
-        if dest_machine not in self.drive_paths.keys():
-            raise ValueError(
-                f"Machine {dest_machine} not defined in .env! \
-                ({self.drive_paths.keys()})"
-            )
+        # if dest_machine not in self.drive_paths.keys():
+        #     raise ValueError(
+        #         f"Machine {dest_machine} not defined in .env! \
+        #         ({self.drive_paths.keys()})"
+        #     )
 
         # find current machine key
         if dest_machine is None:
             for dest_machine in self.drive_paths.keys():
                 if dest_machine in platform.node():
                     break
+        dest_paths = self.get_machine_drivepaths(dest_machine)
 
         for src_machine, drivepaths in self.drive_paths.items():
             src_on_machine = []
@@ -208,9 +230,7 @@ class PathParser:
         logger.debug(f"dest machine: {dest_machine}")
 
         drive_map = {}
-        for src_p, dest_p in zip(
-            self.drive_paths[src_machine], self.drive_paths[dest_machine]
-        ):
+        for src_p, dest_p in zip(self.drive_paths[src_machine], dest_paths):
             drive_map[src_p] = dest_p
 
         logger.debug(f"drive map is {drive_map}")
