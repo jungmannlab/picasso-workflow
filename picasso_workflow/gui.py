@@ -5274,7 +5274,7 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         # Command type selection
         layout.addWidget(QtWidgets.QLabel("Command type:"))
         self.command_combo = QtWidgets.QComboBox()
-        self.command_combo.addItems(["map", "Previous Module Result", "Prior Result", "sum", "max", "min"])
+        self.command_combo.addItems(["map", "Previous Module Result", "Prior Result"])#, "sum", "max", "min"])
         self.command_combo.setItemDelegate(ToolTipDelegate(self.command_combo))
         self.command_combo.currentIndexChanged.connect(self._on_command_changed)
         # self.command_combo.model().setData(

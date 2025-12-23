@@ -4098,7 +4098,7 @@ def _get_block_locs_at(
                         # this is because of dtype issues
                         if step == 0:
                             indices = np.arange(float(block_starts[k, l]), float(block_ends[k, l]), 
-                                dtype=_p.uint32)
+                                dtype=np.uint32)
                             step = 1
                         else:
                             indices = np.concatenate((indices, 
