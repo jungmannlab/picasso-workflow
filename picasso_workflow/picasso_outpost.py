@@ -4076,7 +4076,7 @@ def pick_similar_analysis(
                             x_similar = np.append(x_similar, x_test)
                             y_similar = np.append(y_similar, y_test)
                             rmsds = np.append(
-                                rmsds, postprocess._rmsd_at_com(picked_locs_xy)
+                                rmsds, postprocess.rmsd_at_com(picked_locs_xy)
                             )
                             nlocs = np.append(nlocs, picked_locs_xy.shape[1])
     return x_similar, y_similar, rmsds, nlocs

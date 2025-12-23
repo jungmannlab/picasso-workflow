@@ -5731,6 +5731,10 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_timeout_edit.setMaximumWidth(100)
         cluster_config_layout.addWidget(self.cluster_timeout_edit)
 
+        self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
+        self.cluster_use_module.setMaximumWidth(80)
+        cluster_config_layout.addWidget(self.cluster_use_module)
+
         slurm_buttons = QtWidgets.QHBoxLayout()
         self.slurm_buttons_widget = QtWidgets.QWidget()
         self.slurm_buttons_widget.setLayout(slurm_buttons)
@@ -7673,6 +7677,7 @@ class Window(QtWidgets.QMainWindow):
             # "mail-type": "ALL",
             # "mail-user": f"{username}@biochem.mpg.de",
         }
+        use_pw_mod = self.cluster_use_module.isChecked()
 
         results_folder_local = self.results_folder_display.text()
         results_folder_host = self.pathparser.convert_path(
@@ -7680,8 +7685,9 @@ class Window(QtWidgets.QMainWindow):
         )
 
         commands = self.slurm_communicator.assemble_slurm_commands(
+            scriptname=scriptname, use_pw_module=use_pw_mod)
             # scriptname=scriptname, use_pw_module=True)
-            scriptname=scriptname, use_pw_module=False)
+            # scriptname=scriptname, use_pw_module=False)
         script_content = self.slurm_communicator.create_slurm_script(
             job_name,
             commands,
