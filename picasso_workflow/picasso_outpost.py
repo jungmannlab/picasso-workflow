@@ -15,6 +15,7 @@ import numpy as np
 # from numpy.lib.recfunctions import stack_arrays
 import pandas as pd
 import numba as nb
+import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 from matplotlib.colors import LogNorm
@@ -4023,7 +4024,7 @@ def pick_similar_analysis(
                 x_range, y_range, K, L, block_starts, block_ends
             )
             if n_block_locs >= min_n_locs:
-                block_locs_xy = postprocess.get_block_locs_at(
+                block_locs_xy = _get_block_locs_at(
                     x_range,
                     y_range,
                     locs_xy,
@@ -4035,7 +4036,7 @@ def pick_similar_analysis(
                 # picked_locs_xy = postprocess.locs_at(
                 #     x_grid, y_grid, block_locs_xy, r
                 # )
-                picked_locs_xy = postprocess.locs_at_numba(
+                picked_locs_xy = _locs_at(
                     x_grid, y_grid, block_locs_xy, r
                 )
                 if picked_locs_xy.shape[1] > 1:
@@ -4058,7 +4059,7 @@ def pick_similar_analysis(
                         # picked_locs_xy = postprocess.locs_at(
                         #     x_test, y_test, block_locs_xy, r
                         # )
-                        picked_locs_xy = postprocess.locs_at_numba(
+                        picked_locs_xy = _locs_at(
                             x_test, y_test, block_locs_xy, r
                         )
                         if picked_locs_xy.shape[1] > 1:
@@ -4076,10 +4077,51 @@ def pick_similar_analysis(
                             x_similar = np.append(x_similar, x_test)
                             y_similar = np.append(y_similar, y_test)
                             rmsds = np.append(
-                                rmsds, postprocess.rmsd_at_com(picked_locs_xy)
+                                rmsds, _rmsd_at_com(picked_locs_xy)
                             )
                             nlocs = np.append(nlocs, picked_locs_xy.shape[1])
     return x_similar, y_similar, rmsds, nlocs
+
+
+@nb.jit(nopython=True, nogil=True, cache=True)
+def _get_block_locs_at(
+        x_range, y_range, locs_xy, 
+        block_starts, block_ends, K, L,
+    ):
+    step = 0
+    for k in range(y_range - 1, y_range + 2):
+        if 0 < k < K:
+            for l in range(x_range - 1, x_range + 2):
+                if 0 < l < L:
+                    if block_ends[k, l] - block_starts[k, l] > 0:
+                        # numba does not work if you attach arange to an empty list so the first step is different
+                        # this is because of dtype issues
+                        if step == 0:
+                            indices = np.arange(float(block_starts[k, l]), float(block_ends[k, l]), 
+                                dtype=_p.uint32)
+                            step = 1
+                        else:
+                            indices = np.concatenate((indices, 
+                                np.arange(float(block_starts[k, l]), float(block_ends[k, l]), dtype=np.uint32)
+                            ))
+    return locs_xy[:, indices]
+
+
+@nb.jit(nopython=True, nogil=True, cache=True)
+def _locs_at(x, y, locs_xy, r):
+    dx = locs_xy[0] - x
+    dy = locs_xy[1] - y
+    r2 = r ** 2
+    is_picked = dx ** 2 + dy ** 2 < r2
+    return locs_xy[:, is_picked]
+
+
+@nb.jit(nopython=True, nogil=True)
+def _rmsd_at_com(locs_xy):
+    com_x = np.mean(locs_xy[0])
+    com_y = np.mean(locs_xy[1])
+    return np.sqrt(np.mean((locs_xy[0] - com_x) ** 2 + (locs_xy[1] - com_y) ** 2))
+
 
 
 #####
