@@ -1374,6 +1374,32 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Whether to include visualization plots",
                 "default": True,
                 "required": False,
+            },
+            "methods": {
+                "type": "dict",
+                "description": (
+                    "Methods to summarize"
+                ),
+                "required": True,
+                "properties": {
+                    "nena": {
+                        "type": "dict",
+                        "description": "NeNa calculation",
+                        "required": False,
+                    },
+                    "median-loc-precision": {
+                        "type": "dict",
+                        "description": "median localizatino precision calculation",
+                        "required": False,
+                        "properties": {
+                            "qe_correction": {
+                                "type": "float",
+                                "description": "QE correction factor",
+                                "default": 1,
+                            },
+                        },
+                    },
+                },
             }
         }
 
@@ -1390,6 +1416,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "summary_report": {
                 "type": "dict",
                 "description": "Comprehensive analysis summary",
+            },
+            "nena, nena-nm": {
+                "type": "float",
+                "description": "NeNa value in nanometers",
+            },
+            "nena, nena-px": {
+                "type": "float",
+                "description": "NeNa value in pixels",
+            },
+            "nena, filepath_plot": {
+                "type": "str",
+                "description": "File path of the graph",
+            },
+            "median-loc-precision, median_lp-px": {
+                "type": "float",
+                "description": "Median localization precision in pixels",
+            },
+            "median-loc-precision, median_lp-nm": {
+                "type": "float",
+                "description": "Median localization precision in nanometers",
             },
         }
 
@@ -4600,7 +4646,7 @@ class SlurmCommunicator:
         """
         commands = []
         if use_pw_module:
-            commands.append("module load picasso-workflow2")
+            commands.append("module load picasso-workflow-gui")
         else:
             commands.append("module load anaconda/3/2023.03")
 
@@ -5186,36 +5232,40 @@ class ParameterWidgetInfo:
 class ParameterCmdDialog(QtWidgets.QDialog):
     """Dialog for selecting a command as parameter value."""
 
-    def __init__(self, workflow_modules, module_descriptor, parent=None):
+    def __init__(self, workflow_modules, module_descriptor, current_module_index=0, parent=None):
         """Initialize the prior result dialog.
 
         Args:
             workflow_modules: List of tuples (module_name, param_dict) from workflow
             module_descriptor: ModuleDescriptor instance to get result specs
+            current_module_index: the index of the currently selected module
             parent: Parent widget
         """
         super().__init__(parent)
-        self.setWindowTitle("Select Command")
+        self.setWindowTitle("Select Command for parameter value")
         self.setModal(True)
         self.workflow_modules = workflow_modules
         self.module_descriptor = module_descriptor
+        self.current_module_index = current_module_index
+        self.parent = parent
 
         layout = QtWidgets.QVBoxLayout(self)
 
         # Timing selection
-        layout.addWidget(QtWidgets.QLabel("Collection timing:"))
+        layout.addWidget(QtWidgets.QLabel("Value collection timing:"))
         self.timing_group = QtWidgets.QButtonGroup(self)
 
         self.timing_before_radio = QtWidgets.QRadioButton(
-            "Collect directly before module execution"
+            "Collect directly before module execution ($)"
         )
         self.timing_start_radio = QtWidgets.QRadioButton(
-            "Collect at start of workflow stage"
+            "Collect at start of workflow stage ($$)"
         )
         self.timing_before_radio.setChecked(True)  # Default
 
         self.timing_group.addButton(self.timing_before_radio, 0)
         self.timing_group.addButton(self.timing_start_radio, 1)
+        self.timing_group.buttonToggled.connect(self._on_timing_toggled)
 
         layout.addWidget(self.timing_before_radio)
         layout.addWidget(self.timing_start_radio)
@@ -5224,26 +5274,80 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         # Command type selection
         layout.addWidget(QtWidgets.QLabel("Command type:"))
         self.command_combo = QtWidgets.QComboBox()
-        self.command_combo.addItems(["Previous Result", "sum", "max", "min"])
+        self.command_combo.addItems(["map", "Previous Module Result", "Prior Result", "sum", "max", "min"])
+        self.command_combo.setItemDelegate(ToolTipDelegate(self.command_combo))
+        self.command_combo.currentIndexChanged.connect(self._on_command_changed)
+        # self.command_combo.model().setData(
+        #     0, "Map different values onto workers (e.g. files to load)", Qt.ToolTipRole
+        # )  # Tooltip
+        # self.command_combo.model().setData(
+        #     1, "Load value from a result of a previous module in this or a previous workflow stage", Qt.ToolTipRole
+        # )  # Tooltip
         layout.addWidget(self.command_combo)
         layout.addSpacing(10)
 
-        # Module selection
-        layout.addWidget(QtWidgets.QLabel("Select module:"))
+        # Container for dynamic widgets
+        self.dynamic_widget = QtWidgets.QWidget()
+        self.dynamic_layout = QtWidgets.QVBoxLayout(self.dynamic_widget)
+        self.dynamic_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.dynamic_widget)
+
+        # Create widgets for "Prior Result" mode
+        self.prior_mode = QtWidgets.QButtonGroup(self)
+        self.prior_thisstage = QtWidgets.QRadioButton(
+            "Result from current stage"
+        )
+        self.prior_singlestage_list = QtWidgets.QRadioButton(
+            "Create list from the single stage entries"
+        )
+        self.prior_thisstage.setChecked(True)  # Default
+
+        self.prior_mode.addButton(self.prior_thisstage, 0)
+        self.prior_mode.addButton(self.prior_singlestage_list, 1)
+        self.prior_mode.buttonToggled.connect(self._on_prior_mode_selected)
+
+
+        self.module_label = QtWidgets.QLabel("Select module:")
         self.module_combo = QtWidgets.QComboBox()
         for i, (module_name, params) in enumerate(workflow_modules):
             self.module_combo.addItem(f"{i}: {module_name}")
         self.module_combo.currentIndexChanged.connect(self._on_module_selected)
-        layout.addWidget(self.module_combo)
 
-        # Result selection (combo box instead of text input)
-        layout.addWidget(QtWidgets.QLabel("Select result:"))
+        self.result_label = QtWidgets.QLabel("Select result:")
         self.result_combo = QtWidgets.QComboBox()
+        self.result_combo.currentIndexChanged.connect(self._on_result_selected)
         self.result_combo.setPlaceholderText("Select a result")
-        layout.addWidget(self.result_combo)
 
-        # Populate results for initially selected module
-        self._on_module_selected(0)
+
+        # modify_vlayout = QtWidgets.QVBoxLayout()
+        # self.modify_widget = QtWidgets.QWidget()
+        # self.modify_widget.setLayout(modify_vlayout)
+        self.modify_label = QtWidgets.QLabel("Modify result:")
+        # modify_vlayout.addWidget(self.modify_label)
+        # modify_hlayout = QtWidgets.QHBoxLayout()
+        # modify_hwidget = QtWidgets.QWidget()
+        # modify_hwidget.setLayout(modify_hlayout)
+        self.modify_combo = QtWidgets.QComboBox()
+        self.modify_combo.addItems(["multiply", "divide", "add", "subtract"])
+        self.modify_combo.currentIndexChanged.connect(self._on_modify_operator_selected)
+        # modify_hlayout.addWidget(self.modify_combo)
+        self.modify_value = QtWidgets.QDoubleSpinBox()
+        self.modify_value.valueChanged.connect(self._on_modify_value_changed)
+        # modify_hlayout.addWidget(self.modify_value)
+
+        # Create widgets for "map" mode
+        self.map_label = QtWidgets.QLabel("Map option:")
+        self.map_combo = QtWidgets.QComboBox()
+        self.map_combo.addItems(["filepath", "#tags"])
+        self.map_combo.currentTextChanged.connect(self._on_map_option)
+
+        layout.addWidget(QtWidgets.QLabel("Assembled Command:"))
+        self.command_result = QtWidgets.QLineEdit()
+        layout.addSpacing(10)
+        layout.addWidget(self.command_result)
+
+        # Initialize with first command type
+        self._on_command_changed(0)
 
         # Buttons
         button_box = QtWidgets.QDialogButtonBox(
@@ -5252,6 +5356,86 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
+
+    def _on_timing_toggled(self, button, checked):
+        command = self.get_command()
+        self.command_result.setText(command)
+
+    def _on_map_option(self, option):
+        command = self.get_command()
+        self.command_result.setText(command)
+
+    def _on_command_changed(self, index):
+        """Handle command type change and update dynamic layout.
+
+        Args:
+            index: Index of selected command type
+        """
+        command_type = self.command_combo.currentText()
+
+        # Clear dynamic layout
+        while self.dynamic_layout.count():
+            item = self.dynamic_layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+
+        if command_type == "map":
+            # Show map option widgets
+            self.dynamic_layout.addWidget(self.map_label)
+            self.dynamic_layout.addWidget(self.map_combo)
+        elif command_type == "Prior Result":
+            # Show module and result selection widgets
+            self.dynamic_layout.addWidget(self.prior_thisstage)
+            self.dynamic_layout.addWidget(self.prior_singlestage_list)
+            self.dynamic_layout.addWidget(self.module_label)
+            self.dynamic_layout.addWidget(self.module_combo)
+            self.dynamic_layout.addWidget(self.result_label)
+            self.dynamic_layout.addWidget(self.result_combo)
+            # self.dynamic_layout.addWidget(self.modify_widget)
+            self.dynamic_layout.addWidget(self.modify_label)
+            self.dynamic_layout.addWidget(self.modify_combo)
+            self.dynamic_layout.addWidget(self.modify_value)
+
+            # Populate results for initially selected module
+            self._on_module_selected(self.module_combo.currentIndex())
+        elif command_type == "Previous Module Result":
+            self.dynamic_layout.addWidget(self.result_label)
+            self.dynamic_layout.addWidget(self.result_combo)
+            # self.dynamic_layout.addWidget(self.modify_widget)
+            self.dynamic_layout.addWidget(self.modify_label)
+            self.dynamic_layout.addWidget(self.modify_combo)
+            self.dynamic_layout.addWidget(self.modify_value)
+            # Populate results for previous module
+            if self.current_module_index > 0:
+                self._on_module_selected(self.current_module_index - 1)
+        # For sum, max, min commands, also show module/result selection
+        elif command_type in ["sum", "max", "min"]:
+            self.dynamic_layout.addWidget(self.module_label)
+            self.dynamic_layout.addWidget(self.module_combo)
+            self.dynamic_layout.addWidget(self.result_label)
+            self.dynamic_layout.addWidget(self.result_combo)
+
+            # Populate results for initially selected module
+            self._on_module_selected(self.module_combo.currentIndex())
+
+        command = self.get_command()
+        self.command_result.setText(command)
+
+    def _on_prior_mode_selected(self, button, checked):
+        self.module_combo.blockSignals(True)
+        self.module_combo.clear()
+        if self.prior_singlestage_list.isChecked():
+            workflow_modules = self.parent.single_workflow_modules
+        else:
+            workflow_modules = self.workflow_modules
+
+        for i, (module_name, params) in enumerate(workflow_modules):
+            self.module_combo.addItem(f"{i}: {module_name}")
+        self.module_combo.blockSignals(False)
+            
+
+        command = self.get_command()
+        self.command_result.setText(command)
 
     def _on_module_selected(self, index):
         """Populate result combo box when module is selected.
@@ -5284,19 +5468,105 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         except Exception as e:
             self.result_combo.addItem(f"(error: {str(e)})")
 
+        command = self.get_command()
+        self.command_result.setText(command)
+
+    def _on_result_selected(self, index):
+        command = self.get_command()
+        self.command_result.setText(command)
+
+    def _on_modify_value_changed(self, value):
+        command = self.get_command()
+        self.command_result.setText(command)
+
+    def _on_modify_operator_selected(self, index):
+        command = self.get_command()
+        self.command_result.setText(command)
+
     def get_selection(self):
         """Get the selected module index, result name, command type, and timing.
 
         Returns:
-            tuple: (module_index: int, result_name: str, command_type: str, timing: str)
-                   command_type is "Previous Result", "sum", "max", or "min"
+            tuple: For "map" command: (None, map_option: str, "map", timing: str)
+                   For other commands: (module_index: int, result_name: str, command_type: str, timing: str)
+                   command_type is "map", "Prior Result", "sum", "max", or "min"
                    timing is either "before" or "start"
+                   map_option is "filepath" or "#tags"
         """
-        module_index = self.module_combo.currentIndex()
-        result_name = self.result_combo.currentText()
         command_type = self.command_combo.currentText()
         timing = "before" if self.timing_before_radio.isChecked() else "start"
-        return module_index, result_name, command_type, timing
+
+        if command_type == "map":
+            # For map command, return map option instead of module/result
+            map_option = self.map_combo.currentText()
+            return None, map_option, command_type, timing
+        else:
+            # For other commands, return module index and result name
+            module_index = self.module_combo.currentIndex()
+            result_name = self.result_combo.currentText()
+            return module_index, result_name, command_type, timing
+
+    def get_command(self):
+        command_type = self.command_combo.currentText()
+        timing = "before" if self.timing_before_radio.isChecked() else "start"
+        if timing == "before":
+            timing_cmd = "$"
+        else:
+            timing_cmd = "$$"
+
+        if command_type == "map":
+            # For map command, return map option instead of module/result
+            map_option = self.map_combo.currentText()
+            command_string = f"('{timing_cmd}map', '{map_option}')"
+        elif command_type == "Prior Result":
+            if self.prior_thisstage.isChecked():
+                cmd_prefix = "results"
+            elif self.prior_singlestage_list.isChecked():
+                cmd_prefix = "all_results, single_dataset, $$all"
+
+            module_index = self.module_combo.currentIndex()
+            module_name = self.module_combo.currentText()
+            module_name = module_name[module_name.index(":") + 2:]
+            result_name = self.result_combo.currentText()
+
+            if self.modify_combo.currentText() == "multiply":
+                modify_operator = "*"
+            elif self.modify_combo.currentText() == "divide":
+                modify_operator = "/"
+            elif self.modify_combo.currentText() == "add":
+                modify_operator = "+"
+            elif self.modify_combo.currentText() == "subtract":
+                modify_operator = "-"
+            else:
+                modify_operator = None
+            modify_value = self.modify_value.value()
+
+            if modify_operator is not None:
+                mod_str = f" {modify_operator}{modify_value}"
+            else:
+                mod_str = ""
+
+            command_string = f"('{timing_cmd}get_prior_result{mod_str}', '{cmd_prefix}, {module_index}_{module_name}, {result_name}')"
+        elif command_type == "Previous Module Result":
+            result_name = self.result_combo.currentText()
+            if self.modify_combo.currentText() == "multiply":
+                modify_operator = "*"
+            elif self.modify_combo.currentText() == "divide":
+                modify_operator = "/"
+            elif self.modify_combo.currentText() == "add":
+                modify_operator = "+"
+            elif self.modify_combo.currentText() == "subtract":
+                modify_operator = "-"
+            else:
+                modify_operator = None
+            modify_value = self.modify_value.value()
+            if modify_operator is not None:
+                mod_str = f" {modify_operator}{modify_value}"
+            else:
+                mod_str = ""
+
+            command_string = f"('{timing_cmd}get_previous_module_result{mod_str}', '{result_name}')"
+        return command_string
 
 
 class Window(QtWidgets.QMainWindow):
@@ -5341,12 +5611,14 @@ class Window(QtWidgets.QMainWindow):
         layout.addWidget(workflow_template_combo, 0, 0)
         # Results folder selection
         results_folder_button = QtWidgets.QPushButton("Results Folder")
+        results_folder_button.setToolTip("The folder must be accessible both from this and the compute machine (cluster).")
         # self.files_box.addWidget(results_folder_button, 2, 0)
         layout.addWidget(results_folder_button, 0, 1)
         results_folder_button.clicked.connect(self.select_results_folder)
         self.results_folder_display = QtWidgets.QLineEdit()
-        self.results_folder_display.setReadOnly(True)
+        self.results_folder_display.setReadOnly(False)
         self.results_folder_display.setPlaceholderText("No folder selected")
+        self.results_folder_display.textChanged.connect(self.set_results_folder_display)
         # self.files_box.addWidget(self.results_folder_display, 2, 1, 1, 2)
         layout.addWidget(self.results_folder_display, 0, 2, 1, 2)
         # Investigation type
@@ -6391,6 +6663,10 @@ class Window(QtWidgets.QMainWindow):
             # If dialog was cancelled and no folder is selected, disable widgets
             if not self.results_folder_display.text():
                 self._set_widgets_enabled(False)
+
+    def set_results_folder_display(self, folder):
+        # Enable widgets when a folder is selected
+        self._set_widgets_enabled(True)
 
     def on_template_changed(self, template_name):
         """Load a template"""
@@ -7879,44 +8155,21 @@ class Window(QtWidgets.QMainWindow):
         current_tab_index = self.workflow_tabs.currentIndex()
         if current_tab_index == 0:
             workflow_modules = self.single_workflow_modules
+            curr_module_index = self.single_workflow_list.currentRow()
         elif current_tab_index == 1:
             workflow_modules = self.aggregation_workflow_modules
+            curr_module_index = self.aggregation_workflow_list.currentRow()
         else:
             return
 
         # Create dialog
         dialog = ParameterCmdDialog(
-            workflow_modules, self.module_descriptor, self
+            workflow_modules, self.module_descriptor, curr_module_index, self
         )
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
-            module_index, result_name, command_type, timing = (
-                dialog.get_selection()
-            )
-            if module_index is not None and result_name:
-                # Format base reference: "timing@index: module_name.result_name"
-                # e.g., "before@1: localize.net_gradient" or "start@0: identify.locs"
-                # e.g. "('$get_prior_result', 'all_results,01_testmodule,myresult')"
-                module_name = workflow_modules[module_index][0]
-                if timing == "before":
-                    timing_cmd = "$"
-                else:
-                    timing_cmd = "$$"
-                base_reference = (
-                    f"{timing}@{module_index}: {module_name}.{result_name}"
-                )
-
-                # Wrap in command function if not "Previous Result"
-                if command_type == "Previous Result":
-                    reference_string = f"('{timing_cmd}get_prior_result', 'all_results, {module_index}_{module_name}, {result_name}')"
-                else:
-                    # Format as command(reference)
-                    # e.g., "sum(before@1: localize.net_gradient)"
-                    reference_string = (
-                        f"{command_type.lower()}({base_reference})"
-                    )
-
-                # Convert widget to QLineEdit and populate
-                self._convert_widget_to_textbox(param_name, reference_string)
+            command_str = dialog.command_result.text()
+            # Convert widget to QLineEdit and populate
+            self._convert_widget_to_textbox(param_name, command_str)
 
     # def _handle_prior_result_command(self, param_name):
     #     """Open dialog for selecting prior result reference.
@@ -8016,6 +8269,7 @@ class Window(QtWidgets.QMainWindow):
                 cmd_button = QtWidgets.QPushButton("cmd")
                 cmd_button.setFixedWidth(50)
                 cmd_button.setEnabled(False)  # Disable for dict types
+                cmd_button.setToolTip("Create command to assign this value.")
                 row_layout.addWidget(cmd_button, stretch=0)
 
                 # Create nested parameter rows
