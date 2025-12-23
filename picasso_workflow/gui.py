@@ -7681,9 +7681,7 @@ class Window(QtWidgets.QMainWindow):
 
         commands = self.slurm_communicator.assemble_slurm_commands(
             # scriptname=scriptname, use_pw_module=True)
-            scriptname=scriptname,
-            use_pw_module=False,
-        )
+            scriptname=scriptname, use_pw_module=False)
         script_content = self.slurm_communicator.create_slurm_script(
             job_name,
             commands,
