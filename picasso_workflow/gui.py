@@ -5331,16 +5331,24 @@ class Window(QtWidgets.QMainWindow):
         self.setCentralWidget(central_widget)
         central_widget.setLayout(layout)
 
+        workflow_template_combo = QtWidgets.QComboBox()
+        workflow_template_combo.addItem("")
+        for template in CONFIG["Templates"].keys():
+            workflow_template_combo.addItem(template)
+        workflow_template_combo.setEditable(False)
+        workflow_template_combo.currentTextChanged.connect(self.on_template_changed)
+        workflow_template_combo.setToolTip("Load a template workflow")
+        layout.addWidget(workflow_template_combo, 0, 0)
         # Results folder selection
         results_folder_button = QtWidgets.QPushButton("Results Folder")
         # self.files_box.addWidget(results_folder_button, 2, 0)
-        layout.addWidget(results_folder_button, 0, 0)
+        layout.addWidget(results_folder_button, 0, 1)
         results_folder_button.clicked.connect(self.select_results_folder)
         self.results_folder_display = QtWidgets.QLineEdit()
         self.results_folder_display.setReadOnly(True)
         self.results_folder_display.setPlaceholderText("No folder selected")
         # self.files_box.addWidget(self.results_folder_display, 2, 1, 1, 2)
-        layout.addWidget(self.results_folder_display, 0, 1, 1, 2)
+        layout.addWidget(self.results_folder_display, 0, 2, 1, 2)
         # Investigation type
         self.workflow_type = QtWidgets.QComboBox()
         self.workflow_type.addItem("Single Workflow")
@@ -5359,11 +5367,11 @@ class Window(QtWidgets.QMainWindow):
         self.workflow_type.currentIndexChanged.connect(
             self._on_workflow_type_changed
         )
-        layout.addWidget(self.workflow_type, 0, 3)
+        layout.addWidget(self.workflow_type, 0, 4)
 
         # Create tab widget
         self.tabs = QtWidgets.QTabWidget()
-        layout.addWidget(self.tabs, 1, 0, 1, 4)
+        layout.addWidget(self.tabs, 1, 0, 1, 5)
 
         # Workflow Config tab
         config_tab = QtWidgets.QWidget()
@@ -5405,7 +5413,7 @@ class Window(QtWidgets.QMainWindow):
         # Cluster Host dropdown
         cluster_config_layout.addWidget(QtWidgets.QLabel("Cluster Host:"))
         self.cluster_host_combo = QtWidgets.QComboBox()
-        for host in CONFIG["SlurmHosts"]:
+        for host in CONFIG["SlurmLoginNodes"].keys():
             self.cluster_host_combo.addItem(host)
         self.cluster_host_combo.setEditable(True)
         # self.cluster_host_combo.addItems(["localhost", "cluster.example.com"])
@@ -5445,7 +5453,7 @@ class Window(QtWidgets.QMainWindow):
         cluster_config_layout.addWidget(QtWidgets.QLabel("Timeout:"))
         self.cluster_timeout_edit = QtWidgets.QLineEdit()
         self.cluster_timeout_edit.setPlaceholderText("e.g., 24:00:00")
-        self.cluster_memory_edit.setText(
+        self.cluster_timeout_edit.setText(
             CONFIG["SlurmDefault"].get("timeout", "24:00:00")
         )
         self.cluster_timeout_edit.setMaximumWidth(100)
@@ -5455,9 +5463,18 @@ class Window(QtWidgets.QMainWindow):
         self.slurm_buttons_widget = QtWidgets.QWidget()
         self.slurm_buttons_widget.setLayout(slurm_buttons)
         run_on_cluster_layout.addWidget(self.slurm_buttons_widget)
+
+        estimate_start_button = QtWidgets.QPushButton("Estimate Start on Cluster")
+        slurm_buttons.addWidget(estimate_start_button)
+        estimate_start_button.clicked.connect(self.estimate_start)
+
         start_slurm_button = QtWidgets.QPushButton("Start Workflow on Cluster")
         slurm_buttons.addWidget(start_slurm_button)
         start_slurm_button.clicked.connect(self.start_slurm)
+
+        queue_info_button = QtWidgets.QPushButton("Show Queue Info")
+        queue_info_button.clicked.connect(self.on_show_queue_info)
+        slurm_buttons.addWidget(queue_info_button)
 
         # Job management buttons
         job_management_buttons = QtWidgets.QHBoxLayout()
@@ -5476,10 +5493,6 @@ class Window(QtWidgets.QMainWindow):
         list_jobs_button = QtWidgets.QPushButton("List All Jobs")
         list_jobs_button.clicked.connect(self.on_list_jobs)
         job_management_buttons.addWidget(list_jobs_button)
-
-        queue_info_button = QtWidgets.QPushButton("Show Queue Info")
-        queue_info_button.clicked.connect(self.on_show_queue_info)
-        job_management_buttons.addWidget(queue_info_button)
 
         # Job ID input field
         job_id_layout = QtWidgets.QHBoxLayout()
@@ -6379,6 +6392,21 @@ class Window(QtWidgets.QMainWindow):
             if not self.results_folder_display.text():
                 self._set_widgets_enabled(False)
 
+    def on_template_changed(self, template_name):
+        """Load a template"""
+        try:
+            template_folder = CONFIG["Templates"][template_name]
+        except KeyError:
+            return
+        # # Enable widgets when a folder is selected
+        # self._set_widgets_enabled(True)
+
+        # Search for YAML files and load file list
+        self._load_yaml_file_list(template_folder)
+
+        # Search for workflow definition and load it
+        self._load_workflow_definition(template_folder)
+
     def _load_yaml_file_list(self, folder):
         """Search for YAML files in folder and load file list if found.
 
@@ -6423,6 +6451,100 @@ class Window(QtWidgets.QMainWindow):
         # No YAML files found - this is normal, no action needed
         logger.debug("No src_loc.yaml or raw_locs_list.yaml found in folder")
 
+    def _load_workflow_definition_alt(self, folder):
+        """Load workflow definition from functions (alternative format).
+
+        This handles cases where workflow_modules_sgl and workflow_modules_agg
+        are defined inside functions rather than at module level.
+
+        Args:
+            folder: Path to the folder to search
+        """
+        import ast
+
+        workflow_file = os.path.join(folder, "start_workflow.py")
+
+        if not os.path.exists(workflow_file):
+            logger.debug("No start_workflow.py found in folder")
+            return
+
+        try:
+            # Read and parse the file
+            with open(workflow_file, 'r') as f:
+                source_code = f.read()
+
+            tree = ast.parse(source_code)
+
+            # Find workflow module definitions in function bodies
+            workflow_modules_sgl = None
+            workflow_modules_agg = None
+
+            # Search through all function definitions
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef):
+                    # Look for assignments to workflow_modules_sgl and workflow_modules_agg
+                    for stmt in node.body:
+                        if isinstance(stmt, ast.Assign):
+                            for target in stmt.targets:
+                                if isinstance(target, ast.Name):
+                                    if target.id == 'workflow_modules_sgl':
+                                        # Extract the value
+                                        workflow_modules_sgl = ast.literal_eval(stmt.value)
+                                    elif target.id == 'workflow_modules_agg':
+                                        workflow_modules_agg = ast.literal_eval(stmt.value)
+
+            # Load single dataset workflow if found
+            if workflow_modules_sgl is not None and isinstance(
+                workflow_modules_sgl, list
+            ):
+                self._populate_workflow_from_definition(
+                    workflow_modules_sgl,
+                    self.single_workflow_modules,
+                    self.single_workflow_list,
+                    "Single Dataset",
+                )
+                logger.info(
+                    f"Loaded {len(workflow_modules_sgl)} modules to Single Dataset workflow (alt)"
+                )
+
+            # Load aggregation workflow if found
+            if workflow_modules_agg is not None and isinstance(
+                workflow_modules_agg, list
+            ):
+                self._populate_workflow_from_definition(
+                    workflow_modules_agg,
+                    self.aggregation_workflow_modules,
+                    self.aggregation_workflow_list,
+                    "Aggregation",
+                )
+                logger.info(
+                    f"Loaded {len(workflow_modules_agg)} modules to Aggregation workflow (alt)"
+                )
+
+        except SyntaxError as e:
+            logger.error(f"Syntax error in start_workflow.py: {e}")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Workflow Load Error",
+                f"Syntax error in start_workflow.py:\n{str(e)}",
+            )
+        except ValueError as e:
+            logger.error(f"Could not evaluate workflow definitions: {e}")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Workflow Load Error",
+                f"Could not evaluate workflow definitions:\n{str(e)}\n\n"
+                "Note: Complex expressions may not be supported.",
+            )
+        except Exception as e:
+            logger.error(f"Error loading start_workflow.py (alt): {e}")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Workflow Load Error",
+                f"Failed to load workflow from start_workflow.py:\n{str(e)}",
+            )
+
+
     def _load_workflow_definition(self, folder):
         """Search for workflow definition file and load workflow modules.
 
@@ -6454,6 +6576,12 @@ class Window(QtWidgets.QMainWindow):
             workflow_modules_agg = getattr(
                 module, "workflow_modules_agg", None
             )
+
+            # If no modules found at module level, try alternative loader
+            if workflow_modules_sgl is None and workflow_modules_agg is None:
+                logger.info("No workflow modules found at module level, trying alternative loader")
+                self._load_workflow_definition_alt(folder)
+                return
 
             # Load single dataset workflow if present
             if workflow_modules_sgl is not None and isinstance(
@@ -7242,16 +7370,16 @@ class Window(QtWidgets.QMainWindow):
         # print(f"Created workflow script: {output_path}")
         return output_path
 
-    def start_slurm(self):
-        """"""
+    def assemble_slurm_scripts(self):
         import getpass
 
-        hostname = "hpcl8001"
-        host_cluster = hostname  # "hpcl8"
+        host_cluster = str(self.cluster_host_combo.currentText())  # "hpcl8XXX"
+        login_node = CONFIG["SlurmLoginNodes"][host_cluster]  # "hpcl8001"
+        # print(f"'{host_cluster}', '{login_node}'")
         username = getpass.getuser()
         ssh_key_path = "~/.ssh/id_rsa"
         self.slurm_communicator = SlurmCommunicator(
-            hostname, username, port=22, ssh_key_path=ssh_key_path
+            login_node, username, port=22, ssh_key_path=ssh_key_path
         )
 
         assert self.slurm_communicator.test_connection()
@@ -7261,11 +7389,11 @@ class Window(QtWidgets.QMainWindow):
 
         job_name = "mypwjob"
         slurm_options = {
-            "nodes": self.cluster_nodes_spin.getValue(),
+            "nodes": self.cluster_nodes_spin.value(),
             # "ntasks": Number of tasks,
-            "cpus-per-task": self.cluster_cores_spin.getValue(),
-            "mem": self.cluster_memory_edit.getText(),
-            "time": self.cluster_timeout_edit.getText(),
+            "cpus-per-task": self.cluster_cores_spin.value(),
+            "mem": self.cluster_memory_edit.text(),
+            "time": self.cluster_timeout_edit.text(),
             # "mail-type": "ALL",
             # "mail-user": f"{username}@biochem.mpg.de",
         }
@@ -7291,6 +7419,11 @@ class Window(QtWidgets.QMainWindow):
         script_path = self.slurm_communicator.write_slurm_script(
             script_content, results_folder_local
         )
+        return host_cluster, script_path
+
+    def start_slurm(self):
+        """"""
+        host_cluster, script_path = self.assemble_slurm_scripts()
         result = self.slurm_communicator.submit_job(
             script_path, host_cluster, additional_options=None
         )
@@ -7307,6 +7440,28 @@ class Window(QtWidgets.QMainWindow):
                 f"Job submission failed!\n{result['stderr']}"
             )
             print("Failed to start SLURM on Cluster")
+
+    def estimate_start(self):
+        host_cluster, script_path = self.assemble_slurm_scripts()
+        result = self.slurm_communicator.submit_job(
+            script_path, host_cluster, additional_options=["--test-only"]
+        )
+
+        self.job_info_display.append(
+            f"Job start estimation:\n{str(result['stderr'])}"
+        )
+        # # Store and display job ID
+        # if result["success"] and result["job_id"]:
+        #     self.job_id_input.setText(str(result["job_id"]))
+        #     self.job_info_display.append(
+        #         f"Job submitted successfully!\nJob ID: {result['job_id']}"
+        #     )
+        #     # print(f"Starting SLURM on Cluster - Job ID: {result['job_id']}")
+        # else:
+        #     self.job_info_display.append(
+        #         f"Job submission failed!\n{result['stderr']}"
+        #     )
+        #     print("Failed to start SLURM on Cluster")
 
     def start_locally(self):
         """"""

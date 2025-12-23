@@ -4032,7 +4032,7 @@ def pick_similar_analysis(
                     K,
                     L,
                 )
-                picked_locs_xy = postprocess._locs_at(
+                picked_locs_xy = postprocess.locs_at(
                     x_grid, y_grid, block_locs_xy, r
                 )
                 if picked_locs_xy.shape[1] > 1:
@@ -4052,7 +4052,7 @@ def pick_similar_analysis(
                             break
                         x_test_old = x_test
                         y_test_old = y_test
-                        picked_locs_xy = postprocess._locs_at(
+                        picked_locs_xy = postprocess.locs_at(
                             x_test, y_test, block_locs_xy, r
                         )
                         if picked_locs_xy.shape[1] > 1:

@@ -1,16 +1,21 @@
 # default located in picasso-workflow/picasso_workflow folder
 # user-specific version can be in ~/.config/my_package/config.yaml or %APPDATA%\my_package\config.yaml
+Templates:
+  SimpleTest: "/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/250311-01_basic-localization"
+  MyTest: "/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/tests/mytest"
 Confluence:
   URL: "https://mibwiki.biochem.mpg.de"
   Space: "~hgrabmayr"
   DefaultPage: "test page"
-SlurmHosts:
-  - "hpcl8XXX"
 SlurmDefault:
   nodes: 2
   cores: 12
   memory: "50GB"
   timeout: "24:00:00"
+SlurmLoginNodes:
+  hpcl8XXX: hpcl8001
+  hpcl7XXX: hpcl7001
+  hpcl9XXX: hpcl9301
 Drivepaths:
   pcjuXX.local:
     - "/Volumes/pool-miblab"

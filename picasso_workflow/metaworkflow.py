@@ -129,7 +129,7 @@ class PathParser:
         """Checks a machine against a machine pattern, for example
         'mymachine6234' against 'mymachine6XXX', with X being a digit
         """
-        regex = pattern.replace("X", r"\d")
+        regex = pattern.replace("X", r"\S")
         regex = f"^{regex}$"
         # print('machine', machine, 'pattern', pattern, 'regex', regex)
         return re.fullmatch(regex, machine) is not None
