@@ -3998,15 +3998,15 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     def _plot_nena(self, nena_result, filepath_plot, pixelsize=None):
         fig, ax = plt.subplots()
-        d = nena_result.userkws["d"]
+        d = nena_result["d"]
         if pixelsize is None:
             xlabel = "Distance [px]"
         else:
             d = d * pixelsize
             xlabel = "Distance [nm]"
         ax.set_title("Next frame neighbor distance histogram")
-        ax.plot(d, nena_result.data, label="Data")
-        ax.plot(d, nena_result.best_fit, label="Fit")
+        ax.plot(d, nena_result["data"], label="Data")
+        ax.plot(d, nena_result["best_fit"], label="Fit")
         ax.set_xlabel(xlabel)
         ax.set_ylabel("Counts")
         ax.legend(loc="best")
