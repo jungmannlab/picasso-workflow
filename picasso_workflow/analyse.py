@@ -3961,7 +3961,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     }
                     results["nena"] = {
                         "res": str(all_best_vals),
-                        "chisqr": res.chisqr,
+                        # "chisqr": res.chisqr,
                         "NeNa": (
                             f"{best_val:.3f} px;"
                             + f" {pixelsize*best_val:.3f} nm "
