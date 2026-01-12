@@ -3953,11 +3953,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                     fp_plot = os.path.join(results["folder"], "nena.png")
                     self._plot_nena(res, fp_plot, pixelsize)
                     all_best_vals = {
-                        "delta_a": res.best_values["delta_a"],
-                        "s": res.best_values["s"],
-                        "ac": res.best_values["ac"],
-                        "dc": res.best_values["dc"],
-                        "sc": res.best_values["sc"],
+                        "delta_a": res["best_values"]["delta_a"],
+                        "s": res["best_values"]["s"],
+                        "ac": res["best_values"]["ac"],
+                        "dc": res["best_values"]["dc"],
+                        "sc": res["best_values"]["sc"],
                     }
                     results["nena"] = {
                         "res": str(all_best_vals),
