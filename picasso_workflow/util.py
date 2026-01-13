@@ -2241,7 +2241,7 @@ class ParameterCommandExecutor(DictSimpleTyper):
                         res = res + aritexp[1:]
                     else:
                         raise NotImplementedError(f"Cannot operate '{aritexp}' on '{res}' (str)")
-                elif np.isnumeric(res):
+                elif isinstance(res, (int, float)):
                     if not is_valid_expression(aritexp):
                         raise PriorResultError(
                             f"'{aritexp}' is not a valid numeric "

@@ -1345,11 +1345,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": ["x", "y"],
                 "required": True,
             },
-            "progress": {
-                "type": "function",
-                "description": "progress callback for status updates",
-                "required": False,
-            },
+            # "progress": {
+            #     "type": "function",
+            #     "description": "progress callback for status updates",
+            #     "required": False,
+            # },
         }
 
         results_spec = {
