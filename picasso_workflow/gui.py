@@ -2047,24 +2047,24 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": None,
                 "required": False,
             },
-            "asynch": {
-                "type": "bool",
-                "description": "If True, the GMM search is run in parallel using\
-                        multiprocessing. If False, the GMM search is run\
-                        without multiprocessing.",
-                "default": True,
-                "required": False,
-            },
-            "sigma_bounds": {
-                "type": "float",
-                "description": "(not recommended)\
-                        Minimum standard deviation of the Gaussian components\
-                        in nanometers. Useful for avoiding overfitting within\
-                        a single localization cloud. Now using individual\
-                        loc precision, so min_sigma is not recommended.",
-                "default": None,
-                "required": False,
-            },
+            # "asynch": {
+            #     "type": "bool",
+            #     "description": "If True, the GMM search is run in parallel using\
+            #             multiprocessing. If False, the GMM search is run\
+            #             without multiprocessing.",
+            #     "default": True,
+            #     "required": False,
+            # },
+            # "sigma_bounds": {
+            #     "type": "float",
+            #     "description": "(not recommended)\
+            #             Minimum standard deviation of the Gaussian components\
+            #             in nanometers. Useful for avoiding overfitting within\
+            #             a single localization cloud. Now using individual\
+            #             loc precision, so min_sigma is not recommended.",
+            #     "default": None,
+            #     "required": False,
+            # },
             "loc_prec_handle": {
                 "type": "str",
                 "description": 'One of ["local", "global", "abs"]',

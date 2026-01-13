@@ -6244,7 +6244,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         progress bar. If None, the progress bar displayed
                         directly to the console. If 'silent', no progress
                         is displayed
-                    sigma_bounds : float (not recommended)
+                    sigma_bounds : tuple of float (not recommended)
                         Minimum standard deviation of the Gaussian components
                         in nanometers. Useful for avoiding overfitting within
                         a single localization cloud. Now using individual
@@ -6280,7 +6280,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
             kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
         for oa, default in optional_args:
-            kwargs[oa] = parameters.get(oa, default)
+            setval = parameters.get(oa, default)
+            if oa == "calibration" and setval == "":
+                setval = default
+            kwargs[oa] = setval
 
         results["g5m_args"] = str(kwargs)
 
