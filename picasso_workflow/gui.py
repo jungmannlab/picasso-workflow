@@ -363,11 +363,15 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 Required keys: (none)
                 Optional keys: (none)
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
 
         Returns:
             parameters : dict
@@ -382,59 +386,108 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
         }
 
         return parameters_spec, results_spec
 
     def analysis_documentation(self):
-        """Document the parameters of the analysis machine and software.
-
-        Creates documentation of the analysis environment including system
-        information, software versions, and configuration parameters.
-
+        """This module documents where and how analysis is being performed
         Args:
-            i : int
-                The index of the module in the workflow
             parameters : dict
-                Required keys: (none)
-                Optional keys: (none)
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Optional keys:
-                    system_info : dict
-                        System and software version information
-
+                This module does not use any parameters
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, unchanged
             results : dict
-                Input results with added system documentation
+                the analysis results, updated with:
+                    picasso version : str
+                        version of picasso library used
+                    picasso-workflow version : str
+                        version of picasso-workflow
+                    Architecture : str
+                        machine architecture
+                    OS : str
+                        operating system
+                    host : str
+                        hostname of machine
+                    processor : str
+                        processor information
+                    CPU Frequency [MHz] : float
+                        current CPU frequency
+                    CPU cores : int
+                        number of CPU cores
+                    Memory total [GB] : int
+                        total system memory in GB
+                    Memory available [GB] : int
+                        available system memory in GB
+                    GPU : str
+                        GPU name or "N/A"
+                    GPU memory [GB] : int
+                        GPU memory in GB or 0 if no GPU
         """
         parameters_spec = {}
 
         results_spec = {
-            "start time": {
+            "picasso version": {
                 "type": "str",
-                "description": "Module execution start timestamp",
+                "description": "version of picasso library used",
             },
-            "duration": {
+            "picasso-workflow version": {
+                "type": "str",
+                "description": "version of picasso-workflow",
+            },
+            "Architecture": {
+                "type": "str",
+                "description": "machine architecture",
+            },
+            "OS": {
+                "type": "str",
+                "description": "operating system",
+            },
+            "host": {
+                "type": "str",
+                "description": "hostname of machine",
+            },
+            "processor": {
+                "type": "str",
+                "description": "processor information",
+            },
+            "CPU Frequency [MHz]": {
                 "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
+                "description": "current CPU frequency",
             },
-            "system_info": {
-                "type": "dict",
-                "description": "System and software version information",
-                "required": False,
+            "CPU cores": {
+                "type": "int",
+                "description": "number of CPU cores",
+            },
+            "Memory total [GB]": {
+                "type": "int",
+                "description": "total system memory in GB",
+            },
+            "Memory available [GB]": {
+                "type": "int",
+                "description": "available system memory in GB",
+            },
+            "GPU": {
+                "type": "str",
+                "description": "GPU name or N/A",
+            },
+            "GPU memory [GB]": {
+                "type": "int",
+                "description": "GPU memory in GB or 0 if no GPU",
             },
         }
 
@@ -442,65 +495,52 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def convert_zeiss_movie(self):
         """Converts a DNA-PAINT movie into .raw, as supported by picasso.
-
-        Converts Zeiss .czi movie files to picasso-compatible .raw format
-        for subsequent analysis steps in the workflow.
-
         Args:
-            i : int
-                The index of the module in the workflow
             parameters : dict
-                Required keys:
+                necessary items:
                     filepath : str
-                        Path to the input Zeiss .czi file
-                Optional keys:
-                    output_filepath : str
-                        Custom output path for the .raw file
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    filepath_raw : str
-                        Path to the output .raw file
-
+                        the czi file name to load.
+                optional items:
+                    filename_raw : str
+                        the raw file name to write to
+                    info : dict, information as used by picasso
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
             results : dict
-                Input results with added file path information
+                the analysis results, updated with:
+                    filepath_raw : str
+                        full path to the output raw file
+                    filename_raw : str
+                        name of the output raw file
         """
         parameters_spec = {
             "filepath": {
                 "type": "str",
-                "description": "Path to the input Zeiss .czi file",
+                "description": "the czi file name to load",
                 "extensions": [".czi"],
                 "required": True,
             },
-            "output_filepath": {
+            "filename_raw": {
                 "type": "str",
-                "description": "Custom output path for the .raw file",
-                "extensions": [".raw"],
+                "description": "the raw file name to write to",
                 "required": False,
-                "mode": "save",
+            },
+            "info": {
+                "type": "dict",
+                "description": "information as used by picasso",
+                "required": False,
             },
         }
 
         results_spec = {
-            "start time": {
-                "type": "str",
-                "description": "Module execution start timestamp",
-            },
-            "duration": {
-                "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
-            },
             "filepath_raw": {
                 "type": "str",
-                "description": "Path to the output .raw file",
+                "description": "full path to the output raw file",
+            },
+            "filename_raw": {
+                "type": "str",
+                "description": "name of the output raw file",
             },
         }
 
@@ -511,7 +551,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         Loads DNA-PAINT movie data and metadata into memory for subsequent
         analysis. Optionally creates sample movies and loads camera
-        configuration.
+        configuration. The data is saved in self.movie and self.info.
 
         Args:
             i : int
@@ -524,14 +564,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     sample_movie : dict
                         Parameters for creating a subsampled movie
                     load_camera_info : bool
-                        Whether to load camera configuration
-                        from picasso.CONFIG
+                        Whether to load camera configuration from
+                        picasso.CONFIG
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:
@@ -544,8 +588,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         Returns:
             parameters : dict
-                Input parameters, potentially modified
-                (sample_movie paths updated)
+                Input parameters, potentially modified (sample_movie paths
+                updated)
             results : dict
                 Input results with added movie information and metadata
         """
@@ -604,6 +648,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
@@ -636,69 +684,42 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def load_dataset_localizations(self):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
-
-        Loads pre-computed localization data from file for analysis workflows
-        that skip the identification and localization steps.
-
+        The data is saved in
+            self.locs
+            self.info
         Args:
-            i : int
-                The index of the module in the workflow
             parameters : dict
-                Required keys:
+                necessary items:
                     filename : str
-                        Path to the localization file to load
-                Optional keys:
-                    additional_info : dict
-                        Additional metadata to include
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    picasso version : str
-                        Version of picasso library used
-                    nlocs : int
-                        Number of localizations loaded
-
+                        the (main) file name to load. This can be image files,
+                        or hdf5.
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
             results : dict
-                Input results with added localization information
+                the analysis results, updated with:
+                    picasso version : str
+                        version of picasso library used
+                    nlocs : int
+                        number of localizations loaded
         """
         parameters_spec = {
             "filename": {
                 "type": "str",
-                "description": "Path to the localization file to load",
+                "description": "the (main) file name to load. This can be image files, or hdf5",
                 "extensions": [".hdf5", ".h5"],
                 "required": True,
-            },
-            "additional_info": {
-                "type": "dict",
-                "description": "Additional metadata to include",
-                "required": False,
             },
         }
 
         results_spec = {
-            "start time": {
-                "type": "str",
-                "description": "Module execution start timestamp",
-            },
-            "duration": {
-                "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
-            },
             "picasso version": {
                 "type": "str",
-                "description": "Version of picasso library used",
+                "description": "version of picasso library used",
             },
             "nlocs": {
                 "type": "int",
-                "description": "Number of localizations loaded",
+                "description": "number of localizations loaded",
                 "min": 0,
             },
         }
@@ -711,6 +732,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         Identifies potential localization sites in the loaded movie using
         net gradient thresholding. Optionally performs automatic net gradient
         detection and creates identification vs frame plots.
+        The data is saved in self.identifications.
 
         Args:
             i : int
@@ -742,22 +764,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                             filename : str
                                 Output filename for plot
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:
                     num_identifications : int
                         Total number of identifications found
                     auto_netgrad : dict
-                        Results from automatic net gradient detection
-                        (if requested)
+                        Results from automatic net gradient detection (if
+                        requested)
                     ids_vs_frame : dict
-                        Results from identifications vs frame analysis
-                        (if requested)
+                        Results from identifications vs frame analysis (if
+                        requested)
 
         Returns:
             parameters : dict
@@ -848,6 +874,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
@@ -884,61 +914,59 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def localize(self):
         """Localizes Spots previously identified.
-
-        Performs sub-pixel localization of identified spots using various
-        fitting algorithms (MLE, LQ, etc.).
-
+        The data is saved in
+            self.locs
         Args:
             i : int
-                The index of the module in the workflow
+                the module index in the protocol
             parameters : dict
-                Required keys:
-                    box_size : int
-                        Size of the localization box in pixels
-                Optional keys:
-                    method : str
-                        Localization method ('mle', 'lq', 'avg')
-                    convergence_criterion : float
-                        Convergence criterion for iterative methods
+                necessary items:
+                    box_size : as always
+                    fit_parallel : bool
+                        whether to fit on multiple cores
+                optional items:
+                    locs_vs_frame : dict
+                        for plotting locs vs time
+                        items correspond to arguments of _plot_locs_vs_frame
+                    save_locs : dict
+                        if saving localizations is requested.
+                        Items correpsond to arguments of save_locs
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    nlocs : int
-                        Number of localizations found
-
+                the results dict, created by the module_decorator
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
             results : dict
-                Input results with localization statistics
+                the analysis results, updated with:
+                    locs_vs_frame : dict
+                        plot results if locs_vs_frame parameter was provided
+                    locs_columns : list
+                        list of column names in the localizations array
         """
         parameters_spec = {
             "box_size": {
                 "type": "int",
-                "description": "Size of the localization box in pixels",
+                "description": "as always",
                 "min": 3,
                 "max": 21,
                 "step": 2,
                 "default": 7,
                 "required": True,
             },
-            "method": {
-                "type": "str",
-                "description": "Localization method",
-                "options": ["mle", "lq", "avg"],
-                "default": "mle",
+            "fit_parallel": {
+                "type": "bool",
+                "description": "whether to fit on multiple cores",
+                "default": False,
+                "required": True,
+            },
+            "locs_vs_frame": {
+                "type": "dict",
+                "description": "for plotting locs vs time, items correspond to arguments of _plot_locs_vs_frame",
                 "required": False,
             },
-            "convergence_criterion": {
-                "type": "float",
-                "description": "Convergence criterion for iterative methods",
-                "min": 1e-6,
-                "max": 1e-2,
-                "default": 1e-3,
+            "save_locs": {
+                "type": "dict",
+                "description": "if saving localizations is requested. Items correpsond to arguments of save_locs",
                 "required": False,
             },
         }
@@ -948,15 +976,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
             },
-            "nlocs": {
-                "type": "int",
-                "description": "Number of localizations found",
-                "min": 0,
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "locs_vs_frame": {
+                "type": "dict",
+                "description": "plot results if locs_vs_frame parameter was provided",
+            },
+            "locs_columns": {
+                "type": "list",
+                "description": "list of column names in the localizations array",
             },
         }
 
@@ -966,59 +1005,54 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """Opens a single-plane tiff image and saves it to png with
         contrast adjustment.
 
-        Exports brightfield microscopy images with automatic contrast
-        adjustment for documentation and visualization purposes.
-
         Args:
             i : int
-                The index of the module in the workflow
+                the module index in the protocol
             parameters : dict
-                Required keys:
-                    filepath : str
-                        Path to the input brightfield image
-                Optional keys:
-                    output_filepath : str
-                        Custom output path for the PNG file
-                    contrast_percentiles : tuple
-                        Percentiles for contrast adjustment
+                necessary items:
+                    filepath : str or list of str or dict
+                        the tiff file(s) to load. The converted file(s) will
+                        have the same name, but with .png extension
+                        if dict: keys are labels
+                optional items:
+                    min_quantile : float, default: 0
+                        the quantile below which pixels are shown black
+                    max_quantile : float, default: 1
+                        the quantile above which pixels are shown white
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    output_filepath : str
-                        Path to the exported PNG file
-
+                the results dict, created by the module_decorator
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
             results : dict
-                Input results with export information
+                the analysis results, updated with:
+                    labeled filepaths : dict
+                        keys : labels
+                        values : filepaths
+                    success : bool
+                        whether the export was successful
         """
         parameters_spec = {
             "filepath": {
-                "type": "str",
-                "description": "Path to the input brightfield image",
-                "extensions": [".tif", ".tiff", ".png", ".jpg"],
+                "type": ["str", "list", "dict"],
+                "description": "the tiff file(s) to load. The converted file(s) will have the same name, but with .png extension. if dict: keys are labels",
+                "extensions": [".tif", ".tiff"],
                 "required": True,
             },
-            "output_filepath": {
-                "type": "str",
-                "description": "Custom output path for the PNG file",
-                "extensions": [".png"],
-                "required": False,
-                "mode": "save",
-            },
-            "contrast_percentiles": {
-                "type": "tuple",
-                "description": "Percentiles for contrast adjustment",
-                "length": 2,
-                "element_type": "float",
+            "min_quantile": {
+                "type": "float",
+                "description": "the quantile below which pixels are shown black",
                 "min": 0.0,
-                "max": 100.0,
-                "default": [1.0, 99.0],
+                "max": 1.0,
+                "default": 0,
+                "required": False,
+            },
+            "max_quantile": {
+                "type": "float",
+                "description": "the quantile above which pixels are shown white",
+                "min": 0.0,
+                "max": 1.0,
+                "default": 1,
                 "required": False,
             },
         }
@@ -1028,93 +1062,95 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
             },
-            "output_filepath": {
+            "folder": {
                 "type": "str",
-                "description": "Path to the exported PNG file",
+                "description": "Output folder for module results",
+            },
+            "labeled filepaths": {
+                "type": "dict",
+                "description": "keys : labels, values : filepaths",
+            },
+            "success": {
+                "type": "bool",
+                "description": "whether the export was successful",
             },
         }
 
         return parameters_spec, results_spec
 
     def render(self):
-        """Renders localizations.
-
-        Creates rendered images of localization data using various
-        visualization methods and color schemes.
+        """Renders localizations on the whole field of view, and on
+        a zoom in around the center of mass of localizations.
 
         Args:
             i : int
-                The index of the module in the workflow
+                the module index in the protocol
             parameters : dict
-                Required keys:
-                    oversampling : int
-                        Oversampling factor for rendering
-                Optional keys:
-                    method : str
-                        Rendering method
-                    blur_method : str
-                        Blur method for rendering
-                    colors : list
-                        Color scheme for multi-channel rendering
+                optional items:
+                    ctrmass_fov_nm : Field of view of the zoom in rendering
+                        around the center of mass in nm
+                    fullfov_pixelsize : The rendered pixel size [nm] of the
+                        full FOV rendering
+                    ctrmass_pixelsize : The rendered pixel size [nm] of the
+                        zoom in rendering around the center of mass
+                    ctrmass_blur_method : Blur method
+                    ctrmass_min_blur_width : min blur with
+                    ctrmass_ang : angle
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    rendered_image : numpy.ndarray
-                        Rendered image array
-                    render_filepath : str
-                        Path to saved rendered image
-
+                the results dict, created by the module_decorator
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
             results : dict
-                Input results with rendering outputs
+                the analysis results, updated with:
+                    fp_scene_fullfov : str
+                        filepath to full FOV rendering
+                    fp_scene_ctrmass : str
+                        filepath to center of mass zoom rendering (conditional, only if ctrmass_fov_nm provided)
         """
         parameters_spec = {
-            "oversampling": {
-                "type": "int",
-                "description": "Oversampling factor for rendering",
-                "min": 1,
-                "max": 50,
-                "default": 10,
-                "required": True,
+            "ctrmass_fov_nm": {
+                "type": "float",
+                "description": "Field of view of the zoom in rendering around the center of mass in nm",
+                "min": 0,
+                "required": False,
             },
-            "method": {
+            "fullfov_pixelsize": {
+                "type": "float",
+                "description": "The rendered pixel size [nm] of the full FOV rendering",
+                "min": 0,
+                "required": False,
+            },
+            "ctrmass_pixelsize": {
+                "type": "float",
+                "description": "The rendered pixel size [nm] of the zoom in rendering around the center of mass",
+                "min": 0,
+                "required": False,
+            },
+            "ctrmass_blur_method": {
                 "type": "str",
-                "description": "Rendering method",
-                "options": ["gaussian", "hist", "smooth"],
-                "default": "gaussian",
+                "description": "Blur method",
                 "required": False,
             },
-            "blur_method": {
-                "type": "str",
-                "description": "Blur method for rendering",
-                "options": ["gaussian", "uniform", "none"],
-                "default": "gaussian",
+            "ctrmass_min_blur_width": {
+                "type": "float",
+                "description": "min blur with",
+                "min": 0,
                 "required": False,
             },
-            "colors": {
-                "type": "list",
-                "description": "Color scheme for multi-channel rendering",
-                "element_type": "str",
+            "ctrmass_ang": {
+                "type": "float",
+                "description": "angle",
                 "required": False,
-                "options": [
-                    "red",
-                    "green",
-                    "blue",
-                    "cyan",
-                    "magenta",
-                    "yellow",
-                ],
             },
         }
 
@@ -1123,18 +1159,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
             },
-            "rendered_image": {
-                "type": "numpy.ndarray",
-                "description": "Rendered image array",
-            },
-            "render_filepath": {
+            "folder": {
                 "type": "str",
-                "description": "Path to saved rendered image",
+                "description": "Output folder for module results",
+            },
+            "fp_scene_fullfov": {
+                "type": "str",
+                "description": "filepath to full FOV rendering",
+            },
+            "fp_scene_ctrmass": {
+                "type": "str",
+                "description": "filepath to center of mass zoom rendering (conditional, only if ctrmass_fov_nm provided)",
             },
         }
 
@@ -1142,51 +1186,58 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def undrift_rcc(self):
         """Undrifts localized data using redundant cross correlation.
-
-        Corrects sample drift during acquisition using redundant
-        cross-correlation analysis of localization data.
+        drift is saved in
+        self.drift
 
         Args:
             i : int
-                The index of the module in the workflow
+                the module index in the protocol
             parameters : dict
-                Required keys:
+                necessary items:
                     segmentation : int
-                        Number of segments for drift analysis
-                Optional keys:
-                    display : bool
-                        Whether to display drift correction plots
+                        the number of frames segmented for RCC
+                optional items:
+                    max_iter_segmentations : int, default: 3
+                        maximum number of iterations to adaptively increase segmentation if RCC fails
+                    filename : str
+                        the drift txt file name
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    drift : numpy.ndarray
-                        Calculated drift values
-                    drift_plot_filepath : str
-                        Path to drift visualization plot
-
+                the results dict, created by the module_decorator
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
+                Note: dimensions parameter is set to ['x', 'y'] by this module
             results : dict
-                Input results with drift correction data
+                the analysis results, updated with:
+                    success : bool
+                        whether undrifting was successful
+                    message : str
+                        error or warning messages if any
+                    filepath_driftfile : str
+                        filepath to drift txt file (conditional, only if undrifting succeeded)
+                    filepath_plot : str
+                        filepath to drift plot png (conditional, only if undrifting succeeded)
         """
         parameters_spec = {
             "segmentation": {
                 "type": "int",
-                "description": "Number of segments for drift analysis",
+                "description": "the number of frames segmented for RCC",
                 "min": 2,
                 "max": 1000,
                 "default": 50,
                 "required": True,
             },
-            "display": {
-                "type": "bool",
-                "description": "Whether to display drift correction plots",
-                "default": False,
+            "max_iter_segmentations": {
+                "type": "int",
+                "description": "maximum number of iterations to adaptively increase segmentation if RCC fails",
+                "min": 1,
+                "max": 10,
+                "default": 3,
+                "required": False,
+            },
+            "filename": {
+                "type": "str",
+                "description": "the drift txt file name",
                 "required": False,
             },
         }
@@ -1196,70 +1247,107 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
             },
-            "drift": {
-                "type": "numpy.ndarray",
-                "description": "Calculated drift values",
-            },
-            "drift_plot_filepath": {
+            "folder": {
                 "type": "str",
-                "description": "Path to drift visualization plot",
+                "description": "Output folder for module results",
+            },
+            "success": {
+                "type": "bool",
+                "description": "whether undrifting was successful",
+            },
+            "message": {
+                "type": "str",
+                "description": "error or warning messages if any",
+            },
+            "filepath_driftfile": {
+                "type": "str",
+                "description": "filepath to drift txt file (conditional, only if undrifting succeeded)",
+            },
+            "filepath_plot": {
+                "type": "str",
+                "description": "filepath to drift plot png (conditional, only if undrifting succeeded)",
             },
         }
 
         return parameters_spec, results_spec
 
     def undrift_aim(self):
-        """Unrift localized data using the AIM algorithm.
-
-        Corrects sample drift using the AIM (Accelerated Iterative Method)
-        algorithm for drift correction.
+        """Unrift localized data using the AIM algorithm
+        drift is saved in
+        self.drift
 
         Args:
             i : int
-                The index of the module in the workflow
+                the module index in the protocol
             parameters : dict
-                Required keys:
+                necessary items:
                     segmentation : int
-                        Number of segments for drift analysis
-                Optional keys:
-                    iterations : int
-                        Number of AIM iterations
+                        the number of frames segmented
+                    intersect_d : float
+                        Intersect distance in nanometers.
+                    roi_r : float
+                        Radius of the local search region in nanometers.
+                        Should be larger than the maximum expected drift wihtin
+                        segmentation.
+                    dimensions : list of str
+                        the dimensions undrifted, typically ['x', 'y'].
+                optional items:
+                    progress : callback function
+                        progress callback for status updates
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    drift : numpy.ndarray
-                        Calculated drift values
-
+                the results dict, created by the module_decorator
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
             results : dict
-                Input results with drift correction data
+                the analysis results, updated with:
+                    success : bool
+                        whether undrifting was successful
+                    fp_driftfile : str
+                        filepath to drift txt file
+                    fp_fig : str
+                        filepath to drift plot png
         """
         parameters_spec = {
             "segmentation": {
                 "type": "int",
-                "description": "Number of segments for drift analysis",
+                "description": "the number of frames segmented",
                 "min": 2,
                 "max": 1000,
                 "default": 50,
                 "required": True,
             },
-            "iterations": {
-                "type": "int",
-                "description": "Number of AIM iterations",
-                "min": 1,
-                "max": 100,
-                "default": 10,
+            "intersect_d": {
+                "type": "float",
+                "description": "Intersect distance in nanometers.",
+                "min": 0,
+                "required": True,
+            },
+            "roi_r": {
+                "type": "float",
+                "description": "Radius of the local search region in nanometers. Should be larger than the maximum expected drift wihtin segmentation.",
+                "min": 0,
+                "required": True,
+            },
+            "dimensions": {
+                "type": "list",
+                "description": "the dimensions undrifted, typically ['x', 'y'].",
+                "element_type": "str",
+                "default": ["x", "y"],
+                "required": True,
+            },
+            "progress": {
+                "type": "function",
+                "description": "progress callback for status updates",
                 "required": False,
             },
         }
@@ -1269,46 +1357,54 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
             },
-            "drift": {
-                "type": "numpy.ndarray",
-                "description": "Calculated drift values",
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "success": {
+                "type": "bool",
+                "description": "whether undrifting was successful",
+            },
+            "fp_driftfile": {
+                "type": "str",
+                "description": "filepath to drift txt file",
+            },
+            "fp_fig": {
+                "type": "str",
+                "description": "filepath to drift plot png",
             },
         }
 
         return parameters_spec, results_spec
 
     def manual(self):
-        """Describes a manual step, for which the workflow is paused.
-
-        Pauses the workflow for manual intervention or user input before
-        continuing with subsequent analysis steps.
-
+        """Handles a manual step: if the files required are not
+        present, prompt the user to provide them. if they are, move
+        to the next step.
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Optional keys:
-                    message : str
-                        Message to display to user
-                    wait_for_input : bool
-                        Whether to wait for user confirmation
+                the index of the module
+            parameters: dict
+                with required keys:
+                    prompt : str
+                        the user prompt
+                    filename : str
+                        the file the user should provide.
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results (unchanged)
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "message": {
@@ -1330,43 +1426,63 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
         }
 
         return parameters_spec, results_spec
 
     def summarize_dataset(self):
-        """Summarizes the results of a dataset analysis.
+        """Summarize dataset using various analysis methods
 
-        Creates a comprehensive summary of the analysis results including
-        statistics, plots, and key findings.
+        Computes dataset quality metrics such as NeNa (Nearest Neighbor Analysis)
+        and median localization precision.
 
         Args:
             i : int
                 The index of the module in the workflow
             parameters : dict
-                Optional keys:
-                    include_plots : bool
-                        Whether to include visualization plots
-            results : dict
                 Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    summary_report : dict
-                        Comprehensive analysis summary
-
+                    methods : dict
+                        Dictionary of analysis methods to run. Keys are method names,
+                        values are method-specific parameter dicts.
+                        Supported methods:
+                            "nena" : dict (no parameters)
+                                Performs Nearest Neighbor Analysis to estimate localization precision
+                            "median-loc-precision" : dict
+                                Calculates median localization precision
+                                Optional keys:
+                                    qe_correction : float
+                                        Quantum efficiency correction factor (default: 1)
+            results : dict
+                the results dict, created by the module_decorator
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
             results : dict
-                Input results with summary information
+                the analysis results, updated with:
+                    nena : dict (if nena method used)
+                        Dictionary with keys:
+                            res : str - all best fit values
+                            NeNa : str - formatted NeNa result
+                            nena-px : float - NeNa value in pixels
+                            nena-nm : float - NeNa value in nanometers
+                            filepath_plot : str - path to NeNa plot
+                    median-loc-precision : dict (if median-loc-precision method used)
+                        Dictionary with keys:
+                            median_lp-px : float - median localization precision in pixels
+                            median_lp-nm : float - median localization precision in nanometers
         """
         parameters_spec = {
             "include_plots": {
@@ -1408,10 +1524,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "summary_report": {
                 "type": "dict",
@@ -1442,38 +1566,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def density(self):
-        """Calculate local localization density.
-
-        Computes local density of localizations using various methods
-        for spatial analysis and clustering preparation.
-
+        """Calculate local localization density
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
+                the index of the module
+            parameters: dict
+                with required keys:
                     radius : float
-                        Radius for local density calculation in nm
-                Optional keys:
+                        the radius for calculating local density
+                and optional keys:
                     save_locs : bool
-                        Whether to save density-annotated localizations
+                        whether to save the locs into the results folder
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                    nlocs : int
-                        Number of localizations processed
-                Optional keys:
-                    density_stats : dict
-                        Statistical summary of density calculations
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with density information
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "radius": {
@@ -1499,10 +1605,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "nlocs": {
                 "type": "int",
@@ -1523,6 +1637,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         Applies DBSCAN clustering algorithm to localizations, optionally
         replacing localizations with cluster centers for subsequent analysis.
+        After this module, the standard locs will be the cluster centers.
 
         Args:
             i : int
@@ -1537,14 +1652,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         Whether to replace localizations with cluster centers
                 Optional keys:
                     save_locs : bool
-                        Whether to save clustered localization data to
-                        results folder
+                        Whether to save clustered localization data to results
+                        folder
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:
@@ -1602,6 +1721,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
@@ -1624,42 +1747,23 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def hdbscan(self):
-        """Perform clustering using hdbscan.
-
-        Applies HDBSCAN (Hierarchical DBSCAN) clustering algorithm to
-        localizations for density-based clustering with hierarchical structure.
-
+        """Perform hdbscan clustering. After this module, the standard
+        locs will be the cluster centers.
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    min_cluster_size : int
-                        Minimum cluster size for HDBSCAN
-                    min_samples : int
-                        Minimum samples parameter for HDBSCAN
-                Optional keys:
-                    continue_with_centers : bool
-                        Whether to use cluster centers for subsequent analysis
+                the index of the module
+            parameters: dict
+                with required keys:
+                    min_cluster : float
+                        the hdbscan min_cluster
+                    min_samples : float
+                        the hdbscan min_sample
+                and optional keys:
                     save_locs : bool
-                        Whether to save clustered localization data
+                        whether to save the locs into the results folder
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Optional keys:
-                    n_clusters : int
-                        Number of clusters identified
-                    cluster_centers : numpy.ndarray
-                        Coordinates of cluster centers
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with clustering information
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "min_cluster_size": {
@@ -1699,10 +1803,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "n_clusters": {
                 "type": "int",
@@ -1720,36 +1832,22 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def binding_event_analysis(self):
-        """Perform clustering using the smlm clusterer.
+        """Evaluate binding events according to Philipp Steen's methods
 
-        Analyzes binding events in single-molecule localization data
-        using specialized clustering algorithms.
+        Steen, P.R., Unterauer, E.M., Masullo, L.A. et al.
+        The DNA-PAINT palette: a comprehensive performance analysis
+        of fluorescent dyes.
+        Nat Methods (2024).
+        https://doi.org/10.1038/s41592-024-02374-8
 
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    radius : float
-                        Clustering radius in nm
-                Optional keys:
-                    min_binding_time : float
-                        Minimum binding time threshold
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    binding_events : int
-                        Number of binding events detected
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with binding event analysis
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_locs : str
+                        file path to input locs
+                    n_frames
         """
         parameters_spec = {
             "radius": {
@@ -1775,10 +1873,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "binding_events": {
                 "type": "int",
@@ -1790,36 +1896,27 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def smlm_clusterer(self):
-        """Perform clustering using the smlm clusterer.
-
-        Applies specialized SMLM clustering algorithms for single-molecule
-        localization microscopy data analysis.
-
+        """Perform smlm clustering. After this module, the standard
+        locs will be the cluster centers.
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    method : str
-                        Clustering method to use
-                Optional keys:
+                the index of the module
+            parameters: dict
+                with required keys:
                     radius : float
-                        Clustering radius parameter
+                        the smlm radius, in nm
+                    min_locs : float
+                        the smlm min_locs
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+                    basic_fa : bool
+                        the smlm basic fa, default: False
+                    radius_z : float
+                        the smlm radius_z, default: None
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    n_clusters : int
-                        Number of clusters found
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with clustering statistics
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "method": {
@@ -1843,10 +1940,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "n_clusters": {
                 "type": "int",
@@ -1858,36 +1963,56 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def gaussian_mixture_cluster(self):
-        """Perform clustering using gaussian mixture models.
-
-        Applies Gaussian Mixture Model clustering to localization data
-        for probabilistic cluster assignment.
-
+        """Perform clustering using gaussian mixture modelsAfter this module,
+        the standard locs will be the Gaussian centers.
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    n_components : int
-                        Number of Gaussian components
-                Optional keys:
-                    covariance_type : str
-                        Type of covariance matrix
+                the index of the module
+            parameters: dict
+                with required keys:
+                    locs : np.recarray
+                        Localizations.
+                    info : list
+                        Information dictionaries.
+                    min_locs : int
+                        Minimum number of localizations per component. Used
+                        to filter out components with too few localizations
+                        that likely represent background.
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+                    max_rounds_without_best_bic : int
+                        (default=3)
+                        Maximum number of rounds without BIC improvement to
+                        terminate the optimal GMM search.
+                    bootstrap_check : bool (default=False)
+                        If True, the standard error of the means (SEM) is
+                        calculated using bootstrapping. If False, the
+                        standard, single Gaussian SEM is used as
+                        approximation.
+                    calibration : dict (default=None)
+                        Calibration dictionary with x and y coefficients, z
+                        step size and the number of frames. Only required for
+                        3D data.
+                    asynch : bool (default=True)
+                        If True, the GMM search is run in parallel using
+                        multiprocessing. If False, the GMM search is run
+                        without multiprocessing.
+                    callback_parent : function (default='silent')
+                        Callback function's parent object for displaying
+                        progress bar. If None, the progress bar displayed
+                        directly to the console. If 'silent', no progress
+                        is displayed
+                    sigma_bounds : float (not recommended)
+                        Minimum standard deviation of the Gaussian components
+                        in nanometers. Useful for avoiding overfitting within
+                        a single localization cloud. Now using individual
+                        loc precision, so min_sigma is not recommended.
+                    loc_prec_handle : Literal["local", "global", "abs"]
+                        default: local
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    cluster_assignments : numpy.ndarray
-                        Cluster assignment probabilities
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with GMM clustering results
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "n_components": {
@@ -1912,10 +2037,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "cluster_assignments": {
                 "type": "numpy.ndarray",
@@ -1926,36 +2059,32 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def nneighbor(self):
-        """Calculate Nearest Neighbor distances.
-
-        Computes k-nearest neighbor distances for spatial randomness
-        analysis and clustering validation.
-
+        """Perform nearest neighbor calculation
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    k : int
-                        Number of nearest neighbors to calculate
-                Optional keys:
-                    save_data : bool
-                        Whether to save nearest neighbor data
+                the index of the module
+            parameters: dict
+                with required keys:
+                    dims : list of str
+                        the distance dimensions, e.g. ['x', 'y']
+                        or ['x', 'y', 'z']
+                    nth_NN : int
+                        calculate the 1st to nth nearest neighbor distances
+                    nth_rdf : int
+                        calculate distances up to the 95th percile of the
+                        nth_rdf nearest neighbor
+                    subsample_1stNN : int
+                        by how much fold to subsample distances from the
+                        median of the 1st nearest nteighbor. Default is 20
+                    add_column : bool
+                        whether to add a column of nearest neighbor distance
+                        to the locs
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    nneighbor_distances : numpy.ndarray
-                        Nearest neighbor distance matrix
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with nearest neighbor data
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "k": {
@@ -1979,10 +2108,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "nneighbor_distances": {
                 "type": "numpy.ndarray",
@@ -2006,7 +2143,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     nneighbors : str or numpy.ndarray or list
                         If str: filepath to nearest neighbor data file
                         If array: 2D array (N, k) of kth nearest neighbor
-                            distances
+                        distances
                         If list: multiple datasets or file paths
                     dimensionality : int
                         Spatial dimensionality (2 or 3) for CSR model
@@ -2023,11 +2160,15 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     fit_bkg : bool
                         Whether to fit background (default: False)
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:
@@ -2113,6 +2254,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
@@ -2160,32 +2305,17 @@ class ModuleDescriptor(util.AbstractModuleCollection):
     def save_single_dataset(self):
         """Saves the locs and info of a single dataset; makes loading
         for the aggregation workflow more straightforward.
-
-        Saves localization data and metadata from single-dataset analysis
-        for subsequent use in aggregation workflows.
-
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Optional keys:
-                    filename : str
-                        Custom filename for saved data
+                the index of the module
+            parameters: dict
+                with required keys:
+                        filename : str
+                            the name of the dataset
+                and optional keys:
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    saved_filepath : str
-                        Path to saved dataset file
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with save information
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "filename": {
@@ -2200,10 +2330,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "saved_filepath": {
                 "type": "str",
@@ -2215,37 +2353,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     # Aggregation workflow modules
     def load_datasets_to_aggregate(self):
-        """Loads data of multiple single-dataset workflows into one
-        aggregation workflow.
-
-        Loads and combines data from multiple single-dataset analyses
-        for aggregated statistical analysis.
-
+        """Loads the results of single-dataset workflows
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    file_list : list
-                        List of dataset files to load
-                Optional keys:
-                    tags : list
-                        Custom tags for each dataset
+                the index of the module
+            parameters: dict
+                with required keys:
+                    filepaths : list of str
+                        the hdf5 files to load.
+                    tags : list of str
+                        the tags to name the datasets
+                and optional keys:
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    n_datasets : int
-                        Number of datasets loaded
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with aggregation information
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "file_list": {
@@ -2268,10 +2389,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "n_datasets": {
                 "type": "int",
@@ -2283,37 +2412,36 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def align_channels(self):
-        """Saves the locs and info of a single dataset; makes loading
-        for the aggregation workflow more straightforward.
-
-        Aligns multiple imaging channels using fiducial markers or
-        cross-correlation methods for multi-color analysis.
-
+        """Aligns multiple channels to each other (part of an aggregation
+        workflow)
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    method : str
-                        Alignment method to use
-                Optional keys:
-                    reference_channel : int
-                        Reference channel index for alignment
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+                    filepaths : list of str
+                        the previously saved hdf5 files to be loaded and
+                        aligned. if not given, the last processed data is used
+                    align_pars : dict
+                        kwargs of picasso_outpost.align_channels
+                            max_iterations, convergence
+                    fp_fiducials : list of str
+                        the previously saved hdf5 files of fiducial markers
+                        to be loaded and aligned.
+                    fig_filename : str
+                        the location to save the drift figure to
+                    crop_boundaries : bool
+                        whether to crop the localizations according to the
+                        image boundaries (after shifting)
+                    fp_co_shift_channel_locs : list of str
+                        hdf5 files not in the 'main workflow' that should
+                        be shifted as well. This could e.g. be clustered
+                        localizations when the workflow has continued with
+                        cluster centers
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    alignment_matrix : numpy.ndarray
-                        Transformation matrix for alignment
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with alignment information
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "method": {
@@ -2337,10 +2465,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "alignment_matrix": {
                 "type": "numpy.ndarray",
@@ -2353,32 +2489,19 @@ class ModuleDescriptor(util.AbstractModuleCollection):
     def combine_channels(self):
         """Combines multiple channels into one dataset. This is relevant
         e.g. for RESI.
-
-        Merges data from multiple imaging channels into a single dataset
-        for combined analysis (e.g., RESI microscopy).
-
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Optional keys:
-                    channel_weights : list
-                        Relative weights for each channel
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+                    tag : str
+                        the tag / name of the combined dataset
+                    combine_col : str
+                        the column name for the IDs to the different datasets
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    combined_nlocs : int
-                        Total number of localizations in combined dataset
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with combination statistics
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "channel_weights": {
@@ -2396,10 +2519,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "combined_nlocs": {
                 "type": "int",
@@ -2413,11 +2544,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def save_datasets_aggregated(self):
-        """save data of multiple single-dataset workflows from one
+        """Save data of multiple single-dataset workflows from one
         aggregation workflow.
 
-        Saves aggregated analysis results from multiple datasets
-        to individual files for downstream processing.
+        Saves all channel localization data and metadata from the aggregated
+        workflow to individual files in the results folder.
 
         Args:
             i : int
@@ -2444,10 +2575,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "filepaths": {
                 "type": "list",
@@ -2463,35 +2602,54 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def spinna_manual(self):
         """Direct implementation of spinna batch analysis.
-
-        Performs SPINNA (Spatial Point Pattern Analysis) using manual
-        parameter specification for batch processing.
+        The current locs file(s) are saved into the results folder, and
+        a template csv file is created. This csv needs to be filled out by the
+        user in a manual step before the spinna analysis is carried out.
 
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    radii : list
-                        List of analysis radii in nm
-                Optional keys:
-                    n_simulations : int
-                        Number of Monte Carlo simulations
+                the index of the module
+            parameters: dict
+                with required keys:
+                    proposed_labeling_efficiency : float, range 0-100
+                        labeling efficiency percentage, default for all targets
+                        used proposed value in spinna_config.csv and can be
+                        altered manually after the first run of this module
+                    proposed_labeling_uncertainty : float
+                        labeling uncertainty [nm]; good value is e.g. 5
+                        used proposed value in spinna_config.csv and can be
+                         alteredmanually after the first run of this module
+                    proposed_n_simulate : int
+                        number of target molecules to simulated;
+                        good value is e.g. 50000
+                        used proposed value in spinna_config.csv and can be
+                        altered manually after the first run of this module
+                    proposed_density : int
+                        density to simulate;
+                        area density if 2D; volume density if 3D
+                        used proposed value in spinna_config.csv and can be
+                        altered manually after the first run of this module
+                    proposed_nn_plotted : int
+                        number of nearest neighbors to plot
+                        used proposed value in spinna_config.csv and can be
+                         alteredmanually after the first run of this module
+                and optional keys:
+                    structures : list of dict
+                        SPINNA structures. Each structure dict has
+                            "Molecular targets": list of str,
+                            "Structure title": str,
+                            "TARGET_x": list of float,
+                            "TARGET_y": list of float,
+                            "TARGET_z": list of float,
+                        where TARGET is one each of the target names in
+                        "Molecular targets"
+                    structures_d : float
+                        distance between molecules within auto-generated
+                        structures, in nm. Only necessary if 'structures'
+                        is not given.
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    spinna_results : dict
-                        SPINNA analysis results
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with SPINNA analysis
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "radii": {
@@ -2517,10 +2675,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "spinna_results": {
                 "type": "dict",
@@ -2531,36 +2697,57 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def spinna(self):
-        """implementation of a single spinna run.
-
-        Performs a single SPINNA (Spatial Point Pattern Analysis) run
-        with automated parameter optimization.
+        """Direct implementation of spinna batch analysis.
+        The current locs file(s) are saved into the results folder, and
+        a template csv file is created. This csv needs to be filled out by the
+        user in a manual step before the spinna analysis is carried out.
 
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    max_radius : float
-                        Maximum analysis radius in nm
-                Optional keys:
-                    optimization_method : str
-                        Method for parameter optimization
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    optimal_parameters : dict
-                        Optimized SPINNA parameters
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with optimization results
+                the index of the module
+            parameters: dict
+                with required keys:
+                    labeling_efficiency : dict of float, range 0-1
+                        labeling efficiency, for all targets
+                    labeling_uncertainty : float or dict of floats
+                        labeling uncertainty [nm]; good value is e.g. 5
+                        assumed the same value for all targets
+                    n_simulate : int
+                        number of target molecules to simulated;
+                        good value is e.g. 50000
+                    structures : str or list of dict
+                        if str: filepath to a yaml file with the structures.
+                        if list of dict:
+                        SPINNA structures. Each structure dict has
+                            "Molecular targets": list of str,
+                            "Structure title": str,
+                            "TARGET_x": list of float,
+                            "TARGET_y": list of float,
+                            "TARGET_z": list of float,
+                        where TARGET is one each of the target names in
+                        "Molecular targets"
+                    fp_mask_dict : str
+                        the filepath to the mask_dict file
+                    density : list of float
+                        density to simulate in 1/nm^d;
+                        area density if 2D; volume density if 3D
+                        (required: either density or density_app)
+                    random_rot_mode : '2D', or '3D'
+                        Mode of molecule rotation in simulation
+                    sim_repeats : int
+                        number of simulation repeats
+                    fit_NND_bin : float
+                        bin size of fits
+                    fit_NND_maxdist : float
+                        max of histogram
+                    n_nearest_neighbors : int
+                        number of nearest neighbors to evaluate
+                    granularity : float
+                    the spinna granularity
+                optional keys:
+                    density_app : list of float
+                        apparent density in 1/nm^2;
+                        this is the product of 'real' density & lbl efficiency
         """
         parameters_spec = {
             "max_radius": {
@@ -2585,10 +2772,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "optimal_parameters": {
                 "type": "dict",
@@ -2599,36 +2794,31 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def ripleysk(self):
-        """Ripley's K analysis implementation.
-
-        Performs Ripley's K-function analysis for spatial point pattern
-        characterization and clustering assessment.
-
+        """Perforn Ripley's K analysis between the channels using
+        Magdalena's code.
         Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    radii : list
-                        List of analysis radii in nm
-                Optional keys:
-                    edge_correction : str
-                        Edge correction method
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    ripley_k_values : numpy.ndarray
-                        Calculated Ripley's K values
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with Ripley's K analysis
+            parameters:
+                ripleys_n_random_controls : int
+                    number of random controls, default: 100
+                ripleys_rmax : int
+                    the maximum radius, default 200
+                ripleys_dr : float
+                    the radius interval, default 5
+                radii : 1D np array
+                    the radius values. If given, ripleys_rmax and
+                    ripleys_dr are ignored.
+                ripleys_threshold : float
+                    the threshold of ripleys integrals above which the
+                    interaction is deemed significant.
+                fp_combined_locs : str
+                    filepath to the combined locs of all channel_locs
+                atype : str
+                    the type of analysis: 'Ripleys' for the standard
+                    Ripley's K analysis, or 'RDF' for calculation of the
+                    radial distribution function instead of K, and random
+                    controls by relocating each point by a random x/y in a
+                    circle with the currently investigated r, which preserves
+                    the density fluctuations (instead of CSR simulation)
         """
         parameters_spec = {
             "radii": {
@@ -2653,10 +2843,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "ripley_k_values": {
                 "type": "numpy.ndarray",
@@ -2667,36 +2865,64 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def ripleysk2(self):
-        """Alternative Ripley's K analysis implementation.
-
-        Performs Ripley's K-function analysis using alternative algorithms
-        or parameters for comparison and validation.
-
+        """Perforn Ripley's K analysis between the channels using
+        Rafal's code.
         Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    radii : list
-                        List of analysis radii in nm
-                Optional keys:
-                    algorithm : str
-                        Algorithm variant to use
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    ripley_k2_values : numpy.ndarray
-                        Calculated Ripley's K values (variant 2)
+            parameters:
+                ripleys_n_random_controls : int
+                    number of random controls, default: 100
+                ripleys_rmax : int
+                    the maximum radius, default 200
+                ripleys_dr : float
+                    the radius interval, default 5
+                radii : 1D np array
+                    the radius values. If given, ripleys_rmax and
+                    ripleys_dr are ignored.
+                ripleys_threshold : float
+                    the threshold of ripleys integrals above which the
+                    interaction is deemed significant.
+                area : float
+                    the cell area in µm^2
+                    optional. only used with controltype=CSR
+                fp_mask : str
+                    the filepath to the cell mask.
+                    optional, only used with CSR. can be binary or density mask
+                mask_pixel_size : float
+                    the pixel size of mask pixels (move to mask class which
+                    internally keeps this information)
+                    optional, only used with controltype=CSR
+                metric : str
+                    the type of analysis: 'RK' for the standard
+                    Ripley's K analysis, or 'RDF' for calculation of the
+                    radial distribution function instead of K, and random
+                    controls by relocating each point by a random x/y in a
+                    circle with the currently investigated r, which preserves
+                    the density fluctuations (instead of CSR simulation)
+                    Alternatively, "FRC" for fraction of molecular types
+                    within the radii.
+                controltype : str
+                    "CSR" or "RND". Control n_random_controls by either
+                    CSR simulation within the density mask, or randomizing
+                    the real data
+                randomization_radius : float
+                    for controltype "RND", the radius [nm] by which
+                    to randomize.
+                    optional.
+                shuffle_self : bool
+                    for metric "FRC", whether to shuffle only other types or
+                    also the self type
+                relocate_self : bool
+                    for metric "FRC", whether to relocate centerpoints to
+                    'type_self' after shuffling.
+                fraction_exclude
+                significance_threshold : float
+                    threshold above which heatmap entries are colored
+                normalization : str
+                edge_correction : bool
+                    if True, only locs further from mask edges than max radius
+                    are used for evaluation
+                showControlEnvelope : bool
 
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with alternative Ripley's K analysis
         """
         parameters_spec = {
             "radii": {
@@ -2721,10 +2947,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "ripley_k2_values": {
                 "type": "numpy.ndarray",
@@ -2735,33 +2969,36 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def ripleysk_average(self):
-        """Averages multiple Ripley's K analyses.
-
-        Computes average Ripley's K values across multiple datasets
-        or analysis runs for statistical robustness.
-
+        """Average the results of multiple Ripley's K Analyses, analyse
+        the significant pairs after averaging, and save them into the
+        separate workflow manual folders (for further analysis there)
         Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Optional keys:
-                    weight_method : str
-                        Method for weighting individual analyses
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    average_ripley_k : numpy.ndarray
-                        Averaged Ripley's K values
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with averaged Ripley's K analysis
+            parameters:
+                # fp_ripleys_integrals : list of str
+                #     the various single analyses to average, e.g. of
+                #     different workflows
+                fp_workflows : list of str
+                    the paths to the folders of separate workflows
+                    where the separate ripleys analyses have been done
+                report_names : list of str
+                    the report names of those worklfows
+                ripleys_threshold : float
+                    the threshold of ripleys integrals above which the
+                    interaction is deemed significant.
+                atype : str
+                    "Ripleys" or "RDF"
+                # output_folders : list of str
+                #     folders to write the significant pairs into. This can
+                #     e.g. be the 'manual' results folders of the
+                #     workflows, so these can proceed.
+            optional:
+                swkfl_ripleysk_key : str
+                    the results key of the ripleysk module.
+                    e.g. '05_ripleysk'
+                swkfl_manual_key : str
+                    the results key of the manual module to save the
+                    integrals to
+                if those two are not given, saving is not performed
         """
         parameters_spec = {
             "weight_method": {
@@ -2778,10 +3015,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "average_ripley_k": {
                 "type": "numpy.ndarray",
@@ -2792,33 +3037,48 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def ripleysk_average2(self):
-        """Alternative averaging of multiple Ripley's K analyses.
-
-        Computes alternative average Ripley's K values using different
-        statistical methods for comparison and validation.
-
+        """Average the results of multiple Ripley's K Analyses, analyse
+        the significant pairs after averaging, and save them into the
+        separate workflow manual folders (for further analysis there)
         Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Optional keys:
-                    statistical_method : str
-                        Statistical method for averaging
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    alternative_average_k : numpy.ndarray
-                        Alternative averaged Ripley's K values
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with alternative averaged analysis
+            parameters:
+                # fp_ripleys_integrals : list of str
+                #     the various single analyses to average, e.g. of
+                #     different workflows
+                fp_workflows : list of str
+                    the paths to the folders of separate workflows
+                    where the separate ripleys analyses have been done
+                report_names : list of str
+                    the report names of those worklfows
+                ripleys_threshold : float
+                    the threshold of ripleys integrals above which the
+                    interaction is deemed significant.
+                metric : str
+                    the type of analysis: 'RK' for the standard
+                    Ripley's K analysis, or 'RDF' for calculation of the
+                    radial distribution function instead of K, and random
+                    controls by relocating each point by a random x/y in a
+                    circle with the currently investigated r, which preserves
+                    the density fluctuations (instead of CSR simulation)
+                controltype : str
+                    "CSR" or "RND". Control n_random_controls by either
+                    CSR simulation within the density mask, or randomizing
+                    the real data
+                randomization_radius : float
+                    for controltype "RND", the radius [nm] by which to
+                    randomize.
+                # output_folders : list of str
+                #     folders to write the significant pairs into. This can
+                #     e.g. be the 'manual' results folders of the
+                #     workflows, so these can proceed.
+            optional:
+                swkfl_ripleysk_key : str
+                    the results key of the ripleysk module.
+                    e.g. '05_ripleysk'
+                swkfl_manual_key : str
+                    the results key of the manual module to save the
+                    integrals to
+                if those two are not given, saving is not performed
         """
         parameters_spec = {
             "statistical_method": {
@@ -2835,10 +3095,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "alternative_average_k": {
                 "type": "numpy.ndarray",
@@ -2849,36 +3117,45 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def protein_interactions(self):
-        """Protein interaction analysis.
-
-        Analyzes protein-protein interactions in multi-color SMLM data
-        using spatial correlation and clustering methods.
-
+        """Perform interaction analysis on those dataset pairs that showed
+        significance in Ripley's K analysis. The interaction analysis consists
+        of
+        (1) calculating proportion of singly or doubly co-occurring instances
+            of the single receptors (in clusters)
+        (2) calculating the co-occurrence of these single or double events of
+            one receptor with single or double events of another receptor
+            within a cluster (where Ripley's K showed significance)
+        This approach stems from a time of early development of SPINNA.
+        Nowadays, this could be done directly but potentially with slightly
+        different results.
+        Fixed to 2D. Fixed to only using 1st nearest neighbor
         Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    interaction_radius : float
-                        Maximum interaction distance in nm
-                Optional keys:
-                    confidence_level : float
-                        Statistical confidence level
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    interaction_map : numpy.ndarray
-                        Spatial interaction map
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with interaction analysis
+            parameters:
+                channel_map : dict
+                    maps between channels (protein names, tags before
+                    combining) and index in the combine_id column of combined
+                    locs
+                labeling_efficiency : dict, channel tag to float, range 0-100
+                    labeling efficiency percentage, default for all targets
+                labeling_uncertainty : dict, channel tag to float
+                    labeling uncertainty [nm]; good value is e.g. 5
+                n_simulate : int
+                    number of target molecules to be simulated;
+                    good value is e.g. 50000
+                density : dict, channel tag to float
+                    density to simulate [nm^2 or nm^3];
+                    area density if 2D; volume density if 3D
+                nn_nth : int
+                    number of nearest neighbors to analyse
+                structure_distance : float
+                    the protein distance between each other in nm
+                res_factor : float
+                    the spinna res_factor
+                sim_repeats : int
+                    number of simulation repeats, for noise reduction
+                interaction_pairs: list of list of two strings, or str
+                    pairs that are able to interact
+                    if str: filepath to a yaml file with list of tuples
         """
         parameters_spec = {
             "interaction_radius": {
@@ -2904,10 +3181,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "interaction_map": {
                 "type": "numpy.ndarray",
@@ -2918,33 +3203,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def protein_interactions_average(self):
-        """Average protein interaction analysis across datasets.
-
-        Computes averaged protein interaction statistics across multiple
-        datasets for population-level analysis.
-
+        """Average the results of multiple "protein_interactions" analyses.
+        Create a bar plot with mean and stddev of the different proportions
+        of interaction partners.
         Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Optional keys:
-                    normalization_method : str
-                        Method for normalizing interactions
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    average_interactions : dict
-                        Averaged interaction statistics
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with averaged interaction analysis
+            parameters:
+                fp_workflows : list of str
+                    the paths to the folders of separate workflows
+                    where the separate ripleys analyses have been done
+                report_names : list of str
+                    the report names of those worklfows
+                swkfl_protint_key : str
+                    the results key of the protein interactions module.
+                    e.g. '05_protein_interactions'
+            optional:
         """
         parameters_spec = {
             "normalization_method": {
@@ -2961,10 +3233,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "average_interactions": {
                 "type": "dict",
@@ -2975,36 +3255,39 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def create_mask(self):
-        """Create a density mask.
-
-        Creates spatial masks based on localization density for
-        region-specific analysis and filtering.
+        """
+        This is Susanne's implementation of calculating a cell mask,
+        written (ni part?) for the initial version of the DC-Atlas.
+        May be obsolete with create_mask2, but kept for backwards
+        compatibility. To be deprecated on the long run.
 
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    threshold : float
-                        Density threshold for mask creation
-                Optional keys:
-                    smoothing_radius : float
-                        Radius for density smoothing
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    fp_combined_locs : str
+                        filepath to the locs combined in 'combine_channels'
+                        module
+                    margin : float
+                        Size of the added empty margin to the FOV, in nm
+                    binsize : float
+                        Size o fthe 2D histogram bins of the first step, in nm
+                    sigma_mask_blur : int
+                        parameter of the gaussian blur in binsize units
+                    mask_resolution : float
+                        Controls the digital resolution of the mask, in nm
+                    combine_col : str
+                        the name of the combine column, e.g. 'combine_id'
+                        or 'protein'. Same as used in 'combine_channels' module
+                and optional keys:
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    mask : numpy.ndarray
-                        Generated density mask
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with mask information
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "threshold": {
@@ -3029,10 +3312,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "mask": {
                 "type": "numpy.ndarray",
@@ -3043,36 +3334,57 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def create_mask2(self):
-        """Create a density mask.
+        """
+        This is Rafal's implementation of cell masking, written for the
+        3rd version of the DC Atlas. It is (mostly?) identical with an
+        implementation of it in spinna, which will be integrated into
+        picasso soon. Evaluate deprecation (or moving source from
+        outpost_modules/ripleys to picasso/spinna) at that time.
 
-        Creates spatial masks using alternative algorithms for
-        comparison and validation of mask-based analysis.
+        the locs must be protein positions at this stage.
 
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    algorithm : str
-                        Mask creation algorithm
-                Optional keys:
-                    parameters_dict : dict
-                        Algorithm-specific parameters
+                the index of the module
+            parameters: dict
+                with required keys:
+                    binsize : float
+                        the bin size in nanometers. A good value is 20
+                    blursize : float
+                        the gaussian blur to apply in nanometers.
+                        A good value is 400
+                    mask_pixel_size : float
+                        the pixelsize of the final mask, in nanometers.
+                        Often used: 10
+                    threshold : float
+                        the threshold value below which the mask is set
+                        to zero. For example 1 / 3
+                    binary : boolean
+                        whether to create a binary or density mask
+                    select_cell : boolean
+                        whether to select the largest connected component,
+                        assumed to be the cell of interest.
+                    fill_holes : boolean
+                        whether to fill holes in the cell mask
+                    dilate_nm : float
+                        the nanometers to dilate the mask (useful if a large
+                        threshold has been used)
+                    apply_to_locs : boolean
+                        whether to drop all localizations outside the area
+                and optional keys:
+                    fp_combined_locs : str default: None or ''
+                        filepath to the locs combined in 'combine_channels'
+                        module. If None or '', loaded channel_locs is used
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    combine_col : str
+                        the name of the combine column, e.g. 'combine_id'
+                        or 'protein'. Same as used in 'combine_channels' module
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    mask2 : numpy.ndarray
-                        Alternative generated mask
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with alternative mask
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "algorithm": {
@@ -3093,10 +3405,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "mask2": {
                 "type": "numpy.ndarray",
@@ -3107,36 +3427,38 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def refine_mask_by_density(self):
-        """refine a mask by a given density range.
+        """
+        This module analyses and refines a previously created mask.
+        Particularly, the density histogram of the mask bins are plotted,
+        and an area of homogeneous density can be selected
 
-        Refines existing spatial masks using density criteria
-        for more precise region definition.
+        the locs must be protein positions at this stage.
 
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    density_range : tuple
-                        Min and max density values
-                Optional keys:
-                    refinement_method : str
-                        Method for mask refinement
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_mask : str
+                        the file path to the mask
+                    min_density, max_density : float
+                        the density range to select
+                and optional keys:
+                    nbins : int
+                        the number of bins for plotting
+                    nth_largest : int
+                        select the nth largest area in density range.
+                        set 0 for largest.
+                    apply_to_locs : bool
+                        whether to apply the created mask to the locs
+                    smoothe_nm : float
+                        the number of nanometers to dilate and erode
+                        the mask. This can be useful to remove excessive
+                        holes and ragging in the mask due to the
+                        density thresholding
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    refined_mask : numpy.ndarray
-                        Refined density mask
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with refined mask
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "density_range": {
@@ -3160,10 +3482,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "refined_mask": {
                 "type": "numpy.ndarray",
@@ -3175,38 +3505,34 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def dbscan_molint(self):
         """TO BE CLEANED UP
-        dbscan implementation for molecular interactions workflow.
-
-        Specialized DBSCAN clustering for molecular interaction analysis
-        with additional interaction-specific parameters.
+        dbscan implementation for molecular interactions workflow
 
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    radius : float
-                        DBSCAN radius for interaction clustering
-                    min_samples : int
-                        Minimum samples for interaction clusters
-                Optional keys:
-                    interaction_threshold : float
-                        Distance threshold for interactions
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    epsilon_nm : float
+                        dbscan epsilon in nm
+                    minpts : int
+                        minimum number of points
+                    sigma_linker : float
+                        ... in nm
+                    fp_merge_mask : str
+                        filepath to the merge mask (generated in module
+                        'create_mask')
+                    thresh_type : str
+                        ...
+                    cell_name : str
+                        the name of the cell currently analyzed
+                and optional keys:
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    interaction_clusters : numpy.ndarray
-                        Clustered interaction data
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with interaction clustering
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "radius": {
@@ -3240,10 +3566,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "interaction_clusters": {
                 "type": "numpy.ndarray",
@@ -3255,36 +3589,34 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def CSR_sim_in_mask(self):
         """TO BE CLEANED UP
-        simulate CSR within a density mask.
-
-        Simulates Complete Spatial Randomness within defined mask regions
-        for statistical comparison and validation.
-
+        simulate CSR within a density mask, and perform dbscan as well
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    n_simulations : int
-                        Number of CSR simulations
-                Optional keys:
-                    seed : int
-                        Random seed for reproducibility
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    fp_mask_dict : str
+                        filepath to the mask_dict.pkl file generated in
+                        the 'create_mask' module
+                    N_repeats : int
+                        number of simulation repeats
+                    epsilon_nm : float
+                        dbscan epsilon in nm
+                    minpts : int
+                        minimum number of points
+                    sigma_linker : float
+                        ... in nm
+                    fp_merge_mask : str
+                        filepath to the merge mask (generated in module
+                        'create_mask')
+                and optional keys:
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    csr_simulations : list
-                        Generated CSR simulation data
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with CSR simulation data
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "n_simulations": {
@@ -3309,10 +3641,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "csr_simulations": {
                 "type": "list",
@@ -3324,37 +3664,38 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def find_cluster_motifs(self):
-        """TO BE CLEANED UP
-        simulate CSR within a density mask.
-
-        Identifies recurring spatial patterns or motifs in cluster data
-        for structural characterization.
-
+        """Analyses the binary barcode results of _do_dbscan_molint.
+        Compares experimental to CSR data.
+        Merged for multiple cells
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    motif_size : int
-                        Size of motifs to search for
-                Optional keys:
-                    similarity_threshold : float
-                        Threshold for motif similarity
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_dbscan_molint_key : str
+                        the results key of the dbscan module.
+                        e.g. '09_dbscan_molint'
+                    swkfl_CSR_sim_in_mask_key : str
+                        the results key of the CSR dbscan module.
+                        e.g. '10_CSR_sim_in_mask'
+                    population_threshold : float, 0 - 1
+                        only select barcodes with a relative population
+                        larger than this
+                    ttest_pvalue_max : float, < 0
+                        the pvalue below which the difference between number
+                        of clusters found for a barcode between exp and csr
+                        is deemed significant
+                    channel_colors : list of str
+                        colors to describe the receptors with
+                and optional keys:
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    identified_motifs : list
-                        List of identified cluster motifs
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with motif analysis
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "motif_size": {
@@ -3380,10 +3721,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "identified_motifs": {
                 "type": "list",
@@ -3395,37 +3744,37 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def interaction_graph(self):
-        """TO BE CLEANED UP
-        simulate CSR within a density mask.
-
-        Creates interaction graphs showing spatial relationships
-        between molecular species or clusters.
-
+        """Plot the interaction graph, displaying the different targets
+        and their interactions in a graph. The node sizes denote the
+        density, and the ripley interaction matrix is represented in the
+        edges.
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    graph_type : str
-                        Type of interaction graph
-                Optional keys:
-                    edge_threshold : float
-                        Threshold for graph edges
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_protint_key : str
+                        the results key of the protein_interactions module.
+                        e.g. '09_protein_interactions'
+                    fp_density : str
+                        fp to the denfsities of the channels.
+                    fp_ripleys_meanvals : str
+                        the filepath to the interaction matrix
+                    edge_factor : float
+                        factor to display useful sizes
+                    node_factor : float
+                        factor to display useful sizes
+                    channel_colors : list of str
+                        colors to describe the receptors with
+                and optional keys:
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    interaction_graph : dict
-                        Generated interaction graph data
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with interaction graph
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "graph_type": {
@@ -3448,10 +3797,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "interaction_graph": {
                 "type": "dict",
@@ -3462,36 +3819,28 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def plot_densities(self):
-        """TO BE CLEANED UP
-        simulate CSR within a density mask.
-
-        Creates visualization plots of localization densities
-        across datasets and conditions.
-
+        """Aggregate densities and cell areas of multiple datasets and
+        plot them
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Optional keys:
-                    plot_type : str
-                        Type of density plot
-                    color_map : str
-                        Color map for visualization
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_create_mask_key : str
+                        the results key of the dbscan module.
+                        e.g. '11_create_mask'
+                    swkfl_protint_key : str
+                        the results key of the protein_interactions module.
+                        e.g. '09_protein_interactions'
+                and optional keys:
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    density_plots : list
-                        Generated density plot file paths
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with density visualizations
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "plot_type": {
@@ -3515,10 +3864,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "density_plots": {
                 "type": "list",
@@ -3531,39 +3888,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def find_gold(self):
         """Find localizations stemming from gold beads based on blinking
-        kinetics. The metrics used are number of locs and rms deviation
-        from mean frame.
-
-        Identifies gold nanoparticle localizations using blinking kinetics
-        analysis for drift correction and alignment purposes.
-
+        kinetics.
+        The metrics used are number of locs and rms deviation from mean
+        frame
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    nlocs_threshold : int
-                        Minimum number of localizations for gold detection
-                    rms_threshold : float
-                        Maximum RMS deviation threshold
-                Optional keys:
-                    frame_window : int
-                        Frame window for kinetics analysis
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+                    remove_gold : bool
+                        if present and set to True, the gold locs
+                        are discarded and self.locs is set to the
+                        nongold-locs
+                    diameter : float
+                        the pick similar diameter for identifying gold
+                    std_range, mean_rmsd : float
+                        the pick similar parameters identifying gold
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    gold_locs : numpy.ndarray
-                        Identified gold bead localizations
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with gold bead identification
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "nlocs_threshold": {
@@ -3599,10 +3943,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "gold_locs": {
                 "type": "numpy.ndarray",
@@ -3613,38 +3965,35 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def find_similar(self):
-        """pick similar in nlocs/rmsd space.
-
-        Identifies structures with similar characteristics in
-        localization count and spatial distribution space.
-
+        """pick similar in nlocs/rmsd space (with specified limits in
+        that space).
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    reference_structure : int
-                        Index of reference structure
-                    similarity_metric : str
-                        Metric for similarity calculation
-                Optional keys:
-                    tolerance : float
-                        Tolerance for similarity matching
+                the index of the module
+            parameters: dict
+                with required keys:
+                    diameter : float
+                        the pick similar diameter for identifying gold
+                and optional keys:
+                    min_n_locs_per_frame : float, range 0-1
+                        the min percentage of frames with events in the pick
+                        region to pick. default: 0.01
+                    max_n_locs_per_frame : float, range 0-1
+                        the max percentage of frames with events in the pick
+                        region to pick. default: 0.01
+                    min_rmsd : float
+                        the minimum root mean square distance from pick center
+                        to pick
+                    max_rmsd : float
+                        the maximum root mean square distance from pick center
+                        to pick
+                    n_plot_structures : int
+                        the number of structures to plot
+                    display_pixelsize : float
+                        the pixelsize for display in nm, default: 1
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    similar_structures : list
-                        List of similar structure indices
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with similarity analysis
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "reference_structure": {
@@ -3674,10 +4023,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "similar_structures": {
                 "type": "list",
@@ -3690,35 +4047,30 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def find_structures(self):
         """pick similar on clusters in nlocs/rmsd space.
-
-        Identifies structural patterns in clustered data using
-        localization density and spatial distribution metrics.
-
+        This may be useful for automated picking of origamis, and may
+        help for defining parameters for finding gold
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    cluster_method : str
-                        Method for structure clustering
-                Optional keys:
-                    n_structures : int
-                        Number of structure types to identify
+                the index of the module
+            parameters: dict
+                with required keys:
+                    diameter : float
+                        the pick similar diameter for identifying gold
+                and optional keys:
+                    min_n_locs_per_frame : float
+                        the percentage of frames with events in the pick
+                        region below which there is noise. default: 0.01
+                    n_plot_structures : int
+                        the number of structures to plot
+                    display_pixelsize : float
+                        the pixelsize for display in nm, default: 1
+                    xi : float
+                        the xi parameter for clustering. default 0.05
+                    min_cluster_size : float
+                        the minimun cluster size (fract). default .05
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    structure_types : list
-                        Identified structure type classifications
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with structure identification
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "cluster_method": {
@@ -3742,10 +4094,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "structure_types": {
                 "type": "list",
@@ -3758,35 +4118,19 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def undrift_from_picked(self):
         """Performs undrift from piced locs.
-
-        Corrects sample drift using manually picked or automatically
-        selected fiducial localizations.
-
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    picked_locs : numpy.ndarray or str
-                        Picked localization coordinates or file path
-                Optional keys:
-                    interpolation_method : str
-                        Method for drift interpolation
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_picked_locs : str
+                        filepath to the picked locs to undrift from
+                        (.hdf5 file of list of locs, with 'group' column
+                         to describe picks)
+                and optional keys:
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    drift_corrected : numpy.ndarray
-                        Drift correction vectors
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with drift correction data
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "picked_locs": {
@@ -3809,10 +4153,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "drift_corrected": {
                 "type": "numpy.ndarray",
@@ -3824,39 +4176,29 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def filter_locs(self):
         """Filter localizations to lie within a min-max range of a metric.
-
-        Filters localization data based on specified metrics and
-        value ranges for quality control and analysis refinement.
-
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    metric : str
-                        Metric to filter by
-                    min_value : float
-                        Minimum allowed value
-                    max_value : float
-                        Maximum allowed value
-                Optional keys:
-                    invert_filter : bool
-                        Whether to invert the filter logic
+                the index of the module
+            parameters: dict
+                with required keys:
+                    field : str or list of str
+                        the field(s) to filter on
+                and optional keys:
+                    minval : dtype of field (or list of it)
+                        the minimum value(s) to accept
+                    maxval : dtype of field (or list of it)
+                        the maximum value(s) to accept
+                    mode : str
+                        the mode of threshold application:
+                         - absolute: minval and maxval are values
+                            in units of the field
+                         - zscore: minval and maxval are in units of
+                            standard deviations from the mean
+                            (-2, 2 means cut off at 2*std from mean)
+                         - quantile: minval and maxval are quantiles
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    n_filtered : int
-                        Number of localizations after filtering
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with filtering statistics
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "metric": {
@@ -3895,10 +4237,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "n_filtered": {
                 "type": "int",
@@ -3912,36 +4262,27 @@ class ModuleDescriptor(util.AbstractModuleCollection):
     def filter_transient_binding(self):
         """Filter molecule positions (after clustering or Gaussian Mixture)
         for those who show transient binding. Specifically, the mean frame
-        should not be at extreme positions.
-
-        Filters molecular binding events based on temporal characteristics
-        to identify transient binding behaviors.
-
+        should not be at extreme positions
+        (default, 0.1 > mean frame / nframes > 0.9), and std of frames
+        (default: 0.3 > std frame).
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    frame_percentiles : tuple
-                        Min and max frame percentiles for filtering
-                Optional keys:
-                    binding_duration_range : tuple
-                        Min and max binding duration range
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+                    meanframe_cutoff : float (0-1, default .1)
+                        filter out positions at more extreme temporal positions
+                    stdframe_cutoff : float
+                        filter out positions with lower std than .16
+                    fp_locs : str
+                        the filepath to the underlying localizations
+                        (self.locs are centers). If given, these are filtered
+                        as well and saved with the same filename in the current
+                        results folder
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    transient_events : numpy.ndarray
-                        Filtered transient binding events
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with transient binding analysis
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "frame_percentiles": {
@@ -3968,10 +4309,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "transient_events": {
                 "type": "numpy.ndarray",
@@ -3983,37 +4332,19 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def link_locs(self):
         """Link localizations.
-
-        Links localizations across frames to track molecular trajectories
-        and binding kinetics over time.
-
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    max_distance : float
-                        Maximum linking distance in nm
-                    max_frame_gap : int
-                        Maximum frame gap for linking
-                Optional keys:
-                    linking_algorithm : str
-                        Algorithm for localization linking
+                the index of the module
+            parameters: dict
+                with required keys:
+                    d_max : int
+                        maximum distance to link [px]
+                    tolerance : int
+                        maximum transient dark time [frames]
+                and optional keys:
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    linked_trajectories : list
-                        Linked localization trajectories
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with linking analysis
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "max_distance": {
@@ -4046,10 +4377,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "linked_trajectories": {
                 "type": "list",
@@ -4062,36 +4401,35 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def pairwise_module_executor(self):
         """Calls another module (as a sub-module) for all pairs in the
-        channel_locs.
-
-        Executes a specified module for all pairwise combinations of
-        channels in multi-channel datasets.
-
+        channel_locs
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    sub_module : str
-                        Name of the sub-module to execute
-                Optional keys:
-                    sub_module_params : dict
-                        Parameters for the sub-module
+                the index of the module
+            parameters: dict
+                with required keys:
+                    module_name : str
+                        the module to call
+                    param_target1 : str
+                        parameter name of the first target to set for the
+                        module
+                    param_target2 : str
+                        parameter name of the second target to set for the
+                        module
+                    module_kwargs : dict
+                        the other arguments to the module
+                and optional keys:
+                    result_scalar : str
+                        the key to display in a heatmap as main result
+                    scalar_threshold : float
+                        the saturation value in the heatmap
+                    scalar_minval : float
+                        the minimum value for color in the heatmap
+                    result_fpfig : str or list of str
+                        the key to the filepath of one or more figures
+                        generated to display for documentation
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    pairwise_results : dict
-                        Results from pairwise module execution
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with pairwise analysis
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "sub_module": {
@@ -4111,10 +4449,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "pairwise_results": {
                 "type": "dict",
@@ -4125,10 +4471,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def random_val(self):
-        """For debugging and testing the pairwise module.
+        """Generate random values and plot for debugging and testing the
+        pairwise module.
 
-        Generate random values and plot for debugging and testing the pairwise
-        module.
         Creates a random value and generates a test plot with random data
         for debugging purposes in pairwise module workflows.
 
@@ -4142,6 +4487,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     ylabel : str
                         Label for the y-axis of the test plot
                 Optional keys: (none)
+            results : dict
+                The results dictionary, updated with:
+                    random_val : float
+                        A random value between 0 and 1
+                    fp_fig : str
+                        Filepath to the generated test figure
 
         Returns:
             parameters : dict
@@ -4167,10 +4518,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "random_val": {
                 "type": "float",
@@ -4186,37 +4545,88 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def labeling_efficiency_analysis(self):
         """Analyse for labeling efficiency.
+        Perform 3 component SPINNA analysis for monomers and heterodimers
+        of target (A) and reference (B). For the analysis, we enter a
+        labeling efficiency of 1, yielding proportions of monomers and
+        dimers as seen in the data. The real labeling efficiency is then
 
-        Analyzes labeling efficiency in DNA-PAINT experiments using
-        statistical models and binding event counting.
+        Model:
+        Binders A and B bind to an engineered construct A*-anchor-B*.
+            A <-> A*-anchor-B* <-> B
+        There are four possible configurations:
+            A_only: AA*-anchor-B*
+            AB: AA*-anchor-B*B
+            B_only: A*-anchor-B*B
+            None (invisible in data): A*-anchor-B*
+        Number of total constructs with A, or B, respectively:
+            #A_tot = #A_only + #AB
+            #B_tot = #B_only + #AB
+
+        Proportions can be given in terms of #structures, or in terms
+        of #molecules, e.g.
+        with proportions given in terms of #structures
+         10 monomers, 10 dimers (20molecules in dimers) -> p_m = 50%, p_d=50%
+
+        with proportions given in terms of #molecules
+         10 monomers, 10 dimers (20molecules in dimers) -> p_m = 33%, p_d=66%
+
+        in terms of #structures
+        prop_A^S = #A_only / (#A_only + #B_only + #AB)
+        prop_B^S = #B_only / (#A_only + #B_only + #AB)
+        prop_AB^S = #AB / (#A_only + #B_only + #AB)
+        in terms of #molecules
+        prop_A^S = #A_only / (#A_only + #B_only + 2 #AB)
+        prop_B^S = #B_only / (#A_only + #B_only + 2 #AB)
+        prop_AB^S = 2 #AB / (#A_only + #B_only + 2 #AB)
+
+        #AB = #anchor * LE_A * LE_B
+        #A_tot = #anchor * LE_A
+        #B_tot = #anchor * LE_B
+        #A_only = #A_tot - #AB = #anchor * LE_A * (1 - LE_B)
+        #B_only = #B_tot - #AB = #anchor * LE_B * (1 - LE_A)
+
+        THUS, finally, the labeling efficiency can be calculated by
+
+        with proportions given in terms of #structures
+        LE_A = prop(AB) / (prop(B) + prop(AB))
+        LE_B = prop(AB) / (prop(A) + prop(AB))
+
+        with proportions given in terms of #molecules
+        LE_A = prop(AB) / (2 * prop(B) + prop(AB))
+        LE_B = prop(AB) / (2 * prop(A) + prop(AB))
+
+        SPINNA outputs propportions in terms of #molecules, so the last
+        formulae are used below.
 
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    target_species : str
-                        Name of target molecular species
-                    reference_species : str
-                        Name of reference species
-                Optional keys:
-                    efficiency_model : str
-                        Model for efficiency calculation
+                the index of the module
+            parameters: dict
+                with required keys:
+                    reference_name : str
+                        the channgel_tag of the reference
+                    target_name : str
+                        the channel_tag of the target queried for LE
+                    pair_distance: 10 # real distance of pair of tags in nm
+                    labeling_uncertainty : dict, channel tag to float
+                        labeling uncertainty [nm]; good value is e.g. 5
+                    n_simulate : int
+                        number of target molecules to be simulated;
+                        good value is e.g. 50000
+                    density : dict, channel tag to float
+                        density to simulate [nm^2 or nm^3];
+                        area density if 2D; volume density if 3D
+                    granularity : float
+                        the spinna res_factor
+                    sim_repeats : int
+                        number of simulation repeats, for noise reduction
+                and optional keys:
+                    nn_nth : int
+                        number of nearest neighbors to analyse
+                        default: 1
             results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    labeling_efficiency : float
-                        Calculated labeling efficiency
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with labeling efficiency analysis
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         parameters_spec = {
             "target_species": {
@@ -4243,10 +4653,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "labeling_efficiency": {
                 "type": "float",
@@ -4259,29 +4677,41 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def conditional_branch(self):
-        """For debugging and testing the pairwise module.
-
-        Generate random values and plot for debugging and testing the pairwise
-        module.
-        Creates a random value and generates a test plot with random data
-        for debugging purposes in pairwise module workflows.
+        """Execute different sub-module sequences based on a condition.
 
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    xlabel : str
-                        Label for the x-axis of the test plot
-                    ylabel : str
-                        Label for the y-axis of the test plot
-                Optional keys: (none)
+                the index of the module
+            parameters: dict
+                with required keys:
+                    condition : dict
+                        condition dictionary with keys:
+                            - "left": value or parameter command tuple
+                            - "operator": str (>, <, >=, <=, ==, !=)
+                            - "right": value or parameter command tuple
+                        or logical condition with "and"/"or" keys
+                    if_true : list of tuples
+                        list of (module_name, module_parameters) tuples
+                        to execute if condition is True
+                    if_false : list of tuples
+                        list of (module_name, module_parameters) tuples
+                        to execute if condition is False
+                optional keys:
+                    parameter_command_executor : ParameterCommandExecutor
+                        if provided, will be used for resolving parameter
+                        commands in condition values
+            results : dict
+                the results this function generates
 
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
             results : dict
-                Updated results dictionary with random value and figure path
+                the analysis results including:
+                    - condition_result : bool
+                    - branch_taken : str ("if_true" or "if_false")
+                    - if_branch : dict of sub-module results
+                    - branch_modules : dict of flat-indexed results
         """
         parameters_spec = {
             "xlabel": {
@@ -4301,10 +4731,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "random_val": {
                 "type": "float",
@@ -4319,29 +4757,55 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def resolution_analysis(self):
-        """For debugging and testing the pairwise module.
+        """Perform resolution analysis using point pattern autocorrelation
 
-        Generate random values and plot for debugging and testing the pairwise
-        module.
-        Creates a random value and generates a test plot with random data
-        for debugging purposes in pairwise module workflows.
+        This method calculates the spatial resolution of localizations
+        by computing a 2D autocorrelation function and fitting a Gaussian to
+        extract resolution metrics. The analysis includes 2D Gaussian fitting,
+        radial profile computation, and 1D Gaussian fitting to the radial profile.
 
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    xlabel : str
-                        Label for the x-axis of the test plot
-                    ylabel : str
-                        Label for the y-axis of the test plot
-                Optional keys: (none)
+                the index of the module
+            parameters: dict
+                with required keys:
+                with optional keys:
+                    delta_r : float
+                        grid spacing for autocorrelation (default: 5 nm)
+                    r_max : float
+                        maximum radius for autocorrelation (default: 100 nm)
+                    batch_size : int or None
+                        number of data points per batch for chunking (auto-calculated if None)
+                    n_processes : int or None
+                        number of parallel processes (auto-detected if None, capped at 4)
+                    use_chunking : bool
+                        enable memory-efficient chunking for large datasets (default: True)
+                    use_sparse : bool
+                        use sparse matrices for very large grids (default: False)
 
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Updated results dictionary with random value and figure path
+        Results:
+            resolution : float
+                average resolution in nm (FWHM)
+            sigma_x, sigma_y : float
+                Gaussian standard deviations in x,y directions
+            fwhm_x, fwhm_y : float
+                Full-width half-maximum in x,y directions
+            fit_quality : float
+                R-squared goodness of fit
+            autocorr_map : ndarray
+                2D autocorrelation intensity map
+            radial_profile : ndarray
+                radial profile of autocorrelation
+            radial_distances : ndarray
+                distance values for radial profile
+            resolution_radial : float
+                resolution from radial Gaussian fit (FWHM)
+            resolution_dblradial : float
+                resolution from double Gaussian fit (FWHM)
+            fig_resolution : str
+                path to resolution plot
+            fig_radial : str
+                path to radial profile plot
         """
         parameters_spec = {
             "xlabel": {
@@ -4361,10 +4825,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "random_val": {
                 "type": "float",
@@ -4379,29 +4851,57 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def resolution_frc_spatial(self):
-        """For debugging and testing the pairwise module.
+        """Calculate resolution using spatial FRC approach
 
-        Generate random values and plot for debugging and testing the pairwise
-        module.
-        Creates a random value and generates a test plot with random data
-        for debugging purposes in pairwise module workflows.
+        This method divides the FOV into spatial regions, computes FRC for each
+        region independently, and averages the results. Benefits:
+        - Lower memory usage (smaller images per region)
+        - Better statistics through spatial averaging
+        - Efficient multiprocessing (fully independent regions)
+        - Preserves high spatial frequencies
 
         Args:
             i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    xlabel : str
-                        Label for the x-axis of the test plot
-                    ylabel : str
-                        Label for the y-axis of the test plot
-                Optional keys: (none)
+                the index of the module
+            parameters: dict
+                with optional keys:
+                    pixelsize_render : float
+                        pixel size for rendered images in nm (default: 5 nm)
+                    smoothing_sigma : float or None
+                        Gaussian smoothing sigma in pixels (default: None)
+                    threshold : float
+                        FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
+                    region_size : float
+                        size of each spatial region in micrometers (default: 10.0 µm)
+                    min_locs_per_region : int
+                        minimum localizations per region to process (default: 500)
+                    max_frc_range_nm : float or None
+                        maximum FRC range in nm (default: None = full range)
+                    n_processes : int
+                        number of parallel processes (default: 4)
+                    smoothing_window : float
+                        moving average window size for FRC smoothing in 1/nm
+                        (default: 0.005)
 
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Updated results dictionary with random value and figure path
+        Results:
+            resolution_frc_spatial : float
+                mean FRC-based resolution in nm
+            resolution_std : float
+                standard deviation across regions
+            n_regions : int
+                number of valid regions processed
+            cutoff_frequency : float
+                mean spatial frequency at resolution cutoff (1/nm)
+            frc_curve_mean : ndarray
+                mean FRC curve across regions
+            frc_curve_std : ndarray
+                std of FRC curves
+            spatial_frequencies : ndarray
+                spatial frequency values (1/nm)
+            threshold : float
+                threshold used
+            fig_frc : str
+                path to FRC curve plot
         """
         parameters_spec = {
             "xlabel": {
@@ -4421,10 +4921,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "random_val": {
                 "type": "float",
@@ -4439,29 +4947,74 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def undrift_rsso(self):
-        """For debugging and testing the pairwise module.
+        """Undrift localized data using iterative RSSO-based drift correction
 
-        Generate random values and plot for debugging and testing the pairwise
-        module.
-        Creates a random value and generates a test plot with random data
-        for debugging purposes in pairwise module workflows.
+        This method applies an iterative RSSO (Redundant Spot Shift
+        Overrepresentation) approach where each frame is compared against
+        the whole dataset to compute total drift for that frame. The process
+        is repeated iteratively with the undrifted dataset to improve accuracy.
+        Includes uncertainty analysis, confidence evaluation, windowing and
+        outlier detection.
 
         Args:
             i : int
-                The index of the module in the workflow
+                the module index in the protocol
             parameters : dict
-                Required keys:
-                    xlabel : str
-                        Label for the x-axis of the test plot
-                    ylabel : str
-                        Label for the y-axis of the test plot
-                Optional keys: (none)
+                necessary items:
+                    ton : float
+                        Half-life of localization in frames (how long a spot
+                        stays visible)
+                    toff : float
+                        Time in frames for a spot to reappear after
+                        disappearing
+                    max_shift : float
+                        Maximum expected drift per frame in pixels
+                optional items:
+                    min_locs_per_frame : int
+                        Minimum localizations per frame for reliable drift
+                        estimation (default: 10)
+                    max_iterations : int
+                        Maximum number of iterative refinement rounds (default: 5)
+                    convergence_threshold : float
+                        RMS drift change threshold for convergence in nm (default: 0.1)
+                    plot_drift : bool
+                        Whether to save drift plots (default: True)
+                    save_locs : bool
+                        Whether to save undrifted localizations (default: True)
+                    n_processes : int or None
+                        Number of processes for parallel computation (default: auto)
+                    confidence_threshold : float
+                        Confidence threshold for windowing analysis (default: 0.8)
+                    outlier_detection_enabled : bool
+                        Enable RSSO failure and outlier detection (default: True)
+                    outlier_z_threshold : float
+                        Z-score threshold for temporal outlier detection (default: 3.5)
+                    min_signal_to_noise : float
+                        Minimum signal-to-noise ratio for drift measurements (default: 0.5)
+                    windowing_enabled : bool
+                        Enable adaptive windowing for low-confidence frames (default: True)
+                    window_size_range : tuple
+                        Min and max window sizes for adaptive windowing (default: (3, 20))
 
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
             results : dict
-                Updated results dictionary with random value and figure path
+                the analysis results including:
+                    success : bool
+                        whether drift correction succeeded
+                    drift_x, drift_y : ndarray
+                        total drift trajectories in nm for each frame
+                    uncertainty_x, uncertainty_y : ndarray
+                        uncertainty estimates for drift measurements
+                    drift_quality : ndarray
+                        quality/confidence metrics per frame
+                    n_iterations : int
+                        number of iterations performed
+                    convergence_rms : float
+                        final RMS change indicating convergence
+                    drift_plots : str
+                        path to drift visualization plots
         """
         parameters_spec = {
             "xlabel": {
@@ -4481,10 +5034,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Module execution start timestamp",
             },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
             "duration": {
                 "type": "float",
                 "description": "Module execution duration in seconds",
                 "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
             "random_val": {
                 "type": "float",
@@ -7368,26 +7929,33 @@ class Window(QtWidgets.QMainWindow):
                         file_path, host_cluster
                     )
                     filepaths.append(file_path)
+
+            # Assign datasets dict for Aggregation workflow
+            datasets = {"#tags": tags, "filepath": filepaths}
+
         else:  # Investigation Workflow
             # Build datasets from tree structure
             tags = []
             filepaths = []
 
-            for condition in self.tree_data["condition"]:
-                for dataset in self.tree_data["datasets"]:
-                    for channel in self.tree_data["channels"]:
-                        # Create tag in {dataset}_{channel} format
-                        tag = f"{condition}_{dataset}_{channel}"
-                        tags.append(tag)
+            for dataset in self.tree_data["datasets"]:
+                # Get condition for this dataset
+                condition = self.tree_data["conditions"].get(dataset, "")
 
-                        # Get file path
-                        file_path = self.tree_data["file_paths"][condition][
-                            dataset
-                        ][channel]
-                        file_path = self.pathparser.convert_path(
-                            file_path, host_cluster
-                        )
-                        filepaths.append(file_path)
+                for channel in self.tree_data["channels"]:
+                    # Create tag with condition prefix if available
+                    if condition:
+                        tag = f"{condition}_{dataset}_{channel}"
+                    else:
+                        tag = f"{dataset}_{channel}"
+                    tags.append(tag)
+
+                    # Get file path
+                    file_path = self.tree_data["file_paths"][dataset][channel]
+                    file_path = self.pathparser.convert_path(
+                        file_path, host_cluster
+                    )
+                    filepaths.append(file_path)
 
             datasets = {"#tags": tags, "filepath": filepaths}
 

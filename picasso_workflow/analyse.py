@@ -457,11 +457,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Required keys: (none)
                 Optional keys: (none)
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
 
         Returns:
             parameters : dict
@@ -639,20 +643,36 @@ class AutoPicasso(util.AbstractModuleCollection):
         """This module documents where and how analysis is being performed
         Args:
             parameters : dict
-                necessary items:
-                    filename : str
-                        the (main) file name to load.
-                optional items:
-                    sample_movie : dict, used for creating a subsampled movie
-                        keywords as used in method create_sample_movie
-                    load_camera_info : bool
-                        whether to load the camera information for the camera
-                        used from picasso.CONFIG
+                This module does not use any parameters
         Returns:
             parameters : dict
-                as input, potentially changed values, for consistency
+                as input, unchanged
             results : dict
-                the analysis results
+                the analysis results, updated with:
+                    picasso version : str
+                        version of picasso library used
+                    picasso-workflow version : str
+                        version of picasso-workflow
+                    Architecture : str
+                        machine architecture
+                    OS : str
+                        operating system
+                    host : str
+                        hostname of machine
+                    processor : str
+                        processor information
+                    CPU Frequency [MHz] : float
+                        current CPU frequency
+                    CPU cores : int
+                        number of CPU cores
+                    Memory total [GB] : int
+                        total system memory in GB
+                    Memory available [GB] : int
+                        available system memory in GB
+                    GPU : str
+                        GPU name or "N/A"
+                    GPU memory [GB] : int
+                        GPU memory in GB or 0 if no GPU
         """
         results["picasso version"] = picassoversion
         results["picasso-workflow version"] = "N/A"
@@ -690,14 +710,18 @@ class AutoPicasso(util.AbstractModuleCollection):
                     filepath : str
                         the czi file name to load.
                 optional items:
-                    filepath_raw : str
-                        the file name to write to
+                    filename_raw : str
+                        the raw file name to write to
                     info : dict, information as used by picasso
         Returns:
             parameters : dict
                 as input, potentially changed values, for consistency
             results : dict
-                the analysis results
+                the analysis results, updated with:
+                    filepath_raw : str
+                        full path to the output raw file
+                    filename_raw : str
+                        name of the output raw file
         """
         filepath_czi = parameters["filepath"]
         filename_raw = parameters.get("filename_raw")
@@ -737,11 +761,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                         Whether to load camera configuration from
                         picasso.CONFIG
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:
@@ -881,7 +909,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters : dict
                 as input, potentially changed values, for consistency
             results : dict
-                the analysis results
+                the analysis results, updated with:
+                    picasso version : str
+                        version of picasso library used
+                    nlocs : int
+                        number of localizations loaded
         """
         results["picasso version"] = picassoversion
         self.locs, self.info = io.load_locs(parameters["filename"])
@@ -1133,11 +1165,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                             filename : str
                                 Output filename for plot
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:
@@ -1252,7 +1288,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters : dict
                 as input, potentially changed values, for consistency
             results : dict
-                the analysis results
+                the analysis results, updated with:
+                    locs_vs_frame : dict
+                        plot results if locs_vs_frame parameter was provided
+                    locs_columns : list
+                        list of column names in the localizations array
         """
         em = self.camera_info["Gain"] > 1
         spots = localize.get_spots(
@@ -1398,10 +1438,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters : dict
                 as input, potentially changed values, for consistency
             results : dict
-                the analysis results
-                    labeled filepath : dict
+                the analysis results, updated with:
+                    labeled filepaths : dict
                         keys : labels
                         values : filepaths
+                    success : bool
+                        whether the export was successful
         """
         fps_in = parameters["filepath"]
         if isinstance(fps_in, str):
@@ -1438,10 +1480,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             i : int
                 the module index in the protocol
             parameters : dict
-                necessary items:
+                optional items:
                     ctrmass_fov_nm : Field of view of the zoom in rendering
                         around the center of mass in nm
-                optional items:
                     fullfov_pixelsize : The rendered pixel size [nm] of the
                         full FOV rendering
                     ctrmass_pixelsize : The rendered pixel size [nm] of the
@@ -1455,10 +1496,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters : dict
                 as input, potentially changed values, for consistency
             results : dict
-                the analysis results
-                    labeled filepath : dict
-                        keys : labels
-                        values : filepaths
+                the analysis results, updated with:
+                    fp_scene_fullfov : str
+                        filepath to full FOV rendering
+                    fp_scene_ctrmass : str
+                        filepath to center of mass zoom rendering (conditional, only if ctrmass_fov_nm provided)
         """
         pixelsize = self.pixelsize
         rcode = generate_random_code(6)
@@ -1537,17 +1579,21 @@ class AutoPicasso(util.AbstractModuleCollection):
                     dimensions : list of str
                         the dimensions undrifted, typically ['x', 'y'].
                 optional items:
-                    filename : str
-                        the drift txt file name
-                    save_locs : bool
-                        whether to save the locs into the results folder
+                    progress : callback function
+                        progress callback for status updates
             results : dict
                 the results dict, created by the module_decorator
         Returns:
             parameters : dict
                 as input, potentially changed values, for consistency
             results : dict
-                the analysis results
+                the analysis results, updated with:
+                    success : bool
+                        whether undrifting was successful
+                    fp_driftfile : str
+                        filepath to drift txt file
+                    fp_fig : str
+                        filepath to drift plot png
         """
         pixelsize = self.pixelsize
         progress = parameters.get("progress", None)
@@ -1600,22 +1646,29 @@ class AutoPicasso(util.AbstractModuleCollection):
                 the module index in the protocol
             parameters : dict
                 necessary items:
-                    segmentation : the number of frames segmented for RCC
-                    dimensions : list
-                        the dimensions undrifted. For picasso RCC, this
-                        is always ['x', 'y']
+                    segmentation : int
+                        the number of frames segmented for RCC
                 optional items:
+                    max_iter_segmentations : int, default: 3
+                        maximum number of iterations to adaptively increase segmentation if RCC fails
                     filename : str
                         the drift txt file name
-                    save_locs : bool
-                        whether to save the locs into the results folder
             results : dict
                 the results dict, created by the module_decorator
         Returns:
             parameters : dict
                 as input, potentially changed values, for consistency
+                Note: dimensions parameter is set to ['x', 'y'] by this module
             results : dict
-                the analysis results
+                the analysis results, updated with:
+                    success : bool
+                        whether undrifting was successful
+                    message : str
+                        error or warning messages if any
+                    filepath_driftfile : str
+                        filepath to drift txt file (conditional, only if undrifting succeeded)
+                    filepath_plot : str
+                        filepath to drift plot png (conditional, only if undrifting succeeded)
         """
         pixelsize = self.pixelsize
 
@@ -3945,6 +3998,46 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def summarize_dataset(self, i, parameters, results):
+        """Summarize dataset using various analysis methods
+
+        Computes dataset quality metrics such as NeNa (Nearest Neighbor Analysis)
+        and median localization precision.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    methods : dict
+                        Dictionary of analysis methods to run. Keys are method names,
+                        values are method-specific parameter dicts.
+                        Supported methods:
+                            "nena" : dict (no parameters)
+                                Performs Nearest Neighbor Analysis to estimate localization precision
+                            "median-loc-precision" : dict
+                                Calculates median localization precision
+                                Optional keys:
+                                    qe_correction : float
+                                        Quantum efficiency correction factor (default: 1)
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+                    nena : dict (if nena method used)
+                        Dictionary with keys:
+                            res : str - all best fit values
+                            NeNa : str - formatted NeNa result
+                            nena-px : float - NeNa value in pixels
+                            nena-nm : float - NeNa value in nanometers
+                            filepath_plot : str - path to NeNa plot
+                    median-loc-precision : dict (if median-loc-precision method used)
+                        Dictionary with keys:
+                            median_lp-px : float - median localization precision in pixels
+                            median_lp-nm : float - median localization precision in nanometers
+        """
         pixelsize = self.pixelsize
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
@@ -4039,7 +4132,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def density(self, i, parameters, results):
-        """ACalculate local localization density
+        """Calculate local localization density
         Args:
             i : int
                 the index of the module
@@ -4090,11 +4183,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                         Whether to save clustered localization data to results
                         folder
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:
@@ -6487,11 +6584,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                     fit_bkg : bool
                         Whether to fit background (default: False)
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:

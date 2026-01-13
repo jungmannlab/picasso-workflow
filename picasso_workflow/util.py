@@ -43,11 +43,15 @@ class AbstractModuleCollection(abc.ABC):
                 Required keys: (none)
                 Optional keys: (none)
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
 
         Returns:
             parameters : dict
@@ -59,32 +63,39 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def analysis_documentation(self, i, parameters, results):
-        """Document the parameters of the analysis machine and software.
-
-        Creates documentation of the analysis environment including system
-        information, software versions, and configuration parameters.
-
+        """This module documents where and how analysis is being performed
         Args:
-            i : int
-                The index of the module in the workflow
             parameters : dict
-                Required keys: (none)
-                Optional keys: (none)
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Optional keys:
-                    system_info : dict
-                        System and software version information
-
+                This module does not use any parameters
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, unchanged
             results : dict
-                Input results with added system documentation
+                the analysis results, updated with:
+                    picasso version : str
+                        version of picasso library used
+                    picasso-workflow version : str
+                        version of picasso-workflow
+                    Architecture : str
+                        machine architecture
+                    OS : str
+                        operating system
+                    host : str
+                        hostname of machine
+                    processor : str
+                        processor information
+                    CPU Frequency [MHz] : float
+                        current CPU frequency
+                    CPU cores : int
+                        number of CPU cores
+                    Memory total [GB] : int
+                        total system memory in GB
+                    Memory available [GB] : int
+                        available system memory in GB
+                    GPU : str
+                        GPU name or "N/A"
+                    GPU memory [GB] : int
+                        GPU memory in GB or 0 if no GPU
         """
         pass
 
@@ -92,7 +103,39 @@ class AbstractModuleCollection(abc.ABC):
     def conditional_branch(self):
         """Execute different sub-module sequences based on a condition.
 
-        Allows conditional execution: if(condition){modules...}else{modules...}
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    condition : dict
+                        condition dictionary with keys:
+                            - "left": value or parameter command tuple
+                            - "operator": str (>, <, >=, <=, ==, !=)
+                            - "right": value or parameter command tuple
+                        or logical condition with "and"/"or" keys
+                    if_true : list of tuples
+                        list of (module_name, module_parameters) tuples
+                        to execute if condition is True
+                    if_false : list of tuples
+                        list of (module_name, module_parameters) tuples
+                        to execute if condition is False
+                optional keys:
+                    parameter_command_executor : ParameterCommandExecutor
+                        if provided, will be used for resolving parameter
+                        commands in condition values
+            results : dict
+                the results this function generates
+
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results including:
+                    - condition_result : bool
+                    - branch_taken : str ("if_true" or "if_false")
+                    - if_branch : dict of sub-module results
+                    - branch_modules : dict of flat-indexed results
         """
         pass
 
@@ -103,35 +146,24 @@ class AbstractModuleCollection(abc.ABC):
     @abc.abstractmethod
     def convert_zeiss_movie(self, i, parameters, results):
         """Converts a DNA-PAINT movie into .raw, as supported by picasso.
-
-        Converts Zeiss .czi movie files to picasso-compatible .raw format
-        for subsequent analysis steps in the workflow.
-
         Args:
-            i : int
-                The index of the module in the workflow
             parameters : dict
-                Required keys:
+                necessary items:
                     filepath : str
-                        Path to the input Zeiss .czi file
-                Optional keys:
-                    output_filepath : str
-                        Custom output path for the .raw file
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    filepath_raw : str
-                        Path to the output .raw file
-
+                        the czi file name to load.
+                optional items:
+                    filename_raw : str
+                        the raw file name to write to
+                    info : dict, information as used by picasso
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
             results : dict
-                Input results with added file path information
+                the analysis results, updated with:
+                    filepath_raw : str
+                        full path to the output raw file
+                    filename_raw : str
+                        name of the output raw file
         """
         pass
 
@@ -140,7 +172,8 @@ class AbstractModuleCollection(abc.ABC):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
 
         Loads DNA-PAINT movie data and metadata into memory for subsequent
-        analysis. Optionally creates sample movies and loads camera configuration.
+        analysis. Optionally creates sample movies and loads camera
+        configuration. The data is saved in self.movie and self.info.
 
         Args:
             i : int
@@ -153,13 +186,18 @@ class AbstractModuleCollection(abc.ABC):
                     sample_movie : dict
                         Parameters for creating a subsampled movie
                     load_camera_info : bool
-                        Whether to load camera configuration from picasso.CONFIG
+                        Whether to load camera configuration from
+                        picasso.CONFIG
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:
@@ -172,7 +210,8 @@ class AbstractModuleCollection(abc.ABC):
 
         Returns:
             parameters : dict
-                Input parameters, potentially modified (sample_movie paths updated)
+                Input parameters, potentially modified (sample_movie paths
+                updated)
             results : dict
                 Input results with added movie information and metadata
         """
@@ -181,37 +220,24 @@ class AbstractModuleCollection(abc.ABC):
     @abc.abstractmethod
     def load_dataset_localizations(self, i, parameters, results):
         """Loads a DNA-PAINT dataset in a format supported by picasso.
-
-        Loads pre-computed localization data from file for analysis workflows
-        that skip the identification and localization steps.
-
+        The data is saved in
+            self.locs
+            self.info
         Args:
-            i : int
-                The index of the module in the workflow
             parameters : dict
-                Required keys:
+                necessary items:
                     filename : str
-                        Path to the localization file to load
-                Optional keys:
-                    additional_info : dict
-                        Additional metadata to include
-            results : dict
-                Required keys:
-                    start time : str
-                        Module execution start timestamp
-                    duration : float
-                        Module execution duration in seconds
-                Results updated with:
-                    picasso version : str
-                        Version of picasso library used
-                    nlocs : int
-                        Number of localizations loaded
-
+                        the (main) file name to load. This can be image files,
+                        or hdf5.
         Returns:
             parameters : dict
-                Input parameters (unchanged)
+                as input, potentially changed values, for consistency
             results : dict
-                Input results with added localization information
+                the analysis results, updated with:
+                    picasso version : str
+                        version of picasso library used
+                    nlocs : int
+                        number of localizations loaded
         """
         pass
 
@@ -222,6 +248,7 @@ class AbstractModuleCollection(abc.ABC):
         Identifies potential localization sites in the loaded movie using
         net gradient thresholding. Optionally performs automatic net gradient
         detection and creates identification vs frame plots.
+        The data is saved in self.identifications.
 
         Args:
             i : int
@@ -253,20 +280,26 @@ class AbstractModuleCollection(abc.ABC):
                             filename : str
                                 Output filename for plot
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:
                     num_identifications : int
                         Total number of identifications found
                     auto_netgrad : dict
-                        Results from automatic net gradient detection (if requested)
+                        Results from automatic net gradient detection (if
+                        requested)
                     ids_vs_frame : dict
-                        Results from identifications vs frame analysis (if requested)
+                        Results from identifications vs frame analysis (if
+                        requested)
 
         Returns:
             parameters : dict
@@ -278,33 +311,152 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def localize(self):
-        """Localizes Spots previously identified."""
+        """Localizes Spots previously identified.
+        The data is saved in
+            self.locs
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    box_size : as always
+                    fit_parallel : bool
+                        whether to fit on multiple cores
+                optional items:
+                    locs_vs_frame : dict
+                        for plotting locs vs time
+                        items correspond to arguments of _plot_locs_vs_frame
+                    save_locs : dict
+                        if saving localizations is requested.
+                        Items correpsond to arguments of save_locs
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+                    locs_vs_frame : dict
+                        plot results if locs_vs_frame parameter was provided
+                    locs_columns : list
+                        list of column names in the localizations array
+        """
         pass
 
     @abc.abstractmethod
     def export_brightfield(self):
         """Opens a single-plane tiff image and saves it to png with
-        contrast adjustment."""
+        contrast adjustment.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    filepath : str or list of str or dict
+                        the tiff file(s) to load. The converted file(s) will
+                        have the same name, but with .png extension
+                        if dict: keys are labels
+                optional items:
+                    min_quantile : float, default: 0
+                        the quantile below which pixels are shown black
+                    max_quantile : float, default: 1
+                        the quantile above which pixels are shown white
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+                    labeled filepaths : dict
+                        keys : labels
+                        values : filepaths
+                    success : bool
+                        whether the export was successful
+        """
         pass
 
     @abc.abstractmethod
     def render(self):
-        """Renders localizations."""
+        """Renders localizations on the whole field of view, and on
+        a zoom in around the center of mass of localizations.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                optional items:
+                    ctrmass_fov_nm : Field of view of the zoom in rendering
+                        around the center of mass in nm
+                    fullfov_pixelsize : The rendered pixel size [nm] of the
+                        full FOV rendering
+                    ctrmass_pixelsize : The rendered pixel size [nm] of the
+                        zoom in rendering around the center of mass
+                    ctrmass_blur_method : Blur method
+                    ctrmass_min_blur_width : min blur with
+                    ctrmass_ang : angle
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+                    fp_scene_fullfov : str
+                        filepath to full FOV rendering
+                    fp_scene_ctrmass : str
+                        filepath to center of mass zoom rendering (conditional, only if ctrmass_fov_nm provided)
+        """
         pass
 
     @abc.abstractmethod
     def undrift_rcc(self):
-        """Undrifts localized data using redundant cross correlation."""
+        """Undrifts localized data using redundant cross correlation.
+        drift is saved in
+        self.drift
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    segmentation : int
+                        the number of frames segmented for RCC
+                optional items:
+                    max_iter_segmentations : int, default: 3
+                        maximum number of iterations to adaptively increase segmentation if RCC fails
+                    filename : str
+                        the drift txt file name
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+                Note: dimensions parameter is set to ['x', 'y'] by this module
+            results : dict
+                the analysis results, updated with:
+                    success : bool
+                        whether undrifting was successful
+                    message : str
+                        error or warning messages if any
+                    filepath_driftfile : str
+                        filepath to drift txt file (conditional, only if undrifting succeeded)
+                    filepath_plot : str
+                        filepath to drift plot png (conditional, only if undrifting succeeded)
+        """
         pass
 
     @abc.abstractmethod
     def undrift_rsso(self):
-        """Undrift localized data using RSSO-based temporal drift correction
+        """Undrift localized data using iterative RSSO-based drift correction
 
-        This method applies the RSSO (Redundant Spot Shift Overrepresentation)
-        algorithm to correct for temporal drift by analyzing 2D shift histograms
-        between temporally adjacent localizations. It accounts for the timescales
-        ton (localization half-life) and toff (reappearance time).
+        This method applies an iterative RSSO (Redundant Spot Shift
+        Overrepresentation) approach where each frame is compared against
+        the whole dataset to compute total drift for that frame. The process
+        is repeated iteratively with the undrifted dataset to improve accuracy.
+        Includes uncertainty analysis, confidence evaluation, windowing and
+        outlier detection.
 
         Args:
             i : int
@@ -312,50 +464,166 @@ class AbstractModuleCollection(abc.ABC):
             parameters : dict
                 necessary items:
                     ton : float
-                        Half-life of localization in frames (how long a spot stays
-                        visible)
+                        Half-life of localization in frames (how long a spot
+                        stays visible)
                     toff : float
-                        Time in frames for a spot to reappear after disappearing
+                        Time in frames for a spot to reappear after
+                        disappearing
                     max_shift : float
-                        Maximum expected drift per frame in nanometers
+                        Maximum expected drift per frame in pixels
                 optional items:
-                    processing_chunk_size : int
-                        Number of frames per processing chunk for memory efficiency
-                        (default: 100)
                     min_locs_per_frame : int
-                        Minimum localizations per frame for reliable drift estimation
-                        (default: 10)
-                    min_locs_per_block : int
-                        Minimum localizations per toff-scale block for reliable drift
-                        estimation (default: 100)
+                        Minimum localizations per frame for reliable drift
+                        estimation (default: 10)
+                    max_iterations : int
+                        Maximum number of iterative refinement rounds (default: 5)
+                    convergence_threshold : float
+                        RMS drift change threshold for convergence in nm (default: 0.1)
                     plot_drift : bool
                         Whether to save drift plots (default: True)
-                    plot_rsso : bool
-                        Whether to save RSSO histogram plots for each frame
-                        (default: False)
                     save_locs : bool
                         Whether to save undrifted localizations (default: True)
+                    n_processes : int or None
+                        Number of processes for parallel computation (default: auto)
+                    confidence_threshold : float
+                        Confidence threshold for windowing analysis (default: 0.8)
+                    outlier_detection_enabled : bool
+                        Enable RSSO failure and outlier detection (default: True)
+                    outlier_z_threshold : float
+                        Z-score threshold for temporal outlier detection (default: 3.5)
+                    min_signal_to_noise : float
+                        Minimum signal-to-noise ratio for drift measurements (default: 0.5)
+                    windowing_enabled : bool
+                        Enable adaptive windowing for low-confidence frames (default: True)
+                    window_size_range : tuple
+                        Min and max window sizes for adaptive windowing (default: (3, 20))
 
         Returns:
             parameters : dict
                 as input, potentially changed values, for consistency
             results : dict
-                the analysis results including drift trajectory and plots
+                the analysis results including:
+                    success : bool
+                        whether drift correction succeeded
+                    drift_x, drift_y : ndarray
+                        total drift trajectories in nm for each frame
+                    uncertainty_x, uncertainty_y : ndarray
+                        uncertainty estimates for drift measurements
+                    drift_quality : ndarray
+                        quality/confidence metrics per frame
+                    n_iterations : int
+                        number of iterations performed
+                    convergence_rms : float
+                        final RMS change indicating convergence
+                    drift_plots : str
+                        path to drift visualization plots
         """
 
     @abc.abstractmethod
     def undrift_aim(self):
-        """Unrift localized data using the AIM algorithm"""
+        """Unrift localized data using the AIM algorithm
+        drift is saved in
+        self.drift
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    segmentation : int
+                        the number of frames segmented
+                    intersect_d : float
+                        Intersect distance in nanometers.
+                    roi_r : float
+                        Radius of the local search region in nanometers.
+                        Should be larger than the maximum expected drift wihtin
+                        segmentation.
+                    dimensions : list of str
+                        the dimensions undrifted, typically ['x', 'y'].
+                optional items:
+                    progress : callback function
+                        progress callback for status updates
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+                    success : bool
+                        whether undrifting was successful
+                    fp_driftfile : str
+                        filepath to drift txt file
+                    fp_fig : str
+                        filepath to drift plot png
+        """
         pass
 
     @abc.abstractmethod
     def manual(self):
-        """Describes a manual step, for which the workflow is paused."""
+        """Handles a manual step: if the files required are not
+        present, prompt the user to provide them. if they are, move
+        to the next step.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    prompt : str
+                        the user prompt
+                    filename : str
+                        the file the user should provide.
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def summarize_dataset(self):
-        """Summarizes the results of a dataset analysis."""
+        """Summarize dataset using various analysis methods
+
+        Computes dataset quality metrics such as NeNa (Nearest Neighbor Analysis)
+        and median localization precision.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    methods : dict
+                        Dictionary of analysis methods to run. Keys are method names,
+                        values are method-specific parameter dicts.
+                        Supported methods:
+                            "nena" : dict (no parameters)
+                                Performs Nearest Neighbor Analysis to estimate localization precision
+                            "median-loc-precision" : dict
+                                Calculates median localization precision
+                                Optional keys:
+                                    qe_correction : float
+                                        Quantum efficiency correction factor (default: 1)
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+                    nena : dict (if nena method used)
+                        Dictionary with keys:
+                            res : str - all best fit values
+                            NeNa : str - formatted NeNa result
+                            nena-px : float - NeNa value in pixels
+                            nena-nm : float - NeNa value in nanometers
+                            filepath_plot : str - path to NeNa plot
+                    median-loc-precision : dict (if median-loc-precision method used)
+                        Dictionary with keys:
+                            median_lp-px : float - median localization precision in pixels
+                            median_lp-nm : float - median localization precision in nanometers
+        """
         pass
 
     # @abc.abstractmethod
@@ -366,7 +634,21 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def density(self):
-        """Calculate local localization density"""
+        """Calculate local localization density
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    radius : float
+                        the radius for calculating local density
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
@@ -375,6 +657,7 @@ class AbstractModuleCollection(abc.ABC):
 
         Applies DBSCAN clustering algorithm to localizations, optionally
         replacing localizations with cluster centers for subsequent analysis.
+        After this module, the standard locs will be the cluster centers.
 
         Args:
             i : int
@@ -389,13 +672,18 @@ class AbstractModuleCollection(abc.ABC):
                         Whether to replace localizations with cluster centers
                 Optional keys:
                     save_locs : bool
-                        Whether to save clustered localization data to results folder
+                        Whether to save clustered localization data to results
+                        folder
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:
@@ -414,12 +702,45 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def hdbscan(self):
-        """Perform clustering using hdbscan"""
+        """Perform hdbscan clustering. After this module, the standard
+        locs will be the cluster centers.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    min_cluster : float
+                        the hdbscan min_cluster
+                    min_samples : float
+                        the hdbscan min_sample
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def binding_event_analysis(self):
-        """Perform clustering using the smlm clusterer"""
+        """Evaluate binding events according to Philipp Steen's methods
+
+        Steen, P.R., Unterauer, E.M., Masullo, L.A. et al.
+        The DNA-PAINT palette: a comprehensive performance analysis
+        of fluorescent dyes.
+        Nat Methods (2024).
+        https://doi.org/10.1038/s41592-024-02374-8
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_locs : str
+                        file path to input locs
+                    n_frames
+        """
         pass
 
     @abc.abstractmethod
@@ -428,7 +749,8 @@ class AbstractModuleCollection(abc.ABC):
 
         This method calculates the spatial resolution of localizations
         by computing a 2D autocorrelation function and fitting a Gaussian to
-        extract resolution metrics.
+        extract resolution metrics. The analysis includes 2D Gaussian fitting,
+        radial profile computation, and 1D Gaussian fitting to the radial profile.
 
         Args:
             i : int
@@ -440,6 +762,14 @@ class AbstractModuleCollection(abc.ABC):
                         grid spacing for autocorrelation (default: 5 nm)
                     r_max : float
                         maximum radius for autocorrelation (default: 100 nm)
+                    batch_size : int or None
+                        number of data points per batch for chunking (auto-calculated if None)
+                    n_processes : int or None
+                        number of parallel processes (auto-detected if None, capped at 4)
+                    use_chunking : bool
+                        enable memory-efficient chunking for large datasets (default: True)
+                    use_sparse : bool
+                        use sparse matrices for very large grids (default: False)
 
         Results:
             resolution : float
@@ -452,8 +782,18 @@ class AbstractModuleCollection(abc.ABC):
                 R-squared goodness of fit
             autocorr_map : ndarray
                 2D autocorrelation intensity map
+            radial_profile : ndarray
+                radial profile of autocorrelation
+            radial_distances : ndarray
+                distance values for radial profile
+            resolution_radial : float
+                resolution from radial Gaussian fit (FWHM)
+            resolution_dblradial : float
+                resolution from double Gaussian fit (FWHM)
             fig_resolution : str
                 path to resolution plot
+            fig_radial : str
+                path to radial profile plot
         """
 
     @abc.abstractmethod
@@ -461,8 +801,11 @@ class AbstractModuleCollection(abc.ABC):
         """Calculate resolution using spatial FRC approach
 
         This method divides the FOV into spatial regions, computes FRC for each
-        region independently, and averages the results. This provides better
-        memory efficiency and statistics through spatial averaging.
+        region independently, and averages the results. Benefits:
+        - Lower memory usage (smaller images per region)
+        - Better statistics through spatial averaging
+        - Efficient multiprocessing (fully independent regions)
+        - Preserves high spatial frequencies
 
         Args:
             i : int
@@ -474,7 +817,7 @@ class AbstractModuleCollection(abc.ABC):
                     smoothing_sigma : float or None
                         Gaussian smoothing sigma in pixels (default: None)
                     threshold : float
-                        FRC threshold for resolution cutoff (default: 1/7)
+                        FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
                     region_size : float
                         size of each spatial region in micrometers (default: 10.0 µm)
                     min_locs_per_region : int
@@ -489,44 +832,135 @@ class AbstractModuleCollection(abc.ABC):
 
         Results:
             resolution_frc_spatial : float
-                mean FRC-based resolution in nm (smoothed)
-            resolution_unsmoothed : float
-                mean FRC-based resolution without smoothing
+                mean FRC-based resolution in nm
             resolution_std : float
                 standard deviation across regions
             n_regions : int
                 number of valid regions processed
-            n_regions_total : int
-                total number of regions attempted
+            cutoff_frequency : float
+                mean spatial frequency at resolution cutoff (1/nm)
             frc_curve_mean : ndarray
                 mean FRC curve across regions
-            frc_curve_smoothed : ndarray
-                smoothed FRC curve
             frc_curve_std : ndarray
-                std of FRC curves across regions
+                std of FRC curves
             spatial_frequencies : ndarray
                 spatial frequency values (1/nm)
             threshold : float
-                threshold used for resolution cutoff
-            resolutions_per_region : ndarray
-                resolution values for each individual region
+                threshold used
             fig_frc : str
                 path to FRC curve plot
         """
 
     @abc.abstractmethod
     def smlm_clusterer(self):
-        """Perform clustering using the smlm clusterer"""
+        """Perform smlm clustering. After this module, the standard
+        locs will be the cluster centers.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    radius : float
+                        the smlm radius, in nm
+                    min_locs : float
+                        the smlm min_locs
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+                    basic_fa : bool
+                        the smlm basic fa, default: False
+                    radius_z : float
+                        the smlm radius_z, default: None
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def gaussian_mixture_cluster(self):
-        """Perform clustering using gaussian mixture models"""
+        """Perform clustering using gaussian mixture modelsAfter this module,
+        the standard locs will be the Gaussian centers.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    locs : np.recarray
+                        Localizations.
+                    info : list
+                        Information dictionaries.
+                    min_locs : int
+                        Minimum number of localizations per component. Used
+                        to filter out components with too few localizations
+                        that likely represent background.
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+                    max_rounds_without_best_bic : int
+                        (default=3)
+                        Maximum number of rounds without BIC improvement to
+                        terminate the optimal GMM search.
+                    bootstrap_check : bool (default=False)
+                        If True, the standard error of the means (SEM) is
+                        calculated using bootstrapping. If False, the
+                        standard, single Gaussian SEM is used as
+                        approximation.
+                    calibration : dict (default=None)
+                        Calibration dictionary with x and y coefficients, z
+                        step size and the number of frames. Only required for
+                        3D data.
+                    asynch : bool (default=True)
+                        If True, the GMM search is run in parallel using
+                        multiprocessing. If False, the GMM search is run
+                        without multiprocessing.
+                    callback_parent : function (default='silent')
+                        Callback function's parent object for displaying
+                        progress bar. If None, the progress bar displayed
+                        directly to the console. If 'silent', no progress
+                        is displayed
+                    sigma_bounds : float (not recommended)
+                        Minimum standard deviation of the Gaussian components
+                        in nanometers. Useful for avoiding overfitting within
+                        a single localization cloud. Now using individual
+                        loc precision, so min_sigma is not recommended.
+                    loc_prec_handle : Literal["local", "global", "abs"]
+                        default: local
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def nneighbor(self):
-        """Calculate Nearest Neighbor distances"""
+        """Perform nearest neighbor calculation
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    dims : list of str
+                        the distance dimensions, e.g. ['x', 'y']
+                        or ['x', 'y', 'z']
+                    nth_NN : int
+                        calculate the 1st to nth nearest neighbor distances
+                    nth_rdf : int
+                        calculate distances up to the 95th percile of the
+                        nth_rdf nearest neighbor
+                    subsample_1stNN : int
+                        by how much fold to subsample distances from the
+                        median of the 1st nearest nteighbor. Default is 20
+                    add_column : bool
+                        whether to add a column of nearest neighbor distance
+                        to the locs
+                and optional keys:
+                    save_locs : bool
+                        whether to save the locs into the results folder
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
@@ -543,7 +977,8 @@ class AbstractModuleCollection(abc.ABC):
                 Required keys:
                     nneighbors : str or numpy.ndarray or list
                         If str: filepath to nearest neighbor data file
-                        If array: 2D array (N, k) of kth nearest neighbor distances
+                        If array: 2D array (N, k) of kth nearest neighbor
+                        distances
                         If list: multiple datasets or file paths
                     dimensionality : int
                         Spatial dimensionality (2 or 3) for CSR model
@@ -551,7 +986,8 @@ class AbstractModuleCollection(abc.ABC):
                     kmin : int
                         Minimum k-th nearest neighbor order to fit (default: 1)
                     min_dist : float
-                        Minimum observable distance in nm due to technical limits
+                        Minimum observable distance in nm due to technical
+                        limits
                     max_dist : float
                         Maximum distance for filtering analysis
                     bkg_fraction : float
@@ -559,11 +995,15 @@ class AbstractModuleCollection(abc.ABC):
                     fit_bkg : bool
                         Whether to fit background (default: False)
             results : dict
-                Required keys:
+                Automatic keys (provided by decorator):
                     start time : str
                         Module execution start timestamp
+                    end time : str
+                        Module execution end timestamp
                     duration : float
                         Module execution duration in seconds
+                    folder : str
+                        Output folder for module results
                     folder : str
                         Output folder for generated files
                 Results updated with:
@@ -574,7 +1014,8 @@ class AbstractModuleCollection(abc.ABC):
                     fp_fig : str or list
                         Filepath(s) to CSR fit visualization figure(s)
                     wasserstein_distances_per_k : list
-                        Wasserstein distances for each k-th nearest neighbor order
+                        Wasserstein distances for each k-th nearest neighbor
+                        order
                     mean_wasserstein_distance : float or list
                         Mean Wasserstein distance across all k orders
                     ks_pvalues_per_k : list
@@ -584,7 +1025,8 @@ class AbstractModuleCollection(abc.ABC):
             parameters : dict
                 Input parameters (unchanged)
             results : dict
-                Input results with CSR fitting results and goodness-of-fit metrics
+                Input results with CSR fitting results and goodness-of-fit
+                metrics
         """
         pass
 
@@ -599,7 +1041,19 @@ class AbstractModuleCollection(abc.ABC):
     @abc.abstractmethod
     def save_single_dataset(self):
         """Saves the locs and info of a single dataset; makes loading
-        for the aggregation workflow more straightforward."""
+        for the aggregation workflow more straightforward.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                        filename : str
+                            the name of the dataset
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     ##########################################################################
@@ -608,36 +1062,214 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def load_datasets_to_aggregate(self):
-        """Loads data of multiple single-dataset workflows into one
-        aggregation workflow."""
+        """Loads the results of single-dataset workflows
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    filepaths : list of str
+                        the hdf5 files to load.
+                    tags : list of str
+                        the tags to name the datasets
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def align_channels(self):
-        """Saves the locs and info of a single dataset; makes loading
-        for the aggregation workflow more straightforward."""
+        """Aligns multiple channels to each other (part of an aggregation
+        workflow)
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+                    filepaths : list of str
+                        the previously saved hdf5 files to be loaded and
+                        aligned. if not given, the last processed data is used
+                    align_pars : dict
+                        kwargs of picasso_outpost.align_channels
+                            max_iterations, convergence
+                    fp_fiducials : list of str
+                        the previously saved hdf5 files of fiducial markers
+                        to be loaded and aligned.
+                    fig_filename : str
+                        the location to save the drift figure to
+                    crop_boundaries : bool
+                        whether to crop the localizations according to the
+                        image boundaries (after shifting)
+                    fp_co_shift_channel_locs : list of str
+                        hdf5 files not in the 'main workflow' that should
+                        be shifted as well. This could e.g. be clustered
+                        localizations when the workflow has continued with
+                        cluster centers
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def combine_channels(self):
         """Combines multiple channels into one dataset. This is relevant
-        e.g. for RESI."""
+        e.g. for RESI.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+                    tag : str
+                        the tag / name of the combined dataset
+                    combine_col : str
+                        the column name for the IDs to the different datasets
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def save_datasets_aggregated(self):
-        """save data of multiple single-dataset workflows from one
-        aggregation workflow."""
+        """Save data of multiple single-dataset workflows from one
+        aggregation workflow.
+
+        Saves all channel localization data and metadata from the aggregated
+        workflow to individual files in the results folder.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys: (none)
+                Optional keys: (none)
+            results : dict
+                The results dictionary, updated with:
+                    filepaths : list
+                        List of all saved file paths from the aggregated
+                        datasets
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Updated results dictionary with saved file paths
+        """
         pass
 
     @abc.abstractmethod
     def spinna_manual(self):
-        """Direct implementation of spinna batch analysis."""
+        """Direct implementation of spinna batch analysis.
+        The current locs file(s) are saved into the results folder, and
+        a template csv file is created. This csv needs to be filled out by the
+        user in a manual step before the spinna analysis is carried out.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    proposed_labeling_efficiency : float, range 0-100
+                        labeling efficiency percentage, default for all targets
+                        used proposed value in spinna_config.csv and can be
+                        altered manually after the first run of this module
+                    proposed_labeling_uncertainty : float
+                        labeling uncertainty [nm]; good value is e.g. 5
+                        used proposed value in spinna_config.csv and can be
+                         alteredmanually after the first run of this module
+                    proposed_n_simulate : int
+                        number of target molecules to simulated;
+                        good value is e.g. 50000
+                        used proposed value in spinna_config.csv and can be
+                        altered manually after the first run of this module
+                    proposed_density : int
+                        density to simulate;
+                        area density if 2D; volume density if 3D
+                        used proposed value in spinna_config.csv and can be
+                        altered manually after the first run of this module
+                    proposed_nn_plotted : int
+                        number of nearest neighbors to plot
+                        used proposed value in spinna_config.csv and can be
+                         alteredmanually after the first run of this module
+                and optional keys:
+                    structures : list of dict
+                        SPINNA structures. Each structure dict has
+                            "Molecular targets": list of str,
+                            "Structure title": str,
+                            "TARGET_x": list of float,
+                            "TARGET_y": list of float,
+                            "TARGET_z": list of float,
+                        where TARGET is one each of the target names in
+                        "Molecular targets"
+                    structures_d : float
+                        distance between molecules within auto-generated
+                        structures, in nm. Only necessary if 'structures'
+                        is not given.
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def spinna(self):
-        """implementation of a single spinna run."""
+        """Direct implementation of spinna batch analysis.
+        The current locs file(s) are saved into the results folder, and
+        a template csv file is created. This csv needs to be filled out by the
+        user in a manual step before the spinna analysis is carried out.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    labeling_efficiency : dict of float, range 0-1
+                        labeling efficiency, for all targets
+                    labeling_uncertainty : float or dict of floats
+                        labeling uncertainty [nm]; good value is e.g. 5
+                        assumed the same value for all targets
+                    n_simulate : int
+                        number of target molecules to simulated;
+                        good value is e.g. 50000
+                    structures : str or list of dict
+                        if str: filepath to a yaml file with the structures.
+                        if list of dict:
+                        SPINNA structures. Each structure dict has
+                            "Molecular targets": list of str,
+                            "Structure title": str,
+                            "TARGET_x": list of float,
+                            "TARGET_y": list of float,
+                            "TARGET_z": list of float,
+                        where TARGET is one each of the target names in
+                        "Molecular targets"
+                    fp_mask_dict : str
+                        the filepath to the mask_dict file
+                    density : list of float
+                        density to simulate in 1/nm^d;
+                        area density if 2D; volume density if 3D
+                        (required: either density or density_app)
+                    random_rot_mode : '2D', or '3D'
+                        Mode of molecule rotation in simulation
+                    sim_repeats : int
+                        number of simulation repeats
+                    fit_NND_bin : float
+                        bin size of fits
+                    fit_NND_maxdist : float
+                        max of histogram
+                    n_nearest_neighbors : int
+                        number of nearest neighbors to evaluate
+                    granularity : float
+                    the spinna granularity
+                optional keys:
+                    density_app : list of float
+                        apparent density in 1/nm^2;
+                        this is the product of 'real' density & lbl efficiency
+        """
         pass
 
     @abc.abstractmethod
@@ -670,80 +1302,439 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def create_mask(self):
-        """Create a density mask"""
+        """
+        This is Susanne's implementation of calculating a cell mask,
+        written (ni part?) for the initial version of the DC-Atlas.
+        May be obsolete with create_mask2, but kept for backwards
+        compatibility. To be deprecated on the long run.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    fp_combined_locs : str
+                        filepath to the locs combined in 'combine_channels'
+                        module
+                    margin : float
+                        Size of the added empty margin to the FOV, in nm
+                    binsize : float
+                        Size o fthe 2D histogram bins of the first step, in nm
+                    sigma_mask_blur : int
+                        parameter of the gaussian blur in binsize units
+                    mask_resolution : float
+                        Controls the digital resolution of the mask, in nm
+                    combine_col : str
+                        the name of the combine column, e.g. 'combine_id'
+                        or 'protein'. Same as used in 'combine_channels' module
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def create_mask2(self):
-        """Create a density mask"""
+        """
+        This is Rafal's implementation of cell masking, written for the
+        3rd version of the DC Atlas. It is (mostly?) identical with an
+        implementation of it in spinna, which will be integrated into
+        picasso soon. Evaluate deprecation (or moving source from
+        outpost_modules/ripleys to picasso/spinna) at that time.
+
+        the locs must be protein positions at this stage.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    binsize : float
+                        the bin size in nanometers. A good value is 20
+                    blursize : float
+                        the gaussian blur to apply in nanometers.
+                        A good value is 400
+                    mask_pixel_size : float
+                        the pixelsize of the final mask, in nanometers.
+                        Often used: 10
+                    threshold : float
+                        the threshold value below which the mask is set
+                        to zero. For example 1 / 3
+                    binary : boolean
+                        whether to create a binary or density mask
+                    select_cell : boolean
+                        whether to select the largest connected component,
+                        assumed to be the cell of interest.
+                    fill_holes : boolean
+                        whether to fill holes in the cell mask
+                    dilate_nm : float
+                        the nanometers to dilate the mask (useful if a large
+                        threshold has been used)
+                    apply_to_locs : boolean
+                        whether to drop all localizations outside the area
+                and optional keys:
+                    fp_combined_locs : str default: None or ''
+                        filepath to the locs combined in 'combine_channels'
+                        module. If None or '', loaded channel_locs is used
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    combine_col : str
+                        the name of the combine column, e.g. 'combine_id'
+                        or 'protein'. Same as used in 'combine_channels' module
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def refine_mask_by_density(self):
-        """refine a mask by a given density range"""
+        """
+        This module analyses and refines a previously created mask.
+        Particularly, the density histogram of the mask bins are plotted,
+        and an area of homogeneous density can be selected
+
+        the locs must be protein positions at this stage.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_mask : str
+                        the file path to the mask
+                    min_density, max_density : float
+                        the density range to select
+                and optional keys:
+                    nbins : int
+                        the number of bins for plotting
+                    nth_largest : int
+                        select the nth largest area in density range.
+                        set 0 for largest.
+                    apply_to_locs : bool
+                        whether to apply the created mask to the locs
+                    smoothe_nm : float
+                        the number of nanometers to dilate and erode
+                        the mask. This can be useful to remove excessive
+                        holes and ragging in the mask due to the
+                        density thresholding
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def dbscan_molint(self):
         """TO BE CLEANED UP
         dbscan implementation for molecular interactions workflow
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    epsilon_nm : float
+                        dbscan epsilon in nm
+                    minpts : int
+                        minimum number of points
+                    sigma_linker : float
+                        ... in nm
+                    fp_merge_mask : str
+                        filepath to the merge mask (generated in module
+                        'create_mask')
+                    thresh_type : str
+                        ...
+                    cell_name : str
+                        the name of the cell currently analyzed
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         pass
 
     @abc.abstractmethod
     def CSR_sim_in_mask(self):
         """TO BE CLEANED UP
-        simulate CSR within a density mask
+        simulate CSR within a density mask, and perform dbscan as well
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_channel_map : str
+                        filepath to the map from 'combine_channels' module,
+                        which is a dict from channel name to ID int in the
+                        locs['combine_id']
+                    fp_mask_dict : str
+                        filepath to the mask_dict.pkl file generated in
+                        the 'create_mask' module
+                    N_repeats : int
+                        number of simulation repeats
+                    epsilon_nm : float
+                        dbscan epsilon in nm
+                    minpts : int
+                        minimum number of points
+                    sigma_linker : float
+                        ... in nm
+                    fp_merge_mask : str
+                        filepath to the merge mask (generated in module
+                        'create_mask')
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         pass
 
     @abc.abstractmethod
     def find_cluster_motifs(self):
-        """TO BE CLEANED UP
-        simulate CSR within a density mask
+        """Analyses the binary barcode results of _do_dbscan_molint.
+        Compares experimental to CSR data.
+        Merged for multiple cells
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_dbscan_molint_key : str
+                        the results key of the dbscan module.
+                        e.g. '09_dbscan_molint'
+                    swkfl_CSR_sim_in_mask_key : str
+                        the results key of the CSR dbscan module.
+                        e.g. '10_CSR_sim_in_mask'
+                    population_threshold : float, 0 - 1
+                        only select barcodes with a relative population
+                        larger than this
+                    ttest_pvalue_max : float, < 0
+                        the pvalue below which the difference between number
+                        of clusters found for a barcode between exp and csr
+                        is deemed significant
+                    channel_colors : list of str
+                        colors to describe the receptors with
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         pass
 
     @abc.abstractmethod
     def interaction_graph(self):
-        """TO BE CLEANED UP
-        simulate CSR within a density mask
+        """Plot the interaction graph, displaying the different targets
+        and their interactions in a graph. The node sizes denote the
+        density, and the ripley interaction matrix is represented in the
+        edges.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_protint_key : str
+                        the results key of the protein_interactions module.
+                        e.g. '09_protein_interactions'
+                    fp_density : str
+                        fp to the denfsities of the channels.
+                    fp_ripleys_meanvals : str
+                        the filepath to the interaction matrix
+                    edge_factor : float
+                        factor to display useful sizes
+                    node_factor : float
+                        factor to display useful sizes
+                    channel_colors : list of str
+                        colors to describe the receptors with
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         pass
 
     @abc.abstractmethod
     def plot_densities(self):
-        """TO BE CLEANED UP
-        simulate CSR within a density mask
+        """Aggregate densities and cell areas of multiple datasets and
+        plot them
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_workflows : list of str
+                        the paths to the folders of separate workflows
+                        where the separate ripleys analyses have been done
+                    report_names : list of str
+                        the report names of those worklfows
+                    swkfl_create_mask_key : str
+                        the results key of the dbscan module.
+                        e.g. '11_create_mask'
+                    swkfl_protint_key : str
+                        the results key of the protein_interactions module.
+                        e.g. '09_protein_interactions'
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         pass
 
     @abc.abstractmethod
     def find_gold(self):
         """Find localizations stemming from gold beads based on blinking
-        kinetics. The metrics used are number of locs and rms deviation
-        from mean frame
+        kinetics.
+        The metrics used are number of locs and rms deviation from mean
+        frame
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+                    remove_gold : bool
+                        if present and set to True, the gold locs
+                        are discarded and self.locs is set to the
+                        nongold-locs
+                    diameter : float
+                        the pick similar diameter for identifying gold
+                    std_range, mean_rmsd : float
+                        the pick similar parameters identifying gold
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         pass
 
     @abc.abstractmethod
     def find_similar(self):
-        """pick similar in nlocs/rmsd space"""
+        """pick similar in nlocs/rmsd space (with specified limits in
+        that space).
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    diameter : float
+                        the pick similar diameter for identifying gold
+                and optional keys:
+                    min_n_locs_per_frame : float, range 0-1
+                        the min percentage of frames with events in the pick
+                        region to pick. default: 0.01
+                    max_n_locs_per_frame : float, range 0-1
+                        the max percentage of frames with events in the pick
+                        region to pick. default: 0.01
+                    min_rmsd : float
+                        the minimum root mean square distance from pick center
+                        to pick
+                    max_rmsd : float
+                        the maximum root mean square distance from pick center
+                        to pick
+                    n_plot_structures : int
+                        the number of structures to plot
+                    display_pixelsize : float
+                        the pixelsize for display in nm, default: 1
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def find_structures(self):
-        """pick similar on clusters in nlocs/rmsd space"""
+        """pick similar on clusters in nlocs/rmsd space.
+        This may be useful for automated picking of origamis, and may
+        help for defining parameters for finding gold
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    diameter : float
+                        the pick similar diameter for identifying gold
+                and optional keys:
+                    min_n_locs_per_frame : float
+                        the percentage of frames with events in the pick
+                        region below which there is noise. default: 0.01
+                    n_plot_structures : int
+                        the number of structures to plot
+                    display_pixelsize : float
+                        the pixelsize for display in nm, default: 1
+                    xi : float
+                        the xi parameter for clustering. default 0.05
+                    min_cluster_size : float
+                        the minimun cluster size (fract). default .05
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def undrift_from_picked(self):
-        """Performs undrift from piced locs."""
+        """Performs undrift from piced locs.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_picked_locs : str
+                        filepath to the picked locs to undrift from
+                        (.hdf5 file of list of locs, with 'group' column
+                         to describe picks)
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def filter_locs(self):
-        """Filter localizations to lie within a min-max range of a metric."""
+        """Filter localizations to lie within a min-max range of a metric.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    field : str or list of str
+                        the field(s) to filter on
+                and optional keys:
+                    minval : dtype of field (or list of it)
+                        the minimum value(s) to accept
+                    maxval : dtype of field (or list of it)
+                        the maximum value(s) to accept
+                    mode : str
+                        the mode of threshold application:
+                         - absolute: minval and maxval are values
+                            in units of the field
+                         - zscore: minval and maxval are in units of
+                            standard deviations from the mean
+                            (-2, 2 means cut off at 2*std from mean)
+                         - quantile: minval and maxval are quantiles
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
@@ -751,28 +1742,202 @@ class AbstractModuleCollection(abc.ABC):
         """Filter molecule positions (after clustering or Gaussian Mixture)
         for those who show transient binding. Specifically, the mean frame
         should not be at extreme positions
+        (default, 0.1 > mean frame / nframes > 0.9), and std of frames
+        (default: 0.3 > std frame).
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                and optional keys:
+                    meanframe_cutoff : float (0-1, default .1)
+                        filter out positions at more extreme temporal positions
+                    stdframe_cutoff : float
+                        filter out positions with lower std than .16
+                    fp_locs : str
+                        the filepath to the underlying localizations
+                        (self.locs are centers). If given, these are filtered
+                        as well and saved with the same filename in the current
+                        results folder
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
         """
         pass
 
     @abc.abstractmethod
     def link_locs(self):
-        """Link localizations."""
+        """Link localizations.
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    d_max : int
+                        maximum distance to link [px]
+                    tolerance : int
+                        maximum transient dark time [frames]
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def pairwise_module_executor(self):
         """Calls another module (as a sub-module) for all pairs in the
-        channel_locs."""
+        channel_locs
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    module_name : str
+                        the module to call
+                    param_target1 : str
+                        parameter name of the first target to set for the
+                        module
+                    param_target2 : str
+                        parameter name of the second target to set for the
+                        module
+                    module_kwargs : dict
+                        the other arguments to the module
+                and optional keys:
+                    result_scalar : str
+                        the key to display in a heatmap as main result
+                    scalar_threshold : float
+                        the saturation value in the heatmap
+                    scalar_minval : float
+                        the minimum value for color in the heatmap
+                    result_fpfig : str or list of str
+                        the key to the filepath of one or more figures
+                        generated to display for documentation
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
     @abc.abstractmethod
     def random_val(self):
-        """For debugging and testing the pairwise module."""
+        """Generate random values and plot for debugging and testing the
+        pairwise module.
+
+        Creates a random value and generates a test plot with random data
+        for debugging purposes in pairwise module workflows.
+
+        Args:
+            i : int
+                The index of the module in the workflow
+            parameters : dict
+                Required keys:
+                    xlabel : str
+                        Label for the x-axis of the test plot
+                    ylabel : str
+                        Label for the y-axis of the test plot
+                Optional keys: (none)
+            results : dict
+                The results dictionary, updated with:
+                    random_val : float
+                        A random value between 0 and 1
+                    fp_fig : str
+                        Filepath to the generated test figure
+
+        Returns:
+            parameters : dict
+                Input parameters (unchanged)
+            results : dict
+                Updated results dictionary with random value and figure path
+        """
         pass
 
     @abc.abstractmethod
     def labeling_efficiency_analysis(self):
-        """Analyse for labeling efficiency."""
+        """Analyse for labeling efficiency.
+        Perform 3 component SPINNA analysis for monomers and heterodimers
+        of target (A) and reference (B). For the analysis, we enter a
+        labeling efficiency of 1, yielding proportions of monomers and
+        dimers as seen in the data. The real labeling efficiency is then
+
+        Model:
+        Binders A and B bind to an engineered construct A*-anchor-B*.
+            A <-> A*-anchor-B* <-> B
+        There are four possible configurations:
+            A_only: AA*-anchor-B*
+            AB: AA*-anchor-B*B
+            B_only: A*-anchor-B*B
+            None (invisible in data): A*-anchor-B*
+        Number of total constructs with A, or B, respectively:
+            #A_tot = #A_only + #AB
+            #B_tot = #B_only + #AB
+
+        Proportions can be given in terms of #structures, or in terms
+        of #molecules, e.g.
+        with proportions given in terms of #structures
+         10 monomers, 10 dimers (20molecules in dimers) -> p_m = 50%, p_d=50%
+
+        with proportions given in terms of #molecules
+         10 monomers, 10 dimers (20molecules in dimers) -> p_m = 33%, p_d=66%
+
+        in terms of #structures
+        prop_A^S = #A_only / (#A_only + #B_only + #AB)
+        prop_B^S = #B_only / (#A_only + #B_only + #AB)
+        prop_AB^S = #AB / (#A_only + #B_only + #AB)
+        in terms of #molecules
+        prop_A^S = #A_only / (#A_only + #B_only + 2 #AB)
+        prop_B^S = #B_only / (#A_only + #B_only + 2 #AB)
+        prop_AB^S = 2 #AB / (#A_only + #B_only + 2 #AB)
+
+        #AB = #anchor * LE_A * LE_B
+        #A_tot = #anchor * LE_A
+        #B_tot = #anchor * LE_B
+        #A_only = #A_tot - #AB = #anchor * LE_A * (1 - LE_B)
+        #B_only = #B_tot - #AB = #anchor * LE_B * (1 - LE_A)
+
+        THUS, finally, the labeling efficiency can be calculated by
+
+        with proportions given in terms of #structures
+        LE_A = prop(AB) / (prop(B) + prop(AB))
+        LE_B = prop(AB) / (prop(A) + prop(AB))
+
+        with proportions given in terms of #molecules
+        LE_A = prop(AB) / (2 * prop(B) + prop(AB))
+        LE_B = prop(AB) / (2 * prop(A) + prop(AB))
+
+        SPINNA outputs propportions in terms of #molecules, so the last
+        formulae are used below.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    reference_name : str
+                        the channgel_tag of the reference
+                    target_name : str
+                        the channel_tag of the target queried for LE
+                    pair_distance: 10 # real distance of pair of tags in nm
+                    labeling_uncertainty : dict, channel tag to float
+                        labeling uncertainty [nm]; good value is e.g. 5
+                    n_simulate : int
+                        number of target molecules to be simulated;
+                        good value is e.g. 50000
+                    density : dict, channel tag to float
+                        density to simulate [nm^2 or nm^3];
+                        area density if 2D; volume density if 3D
+                    granularity : float
+                        the spinna res_factor
+                    sim_repeats : int
+                        number of simulation repeats, for noise reduction
+                and optional keys:
+                    nn_nth : int
+                        number of nearest neighbors to analyse
+                        default: 1
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
         pass
 
 
