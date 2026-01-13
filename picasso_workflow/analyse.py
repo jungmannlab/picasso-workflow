@@ -991,9 +991,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         # only use the lower half for FWHM calculation, as the higher
         # tail is confounded by non-background spots
         bkg_peak_height, bkg_peak_pos = np.max(hist), np.argmax(hist)
+        logger.debug(f"bkg_peak_height: {bkg_peak_height}")
+        logger.debug(f"bkg_peak_pos: {bkg_peak_pos}")
         bkg_half_lo = np.argsort(
             np.abs(hist[:bkg_peak_pos] - bkg_peak_height / 2)
         )
+        logger.debug(f"bkg_half_lo: {bkg_half_lo}")
         bkg_fwhm = 2 * np.abs(bkg_peak_pos - bkg_half_lo[0])
         bkg_sigma = bkg_fwhm / np.sqrt(4 * np.log(2))
         # threshold at zscore * bkg_sigma
