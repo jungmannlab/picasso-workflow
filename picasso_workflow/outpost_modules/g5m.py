@@ -1,13 +1,14 @@
 """
 Gaussian Mixture Modeling with Modifications for Molecular Mapping, G5M.
+TODO: change the format to fit the rest of Picasso modules
 
 G5M is based on the sklearn implementation of Gaussian Mixture Modeling
-(GMM) with numba optimizations for fitting, as well as for kmeans++ 
+(GMM) with numba optimizations for fitting, as well as for kmeans++
 initialization. Several modifications for molecular mapping in DNA-PAINT
 are added, for example, localization cloud shape modeling.
 
 Author: Rafal Kowalewski kowalewski@biochem.mpg.de
-Date: Jul 2023 - Jul 2025
+Date: Jul 2023 - Nov 2025
 """
 
 from __future__ import annotations
@@ -15,14 +16,12 @@ from __future__ import annotations
 import os
 import time
 from abc import ABCMeta, abstractmethod
-from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from itertools import chain as itchain
 from typing import Literal
 
 import numpy as np
-from numpy.typing import NDArray
-from numpy.lib.recfunctions import stack_arrays
+import pandas as pd
 from numba import njit
 from scipy.special import erf
 from sklearn.utils import check_random_state
@@ -36,44 +35,29 @@ if THIS_DIR == "plugins":
 else:
     from picasso import io, lib, postprocess, __version__
 
-MIN_LOCS = 15 # default min. number of localizations per molecule
-MAX_ROUNDS_WITHOUT_BEST_BIC = 3 # default number of rounds without BIC improvement to terminate the search for n_components
-MIN_SIGMA_FACTOR = 0.8 # default min. sigma factor for each G5M component (min_sigma = MIN_SIGMA_FACTOR * loc_prec)
-MAX_SIGMA_FACTOR = 1.5 # default max. sigma factor for each G5M component (max_sigma = MAX_SIGMA_FACTOR * loc_prec)
-N_TASKS = 500 # default number of tasks for parallel processing
-N_COMPONENTS_MAX = 100 # to avoid spending eternity on fitting too large clusters
-
-MOLMAP_DTYPE_2D = [
-    (_, "f4") for _ in [
-        "frame", "std_frame",
-        "x", "y", "photons", "sx", "sy", "bg", "lpx", "lpy", 
-        "fitted_sigma", "rel_sigma", 
-        "p_val", "mol_log_likelihood", "group_log_likelihood"
-    ]
-]
-MOLMAP_DTYPE_2D.extend(
-    [("n", "i4"), ("n_events", "i4"), ("group_input", "i4"),]
-)
-
-MOLMAP_DTYPE_3D = [
-    (_, "f4") 
-    for _ in [
-        "frame", "std_frame",
-        "x", "y", "z", "photons", "sx", "sy", "bg", "lpx", "lpy", "lpz", 
-        "fitted_sigma_x", "fitted_sigma_y", "fitted_sigma_z", 
-        "rel_sigma_x", "rel_sigma_y",
-        "p_val", "mol_log_likelihood", "group_log_likelihood"
-    ]
-]
-MOLMAP_DTYPE_3D.extend(
-    [("n", "i4"), ("n_events", "i4"), ("group_input", "i4"),]
-)
+# default min. number of localizations per molecule
+MIN_LOCS = 15
+# default number of rounds without BIC improvement to terminate the
+# search for n_components
+MAX_ROUNDS_WITHOUT_BEST_BIC = 3
+# default min. sigma factor for each G5M component
+# (min_sigma = MIN_SIGMA_FACTOR * loc_prec)
+MIN_SIGMA_FACTOR = 0.8
+# default max. sigma factor for each G5M component
+# (max_sigma = MAX_SIGMA_FACTOR * loc_prec)
+MAX_SIGMA_FACTOR = 1.5
+# default number of tasks for parallel processing
+N_TASKS = 500
+# to avoid spending eternity on fitting too large clusters
+N_COMPONENTS_MAX = 100
 
 
 # helper functions for numba operations along axes
 fastmath = True
+
+
 @njit(fastmath=fastmath)
-def max_along_axis1(X: NDArray, final_shape: tuple[int]) -> NDArray:
+def max_along_axis1(X: np.ndarray, final_shape: tuple[int]) -> np.ndarray:
     output = np.zeros(final_shape, dtype=X.dtype)
     for i in range(X.shape[0]):
         output[i] = np.max(X[i])
@@ -81,7 +65,7 @@ def max_along_axis1(X: NDArray, final_shape: tuple[int]) -> NDArray:
 
 
 @njit(fastmath=fastmath)
-def sum_along_axis0(X: NDArray, final_shape: tuple[int]) -> NDArray:
+def sum_along_axis0(X: np.ndarray, final_shape: tuple[int]) -> np.ndarray:
     output = np.zeros(final_shape, dtype=X.dtype)
     for i in range(X.shape[0]):
         output += X[i]
@@ -89,7 +73,7 @@ def sum_along_axis0(X: NDArray, final_shape: tuple[int]) -> NDArray:
 
 
 @njit(fastmath=fastmath)
-def sum_along_axis1(X: NDArray, final_shape: tuple[int]) -> NDArray:
+def sum_along_axis1(X: np.ndarray, final_shape: tuple[int]) -> np.ndarray:
     output = np.zeros(final_shape, dtype=X.dtype)
     for i in range(X.shape[1]):
         output += X[:, i]
@@ -97,18 +81,18 @@ def sum_along_axis1(X: NDArray, final_shape: tuple[int]) -> NDArray:
 
 
 @njit(fastmath=fastmath)
-def mean_along_axis1(X: NDArray, final_shape: tuple[int]) -> NDArray:
+def mean_along_axis1(X: np.ndarray, final_shape: tuple[int]) -> np.ndarray:
     output = sum_along_axis1(X, final_shape)
     return output / X.shape[1]
 
 
 @njit(fastmath=fastmath)
-def logsumexp_axis1(X: NDArray, final_shape: tuple[int]) -> NDArray:
-    """njit implementation of scipy.special.logsumexp. Note that we 
-    cannot use np.log(np.sum(np.exp(X), axis=1)) because it will
-    cause overflow for large numbers. Thus, we use the logsumexp
-    formula: log(sum(exp(X))) = log(sum(exp(X - max(X))) + max(X)
-    where max(X) is subtracted from X to avoid overflow."""
+def logsumexp_axis1(X: np.ndarray, final_shape: tuple[int]) -> np.ndarray:
+    """njit implementation of ``scipy.special.logsumexp``. Note that we
+    cannot use ``np.log(np.sum(np.exp(X), axis=1))`` because it will
+    cause overflow for large numbers. Thus, we use the ``logsumexp``
+    formula: ``log(sum(exp(X))) = log(sum(exp(X - max(X))) + max(X)``
+    where ``max(X)`` is subtracted from X to avoid overflow."""
     max_val = max_along_axis1(X, final_shape)
     exp_values = np.exp(X - max_val[:, np.newaxis])
     exp_sum = sum_along_axis1(exp_values, final_shape)
@@ -117,8 +101,8 @@ def logsumexp_axis1(X: NDArray, final_shape: tuple[int]) -> NDArray:
 
 
 @njit(fastmath=fastmath)
-def matmul(a: NDArray, b: NDArray) -> NDArray:
-    """# matrix multiplication, assuming that the shapes are 
+def matmul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Matrix multiplication, assuming that the shapes are
     compatible."""
     n, m = a.shape
     m, p = b.shape
@@ -131,7 +115,7 @@ def matmul(a: NDArray, b: NDArray) -> NDArray:
 
 
 @njit(fastmath=fastmath)
-def square_elements_1d(X: NDArray) -> NDArray:
+def square_elements_1d(X: np.ndarray) -> np.ndarray:
     output = np.zeros(X.shape, dtype=X.dtype)
     for i in range(X.shape[0]):
         output[i] = X[i] ** 2
@@ -139,7 +123,7 @@ def square_elements_1d(X: NDArray) -> NDArray:
 
 
 @njit(fastmath=fastmath)
-def square_elements_2d(X: NDArray) -> NDArray:
+def square_elements_2d(X: np.ndarray) -> np.ndarray:
     m, n = X.shape
     output = np.zeros((m, n), dtype=X.dtype)
     for i in range(m):
@@ -148,18 +132,18 @@ def square_elements_2d(X: NDArray) -> NDArray:
     return output
 
 
-# In sklearn's GaussianMixture implementation, the term in the nominator 
-# of the exponential term ((x - mu)^2 / sigma^2) is calculated as 
+# In sklearn's GaussianMixture implementation, the term in the nominator
+# of the exponential term ((x - mu)^2 / sigma^2) is calculated as
 # (x^2 - 2*x*mu + mu^2). This can cause numerical instability when x and
-# mu are large, which is the case for our data. To avoid this, we first 
-# calculate (x - mu) and then square it (x and mu values are similar, 
+# mu are large, which is the case for our data. To avoid this, we first
+# calculate (x - mu) and then square it (x and mu values are similar,
 # thus the instability is avoided). Note: precision = 1/sigma**2
 @njit(fastmath=fastmath)
 def gauss_exponential_term_2D(
-    X: NDArray, # shape (n_samples, 2)
-    means: NDArray, # shape (n_components, 2)
-    precision: NDArray, # shape (n_components,)
-)-> NDArray:
+    X: np.ndarray,  # shape (n_samples, 2)
+    means: np.ndarray,  # shape (n_components, 2)
+    precision: np.ndarray,  # shape (n_components,)
+) -> np.ndarray:
     n_samples = X.shape[0]
     n_components = means.shape[0]
     sq_diff = np.zeros((n_samples, n_components), dtype=X.dtype)
@@ -172,13 +156,12 @@ def gauss_exponential_term_2D(
 
 @njit(fastmath=fastmath)
 def gauss_exponential_term_3D(
-    X: NDArray, # shape (n_samples, 3)
-    means: NDArray, # shape (n_components, 3)
-    precision: NDArray, # shape (n_components, 3)
-)-> NDArray:
-    """Same as gauss_exponential_term_2D but precision has shape 
+    X: np.ndarray,  # shape (n_samples, 3)
+    means: np.ndarray,  # shape (n_components, 3)
+    precision: np.ndarray,  # shape (n_components, 3)
+) -> np.ndarray:
+    """Same as ``gauss_exponential_term_2D`` but precision has shape
     (K, 3), where K is the number of components."""
-
     n_samples = X.shape[0]
     n_components = means.shape[0]
     sq_diff = np.zeros((n_samples, n_components), dtype=X.dtype)
@@ -189,8 +172,8 @@ def gauss_exponential_term_3D(
     return sq_diff
 
 
-@njit #TODO: move to picasso.lib
-def find_local_minima(arr): 
+@njit  # TODO: move to picasso.lib
+def find_local_minima(arr: np.ndarray) -> np.ndarray:
     # Compare each element with its neighbors
     local_minima_mask = (arr[1:-1] < arr[:-2]) & (arr[1:-1] < arr[2:])
     # Get the indices of local minima (adjust by +1 due to slicing)
@@ -199,48 +182,53 @@ def find_local_minima(arr):
 
 
 def test_subclustering(
-    mols: np.recarray, 
-    plot_path : str,
-    clustering_dist: float = 25 / 130, 
+    mols: pd.DataFrame,
+    plot_path: str,
+    clustering_dist: float = 25 / 130,  # TODO: change default units?
     sparse_dist: float = 80 / 130,
     save_svg: bool = False,
-) -> None: #TODO: move to picasso.clusterer or some other script
+) -> None:  # TODO: move to picasso.clusterer or some other script
     """Tests for subclustering of the molecules. Uses Wasserstein
-    distance to determine if the distribution of n_events in 
+    distance to determine if the distribution of n_events in
     well-separated and clustered molecules are similar. If subclustering
     occurs, n_events is supposed to be lower for clustered molecules.
     Uses permutation testing to determine the p-value of the test.
 
-    Takes only 2D distances into account. #TODO: extend to 3D?
-    
     Parameters
     ----------
-    mols : np.recarray
+    mols : pd.DataFrame
         List of molecules, must contain n_events.
     plot_path : str
         Path to save the plot of the test results. Must end with .png.
-    clustering_dist : float
+    clustering_dist : float, optional
         Maximum distance between molecules to consider them as
         clustered. Default is 25 nm (in camera pixels).
-    sparse_dist : float
+    sparse_dist : float, optional
         Minimum distance between molecules to consider them as sparse.
         Default is 80 nm (in camera pixels).
+    save_svg : bool, optional
+        Whether to additionally save the plot as SVG. Default is False.
     """
-
-    #TODO: remove the imports once the function is moved elsewhere
+    # TODO: remove the imports once the function is moved elsewhere
     from scipy.spatial import KDTree
     import matplotlib.pyplot as plt
 
-    assert hasattr(mols, "n_events"), (
-        "The input molecules must have n_events attribute."
-    )
+    # TODO: extract pixelsize
+    pixelsize = 130  # nm
+
+    assert hasattr(
+        mols, "n_events"
+    ), "The input molecules must have n_events attribute."
     assert sparse_dist > clustering_dist, (
-        "The sparse distance must be larger than the clustering "
-        "distance."
+        "The sparse distance must be larger than the clustering " "distance."
     )
 
     # get 1st nearest neighbor distances
-    coords = np.stack((mols.x, mols.y), axis=1)
+    if hasattr(mols, "z"):
+        coords = mols[["x", "y", "z"]].to_numpy()
+        coords[:, 2] /= pixelsize
+    else:
+        coords = mols[["x", "y"]].to_numpy()
     tree = KDTree(coords)
     distances, indices = tree.query(coords, k=2)
     nnd1 = distances[:, 1]
@@ -249,26 +237,40 @@ def test_subclustering(
     # split molecules into clustered and monomeric
     close_nnd_idx = idx1[np.where(nnd1 < clustering_dist)[0]]
     far_nnd_idx = idx1[np.where(nnd1 >= sparse_dist)[0]]
-    close_mols = mols[close_nnd_idx]
-    far_mols = mols[far_nnd_idx]
+    close_mols = mols.iloc[close_nnd_idx]
+    far_mols = mols.iloc[far_nnd_idx]
 
-    m_far = np.mean(far_mols.n_events)
-    m_close = np.mean(close_mols.n_events)
-    s_far = np.std(far_mols.n_events)
-    s_close = np.std(close_mols.n_events)
-    
+    m_far = far_mols["n_events"].mean()
+    m_close = close_mols["n_events"].mean()
+    s_far = far_mols["n_events"].std()
+    s_close = close_mols["n_events"].std()
+
     # create the plot
     fig, ax1 = plt.subplots(1, figsize=(6, 3), constrained_layout=True)
-    min_bin, max_bin = np.percentile(far_mols.n_events, [2.5, 97.5])
-    vals, counts = np.unique(far_mols.n_events, return_counts=True)
-    ax1.bar(vals, counts, width=0.8, alpha=0.5, label=f"Sparse {m_far:.1f} +/- {s_far:.1f}", color="C0")
+    min_bin, max_bin = np.percentile(far_mols["n_events"], [2.5, 97.5])
+    vals, counts = np.unique(far_mols["n_events"], return_counts=True)
+    ax1.bar(
+        vals,
+        counts,
+        width=0.8,
+        alpha=0.5,
+        label=f"Sparse {m_far:.1f} +/- {s_far:.1f}",
+        color="C0",
+    )
     ax1.axvline(m_far, color="C0", linestyle="--")
-    vals, counts = np.unique(close_mols.n_events, return_counts=True)
-    ax1.bar(vals, counts, width=0.8, alpha=0.5, label=f"Clustered {m_close:.1f} +/- {s_close:.1f}", color="C1")
+    vals, counts = np.unique(close_mols["n_events"], return_counts=True)
+    ax1.bar(
+        vals,
+        counts,
+        width=0.8,
+        alpha=0.5,
+        label=f"Clustered {m_close:.1f} +/- {s_close:.1f}",
+        color="C1",
+    )
     ax1.axvline(m_close, color="C1", linestyle="--")
     ax1.set_xlabel("Number of events")
     ax1.set_ylabel("Counts")
-    ax1.set_xlim(min_bin-1, max_bin+1)
+    ax1.set_xlim(min_bin - 1, max_bin + 1)
     ax1.legend()
     fig.savefig(plot_path, dpi=300)
     if save_svg:
@@ -276,24 +278,24 @@ def test_subclustering(
         fig.savefig(base + ".svg", dpi=300)
     plt.close(fig)
 
-    
-### kmeans++ init, adopted from sklearn, numba implementation ###
+
+# kmeans++ init, adopted from sklearn, numba implementation #
 @njit
 def euclidean_distances(
-    X: NDArray, 
-    Y: NDArray, 
-    X_norm_squared: NDArray | None = None, 
-    Y_norm_squared: NDArray | None = None,
-) -> NDArray:
-    """njit implementation of 
-    sklearn.metrics.pairwise._euclidean_distances with squared=True."""
-
+    X: np.ndarray,
+    Y: np.ndarray,
+    X_norm_squared: np.ndarray | None = None,
+    Y_norm_squared: np.ndarray | None = None,
+) -> np.ndarray:
+    """njit implementation of
+    ``sklearn.metrics.pairwise._euclidean_distances`` with
+    ``squared=True``."""
     if X_norm_squared is not None:
         XX = X_norm_squared.reshape(-1, 1)
     else:
-        XX = sum_along_axis1(
-            square_elements_2d(X), (X.shape[0],)
-        )[:, np.newaxis]
+        XX = sum_along_axis1(square_elements_2d(X), (X.shape[0],))[
+            :, np.newaxis
+        ]
 
     if Y is X:
         YY = None if XX is None else XX.T
@@ -301,9 +303,9 @@ def euclidean_distances(
         if Y_norm_squared is not None:
             YY = Y_norm_squared.reshape(1, -1)
         else:
-            YY = sum_along_axis1(
-                square_elements_2d(Y), (Y.shape[0],)
-            )[:, np.newaxis]
+            YY = sum_along_axis1(square_elements_2d(Y), (Y.shape[0],))[
+                :, np.newaxis
+            ]
 
     distances = -2 * matmul(X, Y.T)
     distances += XX
@@ -315,18 +317,17 @@ def euclidean_distances(
     if X is Y:
         np.fill_diagonal(distances, 0)
 
-    return distances # squared distances
+    return distances  # squared distances
 
 
 @njit
 def kmeans_plusplus(
-    X: NDArray, 
-    n_components: int, 
+    X: np.ndarray,
+    n_components: int,
     random_state: int,
-) -> NDArray:
-    """njit implementation of sklearn.cluster._kmeans_plusplus. Used for
-    initializing G5Ms."""
-
+) -> np.ndarray:
+    """njit implementation of ``sklearn.cluster._kmeans_plusplus``. Used
+    for initializing ``G5M``'s."""
     np.random.seed(random_state)
 
     n_samples, n_dimensions = X.shape
@@ -344,7 +345,7 @@ def kmeans_plusplus(
     closest_dist_sq = euclidean_distances(
         centers[0, np.newaxis], X, Y_norm_squared=x_squared_norms
     ).flatten()
-    current_pot = np.sum(closest_dist_sq) 
+    current_pot = np.sum(closest_dist_sq)
 
     # Pick the remaining n_clusters-1 points
     for c in range(1, n_components):
@@ -373,8 +374,8 @@ def kmeans_plusplus(
         )
         candidates_pot = sum_along_axis1(
             distance_to_candidates, (distance_to_candidates.shape[0],)
-        ) 
-        
+        )
+
         # Decide which candidate is the best
         best_candidate = np.argmin(candidates_pot)
         current_pot = candidates_pot[best_candidate]
@@ -388,18 +389,20 @@ def kmeans_plusplus(
     return indices
 
 
-### G5M abstract class ###
+# G5M abstract class #
 class G5M(metaclass=ABCMeta):
-    """Parent class for G5M in 2D and 3D with numba implementations of 
-    initialization and fitting. Based on the implementation of sklearn. 
-    
-    Parameters
+    """Parent class for G5M in 2D and 3D with numba implementations of
+    initialization and fitting. Based on the implementation of sklearn.
+
+    ...
+
+    Attributes
     ----------
     converged : bool
         True if the G5M converged, False otherwise.
-    covariances_ : np.2darray
+    covariances_ : np.ndarray
         Covariances of the G5M components, shape (n_components,).
-    covariances : np.2darray
+    covariances : np.ndarray
         Same as covariances_ but only valid components (based on
         min_locs) are indexed.
     loc_prec_handle : {"local", "abs"}
@@ -410,14 +413,14 @@ class G5M(metaclass=ABCMeta):
     mag_factor : float
         Magnification factor for astigmatism fitting. Required for 3D
         data only. Extracted from the 3D calibration file, see
-        unpack_calibration.
-    means_init : np.2darray (default=None)
+        ``unpack_calibration``.
+    means_init : np.ndarray, optional
         Initial means of the G5M components. If None, the means are
-        initialized using kmeans++.
-    means_ : np.2darray
+        initialized using kmeans++. Default is None.
+    means_ : np.ndarray
         Means of the G5M components, shape (n_components, n_dimensions).
-    means : np.2darray
-        Same as means_ but only valid components (based on min_locs) are 
+    means : np.ndarray
+        Same as means_ but only valid components (based on min_locs) are
         indexed.
     min_locs : int
         Minimum number of localizations per component. Used to filter
@@ -430,77 +433,64 @@ class G5M(metaclass=ABCMeta):
         Number of dimensions in the data.
     n_init : int
         Number of initializations.
-    n_locs : np.1darray
+    n_locs : np.ndarray
         Number of localizations per component (applied after fitting).
-    precisions_cholesky_ : np.2darray
+    precisions_cholesky_ : np.ndarray
         Cholesky decomposition of the precision matrices of the G5M
         components, shape (n_components, n_dimensions).
-    precisions_cholesky : np.2darray
+    precisions_cholesky : np.ndarray
         Same as precisions_cholesky_ but only valid components (based
         on min_locs) are indexed.
     random_state : int
         Random seed for reproducibility.
     sigma_bounds : tuple
-        Bounds for the standard deviation (sigma) of the Gaussian 
+        Bounds for the standard deviation (sigma) of the Gaussian
         components. If local loc. prec. is used, the bounds specify the
         margin of error in units of localization precision. Else,
         absolute bounds on sigma.
-    spot_size : (2,) np.1darray (default=None)
+    spot_size : (2,) np.ndarray, optional
         Spot width and height for astigmatism fitting. Required for 3D
         data only. Extracted from the 3D calibration file, see
-        unpack_calibration.
-    valid_idx : np.1darray
+        ``unpack_calibration``. Default is None.
+    valid_idx : np.ndarray
         Indices of valid components (based on min_locs), applied after
         fitting. Its length gives the number of valid components.
-    weights_ : np.1darray
+    weights_ : np.ndarray
         Weights of the G5M components, shape (n_components,).
-    weights : np.1darray
+    weights : np.ndarray
         Same as weights_ but only valid components (based on min_locs)
         are indexed. Renormalized to sum to 1.
-    z_range : np.1darray (default=None)
+    z_range : np.ndarray, optional
         Z range for astigmatism fitting. Required for 3D data only.
-        Extracted from the 3D calibration file, see unpack_calibration.
+        Extracted from the 3D calibration file, see
+        ``unpack_calibration``.
+        Default is None.
 
-    Methods
-    -------
-    bic(X)
-        Bayesian Information Criterion (BIC) for the G5M. Only valid
-        components are considered (based on min_locs).
-    fit(X)
-        Fits G5M to the data X.
-    predict(X)
-        Predicts the cluster labels for the data X. Only valid
-        components are considered (based on min_locs).
-    sample(n_samples)
-        Samples data points from the G5M. Only valid components are 
-        considered (based on min_locs).
-    score_samples(X)
-        Computes the log-likelihood of the data X under the G5M. Only 
-        valid components are considered (based on min_locs).
-    estimate_log_prob(X)
-        Calculates the log probabilities of the data X under the G5M,
-        without weights. Only valid components are considered (based on 
-        min_locs).
-    estimate_weighted_log_prob(X)
-        Calculates the log probabilities of the data X under the G5M,
-        with weights. Only valid components are considered (based on 
-        min_locs).
-    n_parameters()
-        Finds the number of parameters in the G5M. Only valid components 
-        are considered (based on min_locs).
-    set_parameters(weights, means, covs, pc, converged, valid_idx=None)
-        Sets the G5M parameters, used after fitting.
+    Parameters
+    ----------
+    n_components : int
+        Number of components in the model.
+    min_locs : int
+        Minimum number of localizations per component.
+    sigma_bounds : tuple
+        Bounds for the standard deviation (sigma) of the Gaussian
+        components. If local loc. prec. is used, the bounds specify the
+        margin of error in units of localization precision. Else,
+        absolute bounds on sigma.
+    means_init : np.ndarray or None, optional
+        Initial means (mu) of the Gaussian components. If None, the
+        means are initialized using kmeans++.
     """
 
     def __init__(
-        self, 
-        n_components: int, 
+        self,
+        n_components: int,
         min_locs: int,
         sigma_bounds: tuple[float, float],
         *,
-        means_init: NDArray | None = None,
+        means_init: np.ndarray | None = None,
     ) -> None:
-        
+
         assert sigma_bounds[0] >= 0.0 and sigma_bounds[1] >= 0.0
         assert sigma_bounds[1] >= sigma_bounds[0]
 
@@ -514,7 +504,7 @@ class G5M(metaclass=ABCMeta):
         self.loc_prec_handle = "local"
 
         # for 3D compatibility
-        self.spot_size=None
+        self.spot_size = None
         self.z_range = None
         self.mag_factor = None
 
@@ -524,58 +514,58 @@ class G5M(metaclass=ABCMeta):
         # number of locs per component (applied after fitting)
         self.n_locs = np.zeros(n_components, dtype=int)
 
-    def bic(self, X: NDArray) -> float:
+    def bic(self, X: np.ndarray) -> float:
         """Bayesian Information Criterion (BIC) for the G5M."""
         # shift coordinates by their mean (numerical stability)
         bic = (
-            -2 * self.score_samples(X).mean() * X.shape[0] 
-            + self.n_parameters() * np.log(X.shape[0])
+            self.n_parameters() * np.log(X.shape[0])
+            - 2 * self.score_samples(X).mean() * X.shape[0]
         )
         return bic
-    
+
     @property
-    def covariances(self) -> NDArray:
+    def covariances(self) -> np.ndarray:
         """Valid covariance."""
         return self.covariances_[self.valid_idx]
-    
+
     @abstractmethod
-    def estimate_log_prob(self, X: NDArray) -> NDArray:
-        """Calculates the log probabilities of the data X under the G5M,
+    def estimate_log_prob(self, X: np.ndarray) -> np.ndarray:
+        """Calculate the log probabilities of the data X under the G5M,
         without weights."""
         pass
-    
-    def estimate_weighted_log_prob(self, X: NDArray) -> NDArray:
-        """Calculates the log probabilities of the data X under the G5M,
+
+    def estimate_weighted_log_prob(self, X: np.ndarray) -> np.ndarray:
+        """Calculate the log probabilities of the data X under the G5M,
         with weights."""
         return self.estimate_log_prob(X) + np.log(self.weights)
-    
+
     def fit(
-        self, 
-        X: NDArray, 
-        lp: NDArray,
+        self,
+        X: np.ndarray,
+        lp: np.ndarray,
         loc_prec_handle: Literal["local", "abs"] = "local",
     ) -> G5M | None:
-        """Fits G5M to data X. Returns None if fitting failed.
-        
+        """Fit G5M to data X. Return None if fitting failed.
+
         Parameters
         ----------
-        X : np.2darray
+        X : np.ndarray
             Data points, shape (n_samples, n_dimensions).
-        lp : np.1darray
-            Localization precision for each localization. Only used if 
-            loc_prec_handle is "local". Shape (n_samples,).
-        loc_prec_handle : {"local", "abs"} (default="local")
-            How to handle sigma bounds. If "local", localization 
+        lp : np.ndarray
+            Localization precision for each localization. Only used if
+            loc_prec_handle is "local". Shape (n_samples,) for 2D and
+            (n_samples, 3) for 3D.
+        loc_prec_handle : {"local", "abs"}, optional
+            How to handle sigma bounds. If "local", localization
             precisions of points around each component are used to bound
-            sigmas. Else, sigma_bounds specifies the absolute bounds on 
-            sigmas.
+            sigmas. Else, sigma_bounds specifies the absolute bounds on
+            sigmas. Default is "local".
 
         Returns
         -------
         self : G5M
             Fitted model.
         """
-
         assert X.shape[1] == self.n_dimensions, (
             "The number of dimensions in X must match the number of "
             f"dimensions in the G5M class ({self.n_dimensions})."
@@ -594,17 +584,20 @@ class G5M(metaclass=ABCMeta):
             raise ValueError("Only 2D and 3D data are supported.")
 
         init_weights, init_means, init_precisions_cholesky = initialize_G5M(
-            X, self.n_init, self.n_components,self.random_state,
+            X,
+            self.n_init,
+            self.n_components,
+            self.random_state,
         )
 
         if self.means_init is not None:
             init_means = np.tile(self.means_init, (self.n_init, 1, 1))
 
         (w, m, c, pc), converged, valid_idx = fit_G5M(
-            X, 
+            X,
             min_locs=self.min_locs,
-            init_weights=init_weights, 
-            init_means=init_means, 
+            init_weights=init_weights,
+            init_means=init_means,
             init_precisions_cholesky=init_precisions_cholesky,
             sigma_bounds=self.sigma_bounds,
             lp=lp,
@@ -616,47 +609,47 @@ class G5M(metaclass=ABCMeta):
         if w is None:
             return None
         self.set_parameters(w, m, c, pc, converged, valid_idx=valid_idx)
-        
-        # set valid indices based on number of localizations per 
-        # component 
-        n = np.round(w * len(X)).astype(int) # N_locs per component
+
+        # set valid indices based on number of localizations per
+        # component
+        n = np.round(w * len(X)).astype(int)  # N_locs per component
         self.n_locs = n[self.valid_idx]
         return self
-    
+
     @property
-    def means(self) -> NDArray:
+    def means(self) -> np.ndarray:
         """Valid means."""
         return self.means_[self.valid_idx]
 
     @abstractmethod
     def n_parameters(self) -> int:
-        """Returns the number of parameters."""
+        """Return the number of parameters."""
         pass
 
     @property
-    def precisions_cholesky(self) -> NDArray:
+    def precisions_cholesky(self) -> np.ndarray:
         """Valid precision."""
         return self.precisions_cholesky_[self.valid_idx]
 
-    def predict(self, X: NDArray) -> NDArray:
-        """Predicts the cluster labels for the data X."""
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        """Predict the cluster labels for the data X."""
         return self.estimate_weighted_log_prob(X).argmax(axis=1)
-    
+
     @abstractmethod
-    def sample(self, n_samples: int = 1) -> tuple[NDArray, NDArray]:
-        """Samples data points from the G5M."""
+    def sample(self, n_samples: int = 1) -> tuple[np.ndarray, np.ndarray]:
+        """Sample data points from the G5M."""
         pass
-    
+
     def set_parameters(
-        self, 
-        weights: NDArray, 
-        means: NDArray, 
-        covs: NDArray, 
-        precisions_cholesky: NDArray, 
+        self,
+        weights: np.ndarray,
+        means: np.ndarray,
+        covs: np.ndarray,
+        precisions_cholesky: np.ndarray,
         converged: bool,
-        valid_idx: NDArray | None = None,
+        valid_idx: np.ndarray | None = None,
     ) -> None:
-        """Sets the G5M parameters, used after fitting."""
+        """Set the G5M parameters, used after fitting."""
         self.weights_ = weights / weights.sum()
         self.means_ = means
         self.covariances_ = covs
@@ -666,52 +659,51 @@ class G5M(metaclass=ABCMeta):
             self.valid_idx = valid_idx
         else:
             self.valid_idx = np.arange(len(weights))
-    
-    def score_samples(self, X: NDArray) -> NDArray:
-        """Computes the log-likelihood of the data X under the G5M."""
+
+    def score_samples(self, X: np.ndarray) -> np.ndarray:
+        """Compute the log-likelihood of the data X under the G5M."""
         weighted_log_prob = self.estimate_weighted_log_prob(X)
         final_shape = (weighted_log_prob.shape[0],)
         return logsumexp_axis1(weighted_log_prob, final_shape)
-    
+
     @property
-    def weights(self) -> NDArray:
+    def weights(self) -> np.ndarray:
         """Valid weights."""
         w = self.weights_[self.valid_idx]
         # return w / w.sum()
         return w
 
 
-### 2D G5M functions and classes ###
+# 2D G5M functions and classes #
 @njit
 def check_G5M_resolution_2D(
-    means: NDArray, 
-    weights: NDArray, 
-    precisions_chol: NDArray,
+    means: np.ndarray,
+    weights: np.ndarray,
+    precisions_chol: np.ndarray,
 ) -> bool:
-    """Checks if Sparrow limit is passed for all components of the 
-    G5M_2D.
-    
+    """Check if Sparrow limit is passed for all components of the
+    ``G5M_2D``.
+
     Sparrow resolution limit is violated if there is not local minimum
     between two signals.
-    
+
     Parameters
     ----------
-    means : np.2darray
+    means : np.ndarray
         Means of the G5M components, shape (n_components, 2).
-    weights : np.1darray
+    weights : np.ndarray
         Weights of the G5M components, shape (n_components,).
-    precisions_chol : np.1darray
+    precisions_chol : np.ndarray
         Cholesky decomposition of the precision matrices of the G5M
         components, shape (n_components,).
-    
+
     Returns
     -------
     bool
         True if the G5M components are well separated, False otherwise.
     """
-
     n_valid_components = means.shape[0]
-    if n_valid_components == 0: # if no component is valid
+    if n_valid_components == 0:  # if no component is valid
         return False
     elif n_valid_components == 1:
         return True
@@ -734,9 +726,8 @@ def check_G5M_resolution_2D(
 
             # get the PDF of all components along the line
             X = np.stack((x, y)).T
-            ll = (
-                estimate_log_gaussian_prob_2D(X, means_, prec_chol_) 
-                + np.log(weights_)
+            ll = estimate_log_gaussian_prob_2D(X, means_, prec_chol_) + np.log(
+                weights_
             )
             pdf = sum_along_axis1(np.exp(ll), ll.shape[0])
 
@@ -744,20 +735,16 @@ def check_G5M_resolution_2D(
             # if components in between align)
             if not len(find_local_minima(pdf)):
                 return False
-            
+
     # if all components are well separated
     return True
 
 
 @njit
 def initialize_G5M_2D(
-    X: NDArray, 
-    n_init: int, 
-    n_components: int, 
-    random_state: int
-) -> tuple[NDArray, NDArray, NDArray]:
-    """Initializes the 2D G5M parameters using kmeans++."""
-
+    X: np.ndarray, n_init: int, n_components: int, random_state: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Initialize the 2D G5M parameters using kmeans++."""
     n_samples = X.shape[0]
     init_weights = np.zeros((n_init, n_components), dtype=np.float64)
     init_means = np.zeros((n_init, n_components, 2), dtype=np.float64)
@@ -767,7 +754,7 @@ def initialize_G5M_2D(
     for ii in range(n_init):
         # initialize responsibilities using kmeans++ (e-step-like)
         resp = np.zeros((n_samples, n_components), dtype=np.float64)
-        indices = kmeans_plusplus(X, n_components, random_state) # kmeans++
+        indices = kmeans_plusplus(X, n_components, random_state)  # kmeans++
 
         for i in range(n_components):
             resp[indices[i], i] = 1
@@ -790,24 +777,22 @@ def initialize_G5M_2D(
 
 @njit
 def estimate_gaussian_parameters_2D(
-    X: NDArray, 
-    resp: NDArray,
-) -> tuple[NDArray, NDArray, NDArray]:
+    X: np.ndarray,
+    resp: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     nk, means, covariances = estimate_gaussian_parameters_diag_cov(X, resp)
     covariances = mean_along_axis1(covariances, final_shape=(len(nk),))
     return (
-        np.asarray(nk, dtype=np.float64), 
-        np.asarray(means, dtype=np.float64), 
+        np.asarray(nk, dtype=np.float64),
+        np.asarray(means, dtype=np.float64),
         np.asarray(covariances, dtype=np.float64),
     )
 
 
 @njit
 def estimate_log_gaussian_prob_2D(
-    X: NDArray, 
-    means: NDArray, 
-    precisions_chol: NDArray
-) -> NDArray:
+    X: np.ndarray, means: np.ndarray, precisions_chol: np.ndarray
+) -> np.ndarray:
     log_det = 2 * np.log(precisions_chol)
     precisions = square_elements_1d(precisions_chol)
     log_prob = gauss_exponential_term_2D(X, means, precisions)
@@ -816,15 +801,14 @@ def estimate_log_gaussian_prob_2D(
 
 @njit
 def e_step_2D(
-    X: NDArray, 
-    weights: NDArray, 
-    means: NDArray, 
-    precisions_cholesky: NDArray
-) -> tuple[float, NDArray]:
-    weighted_log_prob = (
-        estimate_log_gaussian_prob_2D(X, means, precisions_cholesky)
-        + np.log(weights)
-    )
+    X: np.ndarray,
+    weights: np.ndarray,
+    means: np.ndarray,
+    precisions_cholesky: np.ndarray,
+) -> tuple[float, np.ndarray]:
+    weighted_log_prob = estimate_log_gaussian_prob_2D(
+        X, means, precisions_cholesky
+    ) + np.log(weights)
     log_prob_norm = logsumexp_axis1(weighted_log_prob, (X.shape[0],))
     log_resp = weighted_log_prob - log_prob_norm[:, np.newaxis]
     return np.mean(log_prob_norm), log_resp.astype(np.float64)
@@ -832,31 +816,29 @@ def e_step_2D(
 
 @njit
 def m_step_2D(
-    X: NDArray, 
-    log_resp: NDArray,
+    X: np.ndarray,
+    log_resp: np.ndarray,
     sigma_bounds: tuple[float, float],
-    lp: NDArray,
+    lp: np.ndarray,
     loc_prec_handle: Literal["local", "abs"],
-    spot_size: NDArray | None = None, # for 3D consistency
-    z_range: NDArray | None = None,
+    spot_size: np.ndarray | None = None,  # for 3D consistency
+    z_range: np.ndarray | None = None,
     mag_factor: float | None = None,
-) -> tuple[NDArray, NDArray, NDArray, NDArray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """2D m step. spot_size, z_range and mag_factor are not used and are
     here for compatibility with the 3D m step."""
-
     min_cov = sigma_bounds[0] ** 2
     max_cov = sigma_bounds[1] ** 2
     resp = np.exp(log_resp)
     weights, means, covs = estimate_gaussian_parameters_2D(X, resp)
-    # clip covariances (numba does not support np.clip or multidim. 
+    # clip covariances (numba does not support np.clip or multidim.
     # indexing)
-    if loc_prec_handle == "local": # local sigma bounds
+    if loc_prec_handle == "local":  # local sigma bounds
         # take weighted (based on resp) avg. loc. prec. per component
         lp_ = np.reshape(lp, (-1, 1))
-        mean_lp_per_component = (
-            sum_along_axis0(resp * lp_, (resp.shape[1])) 
-            / sum_along_axis0(resp, (resp.shape[1],)) 
-        )
+        mean_lp_per_component = sum_along_axis0(
+            resp * lp_, (resp.shape[1])
+        ) / sum_along_axis0(resp, (resp.shape[1],))
         mean_cov_per_component = square_elements_1d(mean_lp_per_component)
         min_covs = min_cov * mean_cov_per_component
         max_covs = max_cov * mean_cov_per_component
@@ -876,44 +858,45 @@ def m_step_2D(
 
 
 def find_optimal_G5M_2D(
-    X: NDArray,
+    X: np.ndarray,
     min_locs: int,
     sigma_bounds: tuple[float, float],
     *,
-    lp: NDArray,
+    lp: np.ndarray,
     loc_prec_handle: Literal["local", "abs"] = "local",
     max_rounds_without_best_bic: int = MAX_ROUNDS_WITHOUT_BEST_BIC,
 ) -> G5M_2D:
-    """Finds optimal G5M for the given 2D dataset.
-    
+    """Find the optimal G5M for the given 2D dataset.
+
     Parameters
     ----------
-    X : np.2darray
+    X : np.ndarray
         2D array of localizations, shape (n_samples, 2).
     min_locs : int
         Minimum number of localizations per component.
-    sigma_bounds : tuple 
-        Bounds for the standard deviation (sigma) of the Gaussian 
+    sigma_bounds : tuple
+        Bounds for the standard deviation (sigma) of the Gaussian
         components. If local loc. prec. is used, the bounds specify the
         margin of error in units of localization precision. Else,
         absolute bounds on sigma.
-    lp : np.1darray
-        Localization precision for each localization. Only used if 
+    lp : np.ndarray
+        Localization precision for each localization. Only used if
         loc_prec_handle is "local". Shape (n_samples,).
-    loc_prec_handle : {"local", "abs"} (default="local")
+    loc_prec_handle : {"local", "abs"}, optional
         How to handle sigma bounds. If "local", localization precisions
-        of points around each component are used to bound sigmas. Else, 
-        sigma_bounds specifies the absolute bounds on sigmas.
-    max_rounds_without_best_bic : int (default=MAX_ROUNDS_WITHOUT_BEST_BIC)
-        Maximum number of rounds without BIC improvement to terminate 
-        the search for the optimal G5M n_components.
-    
+        of points around each component are used to bound sigmas. Else,
+        sigma_bounds specifies the absolute bounds on sigmas. Default
+        is "local".
+    max_rounds_without_best_bic : int, optional
+        Maximum number of rounds without BIC improvement to terminate
+        the search for the optimal G5M n_components. Default is
+        `MAX_ROUNDS_WITHOUT_BEST_BIC`.
+
     Returns
     -------
     g5m : G5M_2D
         Fitted G5M. Returns None if fitting failed.
     """
-
     assert isinstance(lp, np.ndarray)
     assert loc_prec_handle in ["local", "abs"]
     assert len(lp) == len(X), (
@@ -929,19 +912,16 @@ def find_optimal_G5M_2D(
     g5ms = []
     bics = []
     while (
-        n_components <= n_components_max 
+        n_components <= n_components_max
         and rounds_without_best_bic < max_rounds_without_best_bic
     ):
         g5m = G5M_2D(
-            n_components=n_components, 
+            n_components=n_components,
             min_locs=min_locs,
             sigma_bounds=sigma_bounds,
         ).fit(X, lp=lp, loc_prec_handle=loc_prec_handle)
-        if (
-            g5m is None or 
-            not check_G5M_resolution_2D(
-                g5m.means, g5m.weights, g5m.precisions_cholesky
-            )
+        if g5m is None or not check_G5M_resolution_2D(
+            g5m.means, g5m.weights, g5m.precisions_cholesky
         ):
             current_bic = np.inf
             rounds_without_best_bic += 1
@@ -963,7 +943,7 @@ def find_optimal_G5M_2D(
 
 
 def run_g5m_group_2D(
-    locs_group: np.recarray,
+    locs_group: pd.DataFrame,
     *,
     min_locs: int = MIN_LOCS,
     loc_prec_handle: Literal["local", "abs"] = "local",
@@ -972,80 +952,82 @@ def run_g5m_group_2D(
     max_rounds_without_best_bic: int = MAX_ROUNDS_WITHOUT_BEST_BIC,
     bootstrap_check: bool = False,
     max_locs_per_cluster: int = np.inf,
-) -> tuple[np.recarray, np.recarray] | tuple[None, None]:
-    """Runs G5M for a given group of localizations (by default
+) -> tuple[pd.DataFrame, pd.DataFrame] | tuple[None, None]:
+    """Run G5M for a given group of localizations (by default
     one DBSCAN cluster of localizations) in 2D.
-    
+
     Parameters
     ----------
-    locs_group : np.recarray
+    locs_group : pd.DataFrame
         Localizations.
-    min_locs : int (default=MIN_LOCS)
-        Minimum number of localizations per component.
-    loc_prec_handle : {"local", "abs"} (default="local")
+    min_locs : int, optional
+        Minimum number of localizations per component. Default is
+        `MIN_LOCS`.
+    loc_prec_handle : {"local", "abs"}, optional
         How to handle sigma bounds. If "local", localization precisions
-        of points around each component are used to bound sigmas. Else, 
-        sigma_bounds specifies the absolute bounds on sigmas.
-    sigma_bounds : tuple (default=(MIN_SIGMA_FACTOR, MAX_SIGMA_FACTOR))
-        Bounds for the standard deviation (sigma) of the Gaussian 
+        of points around each component are used to bound sigmas. Else,
+        sigma_bounds specifies the absolute bounds on sigmas. Default is
+        "local".
+    sigma_bounds : tuple, optional
+        Bounds for the standard deviation (sigma) of the Gaussian
         components. If local loc. prec. is used, the bounds specify the
         margin of error in units of localization precision. Else,
-        absolute bounds on sigma.
-    pixelsize : float (default=130.0)
-        Camera pixel size in nm.
-    max_rounds_without_best_bic : int (default=MAX_ROUNDS_WITHOUT_BEST_BIC)
+        absolute bounds on sigma. Default is (`MIN_SIGMA_FACTOR`,
+        `MAX_SIGMA_FACTOR`).
+    pixelsize : float, optional
+        Camera pixel size in nm. Default is 130.0.
+    max_rounds_without_best_bic : int, optional
         Maximum number of rounds without BIC improvement to terminate
-        the search for optimal G5M n_components.
-    bootstrap_check : bool (default=False)
+        the search for optimal G5M n_components. Default is
+        `MAX_ROUNDS_WITHOUT_BEST_BIC`.
+    bootstrap_check : bool, optional
         If True, the standard error of the means (SEM) is calculated
         using bootstrapping. If False, the standard, single Gaussian
-        SEM is used.
-    max_locs_per_cluster : int (default=np.inf)
-        Maximum number of localizations per cluster accepted for G5M. 
-        Used to avoid fitting to fiducial markers. Such clusters are 
-        ignored.
-    
+        SEM is used. Default is False.
+    max_locs_per_cluster : int, optional
+        Maximum number of localizations per cluster accepted for G5M.
+        Used to avoid fitting to fiducial markers. Such clusters are
+        ignored. Default is np.inf.
+
     Returns
     -------
-    centers : np.recarray
+    centers : pd.DataFrame
         Centers of the G5M components in the format of localizations.
-    clustered_locs : np.recarray
+    clustered_locs : pd.DataFrame
         Localizations with assigned cluster labels, based on the G5M
-        components
+        components.
     """
-
-    assert loc_prec_handle in ["local", "abs"], (
-        "loc_prec_handle must be 'local'  or 'abs'."
-    )
-    assert len(sigma_bounds) == 2, (
-        "sigma_bounds must be a tuple of two values."
-    )
+    assert loc_prec_handle in [
+        "local",
+        "abs",
+    ], "loc_prec_handle must be 'local'  or 'abs'."
+    assert (
+        len(sigma_bounds) == 2
+    ), "sigma_bounds must be a tuple of two values."
 
     # check that the number of localizations is within the limits
     n_locs = len(locs_group)
     if n_locs < min_locs or n_locs > max_locs_per_cluster:
         return None, None
-    
+
     if loc_prec_handle == "local":
-        lp = np.mean([locs_group.lpx, locs_group.lpy], axis=0)
+        lp = locs_group[["lpx", "lpy"]].mean(axis=1).values
     else:
-        lp = np.ones(len(locs_group)) # dummy
-    X = np.stack((locs_group.x, locs_group.y)).T
+        lp = np.ones(len(locs_group))  # dummy
+    X = locs_group[["x", "y"]].values.astype(np.float64)
 
     g5m = find_optimal_G5M_2D(
-        X, 
+        X,
         min_locs=min_locs,
         sigma_bounds=sigma_bounds,
         lp=lp,
         loc_prec_handle=loc_prec_handle,
-        max_rounds_without_best_bic=max_rounds_without_best_bic, 
+        max_rounds_without_best_bic=max_rounds_without_best_bic,
     )
     if g5m is None or len(g5m.valid_idx) == 0:
         return None, None
-    
-    return convert_G5M_results(
-        g5m, locs_group, pixelsize, bootstrap_check
-    )
+
+    return convert_G5M_results(g5m, locs_group, pixelsize, bootstrap_check)
 
 
 class G5M_2D(G5M):
@@ -1057,7 +1039,7 @@ class G5M_2D(G5M):
         min_locs: int,
         sigma_bounds: tuple[float, float],
         *,
-        means_init: NDArray | None = None, 
+        means_init: np.ndarray | None = None,
     ) -> None:
         super().__init__(
             n_components=n_components,
@@ -1067,55 +1049,55 @@ class G5M_2D(G5M):
         )
         self.n_dimensions = 2
 
-    def estimate_log_prob(self, X: NDArray) -> NDArray:
-        """Calculates the log probabilities of the data X under the G5M,
+    def estimate_log_prob(self, X: np.ndarray) -> np.ndarray:
+        """Calculate the log probabilities of the data X under the G5M,
         without weights."""
-
         return estimate_log_gaussian_prob_2D(
-            X, self.means, self.precisions_cholesky,
+            X,
+            self.means,
+            self.precisions_cholesky,
         )
 
     def n_parameters(self) -> int:
-        """Finds the number of parameters in the G5M."""
-
+        """Find the number of parameters in the G5M."""
         n_valid = len(self.valid_idx)
         cov_params = n_valid
         mean_params = 2 * n_valid
         weight_params = n_valid - 1
         return int(cov_params + mean_params + weight_params)
 
-    def sample(self, n_samples: int = 1) -> tuple[NDArray, NDArray]:
-        """Samples data points from the G5M."""
-
+    def sample(self, n_samples: int = 1) -> tuple[np.ndarray, np.ndarray]:
+        """Sample data points from the G5M."""
         rng = check_random_state(self.random_state)
         n_samples_comp = rng.multinomial(n_samples, self.weights)
 
         X = np.vstack(
             [
                 mean
-                + rng.standard_normal(size=(sample, 2))
-                * np.sqrt(covariance)
+                + rng.standard_normal(size=(sample, 2)) * np.sqrt(covariance)
                 for (mean, covariance, sample) in zip(
                     self.means, self.covariances, n_samples_comp
                 )
             ]
         )
 
-        y = np.concatenate([
-            np.full(sample, j, dtype=int) 
-            for j, sample in enumerate(n_samples_comp)
-        ])
+        y = np.concatenate(
+            [
+                np.full(sample, j, dtype=int)
+                for j, sample in enumerate(n_samples_comp)
+            ]
+        )
         return X, y
 
 
-### 3D G5M functions and classes ###
+# 3D G5M functions and classes #
 def unpack_calibration(
-    calibration: dict, 
+    calibration: dict,
     pixelsize: float,
-) -> tuple[NDArray, NDArray, float]:
-    """Extracts calibration file for 3D G5M. Returns spot widths and 
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Extract calibration file for 3D G5M. Return spot widths and
     heights and the corresponding z values + magnification factor.
-    
+
     Parameters
     ----------
     calibration : dict
@@ -1123,18 +1105,17 @@ def unpack_calibration(
         size and the number of frames.
     pixelsize : float
         Camera pixel size in nm.
-    
+
     Returns
     -------
-    spot_size : (2,) np.1darray
+    spot_size : (2,) np.ndarray
         Spot width and height from the 3D calibration for each z
         position.
-    z_range : np.1darray
+    z_range : np.ndarray
         Z values (in camera pixels) corresponding to the spot ratios.
     mag_factor : float
         Magnification factor for the 3D calibration.
     """
-
     cx = calibration["X Coefficients"]
     cy = calibration["Y Coefficients"]
     z_step_size = calibration["Step size in nm"]
@@ -1148,45 +1129,43 @@ def unpack_calibration(
     spot_width = np.polyval(cx, z_range)
     spot_height = np.polyval(cy, z_range)
     spot_size = np.stack((spot_width, spot_height))
-    
+
     z_range /= pixelsize
     return spot_size, z_range, mag_factor
 
 
 @njit
 def check_G5M_resolution_3D(
-    means: NDArray, 
-    weights: NDArray, 
-    precisions_chol: NDArray,
+    means: np.ndarray,
+    weights: np.ndarray,
+    precisions_chol: np.ndarray,
 ) -> bool:
-    """Checks if Sparrow limit is passed for all components of the 
-    G5M_3D.
-    
+    """Check if Sparrow limit is passed for all components of the
+    ``G5M_3D``.
+
     Sparrow resolution limit is violated if there is not local minimum
     between two signals.
-    
+
     Parameters
     ----------
-    means : np.2darray
+    means : np.ndarray
         Means of the G5M components, shape (n_components, 3).
-    weights : np.1darray
+    weights : np.ndarray
         Weights of the G5M components, shape (n_components,).
-    precisions_chol : np.2darray
+    precisions_chol : np.ndarray
         Cholesky decomposition of the precision matrices of the G5M
         components, shape (n_components, 3).
-    
+
     Returns
     -------
     bool
         True if the G5M components are well separated, False otherwise.
     """
-
     n_valid_components = means.shape[0]
-    if n_valid_components == 0: # if no component is valid
+    if n_valid_components == 0:  # if no component is valid
         return False
     elif n_valid_components == 1:
         return True
-
 
     # iterate over all pairs of components
     for i in range(n_valid_components):
@@ -1202,16 +1181,15 @@ def check_G5M_resolution_3D(
 
             # get the straight line between the two components
             direction_vector = means_[1, :] - means_[0, :]
-            t = np.linspace(0, 1, 40) # parameter for the line
+            t = np.linspace(0, 1, 40)  # parameter for the line
             x = means_[0, 0] + direction_vector[0] * t
             y = means_[0, 1] + direction_vector[1] * t
             z = means_[0, 2] + direction_vector[2] * t
-            
+
             # get the PDF of all components along the line
             X = np.stack((x, y, z)).T
-            ll = (
-                estimate_log_gaussian_prob_3D(X, means_, prec_chol_) 
-                + np.log(weights_)
+            ll = estimate_log_gaussian_prob_3D(X, means_, prec_chol_) + np.log(
+                weights_
             )
             pdf = sum_along_axis1(np.exp(ll), ll.shape[0])
 
@@ -1219,22 +1197,17 @@ def check_G5M_resolution_3D(
             # if components in between align)
             if not len(find_local_minima(pdf)):
                 return False
-            
+
     # if all components are well separated
     return True
 
 
 @njit
 def initialize_G5M_3D(
-    X: NDArray, 
-    n_init: int, 
-    n_components: int, 
-    random_state: int
-) -> tuple[NDArray, NDArray, NDArray]:
-    """Initializes the 3D G5M parameters using kmeans++."""
-
+    X: np.ndarray, n_init: int, n_components: int, random_state: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Initialize the 3D G5M parameters using kmeans++."""
     n_samples = X.shape[0]
-
     init_weights = np.zeros((n_init, n_components), dtype=np.float64)
     init_means = np.zeros((n_init, n_components, 3), dtype=np.float64)
     init_precisions_cholesky = np.zeros(
@@ -1243,8 +1216,8 @@ def initialize_G5M_3D(
     for ii in range(n_init):
         # initialize responsibilities using kmeans++ (e-step-like)
         resp = np.zeros((n_samples, n_components), dtype=np.float64)
-        indices = kmeans_plusplus(X, n_components, random_state) # kmeans++ 
-        
+        indices = kmeans_plusplus(X, n_components, random_state)  # kmeans++
+
         for i in range(n_components):
             resp[indices[i], i] = 1
 
@@ -1261,23 +1234,27 @@ def initialize_G5M_3D(
         np.asarray(init_weights, dtype=np.float64),
         np.asarray(init_means, dtype=np.float64),
         np.asarray(init_precisions_cholesky, dtype=np.float64),
-    )  
+    )
 
 
 @njit
 def estimate_gaussian_parameters_3D(
-    X : NDArray,
-    resp : NDArray,
-) -> tuple[NDArray, NDArray, NDArray]:
+    X: np.ndarray,
+    resp: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return estimate_gaussian_parameters_diag_cov(X, resp)
+
 
 @njit
 def estimate_log_gaussian_prob_3D(
-    X: NDArray,
-    means: NDArray,
-    precisions_chol: NDArray,
-) -> NDArray:
-    log_det = sum_along_axis1(np.log(precisions_chol), (precisions_chol.shape[0],))
+    X: np.ndarray,
+    means: np.ndarray,
+    precisions_chol: np.ndarray,
+) -> np.ndarray:
+    log_det = sum_along_axis1(
+        np.log(precisions_chol),
+        (precisions_chol.shape[0],),
+    )
     precisions = square_elements_2d(precisions_chol)
     log_prob = gauss_exponential_term_3D(X, means, precisions)
     return -0.5 * (3 * np.log(2 * np.pi) + log_prob) + log_det
@@ -1285,15 +1262,14 @@ def estimate_log_gaussian_prob_3D(
 
 @njit
 def e_step_3D(
-    X: NDArray, 
-    weights: NDArray, 
-    means: NDArray, 
-    precisions_cholesky: NDArray
-) -> tuple[float, NDArray]:
-    weighted_log_prob = (
-        estimate_log_gaussian_prob_3D(X, means, precisions_cholesky)
-        + np.log(weights)
-    )
+    X: np.ndarray,
+    weights: np.ndarray,
+    means: np.ndarray,
+    precisions_cholesky: np.ndarray,
+) -> tuple[float, np.ndarray]:
+    weighted_log_prob = estimate_log_gaussian_prob_3D(
+        X, means, precisions_cholesky
+    ) + np.log(weights)
     log_prob_norm = logsumexp_axis1(weighted_log_prob, (X.shape[0],))
     log_resp = weighted_log_prob - log_prob_norm[:, np.newaxis]
     return np.mean(log_prob_norm), log_resp.astype(np.float64)
@@ -1301,59 +1277,67 @@ def e_step_3D(
 
 @njit
 def m_step_3D(
-    X: NDArray, 
-    log_resp: NDArray, 
+    X: np.ndarray,
+    log_resp: np.ndarray,
     sigma_bounds: tuple[float, float],
-    lp: NDArray,
+    lp: np.ndarray,
     loc_prec_handle: Literal["local", "abs"],
-    spot_size: NDArray,
-    z_range: NDArray, 
+    spot_size: np.ndarray,
+    z_range: np.ndarray,
     mag_factor: float = 0.79,
-) -> tuple[NDArray, NDArray, NDArray, NDArray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Modified m-step to handle astigmatism in 3D G5M.
-    
-    The astigmatism modification handles the astigmatism effect in 
-    3D DNA-PAINT data. As in sklearn's implementation, the weights, 
-    means and diagonal covariance matrices are estimated first. In the 
-    next step, sigma bound are imposed and then the ratio of the spot 
-    width and height is extracted from calibration, based on the z 
-    position, for each component and imposed on the covariances' x and 
-    y values.""" 
-    
+
+    The astigmatism modification handles the astigmatism effect in
+    3D DNA-PAINT data. As in sklearn's implementation, the weights,
+    means and diagonal covariance matrices are estimated first. In the
+    next step, sigma bound are imposed and then the ratio of the spot
+    width and height is extracted from calibration, based on the z
+    position, for each component and imposed on the covariances' x and
+    y values."""
     resp = np.exp(log_resp)
     weights, means, covs = estimate_gaussian_parameters_3D(X, resp)
 
-    ### find the min. and max. covariances in each dimension
+    # find the min. and max. covariances in each dimension
     if loc_prec_handle == "local":
         # extract loc. precisions and convert to covariances
-        lpx = np.ascontiguousarray(lp[:, 0]).reshape(-1, 1) # keep array contiguous
+        lpx = np.ascontiguousarray(lp[:, 0]).reshape(-1, 1)
         lpy = np.ascontiguousarray(lp[:, 1]).reshape(-1, 1)
-        
-        mean_lpx_per_component = (
-            sum_along_axis0(resp * lpx, (resp.shape[1]))
-            / sum_along_axis0(resp, (resp.shape[1]))
-        )
+        lpz = np.ascontiguousarray(lp[:, 2]).reshape(-1, 1)
+
+        mean_lpx_per_component = sum_along_axis0(
+            resp * lpx, (resp.shape[1])
+        ) / sum_along_axis0(resp, (resp.shape[1]))
+        mean_lpy_per_component = sum_along_axis0(
+            resp * lpy, (resp.shape[1])
+        ) / sum_along_axis0(resp, (resp.shape[1]))
+        mean_lpz_per_component = sum_along_axis0(
+            resp * lpz, (resp.shape[1])
+        ) / sum_along_axis0(resp, (resp.shape[1]))
+
         mean_covx_per_component = square_elements_1d(mean_lpx_per_component)
-        mean_lpy_per_component = (
-            sum_along_axis0(resp * lpy, (resp.shape[1]))
-            / sum_along_axis0(resp, (resp.shape[1]))
-        )
         mean_covy_per_component = square_elements_1d(mean_lpy_per_component)
+        mean_covz_per_component = square_elements_1d(mean_lpz_per_component)
+
         min_cov_x = sigma_bounds[0] ** 2 * mean_covx_per_component
         max_cov_x = sigma_bounds[1] ** 2 * mean_covx_per_component
         min_cov_y = sigma_bounds[0] ** 2 * mean_covy_per_component
         max_cov_y = sigma_bounds[1] ** 2 * mean_covy_per_component
+        min_cov_z = sigma_bounds[0] ** 2 * mean_covz_per_component
+        # max_cov_z = sigma_bounds[1] ** 2 * mean_covz_per_component
+        max_cov_z = (
+            (sigma_bounds[1] - 1.0) * 0.5 + 1.0
+        ) ** 2 * mean_covz_per_component  # decrease max z cov because the lpz is already pretty high
     elif loc_prec_handle == "abs":
         min_cov_x = np.full(covs.shape[0], sigma_bounds[0] ** 2)
         max_cov_x = np.full(covs.shape[0], sigma_bounds[1] ** 2)
         min_cov_y = np.full(covs.shape[0], sigma_bounds[0] ** 2)
         max_cov_y = np.full(covs.shape[0], sigma_bounds[1] ** 2)
-        
-    min_cov_z = 4 * np.maximum(min_cov_x, min_cov_y) # sigma_z ~ 2 * sigma_xy; cov = sigma**2
-    # min_cov_z = 2 * (min_cov_x + min_cov_y) # sigma_z ~ 2 * avg(sigma_x, sigma_y); cov = sigma**2
-    # min_cov_z = 6.25 * max_along_axis1(covs, (covs.shape[0],)) # sigma_z ~ 2.5 * max(sigma_x, sigma_y); cov = sigma**2
+        # roughly account for worse z precision
+        min_cov_z = np.full(covs.shape[0], sigma_bounds[0] ** 2 * 2.0**2)
+        max_cov_z = np.full(covs.shape[0], sigma_bounds[1] ** 2 * 2.5**2)
 
-    ### apply the bounds to xy covariances
+    # apply the bounds to xy covariances
     for i in range(len(covs)):
         if covs[i, 0] < min_cov_x[i]:
             covs[i, 0] = min_cov_x[i]
@@ -1365,14 +1349,16 @@ def m_step_3D(
             covs[i, 1] = max_cov_y[i]
         if covs[i, 2] < min_cov_z[i]:
             covs[i, 2] = min_cov_z[i]
+        if covs[i, 2] > max_cov_z[i]:
+            covs[i, 2] = max_cov_z[i]
 
-    ### impose the ratio of x and y covariances based on the spot width
-    ### and height ratio
+    # impose the ratio of x and y covariances based on the spot width
+    # and height ratio
 
     # find the spot width and height for each component
-    z_idx = np.abs(
-        z_range[:, np.newaxis] - (means[:, 2] / mag_factor)
-    ).argmin(0) # find the closest z values to the current means
+    z_idx = np.abs(z_range[:, np.newaxis] - (means[:, 2] / mag_factor)).argmin(
+        0
+    )  # find the closest z values to the current means
     spot_width, spot_height = spot_size
     # impose their ratio of x and y covariances
     ratio = spot_width[z_idx] / spot_height[z_idx]
@@ -1381,66 +1367,67 @@ def m_step_3D(
     covs_xy[:, 1] = covs[:, 1]
     mean_xy_covs = mean_along_axis1(covs_xy, (covs_xy.shape[0],))
     covs[:, 0] = mean_xy_covs * ratio
-    covs[:, 1] = mean_xy_covs / ratio 
+    covs[:, 1] = mean_xy_covs / ratio
     weights /= weights.sum()
     precisions_cholesky = 1.0 / np.sqrt(covs)
     return weights, means, covs, precisions_cholesky
 
 
 def find_optimal_G5M_3D(
-    X: NDArray,
+    X: np.ndarray,
     min_locs: int,
     sigma_bounds: tuple[float, float],
-    spot_size: NDArray,
-    z_range: NDArray,
+    spot_size: np.ndarray,
+    z_range: np.ndarray,
     *,
-    lp: NDArray,
+    lp: np.ndarray,
     loc_prec_handle: Literal["local", "abs"] = "local",
     max_rounds_without_best_bic: int = MAX_ROUNDS_WITHOUT_BEST_BIC,
     mag_factor: float = 0.79,
 ) -> G5M_3D:
-    """Finds optimal G5M for given 3D data X.
+    """Find optimal G5M for given 3D data X.
 
     Parameters
     ----------
-    X : np.2darray
+    X : np.ndarray
         2D array of localizations, shape (n_samples, 3).
     min_locs : int
         Minimum number of localizations per component.
     sigma_bounds : tuple
-        Bounds for the standard deviation (sigma) of the Gaussian 
+        Bounds for the standard deviation (sigma) of the Gaussian
         components. If local loc. prec. is used, the bounds specify the
         margin of error in units of localization precision. Else,
         absolute bounds on sigma.
-    spot_size : (2,) np.1darray
+    spot_size : (2,) np.ndarray
         Spot width and height from the 3D calibration for each z
         position (...)
-    z_range : np.1darray
+    z_range : np.ndarray
         (...) and the corresponding z values (in camera pixels).
-    lp : np.1darray
-        Localization precision for each localization. Only used if 
-        loc_prec_handle is "local". Shape (n_samples,).
-    loc_prec_handle : {"local", "abs"} (default="local")
+    lp : np.ndarray
+        Localization precision for each localization in x, y and z. Only
+        used if loc_prec_handle is "local". Shape (n_samples, 3).
+    loc_prec_handle : {"local", "abs"}, optional
         How to handle sigma bounds. If "local", localization precisions
-        of points around each component are used to bound sigmas. Else, 
-        sigma_bounds specifies the absolute bounds on sigmas.
-    max_rounds_without_best_bic : int (default=MAX_ROUNDS_WITHOUT_BEST_BIC)
+        of points around each component are used to bound sigmas. Else,
+        sigma_bounds specifies the absolute bounds on sigmas. Default
+        is "local".
+    max_rounds_without_best_bic : int, optional
         Maximum number of rounds without BIC improvement to terminate
-        the search for optimal G5M n_components.
-    mag_factor : float (default=0.79)
+        the search for optimal G5M n_components. Default is
+        `MAX_ROUNDS_WITHOUT_BEST_BIC`.
+    mag_factor : float, optional
         Magnification factor used for correcting the refractive index
-        mismatch for 3D imaging.
-    
+        mismatch for 3D imaging. Default is 0.79.
+
     Returns
     -------
     g5m : G5M_3D
         Fitted G5M. Returns None if fitting failed.
     """
-
     assert isinstance(lp, np.ndarray)
     assert loc_prec_handle in ["local", "abs"]
-    assert lp.shape == (len(X), 2), (
-        "Localization precisions (lp) must have the shape of (N, 2) "
+    assert lp.shape == (len(X), 3), (
+        "Localization precisions (lp) must have the shape of (N, 3) "
         "where N is the number of localizations."
     )
 
@@ -1448,11 +1435,11 @@ def find_optimal_G5M_3D(
     rounds_without_best_bic = 0
     best_bic = np.inf
     n_components_max = min(N_COMPONENTS_MAX, len(X) // min_locs)
-    
+
     g5ms = []
     bics = []
     while (
-        n_components <= n_components_max 
+        n_components <= n_components_max
         and rounds_without_best_bic < max_rounds_without_best_bic
     ):
         g5m = G5M_3D(
@@ -1463,11 +1450,8 @@ def find_optimal_G5M_3D(
             z_range=z_range,
             mag_factor=mag_factor,
         ).fit(X, lp=lp, loc_prec_handle=loc_prec_handle)
-        if (
-            g5m is None or 
-            not check_G5M_resolution_3D(
-                g5m.means, g5m.weights, g5m.precisions_cholesky
-            )
+        if g5m is None or not check_G5M_resolution_3D(
+            g5m.means, g5m.weights, g5m.precisions_cholesky
         ):
             current_bic = np.inf
             rounds_without_best_bic += 1
@@ -1489,7 +1473,7 @@ def find_optimal_G5M_3D(
 
 
 def run_g5m_group_3D(
-    locs_group: np.recarray,
+    locs_group: pd.DataFrame,
     calibration: dict,
     *,
     min_locs: int = MIN_LOCS,
@@ -1499,60 +1483,68 @@ def run_g5m_group_3D(
     max_rounds_without_best_bic: int = MAX_ROUNDS_WITHOUT_BEST_BIC,
     bootstrap_check: bool = False,
     max_locs_per_cluster: int = np.inf,
-) -> tuple[np.recarray, np.recarray] | tuple[None, None]:
-    """Runs G5M for a given group of localizations (by default one 
+) -> tuple[pd.DataFrame, pd.DataFrame] | tuple[None, None]:
+    """Run G5M for a given group of localizations (by default one
     DBSCAN cluster of localizations) in 3D.
 
     Parameters
     ----------
-    locs_group : np.recarray
+    locs_group : pd.DataFrame
         Localizations.
     calibration : dict
-        Calibration dictionary with the following keys: 
+        Calibration dictionary with the following keys:
         "X Coefficients", "Y Coefficients", "Step size in nm",
-        "Number of frames" and "Magnification factor", see 
-        unpack_calibration for more details.
-    min_locs : int (default=MIN_LOCS)
-        Minimum number of localizations per component.
-    loc_prec_handle : {"local", "abs"} (default="local")
+        "Number of frames" and "Magnification factor", see
+        ``unpack_calibration`` for more details.
+    min_locs : int, optional
+        Minimum number of localizations per component. Default is
+        `MIN_LOCS`.
+    loc_prec_handle : {"local", "abs"}, optional
         How to handle sigma bounds. If "local", localization precisions
-        of points around each component are used to bound sigmas. Else, 
-        sigma_bounds specifies the absolute bounds on sigmas.
-    sigma_bounds : tuple (default=(MIN_SIGMA_FACTOR, MAX_SIGMA_FACTOR))
-        Bounds for the standard deviation (sigma) of the Gaussian 
+        of points around each component are used to bound sigmas. Else,
+        sigma_bounds specifies the absolute bounds on sigmas. Default
+        is "local".
+    sigma_bounds : tuple, optional
+        Bounds for the standard deviation (sigma) of the Gaussian
         components. If loc_prec_handle is "local", the bounds specify
-        the margin of error in units of localization precision. Else, 
-        the bounds specify the absolute bounds on sigma.
-    pixelsize : float (default=130.0)
-        Camera pixel size in nm.
-    max_rounds_without_best_bic : int (default=MAX_ROUNDS_WITHOUT_BEST_BIC)
+        the margin of error in units of localization precision. Else,
+        the bounds specify the absolute bounds on sigma. Default is
+        (`MIN_SIGMA_FACTOR`, `MAX_SIGMA_FACTOR`).
+    pixelsize : float, optional
+        Camera pixel size in nm. Default is 130.0.
+    max_rounds_without_best_bic : int, optional
         Maximum number of rounds without BIC improvement to terminate
-        the search for optimal G5M n_components.
-    bootstrap_check : bool (default=False)
+        the search for optimal G5M n_components. Default is
+        `MAX_ROUNDS_WITHOUT_BEST_BIC`.
+    bootstrap_check : bool, optional
         If True, the standard error of the means (SEM) is calculated
         using bootstrapping. If False, the standard, single Gaussian
-        SEM is used.
-    max_locs_per_cluster : int (default=np.inf)
+        SEM is used. Default is False.
+    max_locs_per_cluster : int, optional
         Maximum number of localizations per cluster accepted for G5M.
         Used to avoid fitting to fiducial markers. Such clusters are
-        ignored.
+        ignored. Default is np.inf.
 
     Returns
     -------
-    centers : np.recarray
+    centers : pd.DataFrame
         Centers of the G5M components in the format of localizations.
-    clustered_locs : np.recarray
+    clustered_locs : pd.DataFrame
         Localizations with assigned cluster labels, based on the G5M
         components.
     """
+    assert loc_prec_handle in [
+        "local",
+        "abs",
+    ], "loc_prec_handle must be 'local' or 'abs'."
+    assert (
+        len(sigma_bounds) == 2
+    ), "sigma_bounds must be a tuple of two values."
+    # make sure lpz is available
+    locs_group = append_lpz_to_locs(
+        locs_group, [{"Pixelsize": pixelsize}], calibration
+    )  # TODO: dirty way to do this, fix later
 
-    assert loc_prec_handle in ["local", "abs"], (
-        "loc_prec_handle must be 'local' or 'abs'."
-    )
-    assert len(sigma_bounds) == 2, (
-        "sigma_bounds must be a tuple of two values."
-    )
-        
     # check that the number of localizations is within the limits
     n_locs = len(locs_group)
     if n_locs < min_locs or n_locs > max_locs_per_cluster:
@@ -1561,43 +1553,43 @@ def run_g5m_group_3D(
     spot_size, z_range, mag_factor = unpack_calibration(calibration, pixelsize)
 
     if loc_prec_handle == "local":
-        lp = np.stack((locs_group.lpx, locs_group.lpy)).T
+        lp = locs_group[["lpx", "lpy", "lpz"]].values
     else:
-        lp = np.ones((len(locs_group), 2)) # dummy
-    X = np.stack((locs_group.x, locs_group.y, locs_group.z / pixelsize)).T
-    
+        lp = np.ones((len(locs_group), 3))  # dummy
+    X = locs_group[["x", "y", "z"]].values
+    X[:, 2] /= pixelsize  # convert z to camera pixels
+    lp[:, 2] /= pixelsize  # convert lpz to camera pixels
+
     g5m = find_optimal_G5M_3D(
-        X, 
+        X,
         min_locs=min_locs,
         sigma_bounds=sigma_bounds,
         spot_size=spot_size,
         z_range=z_range,
         lp=lp,
         loc_prec_handle=loc_prec_handle,
-        max_rounds_without_best_bic=max_rounds_without_best_bic, 
+        max_rounds_without_best_bic=max_rounds_without_best_bic,
         mag_factor=mag_factor,
     )
     if g5m is None or len(g5m.valid_idx) == 0:
         return None, None
-    
-    return convert_G5M_results(
-        g5m, locs_group, pixelsize, bootstrap_check
-    )
+
+    return convert_G5M_results(g5m, locs_group, pixelsize, bootstrap_check)
 
 
 class G5M_3D(G5M):
     """G5M for 3D data (astigmatism)."""
 
     def __init__(
-        self, 
-        n_components: int, 
+        self,
+        n_components: int,
         min_locs: int,
         sigma_bounds: tuple[float, float],
-        spot_size: NDArray,
-        z_range: NDArray,        
+        spot_size: np.ndarray,
+        z_range: np.ndarray,
         *,
         mag_factor: float = 0.79,
-        means_init: NDArray | None = None,
+        means_init: np.ndarray | None = None,
     ) -> None:
         super().__init__(
             n_components=n_components,
@@ -1610,86 +1602,87 @@ class G5M_3D(G5M):
         self.mag_factor = mag_factor
         self.n_dimensions = 3
 
-    def estimate_log_prob(self, X: NDArray) -> NDArray:
-        """Calculates the log probabilities of the data X under the G5M,
+    def estimate_log_prob(self, X: np.ndarray) -> np.ndarray:
+        """Calculate the log probabilities of the data X under the G5M,
         without weights."""
-
         return estimate_log_gaussian_prob_3D(
-            X, self.means, self.precisions_cholesky,
+            X,
+            self.means,
+            self.precisions_cholesky,
         )
 
     def n_parameters(self) -> int:
         """Return the number of free parameters in the model. Note that
-        the astimatism-modification reduces the number of free 
+        the astigmatism-modification reduces the number of free
         parameters for each component by one."""
-
         n_valid = len(self.valid_idx)
-        cov_params = n_valid * 2 # cov. in y depends on cov. in x
+        cov_params = n_valid * 2  # cov. in y depends on cov. in x
         mean_params = 3 * n_valid
         weight_params = n_valid - 1
         return int(cov_params + mean_params + weight_params)
 
-    def sample(self, n_samples: int = 1) -> tuple[NDArray, NDArray]:
-        """Samples data points from the G5M."""
-
+    def sample(self, n_samples: int = 1) -> tuple[np.ndarray, np.ndarray]:
+        """Sample data points from the G5M."""
         rng = check_random_state(self.random_state)
         n_samples_comp = rng.multinomial(n_samples, self.weights)
 
         X = np.vstack(
             [
                 mean
-                + rng.standard_normal(size=(sample, 3))
-                * np.sqrt(covariance)
+                + rng.standard_normal(size=(sample, 3)) * np.sqrt(covariance)
                 for (mean, covariance, sample) in zip(
                     self.means, self.covariances, n_samples_comp
                 )
             ]
         )
 
-        y = np.concatenate([
-            np.full(sample, j, dtype=int) 
-            for j, sample in enumerate(n_samples_comp)
-        ])
+        y = np.concatenate(
+            [
+                np.full(sample, j, dtype=int)
+                for j, sample in enumerate(n_samples_comp)
+            ]
+        )
         return (X, y)
-    
 
-### G5M (2D/3D) functions and classes ###
+
+# G5M (2D/3D) functions and classes #
 @njit
 def estimate_gaussian_parameters_diag_cov(
-    X: NDArray, 
-    resp: NDArray, 
+    X: np.ndarray,
+    resp: np.ndarray,
     reg_covar: float = 1e-6,
-) -> tuple[NDArray, NDArray, NDArray]:
-    """Calculates the MLE parameters for a G5M. Assumes diagonal 
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Calculate the MLE parameters for a G5M. Assumes diagonal
     covariance matrices.
-    
+
     Parameters
     ----------
-    X : np.2darray
+    X : np.ndarray
         Data points.
-    resp : np.2darray
+    resp : np.ndarray
         Responsibilities of the G5M components, shape (n_samples,
         n_components).
-    reg_covar : float (default=1e-6)
-        Regularization term for the covariance matrices.
-    
+    reg_covar : float, optional
+        Regularization term for the covariance matrices. Default is
+        1e-6.
+
     Returns
     -------
     nk, means, covariances : tuple
         Number of localizations per component, means and covariances.
     """
-    
     nk = (
-        sum_along_axis0(resp, (resp.shape[1],)) 
-        + 10. * np.finfo(resp.dtype).eps
+        sum_along_axis0(resp, (resp.shape[1],))
+        + 10.0 * np.finfo(resp.dtype).eps
     )
     means = matmul(resp.T, X) / nk[:, np.newaxis]
     covariances = np.zeros((resp.shape[1], X.shape[1]), dtype=np.float64)
     for i in range(resp.shape[1]):
         for j in range(X.shape[1]):
-            covariances[i, j] = np.sum(
-                resp[:, i] * (X[:, j] - means[i, j]) ** 2
-            ) / nk[i] + reg_covar
+            covariances[i, j] = (
+                np.sum(resp[:, i] * (X[:, j] - means[i, j]) ** 2) / nk[i]
+                + reg_covar
+            )
     return (
         np.asarray(nk, dtype=np.float64),
         np.asarray(means, dtype=np.float64),
@@ -1697,29 +1690,29 @@ def estimate_gaussian_parameters_diag_cov(
     )
 
 
-def approximate_sem(g5m: G5M, locs: np.recarray) -> NDArray:
-    """Returns the standard error of the means (SEM) in the G5M.
-    
+def approximate_sem(g5m: G5M, locs: pd.DataFrame) -> np.ndarray:
+    """Return the standard error of the means (SEM) in the G5M.
+
     Note: this is only an approximation since we treat each component
     independently and ignore the covariance between the
-    components. The standard, single Gaussian SEM is used, i.e., 
-    sigma / sqrt(n).
-    
+    components. The standard, single Gaussian SEM is used, i.e.,
+    ``sigma / sqrt(n)``.
+
     Parameters
     ----------
     g5m : G5M
         Fitted G5M.
-    locs : np.recarray  
+    locs : pd.DataFrame
         Localizations that g5m was fitted to.
-    
+
     Returns
     -------
-    sem : np.2darray
-        Array of standard errors of the means (n_components, n_dimensions).
+    sem : np.ndarray
+        Array of standard errors of the means
+        (n_components, n_dimensions).
     """
-
     weights = g5m.weights
-    covariances = g5m.covariances    
+    covariances = g5m.covariances
 
     if not hasattr(locs, "z"):
         covariances = np.repeat(covariances, 2).reshape(-1, 2)
@@ -1729,36 +1722,34 @@ def approximate_sem(g5m: G5M, locs: np.recarray) -> NDArray:
 
 
 def bootstrap_sem(
-    g5m: G5M, 
-    locs: np.recarray, 
-    n_bootstraps: int = 20
-) -> NDArray:
-    """Returns the standard error of the means (SEM) for the G5M using
+    g5m: G5M, locs: pd.DataFrame, n_bootstraps: int = 20
+) -> np.ndarray:
+    """Return the standard error of the means (SEM) for the G5M using
     bootstrapping.
-    
+
     Parameters
     ----------
     g5m : G5M
         Fitted G5M.
-    locs : np.recarray
+    locs : pd.DataFrame
         Localizations that g5m was fitted to.
-    n_bootstraps : int (default=20)
-        Number of bootstrap rounds to perform.
+    n_bootstraps : int, optional
+        Number of bootstrap rounds to perform. Default is 20.
 
     Returns
     -------
-    sem : np.2darray
-        Array of standard errors of the means (n_components, n_dimensions).
+    sem : np.ndarray
+        Array of standard errors of the means
+        (n_components, n_dimensions).
     """
-
-    np.random.seed(42) 
+    np.random.seed(42)
     old_random_state = g5m.random_state
     g5m.random_state = None
     boot_means = []
     for i in range(n_bootstraps):
         X_boot = g5m.sample(len(locs))[0]
         if hasattr(locs, "z"):
-            g5m_boot = G5M_3D( 
+            g5m_boot = G5M_3D(
                 n_components=len(g5m.valid_idx),
                 min_locs=g5m.min_locs,
                 sigma_bounds=g5m.sigma_bounds,
@@ -1767,17 +1758,17 @@ def bootstrap_sem(
                 means_init=g5m.means,
                 mag_factor=g5m.mag_factor,
             )
-            lp = np.stack((locs.lpx, locs.lpy)).T
+            lp = locs[["lpx", "lpy"]].values
         else:
             g5m_boot = G5M_2D(
-                n_components=len(g5m.valid_idx), 
+                n_components=len(g5m.valid_idx),
                 min_locs=g5m.min_locs,
                 sigma_bounds=g5m.sigma_bounds,
                 means_init=g5m.means,
             )
-            lp = np.mean([locs.lpx, locs.lpy], axis=0)
+            lp = locs[["lpx", "lpy"]].mean(axis=1).values
         g5m_boot.fit(X_boot, lp=lp, loc_prec_handle=g5m.loc_prec_handle)
-        if hasattr(g5m_boot, "means_"): # converged
+        if hasattr(g5m_boot, "means_"):  # converged
             boot_means.append(g5m_boot.means_)
     sem = np.std(boot_means, axis=0)
     g5m.random_state = old_random_state
@@ -1785,74 +1776,83 @@ def bootstrap_sem(
 
 
 def convert_G5M_results(
-    g5m: G5M, 
-    locs_group: np.recarray, 
+    g5m: G5M,
+    locs_group: pd.DataFrame,
     pixelsize: float = 130.0,
-    bootstrap: bool = False, 
-) -> tuple[np.recarray, np.recarray]: 
-    """Extracts G5M components as np.rec.array in the format of 
+    bootstrap: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Extract G5M components as ``pd.DataFrame`` in the format of
     localizations - frame, spatial coordinates, standard errors of the
-    means, fitted sigma and number of localizations corresponding to 
+    means, fitted sigma and number of localizations corresponding to
     the centers, etc.
 
     Parameters
     ----------
     g5m : G5M
         Fitted G5M.
-    locs_group : np.recarray
-        Localizations.
-    pixelsize : float (default=130.0)
-        Camera pixel size in nm.
-    bootstrap : bool (default=False)
+    locs_group : pd.DataFrame
+        Localizations that g5m was fitted to.
+    pixelsize : float, optional
+        Camera pixel size in nm. Default is 130.0.
+    bootstrap : bool, optional
         If True, the standard error of the means (SEM) is calculated
         using bootstrapping. If False, the standard, single Gaussian
-        SEM is used.
-    
+        SEM is used. Default is False.
+
     Returns
     -------
-    centers : np.recarray
+    centers : pd.DataFrame
         Centers of the G5M components in the format of localizations.
-    clustered_locs : np.recarray
+    clustered_locs : pd.DataFrame
         Localizations with assigned cluster labels, based on the G5M
         components.
     """
-
+    locs_group = locs_group.copy()
     means = g5m.means
     covariances = g5m.covariances
     weights = g5m.weights
-    # find responsibilites which are used for weighted averaging of 
+    # find responsibilites which are used for weighted averaging of
     # properties per component
-    e_step = e_step_2D 
-    X = np.stack((locs_group.x, locs_group.y)).T
     if hasattr(locs_group, "z"):
-        X = np.stack((locs_group.x, locs_group.y, locs_group.z / pixelsize)).T
+        X = locs_group[["x", "y", "z"]].values
+        X[:, 2] /= pixelsize  # convert z to camera pixels
         e_step = e_step_3D
+    else:
+        X = locs_group[["x", "y"]].values
+        e_step = e_step_2D
     log_prob = g5m.estimate_weighted_log_prob(X)
     sample_scores = logsumexp_axis1(log_prob, (X.shape[0],))
-    group_ll = np.ones(len(g5m.valid_idx)) * np.mean(sample_scores) # average LL
+    # average LL
+    group_ll = np.ones(len(g5m.valid_idx)) * np.mean(sample_scores)
 
     _, log_resp = e_step(
-        X, g5m.weights_, g5m.means_, g5m.precisions_cholesky_,
+        X,
+        g5m.weights_,
+        g5m.means_,
+        g5m.precisions_cholesky_,
     )
-    resp = np.exp(log_resp[:, g5m.valid_idx]) # only valid components
+    resp = np.exp(log_resp[:, g5m.valid_idx])  # only valid components
     rsum = resp.sum(0)
-    # molecule log likelihood - weighted mean log likelihood of 
+    # molecule log likelihood - weighted mean log likelihood of
     # localizations for each component
     mol_ll = (resp * log_prob).sum(0) / rsum
 
-    # valid probability of the components - we know the expected value 
-    # and the standard deviation of the mean log likelihood of each 
+    # valid probability of the components - we know the expected value
+    # and the standard deviation of the mean log likelihood of each
     # component, whose distirbution follows the normal distribution (due
     # to the central limit theorem). The valid probability is then
     # calculated as the cumulative distribution function of the normal
     # distribution with mu and sigma as the expected value and standard
     # deviation of the mean log likelihood of the component.
-    if X.shape[1] == 2: # (2D)
-        expected = np.log(weights / (2 * np.pi * covariances)) - 1 
-    else: # 3D
-        expected = np.log(
-            weights / ((2 * np.pi)**1.5 * np.sqrt(covariances).prod(1)) 
-        ) - 1.5
+    if X.shape[1] == 2:  # (2D)
+        expected = np.log(weights / (2 * np.pi * covariances)) - 1
+    else:  # 3D
+        expected = (
+            np.log(
+                weights / ((2 * np.pi) ** 1.5 * np.sqrt(covariances).prod(1))
+            )
+            - 1.5
+        )
     stdev = np.sqrt(X.shape[1] * 0.5 / (len(X) * weights))
     # gauss CDF
     p_val = (
@@ -1872,76 +1872,87 @@ def convert_G5M_results(
     lpy = sem[:, 1]
 
     if hasattr(locs_group, "z"):
-        X = np.stack((locs_group.x, locs_group.y, locs_group.z / pixelsize)).T
         z = means[:, 2] * pixelsize
         sigma_x = np.sqrt(covariances[:, 0]) * pixelsize
         sigma_y = np.sqrt(covariances[:, 1]) * pixelsize
         sigma_z = np.sqrt(covariances[:, 2]) * pixelsize
         lpz = sem[:, 2]
-        weighted_lpx = ((resp * locs_group.lpx.reshape(-1, 1)).sum(0) / rsum).reshape(-1)
-        weighted_lpy = ((resp * locs_group.lpy.reshape(-1, 1)).sum(0) / rsum).reshape(-1)
+        weighted_lpx = (
+            (resp * locs_group["lpx"].values.reshape(-1, 1)).sum(0) / rsum
+        ).reshape(-1)
+        weighted_lpy = (
+            (resp * locs_group["lpy"].values.reshape(-1, 1)).sum(0) / rsum
+        ).reshape(-1)
+        weighted_lpz = (
+            (resp * locs_group["lpz"].values.reshape(-1, 1)).sum(0) / rsum
+        ).reshape(-1)
         rel_sigma_x = sigma_x / weighted_lpx / pixelsize
         rel_sigma_y = sigma_y / weighted_lpy / pixelsize
+        rel_sigma_z = sigma_z / weighted_lpz / pixelsize
     else:
-        X = np.stack((locs_group.x, locs_group.y)).T
         sigma = np.sqrt(covariances) * pixelsize
         # relative sigma
-        lp = np.mean([locs_group.lpx, locs_group.lpy], axis=0)
+        lp = locs_group[["lpx", "lpy"]].mean(axis=1).values
         weighted_lp = ((resp * lp.reshape(-1, 1)).sum(0) / rsum).reshape(-1)
         rel_sigma = sigma / weighted_lp / pixelsize
-    
+
     # extract frame info and group_input
-    frames_locs = np.reshape(locs_group.frame, (-1, 1))
+    frames_locs = np.reshape(locs_group["frame"].values, (-1, 1))
     # weighted average of the frame
     frame = (resp * frames_locs).sum(0) / rsum
     # weighted std of the frame
     std_frame = np.sqrt(
-        (resp * (frames_locs - frame) ** 2).sum(0) / (
-            (resp.shape[0] - 1) * rsum / resp.shape[0]
-        )
+        (resp * (frames_locs - frame) ** 2).sum(0)
+        / ((resp.shape[0] - 1) * rsum / resp.shape[0])
     )
     labels = g5m.predict(X)
     # dbscan group id
-    group_input = locs_group.group[0] * np.ones(len(frame), dtype=int)
-    locs_group = lib.append_to_rec(
-        locs_group,
-        locs_group.group[0] * np.ones(len(locs_group), dtype=int),
-        "group_input",
+    group_input = locs_group["group"].iloc[0] * np.ones(len(frame), dtype=int)
+    locs_group["group_input"] = locs_group["group"].iloc[0] * np.ones(
+        len(locs_group), dtype=int
     )
     # assign cluster labels to localizations
-    locs_group.group = labels
+    locs_group["group"] = labels
 
     # assign log_likelihood and cluster labels to localizations
     log_likelihood = g5m.score_samples(X)
-    locs_group = lib.append_to_rec(locs_group, log_likelihood, "log_likelihood")
+    locs_group["log_likelihood"] = log_likelihood
 
     # photons, PSF size and background (weighted average)
-    photons = ((resp * locs_group.photons.reshape(-1, 1)).sum(0) / rsum).reshape(-1)
-    sx = ((resp * locs_group.sx.reshape(-1, 1)).sum(0) / rsum).reshape(-1)
-    sy = ((resp * locs_group.sy.reshape(-1, 1)).sum(0) / rsum).reshape(-1)
-    bg = ((resp * locs_group.bg.reshape(-1, 1)).sum(0) / rsum).reshape(-1)
+    photons = (
+        (resp * locs_group["photons"].values.reshape(-1, 1)).sum(0) / rsum
+    ).reshape(-1)
+    sx = (
+        (resp * locs_group["sx"].values.reshape(-1, 1)).sum(0) / rsum
+    ).reshape(-1)
+    sy = (
+        (resp * locs_group["sy"].values.reshape(-1, 1)).sum(0) / rsum
+    ).reshape(-1)
+    bg = (
+        (resp * locs_group["bg"].values.reshape(-1, 1)).sum(0) / rsum
+    ).reshape(-1)
 
     # extract the number of binding events, i.e., link localizations
     # and assign them to molecules - sticky events will likely have only
     # one or two such events associated
 
-    # idx to split localizations into binding events, where up to 3 
+    # idx to split localizations into binding events, where up to 3
     # frames of no signal are allowed
-    split_idx = np.where(np.diff(locs_group.frame) > 3)[0] + 1
+    split_idx = np.where(np.diff(locs_group["frame"].values) > 3)[0] + 1
     # link localizations into binding events, we only need the center
     # of mass
-    x_events = np.split(locs_group.x, split_idx)
+    x_events = np.split(locs_group["x"].values, split_idx)
     x_events = [np.mean(_) for _ in x_events]
-    y_events = np.split(locs_group.y, split_idx)
+    y_events = np.split(locs_group["y"].values, split_idx)
     y_events = [np.mean(_) for _ in y_events]
     if hasattr(locs_group, "z"):
-        z_events = np.split(locs_group.z, split_idx)
+        z_events = np.split(locs_group["z"].values, split_idx)
         z_events = [np.mean(_) / pixelsize for _ in z_events]
         X_events = np.stack((x_events, y_events, z_events)).T
     else:
         X_events = np.stack((x_events, y_events)).T
-    # find the closest G5M component to each binding event and assign 
-    # the binding event to the component but account for the case when 
+    # find the closest G5M component to each binding event and assign
+    # the binding event to the component but account for the case when
     # no binding event is assigned to a component
     labels = g5m.predict(X_events)
     expected_labels = np.arange(len(g5m.valid_idx))
@@ -1949,46 +1960,76 @@ def convert_G5M_results(
     count_dict = dict(zip(found_labels, counts))
     n_events = np.array([count_dict.get(_, 0) for _ in expected_labels])
 
-    # convert to recarray
+    # convert to DataFrame
     if hasattr(locs_group, "z"):
-        centers = np.rec.array((
-            frame, std_frame,
-            x, y, z, 
-            photons, sx, sy, bg,
-            lpx, lpy, lpz, 
-            sigma_x, sigma_y, sigma_z,
-            rel_sigma_x, rel_sigma_y,
-            p_val, mol_ll, group_ll,
-            g5m.n_locs, n_events, group_input,
-        ), dtype=MOLMAP_DTYPE_3D)
+        centers = pd.DataFrame(
+            {
+                "frame": frame.astype(np.float32),
+                "std_frame": std_frame.astype(np.float32),
+                "x": x.astype(np.float32),
+                "y": y.astype(np.float32),
+                "z": z.astype(np.float32),
+                "photons": photons.astype(np.float32),
+                "sx": sx.astype(np.float32),
+                "sy": sy.astype(np.float32),
+                "bg": bg.astype(np.float32),
+                "lpx": lpx.astype(np.float32),
+                "lpy": lpy.astype(np.float32),
+                "lpz": lpz.astype(np.float32),
+                "fitted_sigma_x": sigma_x.astype(np.float32),
+                "fitted_sigma_y": sigma_y.astype(np.float32),
+                "fitted_sigma_z": sigma_z.astype(np.float32),
+                "rel_sigma_x": rel_sigma_x.astype(np.float32),
+                "rel_sigma_y": rel_sigma_y.astype(np.float32),
+                "rel_sigma_z": rel_sigma_z.astype(np.float32),
+                "p_val": p_val.astype(np.float32),
+                "mol_log_likelihood": mol_ll.astype(np.float32),
+                "group_log_likelihood": group_ll.astype(np.float32),
+                "n_locs": g5m.n_locs.astype(np.int32),
+                "n_events": n_events.astype(np.int32),
+                "group_input": group_input.astype(np.int32),
+            }
+        )
     else:
-        centers = np.rec.array((
-            frame, std_frame,
-            x, y, 
-            photons, sx, sy, bg,
-            lpx, lpy, 
-            sigma, rel_sigma,
-            p_val, mol_ll, group_ll,
-            g5m.n_locs, n_events, group_input,
-        ), dtype=MOLMAP_DTYPE_2D)
+        centers = pd.DataFrame(
+            {
+                "frame": frame.astype(np.float32),
+                "std_frame": std_frame.astype(np.float32),
+                "x": x.astype(np.float32),
+                "y": y.astype(np.float32),
+                "photons": photons.astype(np.float32),
+                "sx": sx.astype(np.float32),
+                "sy": sy.astype(np.float32),
+                "bg": bg.astype(np.float32),
+                "lpx": lpx.astype(np.float32),
+                "lpy": lpy.astype(np.float32),
+                "fitted_sigma": sigma.astype(np.float32),
+                "rel_sigma": rel_sigma.astype(np.float32),
+                "p_val": p_val.astype(np.float32),
+                "mol_log_likelihood": mol_ll.astype(np.float32),
+                "group_log_likelihood": group_ll.astype(np.float32),
+                "n_locs": g5m.n_locs.astype(np.int32),
+                "n_events": n_events.astype(np.int32),
+                "group_input": group_input.astype(np.int32),
+            }
+        )
     return centers, locs_group
 
 
 def sum_G5Ms(g5ms: list[G5M]) -> G5M:
-    """Sums and normalizes G5Ms. Assumes that all G5Ms gave the same 
+    """Sum and normalize G5Ms. Assumes that all G5Ms gave the same
     input parameters, i.e., min_locs, min_sigma, max_sigma.
-    
+
     Parameters
     ----------
     g5ms : list of G5M
         List of G5Ms to sum.
-    
+
     Returns
     -------
     sum_g5m : G5M
         Summed G5Ms.
     """
-
     # check that all G5Ms are instances of G5m
     if not all(isinstance(_, G5M) for _ in g5ms):
         raise ValueError("All G5Ms must be instances of G5M.")
@@ -1996,7 +2037,7 @@ def sum_G5Ms(g5ms: list[G5M]) -> G5M:
     # check that all G5Ms belong to the same class (2D/3D)
     if not all(isinstance(_, g5ms[0].__class__) for _ in g5ms):
         raise ValueError("All G5Ms must be of the same class (2D/3D).")
-    
+
     # get weights
     n_locs = []
     for gm in g5ms:
@@ -2007,23 +2048,22 @@ def sum_G5Ms(g5ms: list[G5M]) -> G5M:
     # get means
     means = np.vstack([_.means for _ in g5ms])
     # get covariances, note that the shape of the covs array depends
-    # on the dimensionality: 2D -> shape: (n_components, ), 3D -> shape: 
+    # on the dimensionality: 2D -> shape: (n_components, ), 3D -> shape:
     # (n_components, 3)
     if g5ms[0].__class__ == G5M_2D:
         covs = np.hstack([_.covariances for _ in g5ms])
     elif g5ms[0].__class__ == G5M_3D:
-        covs = np.stack([_.covariances for _ in g5ms])
+        covs = np.stack([_.covariances for _ in g5ms]).reshape(len(weights), 3)
     pc = 1 / np.sqrt(covs)
 
     sum_g5m = g5ms[0].__class__(
         n_components=len(weights),
         min_locs=g5ms[0].min_locs,
         sigma_bounds=g5ms[0].sigma_bounds,
+        spot_size=g5ms[0].spot_size,
+        z_range=g5ms[0].z_range,
+        mag_factor=g5ms[0].mag_factor,
     )
-    # 3D consistency
-    sum_g5m.spot_size = g5ms[0].spot_size
-    sum_g5m.z_range = g5ms[0].z_range
-    sum_g5m.mag_factor = g5ms[0].mag_factor
 
     # set parameters (just like after fitting)
     valid_idx = np.arange(len(weights))
@@ -2034,75 +2074,82 @@ def sum_G5Ms(g5ms: list[G5M]) -> G5M:
 
 @njit
 def fit_G5M(
-    X: NDArray, 
+    X: np.ndarray,
     min_locs: int,
-    init_weights: NDArray, 
-    init_means: NDArray, 
-    init_precisions_cholesky: NDArray, 
+    init_weights: np.ndarray,
+    init_means: np.ndarray,
+    init_precisions_cholesky: np.ndarray,
     sigma_bounds: tuple[float, float],
     *,
-    lp: NDArray,
+    lp: np.ndarray,
     loc_prec_handle: Literal["local", "abs"] = "local",
-    spot_size: NDArray | None = None,
-    z_range: NDArray | None = None,
+    spot_size: np.ndarray | None = None,
+    z_range: np.ndarray | None = None,
     mag_factor: float | None = None,
-) -> tuple[tuple[NDArray, NDArray, NDArray, NDArray], bool, NDArray]:
-    """Fits G5M to the data X using the initial weights, means and 
+) -> tuple[
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    bool,
+    np.ndarray,
+]:
+    """Fit G5M to the data X using the initial weights, means and
     precisions_cholesky. The function returns the fitted G5M parameters.
-    
+
     Parameters
     ----------
-    X : np.2darray
+    X : np.ndarray
         Data points, shape (n_samples, n_dimensions).
     min_locs : int
         Minimum number of localizations per component. Used to filter
         out components with too few localizations that likely represent
         background.
-    init_weights : np.2darray
-        Initial weights of the G5M components. Shape (n_init, 
+    init_weights : np.ndarray
+        Initial weights of the G5M components. Shape (n_init,
         n_components).
-    init_means : np.3darray
-        Initial means of the G5M components. Shape (n_init, 
+    init_means : np.ndarray
+        Initial means of the G5M components. Shape (n_init,
         n_components, n_dimensions).
     init_precisions_cholesky : np.ndarray
-        Initial cholesky decomposition of precisions. Shape (n_init, 
+        Initial cholesky decomposition of precisions. Shape (n_init,
         n_components) for 2D data and (n_init, n_components, 3) for 3D
         data.
     sigma_bounds : tuple
-        Bounds for the standard deviation (sigma) of the Gaussian 
+        Bounds for the standard deviation (sigma) of the Gaussian
         components. If local loc. prec. is used, the bounds specify the
         margin of error in units of localization precision. Else,
         absolute bounds on sigma.
-    lp : np.1darray
-        Localization precision for each localization. Only used if 
-        loc_prec_handle is "local". Shape (n_samples,).
-    loc_prec_handle : {"local", "abs"} (default="local")
+    lp : np.ndarray
+        Localization precision for each localization. Only used if
+        loc_prec_handle is "local". Shape (n_samples,) for 2D and
+        (n_samples, 3) for 3D data.
+    loc_prec_handle : {"local", "abs"}, optional
         How to handle sigma bounds. If "local", localization precisions
-        of points around each component are used to bound sigmas. Else, 
-        sigma_bounds specifies the absolute bounds on sigmas.
-    spot_size : (2,) np.1darray (default=None)
+        of points around each component are used to bound sigmas. Else,
+        sigma_bounds specifies the absolute bounds on sigmas. Default
+        is "local".
+    spot_size : (2,) np.ndarray, optional
         Spot width and height for astigmatism fitting. Required for 3D
         data only. Extracted from the 3D calibration file, see
-        unpack_calibration.
-    z_range : np.1darray (default=None)
-        Z range for astigmatism fitting. Required for 3D data only. 
-        Extracted from the 3D calibration file, see unpack_calibration.
-    mag_factor : float (default=None)
-        Magnification factor for astigmatism fitting. Required for 3D 
-        data only. Extracted from the 3D calibration file, see 
-        unpack_calibration.
-    
+        ``unpack_calibration``. Default is None.
+    z_range : np.ndarray, optional
+        Z range for astigmatism fitting. Required for 3D data only.
+        Extracted from the 3D calibration file, see
+        ``unpack_calibration``.
+        Default is None.
+    mag_factor : float, optional
+        Magnification factor for astigmatism fitting. Required for 3D
+        data only. Extracted from the 3D calibration file, see
+        ``unpack_calibration``. Default is None.
+
     Returns
     -------
     weights, means, covariances, precisions_cholesky : tuple
         Fitted G5M parameters.
-    converged_ : bool
+    converged : bool
         True if the G5M converged, False otherwise.
-    valid_idx_ : np.1darray
+    valid_idx : np.ndarray
         Indices of the valid components (min_locs).
     """
-
-    if init_precisions_cholesky.ndim == 2: # 2D data
+    if init_precisions_cholesky.ndim == 2:  # 2D data
         e_step = e_step_2D
         m_step = m_step_2D
         check_resolution = check_G5M_resolution_2D
@@ -2110,9 +2157,7 @@ def fit_G5M(
         e_step = e_step_3D
         m_step = m_step_3D
         check_resolution = check_G5M_resolution_3D
-        if (
-            spot_size is None or z_range is None or mag_factor is None
-        ):
+        if spot_size is None or z_range is None or mag_factor is None:
             raise ValueError(
                 "spot_size, z_range and mag_factor are required for "
                 "3D data."
@@ -2125,10 +2170,13 @@ def fit_G5M(
             "requires spot_size, z_range and mag_factor."
         )
 
-    converged_ = False
-    max_lower_bound = -np.inf # best log-likelihood for all inits
-    best_params = (None, None, None, None) # best parameters for all inits
-    valid_idx_ = np.arange(init_means.shape[1]).astype(np.int32) # valid components (min_locs)
+    converged = False
+    # best log-likelihood for all inits
+    max_lower_bound = -np.inf
+    # best parameters for all inits
+    best_params = (None, None, None, None)
+    # valid components (min_locs)
+    valid_idx = np.arange(init_means.shape[1]).astype(np.int32)
 
     # run the procedure n_init times
     for ii in range(len(init_weights)):
@@ -2139,15 +2187,16 @@ def fit_G5M(
 
         # fit G5M
         lower_bound = -np.inf
-        converged = False
-        for _ in range(100): # max_iter=100
+        converged_ = False
+        for _ in range(100):  # max_iter=100
             prev_lower_bound = lower_bound
             log_prob_norm, log_resp = e_step(
-                X, weights, means, precisions_cholesky,
+                X,
+                weights,
+                means,
+                precisions_cholesky,
             )
-            (
-                weights, means, covariances, precisions_cholesky
-            ) = m_step(
+            (weights, means, covariances, precisions_cholesky) = m_step(
                 X,
                 log_resp,
                 sigma_bounds=sigma_bounds,
@@ -2161,34 +2210,35 @@ def fit_G5M(
             change = lower_bound - prev_lower_bound
 
             if abs(change) < 1e-3:
-                converged = True
+                converged_ = True
                 break
 
         # extract the valid components (min_locs)
         n_locs = np.float64(len(X))
         n = np.round(weights * n_locs).astype(np.int32)
-        valid_idx = (np.where(n >= min_locs)[0]).astype(np.int32)
-         # check if FWHM limit is passed
+        valid_idx_ = (np.where(n >= min_locs)[0]).astype(np.int32)
+        # check if FWHM limit is passed
         resolution_pass = check_resolution(
-            means[valid_idx], weights[valid_idx], precisions_cholesky[valid_idx],
+            means[valid_idx_],
+            weights[valid_idx_],
+            precisions_cholesky[valid_idx_],
         )
         # check if the current result is the best
-        if (
-            resolution_pass and 
-            (lower_bound > max_lower_bound or max_lower_bound == -np.inf)
+        if resolution_pass and (
+            lower_bound > max_lower_bound or max_lower_bound == -np.inf
         ):
-                max_lower_bound = lower_bound
-                best_params = (weights, means, covariances, precisions_cholesky)
-                converged_ = converged
-                valid_idx_ = valid_idx
+            max_lower_bound = lower_bound
+            best_params = (weights, means, covariances, precisions_cholesky)
+            converged = converged_
+            valid_idx = valid_idx_
 
-    return best_params, converged_, valid_idx_
+    return best_params, converged, valid_idx
 
-    
+
 def run_g5m_in_clusters(
-    i: int, 
-    n_groups_task: int, 
-    locs: np.recarray, 
+    i: int,
+    n_groups_task: int,
+    locs: pd.DataFrame,
     min_locs: int,
     loc_prec_handle: Literal["local", "abs"],
     sigma_bounds: tuple[float, float],
@@ -2197,33 +2247,32 @@ def run_g5m_in_clusters(
     bootstrap_check: bool,
     calibration: dict | None,
     max_locs_per_cluster: int,
-) -> tuple[np.recarray, np.recarray]:
-    """Runs G5M for a given group of localizations clusters. See
-    run_g5m for parameters explanation.
-    
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Run G5M for a given group of localizations clusters. See
+    ``run_g5m`` for parameters explanation.
+
     Parameters
     ----------
     i : int
         Index of the first group to analyze.
     n_groups_task : int
         Number of groups to analyze.
-    
+
     Returns
     -------
-    centers : list of np.recarrays
-        Centers of the G5M components in the format of localizations. 
+    centers : list of pd.DataFrames
+        Centers of the G5M components in the format of localizations.
         Each element corresponds to one cluster of localizations.
-    clustered_locs : list of np.recarrays
+    clustered_locs : list of pd.DataFrames
         Localizations with assigned cluster labels, based on the G5M
         components.
     """
-    
     centers = []
     clustered_locs = []
-    for group in np.unique(locs.group)[i:i+n_groups_task]: 
+    for group in np.unique(locs.group)[i : i + n_groups_task]:
         if hasattr(locs, "z"):
             centers_, clustered_locs_ = run_g5m_group_3D(
-                locs_group=locs[locs.group == group], 
+                locs_group=locs[locs["group"] == group],
                 calibration=calibration,
                 min_locs=min_locs,
                 loc_prec_handle=loc_prec_handle,
@@ -2235,7 +2284,7 @@ def run_g5m_in_clusters(
             )
         else:
             centers_, clustered_locs_ = run_g5m_group_2D(
-                locs_group=locs[locs.group == group],
+                locs_group=locs[locs["group"] == group],
                 min_locs=min_locs,
                 loc_prec_handle=loc_prec_handle,
                 sigma_bounds=sigma_bounds,
@@ -2251,7 +2300,7 @@ def run_g5m_in_clusters(
 
 
 def run_g5m_parallel(
-    locs: np.recarray,
+    locs: pd.DataFrame,
     *,
     min_locs: int = MIN_LOCS,
     loc_prec_handle: Literal["local", "abs"] = "local",
@@ -2262,22 +2311,24 @@ def run_g5m_parallel(
     calibration: dict | None = None,
     max_locs_per_cluster: int = np.inf,
 ) -> list:
-    """Runs G5M in parallel using multiprocessing. See run_g5m for
+    """Run G5M in parallel using multiprocessing. See ``run_g5m`` for
     parameters explanation.
-    
+
     Returns
     -------
     fs : list
         List of futures.
     """
-    
-    n_groups = len(np.unique(locs.group))
+    n_groups = len(np.unique(locs["group"]))
     n_workers = min(
         60, max(1, int(0.35 * os.cpu_count()))
-    ) # Python crashes when using >64 cores
+    )  # Python crashes when using >64 cores
     groups_per_task = [
-        int(n_groups / N_TASKS + 1) \
-            if _ < n_groups % N_TASKS else int(n_groups / N_TASKS)
+        (
+            int(n_groups / N_TASKS + 1)
+            if _ < n_groups % N_TASKS
+            else int(n_groups / N_TASKS)
+        )
         for _ in range(N_TASKS)
     ]
     start_indices = np.cumsum([0] + groups_per_task[:-1])
@@ -2286,10 +2337,10 @@ def run_g5m_parallel(
     for i, n_groups_task in zip(start_indices, groups_per_task):
         fs.append(
             executor.submit(
-                run_g5m_in_clusters, 
-                i, 
-                n_groups_task, 
-                locs, 
+                run_g5m_in_clusters,
+                i,
+                n_groups_task,
+                locs,
                 min_locs,
                 loc_prec_handle,
                 sigma_bounds,
@@ -2304,8 +2355,8 @@ def run_g5m_parallel(
 
 
 def run_g5m(
-    locs: np.recarray, 
-    info: list[dict], 
+    locs: pd.DataFrame,
+    info: list[dict],
     *,
     min_locs: int = MIN_LOCS,
     loc_prec_handle: Literal["local", "abs"] = "local",
@@ -2314,92 +2365,93 @@ def run_g5m(
     max_rounds_without_best_bic: int = MAX_ROUNDS_WITHOUT_BEST_BIC,
     bootstrap_check: bool = False,
     calibration: dict | None = None,
-    postprocess: bool = False,
+    postprocess: bool = True,
     max_locs_per_cluster: int = np.inf,
     asynch: bool = True,
-    callback_parent: Callable[[QtWidgets.QMainWindow], None]| None | str = None,
-) -> tuple[np.recarray, np.recarray, list[dict]]:
-    """Runs G5M with or without multiprocessing on localizations. The
-    function returns the centers of the G5M components and localizations
-    with assigned cluster labels.
-    
-    Paramaters
+    callback_parent: (
+        QtWidgets.QMainWindow | Literal["console"] | None
+    ) = "console",
+) -> tuple[pd.DataFrame, pd.DataFrame, list[dict]]:
+    """Run G5M with or without multiprocessing. The function returns
+    the centers of the G5M components and localizations with assigned
+    cluster labels.
+
+    Parameters
     ----------
-    locs : np.recarray
+    locs : pd.DataFrame
         Localizations.
     info : list
         Information dictionaries.
-    min_locs : int (default=MIN_LOCS)
+    min_locs : int, optional
         Minimum number of localizations per component. Used to filter
         out components with too few localizations that likely represent
-        background. 
-    loc_prec_handle : {"local", "abs"} (default="local")
+        background. Default is `MIN_LOCS`.
+    loc_prec_handle : {"local", "abs"}, optional
         How to handle sigma bounds. If "local", localization precisions
-        of points around each component are used to bound sigmas. Else, 
-        sigma_bounds specifies the absolute bounds on sigmas. 
-    sigma_bounds : tuple (default=(MIN_SIGMA_FACTOR, MAX_SIGMA_FACTOR))
-        Bounds for the standard deviation (sigma) of the Gaussian 
+        of points around each component are used to bound sigmas. Else,
+        sigma_bounds specifies the absolute bounds on sigmas. Default
+        is "local".
+    sigma_bounds : tuple, optional
+        Bounds for the standard deviation (sigma) of the Gaussian
         components. If local loc. prec. is used, the bounds specify the
         margin of error in units of localization precision. Else,
-        absolute bounds on sigma.
-    max_rounds_without_best_bic : int (default=MAX_ROUNDS_WITHOUT_BEST_BIC)
-        Maximum number of rounds without BIC improvement to terminate 
-        the search for optimal G5M n_components.
-    pixelsize : float (default=130.0)
-        Camera pixel size in nm.
-    bootstrap_check : bool (default=False)
-        If True, the standard error of the means (SEM) is calculated 
+        absolute bounds on sigma. Default is `(MIN_SIGMA_FACTOR,
+        MAX_SIGMA_FACTOR)`.
+    max_rounds_without_best_bic : int, optional
+        Maximum number of rounds without BIC improvement to terminate
+        the search for optimal G5M n_components. Default is 3.
+    pixelsize : float, optional
+        Camera pixel size in nm. Default is 130.0.
+    bootstrap_check : bool, optional
+        If True, the standard error of the means (SEM) is calculated
         using bootstrapping. If False, the standard, single Gaussian SEM
-        is used as approximation.
-    calibration : dict (default=None)
-        Calibration dictionary with x and y coefficients, z step size 
-        and the number of frames, see run_g5m_group_3D for more details. 
-        Only required for 3D data.
-    postprocess : bool (default=False)
+        is used as approximation. Default is False.
+    calibration : dict, optional
+        Calibration dictionary with x and y coefficients, z step size
+        and the number of frames, see run_g5m_group_3D for more details.
+        Only required for 3D data. Default is None.
+    postprocess : bool, optional
         If True, the G5M components are postprocessed to remove likely
         sticky events (mean frame, std frame, n_events filtering).
         Additionally, filters by p_val to dismiss poorly fitted
-        components.
-    max_locs_per_cluster : int (default=np.inf)
+        components. Default is True.
+    max_locs_per_cluster : int, optional
         Maximum number of localizations per cluster accepted for G5M.
         Used to avoid fitting to fiducial markers. Such clusters are
-        ignored.
-    asynch : bool (default=True)
-        If True, G5M is run in parallel using multiprocessing.
-    callback_parent : function (default=None)
+        ignored. Default is np.inf.
+    asynch : bool, optional
+        If True, G5M is run in parallel using multiprocessing. Default
+        is True.
+    callback_parent : {QtWidgets.QMainWindow, "console", None}, optional
         Callback function's parent object for displaying progress bar.
-        If None, the progress bar displayed directly to the console.
-    
+        If "console" tqdm is used to display the progress bar in the
+        console. If None, no progress is displayed. Default is
+        "console".
+
     Returns
     -------
-    centers : np.recarray
+    centers : pd.DataFrame
         Centers of the G5M components in the format of localizations.
-    clustered_locs : np.recarray
+    clustered_locs : pd.DataFrame
         Localizations with assigned cluster labels, based on the G5M
         components.
     info : list
         Updated information dictionaries.
     """
+    assert loc_prec_handle in [
+        "local",
+        "abs",
+    ], "loc_prec_handle must be 'local' or 'abs'."
+    assert (
+        len(sigma_bounds) == 2
+    ), "sigma_bounds must be a tuple of two values."
+    assert (
+        sigma_bounds[0] <= sigma_bounds[1]
+    ), "sigma_bounds[0] must not be larger than sigma_bounds[1]."
+    assert hasattr(
+        locs, "group"
+    ), "Localizations must be grouped. Use DBSCAN or similar."
 
-    assert loc_prec_handle in ["local", "abs"], (
-        "loc_prec_handle must be 'local' or 'abs'."
-    )
-    assert len(sigma_bounds) == 2, (
-        "sigma_bounds must be a tuple of two values."
-    )
-    assert sigma_bounds[0] <= sigma_bounds[1], (
-        "sigma_bounds[0] must not be larger than sigma_bounds[1]."
-    )
-    assert hasattr(locs, "group"), (
-        "Localizations must be grouped. Use DBSCAN or similar."
-    )
-
-    # check that locs are grouped (e.g., by DBSCAN)
-    if not hasattr(locs, "group"):
-        raise ValueError(
-            "Localizations must be grouped. Use DBSCAN or similar."
-        )
-    
     # check that calibration is provided for 3D data
     if hasattr(locs, "z") and calibration is None:
         raise ValueError(
@@ -2407,22 +2459,22 @@ def run_g5m(
         )
 
     # determine how many steps are displayed in the progress bar
-    n_steps = N_TASKS if asynch else len(np.unique(locs.group))
+    n_steps = N_TASKS if asynch else len(np.unique(locs["group"]))
 
     # initialize the progress bar
-    if callback_parent is None:
+    if callback_parent == "console":
         progress = tqdm(total=n_steps, desc="Running G5M...")
-    elif callback_parent == "silent":
+    elif callback_parent is None:
         progress = lib.MockProgress()
     else:
         progress = lib.ProgressDialog(
             "Running G5M...", 0, n_steps, callback_parent
         )
         progress.set_value(0)
-    
-    if asynch: # run G5M using multiprocessing
+
+    if asynch:  # run G5M using multiprocessing
         fs = run_g5m_parallel(
-            locs, 
+            locs,
             min_locs=min_locs,
             loc_prec_handle=loc_prec_handle,
             sigma_bounds=sigma_bounds,
@@ -2436,71 +2488,69 @@ def run_g5m(
         # display progress
         while lib.n_futures_done(fs) < n_steps:
             n_done = lib.n_futures_done(fs)
-            if callback_parent is not None:
+            if callback_parent != "console":
                 progress.set_value(n_done)
             else:
                 progress.update(n_done - progress.n)
             time.sleep(0.2)
 
-        # extract centers from futures
+        # extract centers from futures TODO: make sure this works with pandas!
         centers = [_.result()[0] for _ in fs if len(_.result())]
         centers = list(itchain(*centers))
         clustered_locs = [_.result()[1] for _ in fs if len(_.result())]
         clustered_locs = list(itchain(*clustered_locs))
-        
-    else: # run G5M without multiprocessing
+
+    else:  # run G5M without multiprocessing
         centers = []
         clustered_locs = []
-        for i, group in enumerate(np.unique(locs.group)):
+        for i, group in enumerate(np.unique(locs["group"])):
             if hasattr(locs, "z"):
                 centers_, clustered_locs_ = run_g5m_group_3D(
-                    locs[locs.group == group], 
+                    locs[locs["group"] == group],
                     calibration=calibration,
                     min_locs=min_locs,
                     loc_prec_handle=loc_prec_handle,
                     sigma_bounds=sigma_bounds,
                     pixelsize=pixelsize,
                     max_rounds_without_best_bic=max_rounds_without_best_bic,
-                    bootstrap_check=bootstrap_check, 
+                    bootstrap_check=bootstrap_check,
                     max_locs_per_cluster=max_locs_per_cluster,
                 )
             else:
                 centers_, clustered_locs_ = run_g5m_group_2D(
-                    locs[locs.group == group],
+                    locs[locs["group"] == group],
                     min_locs=min_locs,
                     loc_prec_handle=loc_prec_handle,
                     sigma_bounds=sigma_bounds,
                     pixelsize=pixelsize,
                     max_rounds_without_best_bic=max_rounds_without_best_bic,
-                    bootstrap_check=bootstrap_check, 
+                    bootstrap_check=bootstrap_check,
                     max_locs_per_cluster=max_locs_per_cluster,
                 )
             if centers_ is not None and len(centers_):
                 centers.append(centers_)
                 clustered_locs.append(clustered_locs_)
-            
-            if callback_parent is None:
+
+            if callback_parent == "console":
                 progress.update(1)
             else:
                 progress.set_value(i)
 
     # close progress widget if present
-    if callback_parent is not None:
+    if callback_parent != "console":
         progress.close()
     else:
         progress.update(1)
 
-    # stack centers to form a np.rec.array in the format of localizations
-    centers = stack_arrays(centers, asrecarray=True, usemask=False)
+    # stack centers to form a pd.DataFrame in the format of localizations
+    centers = pd.concat(centers, ignore_index=True)
     # assing group ids to the clustered localizations
     max_label = 0
     for i, clustered_locs_ in enumerate(clustered_locs):
         clustered_locs_["group"] += max_label
         max_label = clustered_locs_["group"].max() + 1
         clustered_locs[i] = clustered_locs_
-    clustered_locs = stack_arrays(
-        clustered_locs, asrecarray=True, usemask=False
-    )
+    clustered_locs = pd.concat(clustered_locs, ignore_index=True)
 
     # update info
     new_info = {
@@ -2518,36 +2568,811 @@ def run_g5m(
         new_info["Sigma bounds method"] = "Local"
     else:
         new_info["Sigma bounds (nm)"] = [
-            sigma_bounds[0] * pixelsize, sigma_bounds[1] * pixelsize
+            sigma_bounds[0] * pixelsize,
+            sigma_bounds[1] * pixelsize,
         ]
         new_info["Sigma bounds method"] = "Abs"
     if hasattr(locs, "z"):
         new_info["X Coefficients"] = calibration["X Coefficients"]
         new_info["Y Coefficients"] = calibration["Y Coefficients"]
-        new_info["Calibration z Step size in nm"] = calibration["Step size in nm"]
-        new_info["Calibration number of frames"] = calibration["Number of frames"]
+        new_info["Calibration z Step size in nm"] = calibration[
+            "Step size in nm"
+        ]
+        new_info["Calibration number of frames"] = calibration[
+            "Number of frames"
+        ]
         new_info["Magnification factor"] = calibration["Magnification factor"]
     info = info + [new_info]
     if postprocess:
         # filter out by mean frame, std frame, p_val and n_events
         n_frames = info[0]["Frames"]
+        min_frame = 0.1 * n_frames
+        max_frame = 0.9 * n_frames
+        min_std_frame = 0.1 * n_frames
+        min_pval = 0.015
+        min_n_events = 3
+
         idx = (
-            (centers.frame > 0.2 * n_frames) &
-            (centers.frame < 0.8 * n_frames) &
-            # (centers.std_frame > 0.066667 * n_frames) &
-            (centers.std_frame > 0.1 * n_frames) &
-            (centers.p_val > 0.015) &
-            (centers.n_events > 3)
+            (centers["frame"] > min_frame)
+            & (centers["frame"] < max_frame)
+            & (centers["std_frame"] > min_std_frame)
+            & (centers["p_val"] > min_pval)
+            & (centers["n_events"] > min_n_events)
         )
         centers = centers[idx]
         clustered_locs = clustered_locs[
-            np.isin(clustered_locs.group, np.arange(len(idx))[idx])
+            np.isin(clustered_locs["group"], np.arange(len(idx))[idx])
         ]
         info[-1]["Filtered"] = True
-        info[-1]["Filter; min. mean frame"] = 0.2 * n_frames
-        info[-1]["Filter; max. mean frame"] = 0.8 * n_frames
-        info[-1]["Filter; min. std frame"] = 0.1 * n_frames
-        info[-1]["Filter; min. p value"] = 0.015
-        info[-1]["Filter; min. n_events"] = 3
+        info[-1]["Filter; min. mean frame"] = min_frame
+        info[-1]["Filter; max. mean frame"] = max_frame
+        info[-1]["Filter; min. std frame"] = min_std_frame
+        info[-1]["Filter; min. p value"] = min_pval
+        info[-1]["Filter; min. n_events"] = min_n_events
     return centers, clustered_locs, info
-        
+
+
+# GUI #
+class G5MParamsDialog(QtWidgets.QDialog):
+    """Extract parameters for G5M: ``min_locs``, ``min_sigma``,
+    ``max_sigma``. For 3D, calibration is requested. The user can also
+    choose whether or not to use bootstraping for finding uncertainties
+    and to use multiprocessing."""
+
+    def __init__(self, window, channel):
+        super().__init__(window)
+        self.window = window
+        self.nena = None
+        self.channel = channel
+        self.flag_3D = hasattr(self.window.view.locs[0], "z")
+        self.setWindowTitle("Molecular mapping (G5M) parameters")
+
+        vbox = QtWidgets.QVBoxLayout(self)
+        grid = QtWidgets.QGridLayout()
+        self.calibration = None
+
+        # min locs per molecule
+        grid.addWidget(QtWidgets.QLabel("Min. locs:"), grid.rowCount(), 0)
+        self.min_locs = QtWidgets.QSpinBox()
+        self.min_locs.setSingleStep(1)
+        self.min_locs.setRange(2, 999)
+        self.min_locs.setValue(MIN_LOCS)
+        grid.addWidget(self.min_locs, grid.rowCount() - 1, 1)
+
+        # loc precision handling - local values or absolute sigma bounds
+        self.loc_prec_handling = QtWidgets.QComboBox()
+        self.loc_prec_handling.addItems(
+            [
+                "Local loc. precision",
+                "Custom \u03c3 bounds",
+            ]
+        )
+        self.loc_prec_handling.setCurrentIndex(0)
+        self.loc_prec_handling.currentIndexChanged.connect(
+            self.handle_loc_prec
+        )
+        grid.addWidget(self.loc_prec_handling, grid.rowCount(), 0, 1, 2)
+        # two associated input boxes - min and max values
+        self.min_sigma_label = QtWidgets.QLabel("Min. \u03c3 factor:")
+        grid.addWidget(self.min_sigma_label, grid.rowCount(), 0)
+        self.min_sigma = QtWidgets.QDoubleSpinBox()
+        self.min_sigma.setDecimals(2)
+        self.min_sigma.setSingleStep(0.01)
+        self.min_sigma.setValue(MIN_SIGMA_FACTOR)
+        self.min_sigma.setRange(0.00, 100.00)
+        grid.addWidget(self.min_sigma, grid.rowCount() - 1, 1)
+        self.max_sigma_label = QtWidgets.QLabel("Max. \u03c3 factor:")
+        grid.addWidget(self.max_sigma_label, grid.rowCount(), 0)
+        self.max_sigma = QtWidgets.QDoubleSpinBox()
+        self.max_sigma.setDecimals(2)
+        self.max_sigma.setSingleStep(0.01)
+        self.max_sigma.setValue(MAX_SIGMA_FACTOR)
+        self.max_sigma.setRange(0.0, 100.00)
+        grid.addWidget(self.max_sigma, grid.rowCount() - 1, 1)
+
+        # bootstrap for SEM?
+        self.bootstrap_check = QtWidgets.QCheckBox("Bootstrap SEM")
+        self.bootstrap_check.setChecked(False)
+        grid.addWidget(self.bootstrap_check, grid.rowCount(), 0, 1, 2)
+
+        # apply multiprocessing?
+        self.multiprocessing_check = QtWidgets.QCheckBox("Use multiprocessing")
+        self.multiprocessing_check.setChecked(True)
+        grid.addWidget(self.multiprocessing_check, grid.rowCount(), 0, 1, 2)
+
+        # save clustered localizations?
+        self.clustered_check = QtWidgets.QCheckBox(
+            "Save clustered localizations"
+        )
+        self.clustered_check.setChecked(False)
+        grid.addWidget(self.clustered_check, grid.rowCount(), 0, 1, 2)
+
+        # postprocess for sticky events?
+        self.postprocess_check = QtWidgets.QCheckBox(
+            "Filter invalid molecules"
+        )
+        self.postprocess_check.setChecked(True)
+        grid.addWidget(self.postprocess_check, grid.rowCount(), 0, 1, 2)
+
+        # check for cluster areas/volumes?
+        self.cluster_size_button = QtWidgets.QPushButton("Check cluster sizes")
+        self.cluster_size_button.clicked.connect(self.check_cluster_sizes)
+        grid.addWidget(self.cluster_size_button, grid.rowCount(), 0, 1, 2)
+        self.cluster_size_label = QtWidgets.QLabel("")
+        grid.addWidget(self.cluster_size_label, grid.rowCount(), 0, 1, 2)
+
+        vbox.addLayout(grid)
+        # OK and Cancel buttons
+        self.buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel,
+            QtCore.Qt.Horizontal,
+            self,
+        )
+        if self.flag_3D:  # 3d calibration
+            self.buttons.buttons()[0].setEnabled(False)
+            self.load_calib_button = QtWidgets.QPushButton(
+                "Load 3D calibration"
+            )
+            self.load_calib_button.clicked.connect(self.load_calibration)
+            grid.addWidget(self.load_calib_button, grid.rowCount(), 0, 1, 2)
+            self.automatic_load_calibration()
+
+        vbox.addWidget(self.buttons)  # these must be added at the end
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+
+    @staticmethod
+    def getParams(
+        parent: QtWidgets.QWidget | None = None,
+        channel: int = 0,
+    ) -> tuple[dict, bool]:
+        """Get the parameters for G5M."""
+        dialog = G5MParamsDialog(parent, channel)
+        result = dialog.exec_()
+        px = dialog.window.display_settings_dlg.pixelsize.value()
+        if dialog.loc_prec_handling.currentIndex() == 0:  # local sigma
+            loc_prec_handle = "local"
+            sigma_bounds = (dialog.min_sigma.value(), dialog.max_sigma.value())
+        else:  # custom bounds
+            loc_prec_handle = "abs"
+            sigma_bounds = (
+                dialog.min_sigma.value() / px,
+                dialog.max_sigma.value() / px,
+            )
+        params = {
+            "min_locs": dialog.min_locs.value(),
+            "loc_prec_handle": loc_prec_handle,
+            "sigma_bounds": sigma_bounds,
+            "bootstrap_check": dialog.bootstrap_check.isChecked(),
+            "multiprocessing_check": dialog.multiprocessing_check.isChecked(),
+            "clustered_locs": dialog.clustered_check.isChecked(),
+            "postprocess_check": dialog.postprocess_check.isChecked(),
+        }
+        if dialog.flag_3D:
+            params["calibration"] = dialog.calibration
+            params["pixelsize"] = px
+        return (
+            params,
+            result == QtWidgets.QDialog.Accepted,
+        )
+
+    def handle_loc_prec(self, idx: int) -> None:
+        if idx == 0:  # local loc precision
+            self.min_sigma_label.setText("Min. \u03c3 factor:")
+            self.max_sigma_label.setText("Max. \u03c3 factor:")
+            self.min_sigma.setValue(MIN_SIGMA_FACTOR)
+            self.max_sigma.setValue(MAX_SIGMA_FACTOR)
+        elif idx == 1:  # custom sigma bounds
+            self.min_sigma_label.setText("Min. \u03c3 (nm):")
+            self.max_sigma_label.setText("Max. \u03c3 (nm):")
+            self.min_sigma.setValue(5.0)
+            self.max_sigma.setValue(20.0)
+
+    def load_calibration(self) -> None:
+        """Load the calibration file selected by the user."""
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Open 3D calibration file", "", filter="*.yaml"
+        )
+        if not path:
+            return
+        self.load_calibration_(path)
+
+    def load_calibration_(self, path: str) -> None:
+        """Load calibration from the given path."""
+        # picasso.io takes in .hdf5 path
+        calib = io.load_info(path.replace(".yaml", ".hdf5"))
+
+        if len(calib) != 1 or "X Coefficients" not in calib[0].keys():
+            message = (
+                "Please load a 3D calibration .yaml file produced by"
+                " Picasso: Localize."
+            )
+            QtWidgets.QMessageBox.information(self.window, "Warning", message)
+            return
+
+        self.calibration = calib[0]
+        self.buttons.buttons()[0].setEnabled(True)
+        self.load_calib_button.setText("3D calibration loaded")
+
+    def automatic_load_calibration(self) -> None:
+        """Load the calibration file automatically when the dialog is
+        opened."""
+        ch = self.channel if self.channel != len(self.window.view.locs) else 0
+        infos = self.window.view.infos[ch]
+        calib_path = lib.get_from_metadata(infos, "Z Calibration Path")
+        if calib_path is not None:
+            try:
+                self.load_calibration_(calib_path)
+                return
+            except Exception:
+                pass
+
+    def check_cluster_sizes(self) -> None:
+        """Check and display the fraction of clusters with their area/
+        volume suggesting they contain more than 12 molecules."""
+        if self.channel == len(self.window.view.locs):
+            warning = "Please select a single channel to check cluster sizes."
+            QtWidgets.QMessageBox.information(self.window, "Warning", warning)
+            return
+
+        # get the path to the cluster areas file
+        path, ok = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Open cluster areas/volumes file",
+            "",
+            filter="*.csv",
+        )
+        if not ok:
+            return
+        try:
+            cluster_sizes = pd.read_csv(path)
+            if hasattr(self.window.view.locs[self.channel], "z"):  # 3D
+                column = "Volume (LP^3)"
+                thresh = 12 * 4 / 3 * np.pi * 2.98**2 * (2.98 * 2.5)
+            else:  # 2D
+                column = "Area (LP^2)"
+                thresh = 12 * np.pi * 2.98**2
+            sizes = cluster_sizes[column].values
+        except Exception:
+            warning = "Could not read the cluster areas/volumes file."
+            QtWidgets.QMessageBox.information(self.window, "Warning", warning)
+            return
+        frac_large = np.round(100 * np.sum(sizes > thresh) / len(sizes), 1)
+        self.cluster_size_label.setText(
+            f"Fraction of large clusters: {frac_large}%"
+        )
+
+
+class Plugin:
+    def __init__(self, window):
+        self.name = "render"  # change if the plugin works for another app
+        self.window = window
+
+    def execute(self):
+        """This function is called when opening a GUI"""
+        g5m_action = self.window.plugin_menu.addAction(
+            "Molecular mapping (G5M)"
+        )
+        g5m_action.triggered.connect(self.run_g5m)
+
+    def check_dbscan(self, channel: int) -> bool:
+        """Check whether the data has been DBSCANed (clustered) in
+        channel i."""
+        locs = self.window.view.locs[channel]
+        if hasattr(locs, "group"):
+            return True
+        else:
+            message = (
+                f"Channel #{channel+1} ("
+                f"{self.window.dataset_dialog.checks[channel].text()})"
+                " does not contain group information. Please run DBSCAN (or"
+                " similar) to group the localizations first."
+            )
+            QtWidgets.QMessageBox.information(self.window, "Warning", message)
+            return False
+
+    def run_g5m(self) -> None:
+        """Get the channel for G5M and ensures that the data has been
+        clustered."""
+        channel = self.window.view.get_channel_all_seq(
+            "G5M; make sure the data has been DBSCANed (or similar)."
+        )
+        if channel is None:
+            return
+
+        # get parameters
+        params, ok = G5MParamsDialog.getParams(self.window, channel)
+        if not ok:
+            return
+
+        # ask the user to input n_frames, step_size and mag_factor of
+        # the calib file in the 3D case
+        if "calibration" in params.keys():
+            if "Step size in nm" not in params["calibration"].keys():
+                z_step_size, ok = QtWidgets.QInputDialog.getDouble(
+                    self.window,
+                    "Input Dialog",
+                    "Enter z step size in the calibration (nm)",
+                    5,
+                    1,
+                    999,
+                    1,
+                )
+                if not ok:
+                    return
+                params["calibration"]["Step size in nm"] = z_step_size
+
+            if "Number of frames" not in params["calibration"].keys():
+                n_frames, ok = QtWidgets.QInputDialog.getInt(
+                    self.window,
+                    "Input Dialog",
+                    "Enter number of frames in the calibration",
+                    200,
+                    1,
+                    99999,
+                    1,
+                )
+                if not ok:
+                    return
+                params["calibration"]["Number of frames"] = n_frames
+
+            if "Magnification factor" not in params["calibration"].keys():
+                mag_factor, ok = QtWidgets.QInputDialog.getDouble(
+                    self.window,
+                    "Input Dialog",
+                    "Enter magnification factor",
+                    0.79,
+                    0.1,
+                    10,
+                    2,
+                )
+                if not ok:
+                    return
+                params["calibration"]["Magnification factor"] = mag_factor
+
+        if channel == len(self.window.view.locs):  # apply to all
+            suffix_molecules, ok = QtWidgets.QInputDialog.getText(
+                self.window,
+                "Input Dialog",
+                "Enter suffix for saving molecules",
+                QtWidgets.QLineEdit.Normal,
+                "_molmap",
+            )
+            if not ok:
+                return
+
+            if params["clustered_locs"]:
+                suffix_clusters, ok = QtWidgets.QInputDialog.getText(
+                    self.window,
+                    "Input Dialog",
+                    "Enter suffix for saving clusters",
+                    QtWidgets.QLineEdit.Normal,
+                    "_molmap_clustered",
+                )
+                if not ok:
+                    return
+
+            for i in range(len(self.window.view.locs)):
+                if not self.check_dbscan(i):
+                    return
+                g5m_centers, clustered_locs, info = self.run_g5m_(i, params)
+                path = self.window.view.locs_paths[i].replace(
+                    ".hdf5", f"{suffix_molecules}.hdf5"
+                )  # add the suffix to the current path
+                if g5m_centers is not None:
+                    io.save_locs(path, g5m_centers, info)
+                if params["clustered_locs"]:
+                    path = self.window.view.locs_paths[i].replace(
+                        ".hdf5", f"{suffix_clusters}.hdf5"
+                    )
+                    if clustered_locs is not None:
+                        io.save_locs(path, clustered_locs, info)
+        else:
+            if not self.check_dbscan(channel):
+                return
+            base, _ = os.path.splitext(self.window.view.locs_paths[channel])
+            out_path = base + "_molmap.hdf5"
+            path_molecules, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self.window, "Save molecules", out_path, filter="*.hdf5"
+            )
+            if not path_molecules:
+                return
+
+            if params["clustered_locs"]:
+                out_path = base + "_molmap_clustered.hdf5"
+                path_clusters, _ = QtWidgets.QFileDialog.getSaveFileName(
+                    self.window,
+                    "Save clustered localizations",
+                    out_path,
+                    filter="*.hdf5",
+                )
+                if not path_clusters:
+                    return
+
+            g5m_centers, clustered_locs, info = self.run_g5m_(channel, params)
+            if g5m_centers is not None:
+                io.save_locs(path_molecules, g5m_centers, info)
+                if params["clustered_locs"]:
+                    if clustered_locs is not None:
+                        io.save_locs(path_clusters, clustered_locs, info)
+                # automatically save the subclustering check
+                test_subclustering(
+                    g5m_centers,
+                    path_molecules.replace(".hdf5", "_subcluster_check.png"),
+                )
+
+    def run_g5m_(
+        self,
+        channel: int,
+        params: dict,
+    ) -> (
+        tuple[pd.DataFrame, pd.DataFrame, list[dict]] | tuple[None, None, None]
+    ):
+        """Run G5M in channel given parameters."""
+        locs = self.window.view.locs[channel]
+        info = self.window.view.infos[channel]
+        if len(locs) < params["min_locs"]:
+            message = (
+                f"Channel #{channel+1} ("
+                f"{self.window.dataset_dialog.checks[channel].text()})"
+                " contains less localizations than the minimum number"
+                " required for G5M."
+            )
+            QtWidgets.QMessageBox.information(self.window, "Warning", message)
+            return None, None
+
+        # check for clusters that are likely fiducial markers or some
+        # impurities
+        max_locs_per_cluster = np.inf
+        n_frames = info[0]["Frames"]
+        max_locs = int(0.4 * n_frames)
+        cluster_ids, n_locs = np.unique(locs.group, return_counts=True)
+        if any(n_locs > max_locs):
+            qm = QtWidgets.QMessageBox()
+            message = (
+                f"Channel #{channel+1} ("
+                f"{self.window.dataset_dialog.checks[channel].text()})"
+                " contains clusters which likely represent fiducial"
+                " markers. These will likely extend the computation"
+                " time and possibly crash the process.\n\n"
+                "Would you like to remove such clusters?"
+            )
+            ret = qm.question(self.window, "Warning", message, qm.Yes | qm.No)
+            if ret == qm.Yes:
+                max_locs_per_cluster = max_locs
+        # add lpz if 3D localizations before Picasso 0.9.0 are loaded
+        if hasattr(locs, "z"):
+            if "lpz" not in locs.columns:
+                locs = append_lpz_to_locs(
+                    locs,
+                    info,
+                    params["calibration"],
+                    fitting_method="gausslq",
+                )
+                # automatically save the updated locs with lpz
+                io.save_locs(
+                    self.window.view.locs_paths[channel].replace(
+                        ".hdf5", "_lpz.hdf5"
+                    ),
+                    locs,
+                    info,
+                )
+
+        centers, clustered_locs, info = run_g5m(
+            locs=locs,
+            info=info,
+            min_locs=params["min_locs"],
+            loc_prec_handle=params["loc_prec_handle"],
+            sigma_bounds=params["sigma_bounds"],
+            pixelsize=self.window.display_settings_dlg.pixelsize.value(),
+            bootstrap_check=params["bootstrap_check"],
+            calibration=params.get("calibration", None),
+            postprocess=params["postprocess_check"],
+            max_locs_per_cluster=max_locs_per_cluster,
+            asynch=params["multiprocessing_check"],
+            callback_parent=self.window,
+        )
+        return centers, clustered_locs, info
+
+
+# TODO: these functions below will be moved to gausslq, gaussmle and
+# localize in Picasso 0.9.0
+# TODO: i do not like the function names, so they need to be changed later
+def append_lpz_to_locs(
+    locs: pd.DataFrame,
+    info: list[dict],
+    calibration: dict,
+    fitting_method: Literal["gausslq", "gaussmle"] = "gausslq",
+) -> pd.DataFrame:
+    """Append lpz field to locs based on calibration.
+
+    Parameters
+    ----------
+    locs : pd.DataFrame
+        Localizations.
+    info : list of dicts
+        Localizations metadata.
+    calibration : dict
+        Calibration dictionary with x and y coefficients, z step size
+        and the number of frames.
+    fitting_method : {"gausslq", "gaussmle"}, optional
+        Fitting method used to obtain 2D localization parameters (x, y,
+        sx, sy). Default is "gausslq".
+
+    Returns
+    -------
+    locs : np.recarray
+        Localizations with appended lpz field.
+    """
+    if not hasattr(locs, "z"):
+        raise ValueError(
+            "2D localizations detected (no z column). Localization"
+            " precision in z cannot be calculated."
+        )
+    if "lpz" in locs.columns:
+        return locs  # lpz already present
+    else:
+        lpz = get_lpz(
+            locs, info, calibration, fitting_method
+        )  # TODO: divide/multiply by the magnification factor?
+        locs["lpz"] = lpz.astype(np.float32)
+        return locs
+
+
+def get_lpz(
+    locs: np.recarray,
+    info: list[dict],
+    calibration: dict,
+    fitting_method: Literal["gausslq", "gaussmle"] = "gausslq",
+) -> np.ndarray:
+    """Calculate lpz for given locs based on calibration.
+
+    Parameters
+    ----------
+    locs : np.recarray
+        Localizations.
+    info : list of dicts
+        Localizations metadata.
+    calibration : dict
+        Calibration dictionary with x and y coefficients, z step size
+        and the number of frames.
+    fitting_method : {"gausslq", "gaussmle"}, optional
+        Fitting method used to obtain 2D localization parameters (x, y,
+        sx, sy). Default is "gausslq".
+
+    Returns
+    -------
+    lpz: np.ndarray
+        Calculated lpz values for the given localizations in nm.
+    """
+    # get camera pixel size
+    pixelsize = np.nan
+    for inf in info:
+        if val := inf.get("Pixelsize"):
+            pixelsize = val
+            break
+    if np.isnan(pixelsize):
+        raise ValueError("Pixelsize not found in info.")
+
+    photons = locs["photons"].values
+    sx = locs["sx"].values
+    sy = locs["sy"].values
+    bg = locs["bg"].values
+    mag_factor = calibration["Magnification factor"]
+    z = (
+        locs["z"].values / mag_factor
+    )  # to pinpoint what was the actual spot size during measurement
+    cx = np.array(calibration["X Coefficients"])
+    cy = np.array(calibration["Y Coefficients"])
+    lpz = (
+        _get_lpz(photons, sx, sy, bg, z, cx, cy, pixelsize, fitting_method)
+        * mag_factor
+    )
+    return lpz
+
+
+def _get_lpz(
+    photons: np.ndarray,
+    sx: np.ndarray,
+    sy: np.ndarray,
+    bg: np.ndarray,
+    z: np.ndarray,
+    cx: np.ndarray,
+    cy: np.ndarray,
+    pixelsize: float,
+    fitting_method: Literal["gausslq", "gaussmle"] = "gausslq",
+) -> np.ndarray:
+    """Calculate lpz for given locs based on calibration coefficients.
+
+    Parameters
+    ----------
+    photons : np.ndarray
+        Number of photons.
+    sx : np.ndarray
+        Single-emitter images' fitted width in camera pixels.
+    sy : np.ndarray
+        Single-emitter images' fitted height in camera pixels.
+    bg : np.ndarray
+        Background photons per pixel.
+    z : np.ndarray
+        Z positions in nm.
+    cx : np.ndarray
+        3D calibration coefficients for x.
+    cy : np.ndarray
+        3D calibration coefficients for y.
+    pixelsize : float
+        Camera pixel size in nm.
+    fitting_method : {"gausslq", "gaussmle"}, optional
+        Fitting method used to obtain 2D localization parameters (x, y,
+        sx, sy). Default is "gausslq".
+
+    Returns
+    -------
+    lpz: np.ndarray
+        Calculated lpz values for the given localizations in nm.
+    """
+    wx_calib = get_calib_size(cx, z) * pixelsize
+    wy_calib = get_calib_size(cy, z) * pixelsize
+    wx_calib_prime = get_prime_calib_size(cx, z) * pixelsize
+    wy_calib_prime = get_prime_calib_size(cy, z) * pixelsize
+    a = np.sqrt(wx_calib)
+    a_prime = wx_calib_prime / (2 * a)
+    b = np.sqrt(wy_calib)
+    b_prime = wy_calib_prime / (2 * b)
+    se_sx = get_se_sigma(sx, sy, photons, bg, fitting_method) * pixelsize
+    se_sy = get_se_sigma(sy, sx, photons, bg, fitting_method) * pixelsize
+    sigma_u = (1 / (2 * np.sqrt(sx * pixelsize))) * se_sx
+    sigma_v = (1 / (2 * np.sqrt(sy * pixelsize))) * se_sy
+    ap2 = a_prime**2
+    bp2 = b_prime**2
+    su2 = sigma_u**2
+    sv2 = sigma_v**2
+    lpz = np.sqrt((ap2 * su2 + bp2 * sv2) / (ap2 + bp2) ** 2)
+    return lpz
+
+
+def get_calib_size(coeffs: np.ndarray, z: np.ndarray) -> np.ndarray:
+    """Calculate calibration spot size at the given z position given
+    the calibration coefficients. Based on Huang et al., Science 2008."""
+    size = (
+        coeffs[0] * z**6
+        + coeffs[1] * z**5
+        + coeffs[2] * z**4
+        + coeffs[3] * z**3
+        + coeffs[4] * z**2
+        + coeffs[5] * z
+        + coeffs[6]
+    )
+    return size
+
+
+def get_prime_calib_size(coeffs: np.ndarray, z: np.ndarray) -> np.ndarray:
+    """Same as ``get_calib_size`` but for the derivative of the size
+    function."""
+    size_prime = (
+        6 * coeffs[0] * z**5
+        + 5 * coeffs[1] * z**4
+        + 4 * coeffs[2] * z**3
+        + 3 * coeffs[3] * z**2
+        + 2 * coeffs[4] * z
+        + coeffs[5]
+    )
+    return size_prime
+
+
+def get_se_sigma(
+    sigma: np.ndarray,
+    sigma_orth: np.ndarray,
+    photons: np.ndarray,
+    bg: np.ndarray,
+    fitting_method: Literal["gausslq", "gaussmle"] = "gausslq",
+) -> np.ndarray:
+    """Calculate standard error of fitted sigma based on the fitting
+    method.
+
+    Parameters
+    ----------
+    sigma : np.ndarray
+        Fitted sigma values in camera pixels.
+    sigma_orth : np.ndarray
+        Fitted sigma values in the orthogonal direction in camera
+        pixels.
+    photons : np.ndarray
+        Number of photons.
+    bg : np.ndarray
+        Background photons per pixel.
+    fitting_method : {"gausslq", "gaussmle"}, optional
+        Fitting method used to obtain 2D localization parameters (x, y,
+        sx, sy). Default is "gausslq".
+
+    Returns
+    -------
+    se_sigma : np.ndarray
+        Standard error of fitted sigma values in camera pixels.
+    """
+    assert fitting_method in [
+        "gausslq",
+        "gaussmle",
+    ], "fitting_method must be 'gausslq' or 'gaussmle'."
+    if fitting_method == "gausslq":
+        return get_se_sigma_lq(sigma, sigma_orth, photons, bg)
+    else:
+        return get_se_sigma_mle(sigma, photons, bg)
+
+
+def get_se_sigma_lq(
+    sigma: np.ndarray,
+    sigma_orth: np.ndarray,
+    photons: np.ndarray,
+    bg: np.ndarray,
+) -> np.ndarray:
+    """Calculate standard error of fitted sigma based on the 2D Gaussian
+    least-squares fitting model (picasso.gausslq) with diagonal
+    covariance matrix.
+
+    Parameters
+    ----------
+    sigma : np.ndarray
+        Fitted sigma values in camera pixels.
+    sigma_orth : np.ndarray
+        Fitted sigma values in the orthogonal direction in camera
+        pixels.
+    photons : np.ndarray
+        Number of photons.
+    bg : np.ndarray
+        Background photons per pixel.
+
+    Returns
+    -------
+    se_sigma : np.ndarray
+        Standard error of fitted sigma values in camera pixels.
+    """
+    sa2 = sigma**2 + 1 / 12
+    sa4 = sa2**2
+    sa = sa2**0.5
+    sa2_orth = sigma_orth**2 + 1 / 12
+    sa_orth = sa2_orth**0.5
+    var_sa2 = (
+        sa4
+        / photons
+        * (512 / 81 + (64 * np.pi * sa * sa_orth * bg) / (3 * photons))
+    )
+    var_sigma = var_sa2 / (4 * sigma**2)
+    se_sigma = np.sqrt(var_sigma)
+    return se_sigma
+
+
+def get_se_sigma_mle(
+    sigma: np.ndarray,
+    photons: np.ndarray,
+    bg: np.ndarray,
+) -> np.ndarray:
+    """Calculate standard error of fitted sigma based on the MLE 2D
+    Gaussian/Poisson noise model (picasso.gaussmle).
+
+    Based on the approximation by Rieger and Stallinga, ChemPhysChem,
+    2014.
+
+    TODO: this is likely slightly incorrect since spherical covariance
+    Gaussian is probably assumed in Mortensen et al., Nat Methods, 2010.
+
+    Parameters
+    ----------
+    sigma : np.ndarray
+        Fitted sigma values in camera pixels.
+    photons : np.ndarray
+        Number of photons.
+    bg : np.ndarray
+        Background photons per pixel.
+
+    Returns
+    -------
+    se_sigma : np.ndarray
+        Standard error of fitted sigma values in camera pixels.
+    """
+    sa2 = sigma**2 + 1 / 12
+    tau = (2 * np.pi * sa2 * bg) / (photons)
+    delta_sigma_sq = (sigma**2 / (4 * photons)) * (
+        1 + 8 * tau + np.sqrt((8 * tau) / (1 + 2 * tau))
+    )
+    return np.sqrt(delta_sigma_sq)
