@@ -837,7 +837,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "start_ng": {
                         "type": "float",
                         "description": "Starting net gradient value",
-                        "min": 0.0,
+                        "min": -10000.0,
                     },
                     "zscore": {
                         "type": "float",
@@ -2015,19 +2015,60 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "n_components": {
+            "min_locs": {
                 "type": "int",
-                "description": "Number of Gaussian components",
-                "min": 1,
+                "description": "Minimum number of localizations in a component",
+                "min": 0,
                 "max": 50,
                 "default": 3,
                 "required": True,
             },
-            "covariance_type": {
+            "max_rounds_without_best_bic": {
+                "type": "int",
+                "description": "Maximum number of rounds without BIC improvement to\
+                    terminate the optimal GMM search.",
+                "default": 3,
+                "required": False,
+            },
+            "bootstrap_check": {
+                "type": "bool",
+                "description": "If True, the standard error of the means (SEM) is\
+                        calculated using bootstrapping. If False, the\
+                        standard, single Gaussian SEM is used as\
+                        approximation.",
+                "default": False,
+                "required": False,
+            },
+            "calibration": {
+                "type": "dict",
+                "description": "Calibration dictionary with x and y coefficients, z\
+                        step size and the number of frames. Only required for\
+                        3D data.",
+                "default": None,
+                "required": False,
+            },
+            "asynch": {
+                "type": "bool",
+                "description": "If True, the GMM search is run in parallel using\
+                        multiprocessing. If False, the GMM search is run\
+                        without multiprocessing.",
+                "default": True,
+                "required": False,
+            },
+            "sigma_bounds": {
+                "type": "float",
+                "description": "(not recommended)\
+                        Minimum standard deviation of the Gaussian components\
+                        in nanometers. Useful for avoiding overfitting within\
+                        a single localization cloud. Now using individual\
+                        loc precision, so min_sigma is not recommended.",
+                "default": None,
+                "required": False,
+            },
+            "loc_prec_handle": {
                 "type": "str",
-                "description": "Type of covariance matrix",
-                "options": ["full", "tied", "diag", "spherical"],
-                "default": "full",
+                "description": 'One of ["local", "global", "abs"]',
+                "default": "local",
                 "required": False,
             },
         }

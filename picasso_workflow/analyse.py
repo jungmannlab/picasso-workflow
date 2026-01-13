@@ -6201,7 +6201,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     @profile_resource_usage
     @module_decorator
     def gaussian_mixture_cluster(self, i, parameters, results):
-        """Perform clustering using gaussian mixture modelsAfter this module,
+        """Perform clustering using gaussian mixture models. After this module,
         the standard locs will be the Gaussian centers.
         Args:
             i : int
@@ -6260,7 +6260,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ("calibration", None),
             ("pixelsize", pixelsize),
             ("asynch", True),
-            ("callback_parent", "silent"),
+            ("callback_parent", None), # "silent"),
             ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
             ("loc_prec_handle", "local"),
         ]
