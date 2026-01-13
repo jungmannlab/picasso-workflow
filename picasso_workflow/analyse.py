@@ -6301,8 +6301,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # plot: histogram of cluster sizes
         fig, ax = plt.subplots()
-        maxbin = int(np.quantile(center_locs["n"], 0.95))
-        ax.hist(center_locs["n"], bins=np.arange(maxbin))
+        maxbin = int(np.quantile(center_locs["n_events"], 0.95))
+        ax.hist(center_locs["n_events"], bins=np.arange(maxbin))
         ax.set_xlabel("cluster size [locs]")
         ax.set_ylabel("Frequency")
         results["fp_fig_clustersizes"] = os.path.join(
