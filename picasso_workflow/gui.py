@@ -8265,6 +8265,14 @@ class Window(QtWidgets.QMainWindow):
         host_cluster = str(self.cluster_host_combo.currentText())  # "hpcl8XXX"
         login_node = CONFIG["SlurmLoginNodes"][host_cluster]  # "hpcl8001"
         # print(f"'{host_cluster}', '{login_node}'")
+
+        results_folder_local = self.results_folder_display.text()
+        if not os.path.exists(results_folder_local):
+            os.makedirs(results_folder_local)
+        results_folder_host = self.pathparser.convert_path(
+            results_folder_local, host_cluster
+        )
+
         username = getpass.getuser()
         ssh_key_path = "~/.ssh/id_rsa"
         self.slurm_communicator = SlurmCommunicator(
@@ -8287,11 +8295,6 @@ class Window(QtWidgets.QMainWindow):
             # "mail-user": f"{username}@biochem.mpg.de",
         }
         use_pw_mod = self.cluster_use_module.isChecked()
-
-        results_folder_local = self.results_folder_display.text()
-        results_folder_host = self.pathparser.convert_path(
-            results_folder_local, host_cluster
-        )
 
         commands = self.slurm_communicator.assemble_slurm_commands(
             scriptname=scriptname, use_pw_module=use_pw_mod)
