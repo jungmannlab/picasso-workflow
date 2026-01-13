@@ -2236,12 +2236,18 @@ class ParameterCommandExecutor(DictSimpleTyper):
 
             # check for arithmetic expression:
             if aritexp is not None:
-                if not is_valid_expression(aritexp):
-                    raise PriorResultError(
-                        f"'{aritexp}' is not a valid numeric "
-                        + "arithmetic expression."
-                    )
-                res = eval(str(res) + aritexp)
+                if isinstance(res, str):
+                    if aritexp[0] == "+":
+                        res = res + aritexp[1:]
+                    else:
+                        raise NotImplementedError(f"Cannot operate '{aritexp}' on '{res}' (str)")
+                elif np.isnumeric(res):
+                    if not is_valid_expression(aritexp):
+                        raise PriorResultError(
+                            f"'{aritexp}' is not a valid numeric "
+                            + "arithmetic expression."
+                        )
+                    res = eval(str(res) + aritexp)
             # to deactivate, leave out ocmmand sign
             t_out = tuple([t[0][len(self.command_sign) :], t[1]])
             total_result = {"parsed": res, "original": t_out}
