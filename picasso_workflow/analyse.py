@@ -7531,7 +7531,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         good value is e.g. 50000
                         used proposed value in spinna_config.csv and can be
                         altered manually after the first run of this module
-                    proposed_density : int
+                    proposed_density : float
                         density to simulate;
                         area density if 2D; volume density if 3D
                         used proposed value in spinna_config.csv and can be

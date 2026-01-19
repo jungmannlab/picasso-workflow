@@ -625,7 +625,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     },
                     "fps": {
                         "type": "float",
-                        "description": "frames per second for replay of subsampled movie",
+                        "description": "frames per second for replay of \
+                            subsampled movie",
                         "min": 1,
                         "max": 100,
                         "default": 2,
@@ -706,7 +707,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "filename": {
                 "type": "str",
-                "description": "the (main) file name to load. This can be image files, or hdf5",
+                "description": "the (main) file name to load. This can be \
+                    image files, or hdf5",
                 "extensions": [".hdf5", ".h5"],
                 "required": True,
             },
@@ -961,12 +963,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "locs_vs_frame": {
                 "type": "dict",
-                "description": "for plotting locs vs time, items correspond to arguments of _plot_locs_vs_frame",
+                "description": "for plotting locs vs time, items correspond \
+                    to arguments of _plot_locs_vs_frame",
                 "required": False,
             },
             "save_locs": {
                 "type": "dict",
-                "description": "if saving localizations is requested. Items correpsond to arguments of save_locs",
+                "description": "if saving localizations is requested. Items \
+                    correpsond to arguments of save_locs",
                 "required": False,
             },
         }
@@ -991,11 +995,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "locs_vs_frame": {
                 "type": "dict",
-                "description": "plot results if locs_vs_frame parameter was provided",
+                "description": "plot results if locs_vs_frame parameter was \
+                    provided",
             },
             "locs_columns": {
                 "type": "list",
-                "description": "list of column names in the localizations array",
+                "description": "list of column names in the localizations \
+                    array",
             },
         }
 
@@ -1035,13 +1041,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "filepath": {
                 "type": ["str", "list", "dict"],
-                "description": "the tiff file(s) to load. The converted file(s) will have the same name, but with .png extension. if dict: keys are labels",
+                "description": "the tiff file(s) to load. The converted \
+                    file(s) will have the same name, but with .png extension. \
+                    If dict: keys are labels",
                 "extensions": [".tif", ".tiff"],
                 "required": True,
             },
             "min_quantile": {
                 "type": "float",
-                "description": "the quantile below which pixels are shown black",
+                "description": "the quantile below which pixels are shown \
+                    black",
                 "min": 0.0,
                 "max": 1.0,
                 "default": 0,
@@ -1049,7 +1058,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "max_quantile": {
                 "type": "float",
-                "description": "the quantile above which pixels are shown white",
+                "description": "the quantile above which pixels are shown \
+                    white",
                 "min": 0.0,
                 "max": 1.0,
                 "default": 1,
@@ -1083,6 +1093,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "bool",
                 "description": "whether the export was successful",
             },
+            # "keys": {
+            #     # TODO: Add type, description, min, max, default, required, step, extensions, properties
+            #     # Hint: type appears to be labels
+            # },
+            # "values": {
+            #     # TODO: Add type, description, min, max, default, required, step, extensions, properties
+            #     # Hint: type appears to be filepaths
+            # },
         }
 
         return parameters_spec, results_spec
@@ -1115,24 +1133,28 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     fp_scene_fullfov : str
                         filepath to full FOV rendering
                     fp_scene_ctrmass : str
-                        filepath to center of mass zoom rendering (conditional, only if ctrmass_fov_nm provided)
+                        filepath to center of mass zoom rendering (conditional,
+                        only if ctrmass_fov_nm provided)
         """
         parameters_spec = {
             "ctrmass_fov_nm": {
                 "type": "float",
-                "description": "Field of view of the zoom in rendering around the center of mass in nm",
+                "description": "Field of view of the zoom in rendering around \
+                    the center of mass in nm",
                 "min": 0,
                 "required": False,
             },
             "fullfov_pixelsize": {
                 "type": "float",
-                "description": "The rendered pixel size [nm] of the full FOV rendering",
+                "description": "The rendered pixel size [nm] of the full FOV \
+                    rendering",
                 "min": 0,
                 "required": False,
             },
             "ctrmass_pixelsize": {
                 "type": "float",
-                "description": "The rendered pixel size [nm] of the zoom in rendering around the center of mass",
+                "description": "The rendered pixel size [nm] of the zoom in \
+                    rendering around the center of mass",
                 "min": 0,
                 "required": False,
             },
@@ -1178,7 +1200,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "fp_scene_ctrmass": {
                 "type": "str",
-                "description": "filepath to center of mass zoom rendering (conditional, only if ctrmass_fov_nm provided)",
+                "description": "filepath to center of mass zoom rendering \
+                    (conditional, only if ctrmass_fov_nm provided)",
             },
         }
 
@@ -1198,7 +1221,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         the number of frames segmented for RCC
                 optional items:
                     max_iter_segmentations : int, default: 3
-                        maximum number of iterations to adaptively increase segmentation if RCC fails
+                        maximum number of iterations to adaptively increase
+                        segmentation if RCC fails
                     filename : str
                         the drift txt file name
             results : dict
@@ -1214,9 +1238,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     message : str
                         error or warning messages if any
                     filepath_driftfile : str
-                        filepath to drift txt file (conditional, only if undrifting succeeded)
+                        filepath to drift txt file (conditional, only if
+                        undrifting succeeded)
                     filepath_plot : str
-                        filepath to drift plot png (conditional, only if undrifting succeeded)
+                        filepath to drift plot png (conditional, only if
+                        undrifting succeeded)
         """
         parameters_spec = {
             "segmentation": {
@@ -1229,7 +1255,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "max_iter_segmentations": {
                 "type": "int",
-                "description": "maximum number of iterations to adaptively increase segmentation if RCC fails",
+                "description": "maximum number of iterations to adaptively \
+                    increase segmentation if RCC fails",
                 "min": 1,
                 "max": 10,
                 "default": 3,
@@ -1270,11 +1297,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "filepath_driftfile": {
                 "type": "str",
-                "description": "filepath to drift txt file (conditional, only if undrifting succeeded)",
+                "description": "filepath to drift txt file (conditional, \
+                only if undrifting succeeded)",
             },
             "filepath_plot": {
                 "type": "str",
-                "description": "filepath to drift plot png (conditional, only if undrifting succeeded)",
+                "description": "filepath to drift plot png (conditional, \
+                only if undrifting succeeded)",
             },
         }
 
@@ -1296,8 +1325,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         Intersect distance in nanometers.
                     roi_r : float
                         Radius of the local search region in nanometers.
-                        Should be larger than the maximum expected drift wihtin
-                        segmentation.
+                        Should be larger than the maximum expected drift
+                        wihtin segmentation.
                     dimensions : list of str
                         the dimensions undrifted, typically ['x', 'y'].
                 optional items:
@@ -1334,13 +1363,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "roi_r": {
                 "type": "float",
-                "description": "Radius of the local search region in nanometers. Should be larger than the maximum expected drift wihtin segmentation.",
+                "description": "Radius of the local search region in \
+                nanometers. Should be larger than the maximum expected drift \
+                wihtin segmentation.",
                 "min": 0,
                 "required": True,
             },
             "dimensions": {
                 "type": "list",
-                "description": "the dimensions undrifted, typically ['x', 'y'].",
+                "description": "the dimensions undrifted, typically \
+                    ['x', 'y'].",
                 "element_type": "str",
                 "default": ["x", "y"],
                 "required": True,
@@ -1419,6 +1451,24 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": True,
                 "required": False,
             },
+            # "prompt": {
+            #     # TODO: Add type, description, min, max, default,
+            #     #     required, step, extensions, properties
+            #     # Hint: type appears to be str
+            #     # Hint: required = True
+            # },
+            # "filename": {
+            #     # TODO: Add type, description, min, max, default,
+            #     # required, step, extensions, properties
+            #     # Hint: type appears to be str
+            #     # Hint: required = True
+            # },
+            # "save_locs": {
+            #     # TODO: Add type, description, min, max, default,
+            #     # required, step, extensions, properties
+            #     # Hint: type appears to be bool
+            #     # Hint: required = False (optional)
+            # },
         }
 
         results_spec = {
@@ -1446,8 +1496,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
     def summarize_dataset(self):
         """Summarize dataset using various analysis methods
 
-        Computes dataset quality metrics such as NeNa (Nearest Neighbor Analysis)
-        and median localization precision.
+        Computes dataset quality metrics such as NeNa (Nearest Neighbor
+        Analysis) and median localization precision.
 
         Args:
             i : int
@@ -1455,16 +1505,19 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             parameters : dict
                 Required keys:
                     methods : dict
-                        Dictionary of analysis methods to run. Keys are method names,
-                        values are method-specific parameter dicts.
+                        Dictionary of analysis methods to run. Keys are
+                        method names, values are method-specific parameter
+                        dicts.
                         Supported methods:
                             "nena" : dict (no parameters)
-                                Performs Nearest Neighbor Analysis to estimate localization precision
+                                Performs Nearest Neighbor Analysis to estimate
+                                localization precision
                             "median-loc-precision" : dict
                                 Calculates median localization precision
                                 Optional keys:
                                     qe_correction : float
-                                        Quantum efficiency correction factor (default: 1)
+                                        Quantum efficiency correction factor
+                                        (default: 1)
             results : dict
                 the results dict, created by the module_decorator
         Returns:
@@ -1479,10 +1532,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                             nena-px : float - NeNa value in pixels
                             nena-nm : float - NeNa value in nanometers
                             filepath_plot : str - path to NeNa plot
-                    median-loc-precision : dict (if median-loc-precision method used)
+                    median-loc-precision : dict (if median-loc-precision method
+                            used)
                         Dictionary with keys:
-                            median_lp-px : float - median localization precision in pixels
-                            median_lp-nm : float - median localization precision in nanometers
+                            median_lp-px : float - median localization
+                                precision in pixels
+                            median_lp-nm : float - median localization
+                                precision in nanometers
         """
         parameters_spec = {
             "include_plots": {
@@ -1505,7 +1561,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     },
                     "median-loc-precision": {
                         "type": "dict",
-                        "description": "median localizatino precision calculation",
+                        "description": "median localizatino precision \
+                            calculation",
                         "required": False,
                         "properties": {
                             "qe_correction": {
@@ -1766,7 +1823,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "min_cluster_size": {
+            "min_cluster": {
                 "type": "int",
                 "description": "Minimum cluster size for HDBSCAN",
                 "min": 2,
@@ -1866,6 +1923,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 0.1,
                 "required": False,
             },
+            "fp_locs": {
+                "type": "str",
+                "description": "The filepath of the .hdf5 file to write",
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -1931,6 +1993,23 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 1.0,
                 "max": 1000.0,
                 "default": 50.0,
+                "required": False,
+            },
+            "min_locs": {
+                "type": "int",
+                "description": "Minimum number of localizations in a cluster",
+                "required": True,
+            },
+            "basic_fa": {
+                "type": "bool",
+                "description": "Whether to perform basic frame analysis",
+                "default": False,
+                "required": False,
+            },
+            "radius_z": {
+                "type": "float",
+                "description": "The smlm radius_z",
+                "default": None,
                 "required": False,
             },
         }
@@ -2017,7 +2096,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "min_locs": {
                 "type": "int",
-                "description": "Minimum number of localizations in a component",
+                "description": "Minimum number of localizations in a \
+                    component",
                 "min": 0,
                 "max": 50,
                 "default": 3,
@@ -2025,25 +2105,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "max_rounds_without_best_bic": {
                 "type": "int",
-                "description": "Maximum number of rounds without BIC improvement to\
+                "description": "Maximum number of rounds without BIC \
+                    improvement to\
                     terminate the optimal GMM search.",
                 "default": 3,
                 "required": False,
             },
             "bootstrap_check": {
                 "type": "bool",
-                "description": "If True, the standard error of the means (SEM) is\
-                        calculated using bootstrapping. If False, the\
-                        standard, single Gaussian SEM is used as\
+                "description": "If True, the standard error of the means \
+                        (SEM) is calculated using bootstrapping. If False, \
+                        the standard, single Gaussian SEM is used as\
                         approximation.",
                 "default": False,
                 "required": False,
             },
             "calibration": {
                 "type": "dict",
-                "description": "Calibration dictionary with x and y coefficients, z\
-                        step size and the number of frames. Only required for\
-                        3D data.",
+                "description": "Calibration dictionary with x and y \
+                        coefficients, z step size and the number of frames.\
+                        Only required for 3D data.",
                 "default": None,
                 "required": False,
             },
@@ -2128,7 +2209,19 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "k": {
+            "save_data": {
+                "type": "bool",
+                "description": "Whether to save nearest neighbor data",
+                "default": True,
+                "required": False,
+            },
+            "dims": {
+                "type": "list",
+                "description": "the distance dimensions, e.g. ['x', 'y']",
+                "default": ['x', 'y'],
+                "required": False,
+            },
+            "nth_NN": {
                 "type": "int",
                 "description": "Number of nearest neighbors to calculate",
                 "min": 1,
@@ -2136,10 +2229,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 5,
                 "required": True,
             },
-            "save_data": {
+            "nth_rdf": {
+                "type": "int",
+                "description": "Calculate distances up to the 95th percile \
+                    of the nth_rdf nearest neighbor",
+                "min": 1,
+                "required": True,
+            },
+            "subsample_1stNN": {
+                "type": "float",
+                "description": "By how much fold to subsample distances from \
+                the median of the 1st nearest neighbor.",
+                "min": 1,
+                "default": 20,
+                "required": False,
+            },
+            "add_column": {
                 "type": "bool",
-                "description": "Whether to save nearest neighbor data",
-                "default": True,
+                "description": "Whether to add a column of nearest neighbor \
+                    distance to the locs.",
+                "default": False,
                 "required": False,
             },
         }
@@ -2410,7 +2519,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "file_list": {
+            "filepaths": {
                 "type": "list",
                 "description": "List of dataset files to load",
                 "element_type": "file",
@@ -2499,6 +2608,75 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 0,
                 "required": False,
             },
+            "filepaths": {
+                "type": "list",
+                "description": "Filepaths to localization datasets to be \
+                    aligned, in case the data from previous modules is not\
+                    to be used.",
+                "required": False,
+            },
+            "fp_fiducials": {
+                "type": "list",
+                "description": "Filepaths to localization datasets to be \
+                    used as fiducial markers for alignment.",
+                "required": False,
+            },
+            "align_pars": {
+                "type": "dict",
+                "description": "Parameters for alignment.",
+                "properties": {
+                    "max_iterations": {
+                        "type": "int",
+                        "description": "Maximum iterations of alogrithm.",
+                        "default": 5,
+                    },
+                    "convergence": {
+                        "type": "float",
+                        "description": "Convergence criterion.",
+                        "default": 0.001,
+                    },
+                    "force_method": {
+                        "type": "bool",
+                        "description": "Whether to force the method chosen \
+                            or let the alogritm decide on the best method.",
+                        "default": None,
+                    },
+                    "max_shift": {
+                        "type": "float",
+                        "description": "Maximum allowed shift in alignment.",
+                        "default": None,
+                    },
+                    "plot_histogram": {
+                        "type": "bool",
+                        "description": "Whether to plot the histogram.",
+                        "default": False,
+                    },
+                    "plot_dir": {
+                        "type": "str",
+                        "description": "Which directory to plot into.",
+                        "default": None,
+                    },
+                },
+            },
+            "fig_filename": {
+                "type": "str",
+                "description": "Filename of the figure to be generated.",
+                "required": False,
+            },
+            "crop_boundaries": {
+                "type": "bool",
+                "description": "Whether to crop the data to the region of \
+                    overlap of all channels.",
+                "required": False,
+            },
+            "fp_co_shift_channel_locs": {
+                "type": "list",
+                "description": "Filepaths to locs that should be shifted along\
+                    with the channel data, but not used for assessing \
+                    alignment. This could e.g. be clustered locs, when the \
+                    alignment is done based on cluster centers.",
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -2552,7 +2730,19 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 0.0,
                 "max": 10.0,
                 "required": False,
-            }
+            },
+            "tag": {
+                "type": "str",
+                "description": "The tag/name to assign to the combined \
+                    dataset.",
+                "required": False,
+            },
+            "combine_col": {
+                "type": "str",
+                "description": "The column name for the IDs to the different \
+                    datasets. Allows back-tracking locs to their origin.",
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -2693,20 +2883,65 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "radii": {
-                "type": "list",
-                "description": "List of analysis radii in nm",
-                "element_type": "float",
-                "min": 1.0,
-                "max": 1000.0,
+            "proposed_labeling_efficiency": {
+                "type": "float",
+                "description": "Labeling efficiency percentage, default for \
+                    all targets used proposed value in spinna_config.csv and \
+                    can be altered manually after the first run of this \
+                    module",
+                "min": 0.0,
+                "max": 100.0,
                 "required": True,
             },
-            "n_simulations": {
+            "proposed_labeling_uncertainty": {
+                "type": "float",
+                "description": "Labeling uncertainty [nm]; good value is e.g.\
+                        5 used proposed value in spinna_config.csv and can be\
+                        altered manually after the first run of this module",
+                "default": 5,
+                "required": True,
+            },
+            "proposed_n_simulate": {
                 "type": "int",
                 "description": "Number of Monte Carlo simulations",
                 "min": 10,
                 "max": 10000,
                 "default": 1000,
+                "required": True,
+            },
+            "proposed_density": {
+                "type": "float",
+                "description": "Density to simulate; area density if 2D; \
+                    volume density if 3D used proposed value in \
+                    spinna_config.csv and can be altered manually after the \
+                    first run of this module",
+                "required": True,
+            },
+            "proposed_nn_plotted": {
+                "type": "int",
+                "description": "Number of nearest neighbors to plot used \
+                    proposed value in spinna_config.csv and can be \
+                    alteredmanually after the first run of this module",
+                "required": True,
+            },
+            "structures": {
+                "type": "list",
+                "element_type": "dict",
+                "description": 'SPINNA structures. Each structure dict has \
+                        "Molecular targets": list of str, \
+                        "Structure title": str, \
+                        "TARGET_x": list of float, \
+                        "TARGET_y": list of float, \
+                        "TARGET_z": list of float, \
+                    where TARGET is one each of the target names in \
+                    "Molecular targets"',
+                "required": False,
+            },
+            "structures_d": {
+                "type": "float",
+                "description": "Distance between molecules within \
+                    auto-generated structures, in nm. Only necessary if \
+                    'structures' is not given.",
                 "required": False,
             },
         }
@@ -2806,6 +3041,79 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": "mle",
                 "required": False,
             },
+            "labeling_efficiency": {
+                "type": "dict",
+                "element_type": "float",
+                "description": "Labeling efficiency (0-1), for all targets",
+                "min": 0.0,
+                "max": 1.0,
+                "required": True,
+            },
+            "labeling_uncertainty": {
+                "type": "float",
+                "description": "labeling uncertainty [nm]; good value is e.g. \
+                    5 assumed the same value for all targets (can be dict for \
+                    targets)",
+                "required": True,
+            },
+            "n_simulate": {
+                "type": "int",
+                "description": "Number of target molecules to simulated.",
+                "min": 10,
+                "max": 10000,
+                "default": 5000,
+                "required": True,
+            },
+            "structures": {
+                "type": "str",
+                "description": "Filepath to yaml file with structure \
+                    definition. Can also be a list of dict of the \
+                    definitions.",
+                "required": True,
+            },
+            "fp_mask_dict": {
+                "type": "str",
+                "description": "The filepath to the mask_dict file.",
+                "required": True,
+            },
+            "density": {
+                "type": "list",
+                "element_type": "float",
+                "description": "Densities to simulate in 1/nm^d; area density \
+                    if 2D; volume density if 3D.",
+                "required": True,
+            },
+            "sim_repeats": {
+                "type": "int",
+                "description": "Number of simulation repeats.",
+                "required": True,
+            },
+            "fit_NND_bin": {
+                "type": "float",
+                "description": "bin size of fits",
+                "required": True,
+            },
+            "fit_NND_maxdist": {
+                "type": "float",
+                "description": "Maximum of histogram shown",
+                "required": True,
+            },
+            "n_nearest_neighbors": {
+                "type": "int",
+                "description": "Number of nearest neighbors to evaluate.",
+                "required": True,
+            },
+            "granularity": {
+                "type": "float",
+                "description": "The spinna granularity",
+                "required": True,
+            },
+            "density_app": {
+                "type": "float",
+                "description": "Tpparent density in 1/nm^2; this is the \
+                    product of 'real' density & lbl efficiency",
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -2876,6 +3184,36 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "options": ["none", "translation", "isotropic"],
                 "default": "translation",
                 "required": False,
+            },
+            "ripleys_n_random_controls": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: number of random controls, default: 100
+                # Hint: type appears to be int
+            },
+            "ripleys_rmax": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the maximum radius, default 200
+                # Hint: type appears to be int
+            },
+            "ripleys_dr": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the radius interval, default 5
+                # Hint: type appears to be float
+            },
+            "ripleys_threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
+                # Hint: type appears to be float
+            },
+            "fp_combined_locs": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: filepath to the combined locs of all channel_locs
+                # Hint: type appears to be str
+            },
+            "atype": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the type of analysis: 'Ripleys' for the standard Ripley's K analysis, or 'RDF' for calculation of the radial distribution function instead of K, an...
+                # Hint: type appears to be str
             },
         }
 
@@ -2981,6 +3319,84 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": "fast",
                 "required": False,
             },
+            "ripleys_n_random_controls": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: number of random controls, default: 100
+                # Hint: type appears to be int
+            },
+            "ripleys_rmax": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the maximum radius, default 200
+                # Hint: type appears to be int
+            },
+            "ripleys_dr": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the radius interval, default 5
+                # Hint: type appears to be float
+            },
+            "ripleys_threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
+                # Hint: type appears to be float
+            },
+            "area": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the cell area in µm^2 optional. only used with controltype=CSR
+                # Hint: type appears to be float
+            },
+            "fp_mask": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the filepath to the cell mask. optional, only used with CSR. can be binary or density mask
+                # Hint: type appears to be str
+            },
+            "mask_pixel_size": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the pixel size of mask pixels (move to mask class which internally keeps this information) optional, only used with controltype=CSR
+                # Hint: type appears to be float
+            },
+            "metric": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the type of analysis: 'RK' for the standard Ripley's K analysis, or 'RDF' for calculation of the radial distribution function instead of K, and ran...
+                # Hint: type appears to be str
+            },
+            "controltype": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: CSR simulation within the density mask, or randomizing the real data
+                # Hint: type appears to be str
+            },
+            "randomization_radius": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: for controltype \"RND\", the radius [nm] by which to randomize. optional.
+                # Hint: type appears to be float
+            },
+            "shuffle_self": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: for metric \"FRC\", whether to shuffle only other types or also the self type
+                # Hint: type appears to be bool
+            },
+            "relocate_self": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: for metric \"FRC\", whether to relocate centerpoints to fraction_exclude
+                # Hint: type appears to be bool
+            },
+            "significance_threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: threshold above which heatmap entries are colored
+                # Hint: type appears to be float
+            },
+            "normalization": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be str
+            },
+            "edge_correction": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: if True, only locs further from mask edges than max radius are used for evaluation
+                # Hint: type appears to be bool
+            },
+            "showControlEnvelope": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be bool
+            },
         }
 
         results_spec = {
@@ -3048,7 +3464,37 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "options": ["equal", "by_nlocs", "by_area"],
                 "default": "equal",
                 "required": False,
-            }
+            },
+            "fp_workflows": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
+                # Hint: type appears to be list
+            },
+            "report_names": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the report names of those worklfows
+                # Hint: type appears to be list
+            },
+            "ripleys_threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
+                # Hint: type appears to be float
+            },
+            "atype": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: # output_folders : list of str #     folders to write the significant pairs into. This can #     e.g. be the 'manual' results folders of the #     ...
+                # Hint: type appears to be str
+            },
+            "swkfl_ripleysk_key": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the results key of the ripleysk module. e.g. '05_ripleysk'
+                # Hint: type appears to be str
+            },
+            "swkfl_manual_key": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the results key of the manual module to save the integrals to if those two are not given, saving is not performed
+                # Hint: type appears to be str
+            },
         }
 
         results_spec = {
@@ -3128,7 +3574,47 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "options": ["mean", "median", "trimmed_mean"],
                 "default": "mean",
                 "required": False,
-            }
+            },
+            "fp_workflows": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
+                # Hint: type appears to be list
+            },
+            "report_names": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the report names of those worklfows
+                # Hint: type appears to be list
+            },
+            "ripleys_threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
+                # Hint: type appears to be float
+            },
+            "metric": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the type of analysis: 'RK' for the standard Ripley's K analysis, or 'RDF' for calculation of the radial distribution function instead of K, and ran...
+                # Hint: type appears to be str
+            },
+            "controltype": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: CSR simulation within the density mask, or randomizing the real data
+                # Hint: type appears to be str
+            },
+            "randomization_radius": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: for controltype \"RND\", the radius [nm] by which to randomize. # output_folders : list of str #     folders to write the significant pairs into. Thi...
+                # Hint: type appears to be float
+            },
+            "swkfl_ripleysk_key": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the results key of the ripleysk module. e.g. '05_ripleysk'
+                # Hint: type appears to be str
+            },
+            "swkfl_manual_key": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the results key of the manual module to save the integrals to if those two are not given, saving is not performed
+                # Hint: type appears to be str
+            },
         }
 
         results_spec = {
@@ -3215,6 +3701,52 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 0.95,
                 "required": False,
             },
+            "channel_map": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: maps between channels (protein names, tags before combining) and index in the combine_id column of combined locs labeling_efficiency : dict, channe...
+                # Hint: type appears to be dict
+            },
+            "labeling_efficiency": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be dict
+            },
+            "labeling_uncertainty": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be dict
+            },
+            "n_simulate": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: number of target molecules to be simulated; good value is e.g. 50000 density : dict, channel tag to float density to simulate [nm^2 or nm^3]; area ...
+                # Hint: type appears to be int
+            },
+            "density": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be dict
+            },
+            "nn_nth": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: number of nearest neighbors to analyse
+                # Hint: type appears to be int
+            },
+            "structure_distance": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the protein distance between each other in nm
+                # Hint: type appears to be float
+            },
+            "res_factor": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the spinna res_factor
+                # Hint: type appears to be float
+            },
+            "sim_repeats": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: number of simulation repeats, for noise reduction interaction_pairs: list of list of two strings, or str pairs that are able to interact
+                # Hint: type appears to be int
+            },
+            "interaction_pairs": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be list
+            },
         }
 
         results_spec = {
@@ -3266,7 +3798,22 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "options": ["by_area", "by_density", "none"],
                 "default": "by_area",
                 "required": False,
-            }
+            },
+            "fp_workflows": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
+                # Hint: type appears to be list
+            },
+            "report_names": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the report names of those worklfows
+                # Hint: type appears to be list
+            },
+            "swkfl_protint_key": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the results key of the protein interactions module. e.g. '05_protein_interactions' optional:
+                # Hint: type appears to be str
+            },
         }
 
         results_spec = {
@@ -3345,6 +3892,48 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "max": 200.0,
                 "default": 20.0,
                 "required": False,
+            },
+            "fp_channel_map": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: filepath to the map from 'combine_channels' module, which is a dict from channel name to ID int in the locs['combine_id']
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "fp_combined_locs": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: filepath to the locs combined in 'combine_channels' module
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "margin": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Size of the added empty margin to the FOV, in nm
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "binsize": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Size o fthe 2D histogram bins of the first step, in nm
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "sigma_mask_blur": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: parameter of the gaussian blur in binsize units
+                # Hint: type appears to be int
+                # Hint: required = True
+            },
+            "mask_resolution": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Controls the digital resolution of the mask, in nm
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "combine_col": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the name of the combine column, e.g. 'combine_id' or 'protein'. Same as used in 'combine_channels' module
+                # Hint: type appears to be str
+                # Hint: required = True
             },
         }
 
@@ -3439,6 +4028,91 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Algorithm-specific parameters",
                 "required": False,
             },
+            "binsize": {
+                "type": "float",
+                "description": "The bin size in nanometers.",
+                "default": 20,
+                "min": 0,
+                "required": True,
+            },
+            "blursize": {
+                "type": "float",
+                "description": "The gaussian blur to apply in nanometers.",
+                "min": 0,
+                "default": 400,
+                "required": True,
+            },
+            "mask_pixel_size": {
+                "type": "float",
+                "description": "The pixelsize of the final mask, in \
+                    nanometers.",
+                "min": 0,
+                "required": True,
+            },
+            "threshold": {
+                "type": "float",
+                "description": "The threshold value below which the mask \
+                    is set to zero.",
+                "min": 0,
+                "default": 0.333,
+                "required": True,
+            },
+            "binary": {
+                "type": "bool",
+                "description": "Whether to create a binary or density mask",
+                "required": True,
+            },
+            "select_cell": {
+                "type": "bool",
+                "description": "Whether to select the nth largest connected \
+                    component, assumed to be the cell of interest.",
+                "required": True,
+            },
+            "nth_largest_cell": {
+                "type": "int",
+                "description": "If select_cell is True: Select the nth \
+                    largest cell.",
+                "default": 1,
+                "required": True,
+            },
+            "fill_holes": {
+                "type": "bool",
+                "description": "Whether to fill holes in the cell mask",
+                "required": True,
+            },
+            "dilate_nm": {
+                "type": "float",
+                "description": "The nanometers to dilate the mask (useful \
+                    if a large threshold has been used)",
+                "required": True,
+            },
+            "apply_to_locs": {
+                "type": "bool",
+                "description": "Whether to drop all localizations outside \
+                    the masked area.",
+                "required": True,
+            },
+            "fp_combined_locs": {
+                "type": "str",
+                "description": "Filepath to the locs combined previously \
+                    in 'combine_channels' module. If None or '', \
+                    loaded channel_locs is used",
+                "required": False,
+            },
+            "fp_channel_map": {
+                "type": "str",
+                "description": "Filepath to the map from 'combine_channels' \
+                    module, which is a dict from channel name to ID int in \
+                    the locs['combine_id']",
+                "required": False,
+            },
+            "combine_col": {
+                "type": "str",
+                "description": "The name of the combine column, e.g. \
+                    'combine_id' or 'protein'. Same as used in \
+                    'combine_channels' module",
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -3514,6 +4188,37 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Method for mask refinement",
                 "options": ["erosion", "dilation", "opening", "closing"],
                 "default": "opening",
+                "required": False,
+            },
+            "fp_mask": {
+                "type": "str",
+                "description": "The file path to the mask min_density, \
+                    max_density : float the density range to select",
+                "required": True,
+            },
+            "nbins": {
+                "type": "int",
+                "description": "The number of bins for plotting",
+                "required": False,
+            },
+            "nth_largest": {
+                "type": "int",
+                "description": "Select the nth largest area in density range. \
+                    Set 0 for largest.",
+                "required": False,
+                "min": 0,
+            },
+            "apply_to_locs": {
+                "type": "bool",
+                "description": "Whether to apply the created mask to the \
+                    locs.",
+                "required": False,
+            },
+            "smoothe_nm": {
+                "type": "float",
+                "description": "The distance in nanometers to dilate and erode\
+                    the mask. This can be useful to remove excessive holes and\
+                    ragging in the mask due to the density thre...",
                 "required": False,
             },
         }
@@ -3600,6 +4305,48 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 50.0,
                 "required": False,
             },
+            "fp_channel_map": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: filepath to the map from 'combine_channels' module, which is a dict from channel name to ID int in the locs['combine_id']
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "epsilon_nm": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: dbscan epsilon in nm
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "minpts": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: minimum number of points
+                # Hint: type appears to be int
+                # Hint: required = True
+            },
+            "sigma_linker": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: ... in nm
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "fp_merge_mask": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: filepath to the merge mask (generated in module
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "thresh_type": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: ...
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "cell_name": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the name of the cell currently analyzed
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
         }
 
         results_spec = {
@@ -3674,6 +4421,45 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 0,
                 "max": 2**32 - 1,
                 "required": False,
+            },
+            "fp_channel_map": {
+                "type": "str",
+                "description": "Filepath to the map from \
+                    'combine_channels' module, which is a dict from \
+                    channel name to ID int in the locs['combine_id']",
+                "required": True,
+            },
+            "fp_mask_dict": {
+                "type": "str",
+                "description": "Filepath to the mask_dict.pkl file \
+                    generated in the 'create_mask' module",
+                "required": True,
+            },
+            "N_repeats": {
+                "type": "int",
+                "description": "Number of simulation repeats",
+                "required": True,
+            },
+            "epsilon_nm": {
+                "type": "float",
+                "description": "dbscan epsilon in nm",
+                "required": True,
+            },
+            "minpts": {
+                "type": "int",
+                "description": "minimum number of points",
+                "required": True,
+            },
+            "sigma_linker": {
+                "type": "float",
+                "description": "... in nm",
+                "required": True,
+            },
+            "fp_merge_mask": {
+                "type": "str",
+                "description": "Filepath to the merge mask \
+                    (generated in module)",
+                "required": True,
             },
         }
 
@@ -3755,6 +4541,46 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 0.8,
                 "required": False,
             },
+            "fp_workflows": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
+                # Hint: type appears to be list
+                # Hint: required = True
+            },
+            "report_names": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the report names of those worklfows
+                # Hint: type appears to be list
+                # Hint: required = True
+            },
+            "swkfl_dbscan_molint_key": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the results key of the dbscan module. e.g. '09_dbscan_molint'
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "swkfl_CSR_sim_in_mask_key": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the results key of the CSR dbscan module. e.g. '10_CSR_sim_in_mask' population_threshold : float, 0 - 1 only select barcodes with a relative popula...
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "population_threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "ttest_pvalue_max": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "channel_colors": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: colors to describe the receptors with
+                # Hint: type appears to be list
+                # Hint: required = True
+            },
         }
 
         results_spec = {
@@ -3831,6 +4657,54 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "max": 1000.0,
                 "required": False,
             },
+            "fp_workflows": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
+                # Hint: type appears to be list
+                # Hint: required = True
+            },
+            "report_names": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the report names of those worklfows
+                # Hint: type appears to be list
+                # Hint: required = True
+            },
+            "swkfl_protint_key": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the results key of the protein_interactions module. e.g. '09_protein_interactions'
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "fp_density": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: fp to the denfsities of the channels.
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "fp_ripleys_meanvals": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the filepath to the interaction matrix
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "edge_factor": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: factor to display useful sizes
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "node_factor": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: factor to display useful sizes
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "channel_colors": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: colors to describe the receptors with
+                # Hint: type appears to be list
+                # Hint: required = True
+            },
         }
 
         results_spec = {
@@ -3897,6 +4771,30 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "options": ["viridis", "plasma", "hot", "jet"],
                 "default": "viridis",
                 "required": False,
+            },
+            "fp_workflows": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
+                # Hint: type appears to be list
+                # Hint: required = True
+            },
+            "report_names": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the report names of those worklfows
+                # Hint: type appears to be list
+                # Hint: required = True
+            },
+            "swkfl_create_mask_key": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the results key of the dbscan module. e.g. '11_create_mask'
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "swkfl_protint_key": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the results key of the protein_interactions module. e.g. '09_protein_interactions'
+                # Hint: type appears to be str
+                # Hint: required = True
             },
         }
 
@@ -3975,6 +4873,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 10,
                 "max": 1000,
                 "default": 100,
+                "required": False,
+            },
+            "remove_gold": {
+                "type": "bool",
+                "description": "If present and set to True, the gold \
+                    locs are discarded and self.locs is set to the \
+                    nongold-locs",
+                "required": False,
+            },
+            "diameter": {
+                "type": "float",
+                "description": "The pick similar diameter for \
+                    identifying gold std_range, mean_rmsd : float \
+                    the pick similar parameters identifying gold",
                 "required": False,
             },
         }
@@ -4057,6 +4969,46 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 0.1,
                 "required": False,
             },
+            "diameter": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the pick similar diameter for identifying gold
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "min_n_locs_per_frame": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "max_n_locs_per_frame": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "min_rmsd": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the minimum root mean square distance from pick center to pick
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "max_rmsd": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the maximum root mean square distance from pick center to pick
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "n_plot_structures": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the number of structures to plot
+                # Hint: type appears to be int
+                # Hint: required = False (optional)
+            },
+            "display_pixelsize": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the pixelsize for display in nm, default: 1
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
         }
 
         results_spec = {
@@ -4128,6 +5080,42 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 5,
                 "required": False,
             },
+            "diameter": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the pick similar diameter for identifying gold
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "min_n_locs_per_frame": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the percentage of frames with events in the pick region below which there is noise. default: 0.01
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "n_plot_structures": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the number of structures to plot
+                # Hint: type appears to be int
+                # Hint: required = False (optional)
+            },
+            "display_pixelsize": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the pixelsize for display in nm, default: 1
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "xi": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the xi parameter for clustering. default 0.05
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "min_cluster_size": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the minimun cluster size (fract). default .05
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
         }
 
         results_spec = {
@@ -4186,6 +5174,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "options": ["linear", "spline", "polynomial"],
                 "default": "spline",
                 "required": False,
+            },
+            "fp_picked_locs": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: filepath to the picked locs to undrift from (.hdf5 file of list of locs, with 'group' column to describe picks)
+                # Hint: type appears to be str
+                # Hint: required = True
             },
         }
 
@@ -4271,6 +5265,28 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": False,
                 "required": False,
             },
+            "field": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the field(s) to filter on
+                # Hint: type appears to be str or list
+                # Hint: required = True
+            },
+            "minval": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be dtype
+                # Hint: required = False (optional)
+            },
+            "maxval": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be dtype
+                # Hint: required = False (optional)
+            },
+            "mode": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the mode of threshold application: in units of the field standard deviations from the mean (-2, 2 means cut off at 2*std from mean)
+                # Hint: type appears to be str
+                # Hint: required = False (optional)
+            },
         }
 
         results_spec = {
@@ -4343,6 +5359,23 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "element_type": "float",
                 "required": False,
             },
+            "meanframe_cutoff": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "stdframe_cutoff": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: filter out positions with lower std than .16
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "fp_locs": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the filepath to the underlying localizations (self.locs are centers). If given, these are filtered as well and saved with the same filename in the ...
+                # Hint: type appears to be str
+                # Hint: required = False (optional)
+            },
         }
 
         results_spec = {
@@ -4410,6 +5443,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "options": ["nearest_neighbor", "hungarian", "lap"],
                 "default": "hungarian",
                 "required": False,
+            },
+            "d_max": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: maximum distance to link [px]
+                # Hint: type appears to be int
+                # Hint: required = True
+            },
+            "tolerance": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: maximum transient dark time [frames]
+                # Hint: type appears to be int
+                # Hint: required = True
             },
         }
 
@@ -4482,6 +5527,54 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "dict",
                 "description": "Parameters for the sub-module",
                 "required": False,
+            },
+            "module_name": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the module to call
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "param_target1": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: parameter name of the first target to set for the module
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "param_target2": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: parameter name of the second target to set for the module
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "module_kwargs": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the other arguments to the module
+                # Hint: type appears to be dict
+                # Hint: required = True
+            },
+            "result_scalar": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the key to display in a heatmap as main result
+                # Hint: type appears to be str
+                # Hint: required = False (optional)
+            },
+            "scalar_threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the saturation value in the heatmap
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "scalar_minval": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the minimum value for color in the heatmap
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "result_fpfig": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the key to the filepath of one or more figures generated to display for documentation
+                # Hint: type appears to be str or list
+                # Hint: required = False (optional)
             },
         }
 
@@ -4687,6 +5780,57 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": "maximum_likelihood",
                 "required": False,
             },
+            "reference_name": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the channgel_tag of the reference
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "target_name": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the channel_tag of the target queried for LE pair_distance: 10 # real distance of pair of tags in nm labeling_uncertainty : dict, channel tag to fl...
+                # Hint: type appears to be str
+                # Hint: required = True
+            },
+            "pair_distance": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be 10
+                # Hint: required = True
+            },
+            "labeling_uncertainty": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be dict
+                # Hint: required = True
+            },
+            "n_simulate": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: number of target molecules to be simulated; good value is e.g. 50000 density : dict, channel tag to float density to simulate [nm^2 or nm^3]; area ...
+                # Hint: type appears to be int
+                # Hint: required = True
+            },
+            "density": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be dict
+                # Hint: required = True
+            },
+            "granularity": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: the spinna res_factor
+                # Hint: type appears to be float
+                # Hint: required = True
+            },
+            "sim_repeats": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: number of simulation repeats, for noise reduction
+                # Hint: type appears to be int
+                # Hint: required = True
+            },
+            "nn_nth": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: number of nearest neighbors to analyse
+                # Hint: type appears to be int
+                # Hint: required = False (optional)
+            },
         }
 
         results_spec = {
@@ -4764,6 +5908,30 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Label for the y-axis of the test plot",
                 "required": True,
+            },
+            "condition": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: condition dictionary with keys: or logical condition with \"and\"/\"or\" keys
+                # Hint: type appears to be dict
+                # Hint: required = True
+            },
+            "if_true": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: list of (module_name, module_parameters) tuples to execute if condition is True
+                # Hint: type appears to be list
+                # Hint: required = True
+            },
+            "if_false": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: list of (module_name, module_parameters) tuples to execute if condition is False
+                # Hint: type appears to be list
+                # Hint: required = True
+            },
+            "parameter_command_executor": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: if provided, will be used for resolving parameter commands in condition values
+                # Hint: type appears to be ParameterCommandExecutor
+                # Hint: required = False (optional)
             },
         }
 
@@ -4859,6 +6027,42 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Label for the y-axis of the test plot",
                 "required": True,
             },
+            "delta_r": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: grid spacing for autocorrelation (default: 5 nm)
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "r_max": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: maximum radius for autocorrelation (default: 100 nm)
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "batch_size": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: number of data points per batch for chunking (auto-calculated if None)
+                # Hint: type appears to be int or None
+                # Hint: required = False (optional)
+            },
+            "n_processes": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: number of parallel processes (auto-detected if None, capped at 4)
+                # Hint: type appears to be int or None
+                # Hint: required = False (optional)
+            },
+            "use_chunking": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: enable memory-efficient chunking for large datasets (default: True)
+                # Hint: type appears to be bool
+                # Hint: required = False (optional)
+            },
+            "use_sparse": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: use sparse matrices for very large grids (default: False)
+                # Hint: type appears to be bool
+                # Hint: required = False (optional)
+            },
         }
 
         results_spec = {
@@ -4886,6 +6090,42 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "fp_fig": {
                 "type": "str",
                 "description": "Filepath to the generated test figure",
+            },
+            "resolution": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+            },
+            "fit_quality": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+            },
+            "autocorr_map": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be ndarray
+            },
+            "radial_profile": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be ndarray
+            },
+            "radial_distances": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be ndarray
+            },
+            "resolution_radial": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+            },
+            "resolution_dblradial": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+            },
+            "fig_resolution": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be str
+            },
+            "fig_radial": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be str
             },
         }
 
@@ -4955,6 +6195,54 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Label for the y-axis of the test plot",
                 "required": True,
             },
+            "pixelsize_render": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: pixel size for rendered images in nm (default: 5 nm)
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "smoothing_sigma": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Gaussian smoothing sigma in pixels (default: None)
+                # Hint: type appears to be float or None
+                # Hint: required = False (optional)
+            },
+            "threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "region_size": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: size of each spatial region in micrometers (default: 10.0 µm)
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
+            "min_locs_per_region": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: minimum localizations per region to process (default: 500)
+                # Hint: type appears to be int
+                # Hint: required = False (optional)
+            },
+            "max_frc_range_nm": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: maximum FRC range in nm (default: None = full range)
+                # Hint: type appears to be float or None
+                # Hint: required = False (optional)
+            },
+            "n_processes": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: number of parallel processes (default: 4)
+                # Hint: type appears to be int
+                # Hint: required = False (optional)
+            },
+            "smoothing_window": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: moving average window size for FRC smoothing in 1/nm (default: 0.005)
+                # Hint: type appears to be float
+                # Hint: required = False (optional)
+            },
         }
 
         results_spec = {
@@ -4982,6 +6270,43 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "fp_fig": {
                 "type": "str",
                 "description": "Filepath to the generated test figure",
+            },
+            "resolution_frc_spatial": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+            },
+            "resolution_std": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+            },
+            "n_regions": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be int
+            },
+            "cutoff_frequency": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+            },
+            "frc_curve_mean": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be ndarray
+            },
+            "frc_curve_std": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be ndarray
+            },
+            "spatial_frequencies": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be ndarray
+            },
+            "threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
+                # Hint: type appears to be float
+            },
+            "fig_frc": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be str
             },
         }
 
@@ -5068,6 +6393,81 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Label for the y-axis of the test plot",
                 "required": True,
             },
+            "ton": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Half-life of localization in frames (how long a spot stays visible)
+                # Hint: type appears to be float
+            },
+            "toff": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Time in frames for a spot to reappear after disappearing
+                # Hint: type appears to be float
+            },
+            "max_shift": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Maximum expected drift per frame in pixels optional items:
+                # Hint: type appears to be float
+            },
+            "min_locs_per_frame": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Minimum localizations per frame for reliable drift estimation (default: 10)
+                # Hint: type appears to be int
+            },
+            "max_iterations": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Maximum number of iterative refinement rounds (default: 5)
+                # Hint: type appears to be int
+            },
+            "convergence_threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: RMS drift change threshold for convergence in nm (default: 0.1)
+                # Hint: type appears to be float
+            },
+            "plot_drift": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Whether to save drift plots (default: True)
+                # Hint: type appears to be bool
+            },
+            "save_locs": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Whether to save undrifted localizations (default: True)
+                # Hint: type appears to be bool
+            },
+            "n_processes": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Number of processes for parallel computation (default: auto)
+                # Hint: type appears to be int or None
+            },
+            "confidence_threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Confidence threshold for windowing analysis (default: 0.8)
+                # Hint: type appears to be float
+            },
+            "outlier_detection_enabled": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Enable RSSO failure and outlier detection (default: True)
+                # Hint: type appears to be bool
+            },
+            "outlier_z_threshold": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Z-score threshold for temporal outlier detection (default: 3.5)
+                # Hint: type appears to be float
+            },
+            "min_signal_to_noise": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Minimum signal-to-noise ratio for drift measurements (default: 0.5)
+                # Hint: type appears to be float
+            },
+            "windowing_enabled": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Enable adaptive windowing for low-confidence frames (default: True)
+                # Hint: type appears to be bool
+            },
+            "window_size_range": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: description: Min and max window sizes for adaptive windowing (default: (3, 20))
+                # Hint: type appears to be tuple
+            },
         }
 
         results_spec = {
@@ -5095,6 +6495,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "fp_fig": {
                 "type": "str",
                 "description": "Filepath to the generated test figure",
+            },
+            "success": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be bool
+            },
+            "drift_quality": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be ndarray
+            },
+            "n_iterations": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be int
+            },
+            "convergence_rms": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be float
+            },
+            "drift_plots": {
+                # TODO: Add type, description, min, max, default, required, step, extensions, properties
+                # Hint: type appears to be str
             },
         }
 
@@ -7374,6 +8794,8 @@ class Window(QtWidgets.QMainWindow):
                                         workflow_modules_sgl = ast.literal_eval(stmt.value)
                                     elif target.id == 'workflow_modules_agg':
                                         workflow_modules_agg = ast.literal_eval(stmt.value)
+            logger.debug(f"{workflow_modules_sgl}")
+            logger.debug(f"{workflow_modules_agg}")
 
             # Load single dataset workflow if found
             if workflow_modules_sgl is not None and isinstance(
@@ -8957,6 +10379,7 @@ class Window(QtWidgets.QMainWindow):
 
             # Set tooltip
             description = param_metadata.get("description", "")
+            description = textwrap.fill(description)
             if description:
                 widget.setToolTip(description)
                 label.setToolTip(description)
@@ -9105,7 +10528,8 @@ class Window(QtWidgets.QMainWindow):
                 ] = (module_name, param_values)
 
     def _on_parameter_changed(self):
-        """Called when a parameter textbox loses focus (editingFinished signal)."""
+        """Called when a parameter textbox loses focus (editingFinished signal).
+        """
         self._validate_parameters()
         # Auto-save parameters if editing an existing workflow item
         self._update_editing_workflow_item()

@@ -3,6 +3,7 @@
 Templates:
   SimpleTest: "/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/250311-01_basic-localization"
   MyTest: "/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/tests/mytest"
+  LE-with-gold-AggWfl: "/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/260119_labeling-efficiency-gold-awfl"
 Confluence:
   URL: "https://mibwiki.biochem.mpg.de"
   Space: "~hgrabmayr"
