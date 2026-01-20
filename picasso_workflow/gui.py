@@ -9915,7 +9915,6 @@ class Window(QtWidgets.QMainWindow):
         # Add datasets
         for key, values in datasets.items():
             if isinstance(values, list) and len(values) == 1:
-                script_lines.append(f"    {repr(key)}: [")
                 formatted = format_value(values[0])
                 script_lines.append(f"    {repr(key)}: {formatted},")
             else:
