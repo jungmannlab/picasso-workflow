@@ -10976,6 +10976,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         self.locs, self.info, drift = picasso_outpost._undrift_from_picked(
             self.locs, self.info, picked_locs
         )
+        drift = pd.DataFrame(drift)
 
         dims = ["x", "y"]
         if "z" in picked_locs[0].columns:
