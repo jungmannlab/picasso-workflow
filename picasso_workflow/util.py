@@ -2145,6 +2145,7 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 idx = int(aritexp)
                 res = self.map[t[1]][idx]
                 logger.debug(f"Indexing map {t[1]}[{idx}]: {res}")
+                aritexp = None  # avoid arithmetic expression below
             elif cmd == f"{self.command_sign}sum":
                 logger.debug(f"summing up {t[1:]}.")
                 components = []

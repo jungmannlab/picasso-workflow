@@ -7722,6 +7722,62 @@ class Window(QtWidgets.QMainWindow):
         docconfig_layout = QtWidgets.QGridLayout(docconfig_tab)
         self.tabs.addTab(docconfig_tab, "Documentation Config")
 
+        # Confluence configuration group
+        confluence_group = QtWidgets.QGroupBox("Confluence Settings")
+        confluence_layout = QtWidgets.QGridLayout(confluence_group)
+        docconfig_layout.addWidget(confluence_group, 0, 0, 1, 2)
+
+        # Get Confluence config with safe defaults
+        confluence_config = CONFIG.get("Confluence", {})
+
+        # Confluence URL
+        confluence_layout.addWidget(QtWidgets.QLabel("URL:"), 0, 0)
+        self.confluence_url_edit = QtWidgets.QLineEdit()
+        self.confluence_url_edit.setPlaceholderText(
+            "e.g., https://confluence.example.com"
+        )
+        self.confluence_url_edit.setToolTip(
+            "If empty, host will load from environment variable")
+        self.confluence_url_edit.setText(confluence_config.get("URL", ""))
+        confluence_layout.addWidget(self.confluence_url_edit, 0, 1)
+
+        # Confluence Space
+        confluence_layout.addWidget(QtWidgets.QLabel("Space:"), 1, 0)
+        self.confluence_space_edit = QtWidgets.QLineEdit()
+        self.confluence_space_edit.setPlaceholderText("e.g., ~username or TEAM")
+        self.confluence_space_edit.setToolTip(
+            "If empty, host will load from environment variable")
+        self.confluence_space_edit.setText(confluence_config.get("Space", ""))
+        confluence_layout.addWidget(self.confluence_space_edit, 1, 1)
+
+        # Confluence Token
+        confluence_layout.addWidget(QtWidgets.QLabel("Token:"), 2, 0)
+        self.confluence_token_edit = QtWidgets.QLineEdit()
+        self.confluence_token_edit.setPlaceholderText(
+            "API token (or set CONFLUENCE_BEARER env var)"
+        )
+        self.confluence_token_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.confluence_token_edit.setToolTip(
+            "If empty, host will load from environment variable")
+        self.confluence_token_edit.setText(confluence_config.get("Token", ""))
+        confluence_layout.addWidget(self.confluence_token_edit, 2, 1)
+
+        # Parent Page
+        confluence_layout.addWidget(QtWidgets.QLabel("Parent Page:"), 3, 0)
+        self.confluence_parent_page_edit = QtWidgets.QLineEdit()
+        self.confluence_parent_page_edit.setToolTip(
+            "If empty, host will load from environment variable")
+        self.confluence_parent_page_edit.setPlaceholderText(
+            "Page title to create reports under"
+        )
+        self.confluence_parent_page_edit.setText(
+            confluence_config.get("DefaultPage", "")
+        )
+        confluence_layout.addWidget(self.confluence_parent_page_edit, 3, 1)
+
+        # Add stretch to push widgets to the top
+        docconfig_layout.setRowStretch(1, 1)
+
         # Run tab
         run_tab = QtWidgets.QWidget()
         run_layout = QtWidgets.QGridLayout(run_tab)
@@ -9896,15 +9952,28 @@ class Window(QtWidgets.QMainWindow):
                 "from picasso_workflow.metaworkflow import InvestigationWorkflowCoordinator"
             )
 
+        cf_url = self.confluence_url_edit.currentText()
+        if cf_url == "":
+            cf_url = "os.getenv('CONFLUENCE_URL')"
+        cf_space = self.confluence_space_edit.currentText()
+        if cf_space == "":
+            cf_space = "os.getenv('CONFLUENCE_SPACE')"
+        cf_token = self.confluence_token_edit.currentText()
+        if cf_token == "":
+            cf_token = "os.getenv('CONFLUENCE_BEARER')"
+        cf_ppage = self.confluence_parent_page_edit.currentText()
+        if cf_ppage == "":
+            cf_ppage = "os.getenv('CONFLUENCE_BASE_PAGE')"
+
         script_lines.extend(
             [
                 "",
                 "",
                 "# Confluence configuration (set via environment variables)",
-                "confluence_url = os.getenv('CONFLUENCE_URL')",
-                "confluence_token = os.getenv('CONFLUENCE_BEARER')",
-                "confluence_space = os.getenv('CONFLUENCE_SPACE')",
-                "base_page = os.getenv('CONFLUENCE_BASE_PAGE')",
+                f"confluence_url = {cf_url}",
+                f"confluence_token = {cf_token}",
+                f"confluence_space = {cf_space}",
+                f"base_page = {cf_ppage}",
                 "",
                 "",
                 "# Dataset configuration",
