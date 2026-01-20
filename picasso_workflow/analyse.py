@@ -9507,6 +9507,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if (
             "min_density" in parameters.keys()
             and "max_density" in parameters.keys()
+            and parameters["max_density"] > 0
         ):
             min_density = parameters["min_density"]
             max_density = parameters["max_density"]
@@ -10972,7 +10973,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         dims = ["x", "y"]
-        if "z" in picked_locs.columns:
+        if "z" in picked_locs[0].columns:
             dims.append("z")
         fp_fig = os.path.join(results["folder"], "undrift_from_picked.png")
         results["fp_fig"] = fp_fig

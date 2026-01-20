@@ -52,6 +52,7 @@ def config_logger():
         retention=5,
         enqueue=True,
         serialize=False,
+        level="DEBUG"
     )
     logger.add(
         sys.stderr,

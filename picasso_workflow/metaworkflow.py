@@ -608,6 +608,12 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         # src_loc_file is a picasso-info like yaml file, representing a list of
         # dicts, with keys "#tags" and #filepath
         self.dataset_filepaths = io.load_info(src_loc_file)
+        if "#tags" not in self.dataset_filepaths.keys():
+            self.dataset_filepaths = io.load_info(src_loc_file)[0]
+            self.tile_entries = {
+                "filepath": list(self.dataset_filepaths.values()),
+                "#tags": list(self.dataset_filepaths.keys()),
+            }
 
         self.analysis_name = analysis_name
 

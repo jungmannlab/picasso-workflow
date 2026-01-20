@@ -2181,7 +2181,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def nneighbor(self):
-        """Perform nearest neighbor calculation
+        """Perform nearest neighbor calculation. Plot NN histogram
+        and radial distribution function.
+
         Args:
             i : int
                 the index of the module
@@ -2598,7 +2600,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Alignment method to use",
                 "options": ["fiducial", "cross_correlation", "manual"],
+                "default": "cross_correlation",
                 "required": True,
+            },
+            "force_method": {
+                "type": "bool",
+                "description": "Whether to force the method (Or choose in background).",
+                "default": False,
+                "required": False,
             },
             "reference_channel": {
                 "type": "int",
@@ -4143,11 +4152,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
     def refine_mask_by_density(self):
         """
-        This module analyses and refines a previously created mask.
+        This module analyses and refines a previously created mask for
+        even signal.
         Particularly, the density histogram of the mask bins are plotted,
         and an area of homogeneous density can be selected
 
-        the locs must be protein positions at this stage.
+        The locs must be protein positions at this stage.
 
         Args:
             i : int
@@ -4176,25 +4186,51 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "density_range": {
-                "type": "tuple",
-                "description": "Min and max density values",
-                "length": 2,
-                "element_type": "float",
-                "required": True,
-            },
-            "refinement_method": {
-                "type": "str",
-                "description": "Method for mask refinement",
-                "options": ["erosion", "dilation", "opening", "closing"],
-                "default": "opening",
-                "required": False,
-            },
+            # "density_range": {
+            #     "type": "tuple",
+            #     "description": "Min and max density values",
+            #     "length": 2,
+            #     "element_type": "float",
+            #     "required": True,
+            # },
+            # "refinement_method": {
+            #     "type": "str",
+            #     "description": "Method for mask refinement",
+            #     "options": ["erosion", "dilation", "opening", "closing"],
+            #     "default": "opening",
+            #     "required": False,
+            # },
             "fp_mask": {
                 "type": "str",
                 "description": "The file path to the mask min_density, \
                     max_density : float the density range to select",
                 "required": True,
+            },
+            "density_std_cutoff": {
+                "type": "float",
+                "description":
+                    "Density range in units of std/median, "
+                    "symmetric around median. Alternative to max/min",
+                "min": 0,
+                "max": 1,
+                "default": 0,
+                "required": False,
+            },
+            "density_min": {
+                "type": "float",
+                "description":
+                    "Lower density cutoff."
+                    "Alternative to density_std_cutoff",
+                "default": 0,
+                "required": False,
+            },
+            "density_max": {
+                "type": "float",
+                "description":
+                    "Higher density cutoff."
+                    "Alternative to density_std_cutoff",
+                "default": 0,
+                "required": False,
             },
             "nbins": {
                 "type": "int",
@@ -4203,10 +4239,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "nth_largest": {
                 "type": "int",
-                "description": "Select the nth largest area in density range. \
-                    Set 0 for largest.",
+                "description":
+                    "Select the nth largest contiguous area in density "
+                    "range. Set 0 for largest.",
                 "required": False,
                 "min": 0,
+                "default": 0,
             },
             "apply_to_locs": {
                 "type": "bool",
@@ -5162,7 +5200,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "picked_locs": {
+            "fp_picked_locs": {
                 "type": ["numpy.ndarray", "str"],
                 "description": "Picked localization coordinates or file path",
                 "extensions": [".hdf5", ".txt"],
@@ -5174,12 +5212,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "options": ["linear", "spline", "polynomial"],
                 "default": "spline",
                 "required": False,
-            },
-            "fp_picked_locs": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the picked locs to undrift from (.hdf5 file of list of locs, with 'group' column to describe picks)
-                # Hint: type appears to be str
-                # Hint: required = True
             },
         }
 
@@ -5236,56 +5268,39 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "metric": {
-                "type": "str",
-                "description": "Metric to filter by",
-                "options": [
-                    "photons",
-                    "lpx",
-                    "lpy",
-                    "lpx_err",
-                    "lpy_err",
-                    "bg",
-                ],
-                "required": True,
-            },
-            "min_value": {
-                "type": "float",
-                "description": "Minimum allowed value",
-                "required": True,
-            },
-            "max_value": {
-                "type": "float",
-                "description": "Maximum allowed value",
-                "required": True,
-            },
-            "invert_filter": {
-                "type": "bool",
-                "description": "Whether to invert the filter logic",
-                "default": False,
-                "required": False,
-            },
             "field": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the field(s) to filter on
-                # Hint: type appears to be str or list
-                # Hint: required = True
+                "type": ["str", "list"],
+                "description": 
+                    "Field to filter by. One or list of columns in locs"
+                    " (e.g. 'photons', 'x', 'y', 'sx', 'sy')",
+                "required": True,
             },
             "minval": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be dtype
-                # Hint: required = False (optional)
+                "type": ["float", "list"],
+                "description": "Minimum filter cutoff value",
+                "required": True,
             },
             "maxval": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be dtype
-                # Hint: required = False (optional)
+                "type": ["float", "list"],
+                "description": "Maximum filter cutoff value",
+                "required": True,
             },
+            # "invert_filter": {
+            #     "type": "bool",
+            #     "description": "Whether to invert the filter logic",
+            #     "default": False,
+            #     "required": False,
+            # },
             "mode": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the mode of threshold application: in units of the field standard deviations from the mean (-2, 2 means cut off at 2*std from mean)
-                # Hint: type appears to be str
-                # Hint: required = False (optional)
+                "type": "str",
+                "description": "Metric to apply filter values to",
+                "options": [
+                    "absolute",
+                    "zscore",
+                    "quantile",
+                ],
+                "default": "absolute",
+                "required": False,
             },
         }
 
@@ -5342,35 +5357,45 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "frame_percentiles": {
-                "type": "tuple",
-                "description": "Min and max frame percentiles for filtering",
-                "length": 2,
-                "element_type": "float",
-                "min": 0.0,
-                "max": 100.0,
-                "default": [10.0, 90.0],
-                "required": True,
-            },
-            "binding_duration_range": {
-                "type": "tuple",
-                "description": "Min and max binding duration range",
-                "length": 2,
-                "element_type": "float",
+            # "frame_percentiles": {
+            #     "type": "tuple",
+            #     "description": "Min and max frame percentiles for filtering",
+            #     "length": 2,
+            #     "element_type": "float",
+            #     "min": 0.0,
+            #     "max": 100.0,
+            #     "default": [10.0, 90.0],
+            #     "required": True,
+            # },
+            # "binding_duration_range": {
+            #     "type": "tuple",
+            #     "description": "Min and max binding duration range",
+            #     "length": 2,
+            #     "element_type": "float",
+            #     "required": False,
+            # },
+            "meanframe_cutoff": {
+                "type": "float",
+                "description": "filter out positions at more extreme temporal positions",
+                "min": 0,
+                "max": 1,
+                "default": .1,
                 "required": False,
             },
-            "meanframe_cutoff": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
-            },
             "stdframe_cutoff": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filter out positions with lower std than .16
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "filter out positions with lower standard deviation",
+                "min": 0,
+                # "max": 1,
+                "default": .16,
+                "required": False,
             },
             "fp_locs": {
+                "type": "str",
+                "description": 
+                    "The filepath to localizations (self.locs should be the"
+                    " centers). If given, locs are filtered and saved as well.",
+                "required": False,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: the filepath to the underlying localizations (self.locs are centers). If given, these are filtered as well and saved with the same filename in the ...
                 # Hint: type appears to be str
@@ -5763,73 +5788,68 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "target_species": {
+            "target_name": {
                 "type": "str",
                 "description": "Name of target molecular species",
                 "required": True,
             },
-            "reference_species": {
+            "reference_name": {
                 "type": "str",
                 "description": "Name of reference species",
                 "required": True,
             },
-            "efficiency_model": {
-                "type": "str",
-                "description": "Model for efficiency calculation",
-                "options": ["poisson", "binomial", "maximum_likelihood"],
-                "default": "maximum_likelihood",
-                "required": False,
-            },
-            "reference_name": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the channgel_tag of the reference
-                # Hint: type appears to be str
-                # Hint: required = True
-            },
-            "target_name": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the channel_tag of the target queried for LE pair_distance: 10 # real distance of pair of tags in nm labeling_uncertainty : dict, channel tag to fl...
-                # Hint: type appears to be str
-                # Hint: required = True
-            },
+            # "efficiency_model": {
+            #     "type": "str",
+            #     "description": "Model for efficiency calculation",
+            #     "options": ["poisson", "binomial", "maximum_likelihood"],
+            #     "default": "maximum_likelihood",
+            #     "required": False,
+            # },
             "pair_distance": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be 10
-                # Hint: required = True
+                "type": "int",
+                "description": "Target-Reference pair distance [nm]",
+                "default": 10,
+                "required": True,
             },
             "labeling_uncertainty": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be dict
-                # Hint: required = True
+                "type": "dict",
+                "description":
+                    "Dictionary mapping from target/reference (tag) "
+                    "to labeling uncertainty [nm]",
+                # "default": 5,
+                "required": True,
             },
             "n_simulate": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of target molecules to be simulated; good value is e.g. 50000 density : dict, channel tag to float density to simulate [nm^2 or nm^3]; area ...
-                # Hint: type appears to be int
-                # Hint: required = True
+                "type": "int",
+                "description": "Number of structures to simulate",
+                "default": 500000,
+                "required": True,
             },
             "density": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be dict
-                # Hint: required = True
+                "type": "dict",
+                "description":
+                    "Dictionary mapping from target/reference (tag) "
+                    "to molecular density [nm^-2 or nm^-3]",
+                # "default": 5,
+                "required": True,
             },
             "granularity": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the spinna res_factor
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "The spinna res_factor",
+                "default": 100,
+                "required": True,
             },
             "sim_repeats": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of simulation repeats, for noise reduction
-                # Hint: type appears to be int
-                # Hint: required = True
+                "type": "int",
+                "description": "Number of simulation iterations",
+                "default": 10,
+                "required": True,
             },
             "nn_nth": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of nearest neighbors to analyse
-                # Hint: type appears to be int
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Neighbor up to which to evaluate",
+                "default": 2,
+                "required": False,
             },
         }
 
@@ -7296,7 +7316,7 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         # Command type selection
         layout.addWidget(QtWidgets.QLabel("Command type:"))
         self.command_combo = QtWidgets.QComboBox()
-        self.command_combo.addItems(["map", "Previous Module Result", "Prior Result"])#, "sum", "max", "min"])
+        self.command_combo.addItems(["map", "index", "Previous Module Result", "Prior Result"])#, "sum", "max", "min"])
         self.command_combo.setItemDelegate(ToolTipDelegate(self.command_combo))
         self.command_combo.currentIndexChanged.connect(self._on_command_changed)
         # self.command_combo.model().setData(
@@ -7363,6 +7383,15 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.map_combo.addItems(["filepath", "#tags"])
         self.map_combo.currentTextChanged.connect(self._on_map_option)
 
+        # Create widgets for "index" mode
+        self.index_label = QtWidgets.QLabel("Index option:")
+        self.index_combo = QtWidgets.QComboBox()
+        self.index_combo.addItems(["filepath", "#tags"])
+        self.index_combo.currentTextChanged.connect(self._on_index_option)
+        self.index_spin = QtWidgets.QSpinBox()
+        self.index_spin.setMinimum(0)
+        self.index_spin.setValue(0)
+
         layout.addWidget(QtWidgets.QLabel("Assembled Command:"))
         self.command_result = QtWidgets.QLineEdit()
         layout.addSpacing(10)
@@ -7405,6 +7434,10 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             # Show map option widgets
             self.dynamic_layout.addWidget(self.map_label)
             self.dynamic_layout.addWidget(self.map_combo)
+        elif command_type == "index":
+            self.dynamic_layout.addWidget(self.index_label)
+            self.dynamic_layout.addWidget(self.index_combo)
+            self.dynamic_layout.addWidget(self.index_spin)
         elif command_type == "Prior Result":
             # Show module and result selection widgets
             self.dynamic_layout.addWidget(self.prior_thisstage)
@@ -7505,28 +7538,28 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         command = self.get_command()
         self.command_result.setText(command)
 
-    def get_selection(self):
-        """Get the selected module index, result name, command type, and timing.
+    # def get_selection(self):
+    #     """Get the selected module index, result name, command type, and timing.
 
-        Returns:
-            tuple: For "map" command: (None, map_option: str, "map", timing: str)
-                   For other commands: (module_index: int, result_name: str, command_type: str, timing: str)
-                   command_type is "map", "Prior Result", "sum", "max", or "min"
-                   timing is either "before" or "start"
-                   map_option is "filepath" or "#tags"
-        """
-        command_type = self.command_combo.currentText()
-        timing = "before" if self.timing_before_radio.isChecked() else "start"
+    #     Returns:
+    #         tuple: For "map" command: (None, map_option: str, "map", timing: str)
+    #                For other commands: (module_index: int, result_name: str, command_type: str, timing: str)
+    #                command_type is "map", "Prior Result", "sum", "max", or "min"
+    #                timing is either "before" or "start"
+    #                map_option is "filepath" or "#tags"
+    #     """
+    #     command_type = self.command_combo.currentText()
+    #     timing = "before" if self.timing_before_radio.isChecked() else "start"
 
-        if command_type == "map":
-            # For map command, return map option instead of module/result
-            map_option = self.map_combo.currentText()
-            return None, map_option, command_type, timing
-        else:
-            # For other commands, return module index and result name
-            module_index = self.module_combo.currentIndex()
-            result_name = self.result_combo.currentText()
-            return module_index, result_name, command_type, timing
+    #     if command_type == "map":
+    #         # For map command, return map option instead of module/result
+    #         map_option = self.map_combo.currentText()
+    #         return None, map_option, command_type, timing
+    #     else:
+    #         # For other commands, return module index and result name
+    #         module_index = self.module_combo.currentIndex()
+    #         result_name = self.result_combo.currentText()
+    #         return module_index, result_name, command_type, timing
 
     def get_command(self):
         command_type = self.command_combo.currentText()
@@ -7540,6 +7573,10 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             # For map command, return map option instead of module/result
             map_option = self.map_combo.currentText()
             command_string = f"('{timing_cmd}map', '{map_option}')"
+        elif command_type == "index":
+            map_option = self.index_combo.currentText()
+            index = self.index_spin.value()
+            command_string = f"('{timing_cmd}index {index}', '{map_option}')"
         elif command_type == "Prior Result":
             if self.prior_thisstage.isChecked():
                 cmd_prefix = "results"
@@ -8735,7 +8772,7 @@ class Window(QtWidgets.QMainWindow):
                         # Key -> Name, Value -> File Path
                         dict_to_table(file_dict, self.files_table)
 
-                        logger.info(f"Loaded file list from {yaml_file}")
+                        logger.debug(f"Loaded file list from {yaml_file}")
                         return  # Stop after loading first matching file
                     else:
                         logger.warning(
@@ -8753,21 +8790,111 @@ class Window(QtWidgets.QMainWindow):
         # No YAML files found - this is normal, no action needed
         logger.debug("No src_loc.yaml or raw_locs_list.yaml found in folder")
 
+    def _safe_eval_node(self, node, variables=None):
+        """Evaluate AST node, handling literals, string concat, and f-strings.
+
+        This is a custom evaluator that handles more complex expressions than
+        ast.literal_eval, including:
+        - Literals (strings, numbers, lists, tuples, dicts)
+        - String concatenation (ast.BinOp with ast.Add)
+        - F-strings (ast.JoinedStr) with variable substitution
+        - Variable references (ast.Name) from a known variables dict
+
+        Args:
+            node: AST node to evaluate
+            variables: Dict of known variable values
+                (e.g., {'idx_last_sgl_module': 6})
+
+        Returns:
+            Evaluated Python value
+
+        Raises:
+            ValueError: If node cannot be safely evaluated
+        """
+        import ast
+
+        if variables is None:
+            variables = {}
+
+        # Handle different node types
+        if isinstance(node, ast.Constant):
+            return node.value
+
+        elif isinstance(node, ast.List):
+            return [self._safe_eval_node(el, variables) for el in node.elts]
+
+        elif isinstance(node, ast.Tuple):
+            return tuple(
+                self._safe_eval_node(el, variables) for el in node.elts
+            )
+
+        elif isinstance(node, ast.Dict):
+            keys = [
+                self._safe_eval_node(k, variables) if k else None
+                for k in node.keys
+            ]
+            vals = [self._safe_eval_node(v, variables) for v in node.values]
+            return dict(zip(keys, vals))
+
+        elif isinstance(node, ast.Set):
+            return {self._safe_eval_node(el, variables) for el in node.elts}
+
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            # String/list concatenation
+            left = self._safe_eval_node(node.left, variables)
+            right = self._safe_eval_node(node.right, variables)
+            return left + right
+
+        elif isinstance(node, ast.JoinedStr):
+            # F-string: f"text {var:fmt} more"
+            parts = []
+            for part in node.values:
+                if isinstance(part, ast.Constant):
+                    parts.append(str(part.value))
+                elif isinstance(part, ast.FormattedValue):
+                    val = self._safe_eval_node(part.value, variables)
+                    if part.format_spec:
+                        # Format spec is also a JoinedStr
+                        fmt = self._safe_eval_node(part.format_spec, variables)
+                        parts.append(format(val, fmt))
+                    else:
+                        parts.append(str(val))
+            return ''.join(parts)
+
+        elif isinstance(node, ast.Name):
+            if node.id in variables:
+                return variables[node.id]
+            raise ValueError(f"Unknown variable: {node.id}")
+
+        # Python 3.7 compatibility (ast.Str, ast.Num deprecated but may exist)
+        elif hasattr(ast, 'Str') and isinstance(node, ast.Str):
+            return node.s
+        elif hasattr(ast, 'Num') and isinstance(node, ast.Num):
+            return node.n
+
+        raise ValueError(f"Cannot evaluate node: {type(node).__name__}")
+
     def _load_workflow_definition_alt(self, folder):
         """Load workflow definition from functions (alternative format).
 
         This handles cases where workflow_modules_sgl and workflow_modules_agg
-        are defined inside functions rather than at module level.
+        are defined inside functions rather than at module level. Uses a custom
+        AST evaluator to handle complex expressions like string concatenation,
+        f-strings, and variable references.
 
         Args:
             folder: Path to the folder to search
         """
         import ast
 
+        print(f"DEBUG: _load_workflow_definition_alt called with folder={folder}")
         workflow_file = os.path.join(folder, "start_workflow.py")
+
+        logger.debug('loading definition (alt)')
 
         if not os.path.exists(workflow_file):
             logger.debug("No start_workflow.py found in folder")
+            print("No start_workflow.py found in folder")
             return
 
         try:
@@ -8777,25 +8904,204 @@ class Window(QtWidgets.QMainWindow):
 
             tree = ast.parse(source_code)
 
-            # Find workflow module definitions in function bodies
+            # Find workflow module definitions
             workflow_modules_sgl = None
             workflow_modules_agg = None
+            workflow_modules_multi = None
 
-            # Search through all function definitions
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef):
-                    # Look for assignments to workflow_modules_sgl and workflow_modules_agg
-                    for stmt in node.body:
-                        if isinstance(stmt, ast.Assign):
-                            for target in stmt.targets:
-                                if isinstance(target, ast.Name):
-                                    if target.id == 'workflow_modules_sgl':
-                                        # Extract the value
-                                        workflow_modules_sgl = ast.literal_eval(stmt.value)
-                                    elif target.id == 'workflow_modules_agg':
-                                        workflow_modules_agg = ast.literal_eval(stmt.value)
-            logger.debug(f"{workflow_modules_sgl}")
-            logger.debug(f"{workflow_modules_agg}")
+            # Variables dict for resolving variable references in expressions
+            variables = {}
+
+            # Helper to safely evaluate AST nodes using the custom evaluator
+            def safe_eval_node(node, var_name, variables_dict):
+                """Try to evaluate an AST node using custom evaluator.
+
+                Returns None if evaluation fails.
+                Note: Do NOT fall back to ast.literal_eval - it's more
+                restrictive and cannot handle BinOp nodes (string concat).
+                """
+                try:
+                    return self._safe_eval_node(node, variables_dict)
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"Could not evaluate {var_name}: {e}")
+                    print(f"DEBUG: Could not evaluate {var_name}: {e}")
+                    return None
+
+            def search_assignments(statements, variables_dict):
+                """Search statements for workflow variable assignments.
+
+                Returns tuple (sgl, agg, multi) of found values.
+                Also updates variables_dict with any idx_last_sgl_module found.
+                """
+                sgl = None
+                agg = None
+                multi = None
+
+                for stmt in statements:
+                    if isinstance(stmt, ast.Assign):
+                        for target in stmt.targets:
+                            if isinstance(target, ast.Name):
+                                if target.id == 'workflow_modules_sgl':
+                                    sgl = safe_eval_node(
+                                        stmt.value, 'workflow_modules_sgl',
+                                        variables_dict
+                                    )
+                                    # Update idx_last_sgl_module for later use
+                                    if sgl and isinstance(sgl, list):
+                                        variables_dict['idx_last_sgl_module'] = (
+                                            len(sgl) - 1
+                                        )
+                                        print(
+                                            f"DEBUG: Set idx_last_sgl_module="
+                                            f"{variables_dict['idx_last_sgl_module']}"
+                                        )
+                                elif target.id == 'workflow_modules_agg':
+                                    agg = safe_eval_node(
+                                        stmt.value, 'workflow_modules_agg',
+                                        variables_dict
+                                    )
+                                elif target.id == 'workflow_modules_multi':
+                                    multi = safe_eval_node(
+                                        stmt.value, 'workflow_modules_multi',
+                                        variables_dict
+                                    )
+                                elif target.id == 'idx_last_sgl_module':
+                                    # Try to evaluate the variable assignment
+                                    try:
+                                        val = self._safe_eval_node(
+                                            stmt.value, variables_dict
+                                        )
+                                        variables_dict['idx_last_sgl_module'] = val
+                                        print(
+                                            f"DEBUG: Found idx_last_sgl_module "
+                                            f"assignment: {val}"
+                                        )
+                                    except (ValueError, TypeError):
+                                        pass
+                return sgl, agg, multi
+
+            # First search module-level assignments
+            sgl, agg, multi = search_assignments(tree.body, variables)
+            if sgl is not None:
+                workflow_modules_sgl = sgl
+            if agg is not None:
+                workflow_modules_agg = agg
+            if multi is not None:
+                workflow_modules_multi = multi
+
+            print("DEBUG: After module-level search:")
+            print(f"  workflow_modules_sgl: {workflow_modules_sgl}")
+            print(f"  workflow_modules_agg: {workflow_modules_agg}")
+            print(f"  workflow_modules_multi: {workflow_modules_multi}")
+            print(f"  variables: {variables}")
+
+            # Search inside function definitions if nothing meaningful found
+            # Note: search functions if lists are None OR empty
+            needs_function_search = (
+                (workflow_modules_sgl is None or workflow_modules_sgl == [])
+                and (workflow_modules_agg is None or workflow_modules_agg == [])
+                and (workflow_modules_multi is None
+                     or workflow_modules_multi == {})
+            )
+
+            if needs_function_search:
+                print("DEBUG: Searching inside function definitions...")
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.FunctionDef):
+                        # Reset variables for this function scope
+                        func_variables = dict(variables)
+                        sgl, agg, multi = search_assignments(
+                            node.body, func_variables
+                        )
+
+                        # Update main variables dict with any found variables
+                        variables.update(func_variables)
+
+                        if sgl is not None and workflow_modules_sgl is None:
+                            workflow_modules_sgl = sgl
+                        if agg is not None and workflow_modules_agg is None:
+                            workflow_modules_agg = agg
+                        if multi is not None and workflow_modules_multi is None:
+                            workflow_modules_multi = multi
+
+            # If workflow_modules_sgl was found but workflow_modules_agg was not,
+            # try again with the updated variables dict (now has idx_last_sgl_module)
+            if (workflow_modules_sgl is not None
+                    and isinstance(workflow_modules_sgl, list)
+                    and len(workflow_modules_sgl) > 0
+                    and (workflow_modules_agg is None
+                         or workflow_modules_agg == [])):
+                print(
+                    "DEBUG: Retrying workflow_modules_agg with updated "
+                    f"variables: {variables}"
+                )
+
+                # Search module level again with updated variables
+                for stmt in tree.body:
+                    if isinstance(stmt, ast.Assign):
+                        for target in stmt.targets:
+                            if (isinstance(target, ast.Name)
+                                    and target.id == 'workflow_modules_agg'):
+                                result = safe_eval_node(
+                                    stmt.value, 'workflow_modules_agg',
+                                    variables
+                                )
+                                if result is not None:
+                                    workflow_modules_agg = result
+
+                # Search inside functions again with updated variables
+                if workflow_modules_agg is None or workflow_modules_agg == []:
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.FunctionDef):
+                            for stmt in node.body:
+                                if isinstance(stmt, ast.Assign):
+                                    for target in stmt.targets:
+                                        if (isinstance(target, ast.Name)
+                                                and target.id == 'workflow_modules_agg'):
+                                            result = safe_eval_node(
+                                                stmt.value, 'workflow_modules_agg',
+                                                variables
+                                            )
+                                            if result is not None:
+                                                workflow_modules_agg = result
+
+                if workflow_modules_agg is not None:
+                    print(
+                        f"DEBUG: After retry, found workflow_modules_agg with "
+                        f"{len(workflow_modules_agg)} modules"
+                    )
+                else:
+                    print("DEBUG: After retry, workflow_modules_agg still None")
+
+            # Check for workflow_modules_multi dict format
+            if workflow_modules_multi is not None and isinstance(
+                workflow_modules_multi, dict
+            ):
+                logger.debug(
+                    "Found workflow_modules_multi dict in function (alt)"
+                )
+                if workflow_modules_sgl is None:
+                    workflow_modules_sgl = workflow_modules_multi.get(
+                        "single_dataset_modules"
+                    )
+                if workflow_modules_agg is None:
+                    workflow_modules_agg = workflow_modules_multi.get(
+                        "aggregation_modules"
+                    )
+
+            # Debug logging
+            logger.debug(
+                f"Alt loader found: "
+                f"workflow_modules_sgl={'list' if isinstance(workflow_modules_sgl, list) else type(workflow_modules_sgl).__name__}, "
+                f"workflow_modules_agg={'list' if isinstance(workflow_modules_agg, list) else type(workflow_modules_agg).__name__}, "
+                f"workflow_modules_multi={'dict' if isinstance(workflow_modules_multi, dict) else type(workflow_modules_multi).__name__}"
+            )
+            print(
+                f"Alt loader found: "
+                f"workflow_modules_sgl={'list' if isinstance(workflow_modules_sgl, list) else type(workflow_modules_sgl).__name__}, "
+                f"workflow_modules_agg={'list' if isinstance(workflow_modules_agg, list) else type(workflow_modules_agg).__name__}, "
+                f"workflow_modules_multi={'dict' if isinstance(workflow_modules_multi, dict) else type(workflow_modules_multi).__name__}"
+            )
 
             # Load single dataset workflow if found
             if workflow_modules_sgl is not None and isinstance(
@@ -8808,7 +9114,21 @@ class Window(QtWidgets.QMainWindow):
                     "Single Dataset",
                 )
                 logger.info(
-                    f"Loaded {len(workflow_modules_sgl)} modules to Single Dataset workflow (alt)"
+                    f"Loaded {len(workflow_modules_sgl)} modules to "
+                    "Single Dataset workflow (alt)"
+                )
+                print(
+                    f"Loaded {len(workflow_modules_sgl)} modules to "
+                    "Single Dataset workflow (alt)"
+                )
+            else:
+                logger.info(
+                    "No single dataset modules found in workflow template "
+                    "(alt)"
+                )
+                print(
+                    "No single dataset modules found in workflow template "
+                    "(alt)"
                 )
 
             # Load aggregation workflow if found
@@ -8822,32 +9142,41 @@ class Window(QtWidgets.QMainWindow):
                     "Aggregation",
                 )
                 logger.info(
-                    f"Loaded {len(workflow_modules_agg)} modules to Aggregation workflow (alt)"
+                    f"Loaded {len(workflow_modules_agg)} modules to "
+                    "Aggregation workflow (alt)"
                 )
+                print(
+                    f"Loaded {len(workflow_modules_agg)} modules to "
+                    "Aggregation workflow (alt)"
+                )
+                # Set workflow type to "Aggregation Workflow"
+                self.workflow_type.setCurrentIndex(1)
+            else:
+                logger.info(
+                    "No aggregation modules found in workflow template (alt)"
+                )
+                print(
+                    "No aggregation modules found in workflow template (alt)"
+                )
+                # Set workflow type to "Single Workflow"
+                self.workflow_type.setCurrentIndex(0)
 
         except SyntaxError as e:
             logger.error(f"Syntax error in start_workflow.py: {e}")
+            print(f"Syntax error in start_workflow.py: {e}")
             QtWidgets.QMessageBox.warning(
                 self,
                 "Workflow Load Error",
                 f"Syntax error in start_workflow.py:\n{str(e)}",
             )
-        except ValueError as e:
-            logger.error(f"Could not evaluate workflow definitions: {e}")
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Workflow Load Error",
-                f"Could not evaluate workflow definitions:\n{str(e)}\n\n"
-                "Note: Complex expressions may not be supported.",
-            )
         except Exception as e:
             logger.error(f"Error loading start_workflow.py (alt): {e}")
+            print(f"Error loading start_workflow.py (alt): {e}")
             QtWidgets.QMessageBox.warning(
                 self,
                 "Workflow Load Error",
                 f"Failed to load workflow from start_workflow.py:\n{str(e)}",
             )
-
 
     def _load_workflow_definition(self, folder):
         """Search for workflow definition file and load workflow modules.
@@ -8856,6 +9185,8 @@ class Window(QtWidgets.QMainWindow):
             folder: Path to the folder to search
         """
         workflow_file = os.path.join(folder, "start_workflow.py")
+
+        logger.debug('loaing definition')
 
         if not os.path.exists(workflow_file):
             logger.debug("No start_workflow.py found in folder")
@@ -8881,6 +9212,34 @@ class Window(QtWidgets.QMainWindow):
                 module, "workflow_modules_agg", None
             )
 
+            # Also check for workflow_modules_multi dict format
+            # (used by standard_aggregation_workflows.py)
+            workflow_modules_multi = getattr(
+                module, "workflow_modules_multi", None
+            )
+            if workflow_modules_multi is not None and isinstance(
+                workflow_modules_multi, dict
+            ):
+                logger.debug(
+                    "Found workflow_modules_multi dict at module level"
+                )
+                if workflow_modules_sgl is None:
+                    workflow_modules_sgl = workflow_modules_multi.get(
+                        "single_dataset_modules"
+                    )
+                if workflow_modules_agg is None:
+                    workflow_modules_agg = workflow_modules_multi.get(
+                        "aggregation_modules"
+                    )
+
+            # Debug logging to track what was found
+            logger.debug(
+                f"Module-level variables found: "
+                f"workflow_modules_sgl={'list' if isinstance(workflow_modules_sgl, list) else type(workflow_modules_sgl).__name__}, "
+                f"workflow_modules_agg={'list' if isinstance(workflow_modules_agg, list) else type(workflow_modules_agg).__name__}, "
+                f"workflow_modules_multi={'dict' if isinstance(workflow_modules_multi, dict) else type(workflow_modules_multi).__name__}"
+            )
+
             # If no modules found at module level, try alternative loader
             if workflow_modules_sgl is None and workflow_modules_agg is None:
                 logger.info("No workflow modules found at module level, trying alternative loader")
@@ -8898,7 +9257,12 @@ class Window(QtWidgets.QMainWindow):
                     "Single Dataset",
                 )
                 logger.info(
-                    f"Loaded {len(workflow_modules_sgl)} modules to Single Dataset workflow"
+                    f"Loaded {len(workflow_modules_sgl)} modules to "
+                    "Single Dataset workflow"
+                )
+            else:
+                logger.info(
+                    "No single dataset modules found in workflow template"
                 )
 
             # Load aggregation workflow if present
@@ -8912,8 +9276,17 @@ class Window(QtWidgets.QMainWindow):
                     "Aggregation",
                 )
                 logger.info(
-                    f"Loaded {len(workflow_modules_agg)} modules to Aggregation workflow"
+                    f"Loaded {len(workflow_modules_agg)} modules to "
+                    "Aggregation workflow"
                 )
+                # Set workflow type to "Aggregation Workflow"
+                self.workflow_type.setCurrentIndex(1)
+            else:
+                logger.info(
+                    "No aggregation modules found in workflow template"
+                )
+                # Set workflow type to "Single Dataset Workflow"
+                self.workflow_type.setCurrentIndex(0)
 
         except Exception as e:
             logger.error(f"Error loading start_workflow.py: {e}")
@@ -9541,12 +9914,16 @@ class Window(QtWidgets.QMainWindow):
 
         # Add datasets
         for key, values in datasets.items():
-            # script_lines.append(f"    {repr(key)}: [")
-            if isinstance(values, list):
-                value = values[0]
-            formatted = format_value(value)
-            script_lines.append(f"    {repr(key)}: {formatted},")
-            # script_lines.append("    ],")
+            if isinstance(values, list) and len(values) == 1:
+                script_lines.append(f"    {repr(key)}: [")
+                formatted = format_value(values[0])
+                script_lines.append(f"    {repr(key)}: {formatted},")
+            else:
+                script_lines.append(f"    {repr(key)}: [")
+                for value in values:
+                    formatted = format_value(value)
+                    script_lines.append(f"        {formatted},")
+                script_lines.append("    ],")
         script_lines.append("}")
 
         script_lines.extend(

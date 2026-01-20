@@ -2141,6 +2141,10 @@ class ParameterCommandExecutor(DictSimpleTyper):
             elif cmd == f"{self.command_sign}map":
                 res = self.map[t[1]]
                 logger.debug(f"Mapping {t[1]}: {res}")
+            elif cmd == f"{self.command_sign}index":
+                idx = int(aritexp)
+                res = self.map[t[1]][idx]
+                logger.debug(f"Indexing map {t[1]}[{idx}]: {res}")
             elif cmd == f"{self.command_sign}sum":
                 logger.debug(f"summing up {t[1:]}.")
                 components = []

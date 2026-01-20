@@ -3561,7 +3561,7 @@ def _undrift_from_picked_coordinate(info, picked_locs, coordinate):
     channel : int
         Channel where locs are being undrifted
     picked_locs : list
-        List of np.recarrays with locs for each pick
+        List of pd.DataFrames with locs for each pick
     coordinate : str
         Spatial coordinate where drift is to be found
 
