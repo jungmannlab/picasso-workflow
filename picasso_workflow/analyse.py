@@ -6688,7 +6688,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             if len(fitresult.x) > 1:
                 bkgs.append(fitresult.x[1])
             else:
-                bkgs.append(parameters.get("bkg_fraction", 0))
+                bkgs.append(float(parameters.get("bkg_fraction", 0)))
 
             # Calculate goodness-of-fit using Wasserstein distance and KS tests
             k_wasserstein_distances = []
@@ -6702,7 +6702,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         (observed_distances >= kwargs.get("min_dist", 0))
                         & (
                             observed_distances
-                            <= kwargs.get("max_dist", np.inf)
+                            <= float(kwargs.get("max_dist", np.inf))
                         )
                     ]
 
@@ -6713,7 +6713,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                             np.max(observed_filtered) * 1.2
                         )  # Extend range slightly
                         r_theory = np.linspace(
-                            kwargs.get("min_dist", 0),
+                            float(kwargs.get("min_dist", 0)),
                             max_dist_theory,
                             n_samples,
                         )
@@ -6723,9 +6723,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                             r_theory,
                             k,
                             rho_mle,
-                            d=parameters["dimensionality"],
-                            min_dist=kwargs.get("min_dist", 0),
-                            max_dist=kwargs.get("max_dist", np.inf),
+                            d=int(parameters["dimensionality"]),
+                            min_dist=float(kwargs.get("min_dist", 0)),
+                            max_dist=float(kwargs.get("max_dist", np.inf)),
                             bkg_fraction=bkgs[-1],
                             renormalize=True,
                         )
