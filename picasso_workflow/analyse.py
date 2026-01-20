@@ -6283,6 +6283,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             setval = parameters.get(oa, default)
             if oa == "calibration" and setval == "":
                 setval = default
+            elif (
+                oa == "callback_parent"
+                and (setval == "silent" or setval == "None")
+            ):
+                setval = None
             kwargs[oa] = setval
 
         results["g5m_args"] = str(kwargs)
