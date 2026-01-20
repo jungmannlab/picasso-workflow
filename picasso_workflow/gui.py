@@ -7837,6 +7837,8 @@ class Window(QtWidgets.QMainWindow):
 
         self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
         self.cluster_use_module.setMaximumWidth(200)
+        self.cluster_use_module.setChecked(True)
+        # self.cluster_use_module.connect(self.on_cluster_use_module_state_change)
         cluster_config_layout.addWidget(self.cluster_use_module)
 
         slurm_buttons = QtWidgets.QHBoxLayout()
@@ -8690,10 +8692,14 @@ class Window(QtWidgets.QMainWindow):
         """Enable or disable file and module widgets based on results folder selection."""
         self.workflow_type.setEnabled(enabled)
         # Files box widgets
-        self.add_files_button.setEnabled(enabled)
-        self.remove_files_button.setEnabled(enabled)
-        self.clear_files_button.setEnabled(enabled)
-        self.files_table.setEnabled(enabled)
+        try:
+            self.add_files_button.setEnabled(enabled)
+            self.remove_files_button.setEnabled(enabled)
+            self.clear_files_button.setEnabled(enabled)
+            self.files_table.setEnabled(enabled)
+        except RuntimeError:
+            # we're not in Single Workflow mode
+            pass
 
         # Modules box widgets
         self.current_module.setEnabled(enabled)
@@ -9641,6 +9647,12 @@ class Window(QtWidgets.QMainWindow):
             )  # Single Dataset: enabled
             self.workflow_tabs.setTabEnabled(1, True)  # Aggregation: enabled
             self.workflow_tabs.setTabEnabled(2, True)  # Investigation: enabled
+
+    # def on_cluster_use_module_state_change(self, state):
+    #     if not self.cluster_use_module.isChecked():
+    #         QtWidgets.QMessageBox.warning(
+    #             self, "Warning",
+    #             "Are you very sure?")
 
     def remove_selected(self):
         """Remove the selected module from the workflow."""

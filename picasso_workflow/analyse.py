@@ -6658,7 +6658,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             "kmin": kmin,
             "rho_bound_factor": 10,
         }
-        d = parameters.get("dimensionality", 2)
+        d = int(parameters.get("dimensionality", 2))
         kwargs["d"] = d
         rho_init = 2 / (2 * d * np.pi * np.median(nneighbors[:, 0]) ** d)
         kwargs["rho_init"] = rho_init
