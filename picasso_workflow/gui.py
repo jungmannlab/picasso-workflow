@@ -7791,20 +7791,30 @@ class Window(QtWidgets.QMainWindow):
         run_on_cluster_layout = QtWidgets.QVBoxLayout(run_on_cluster_tab)
         self.run_tabs.addTab(run_on_cluster_tab, "Run on SLURM Cluster")
 
-        # Cluster configuration widgets
-        cluster_config_layout = QtWidgets.QHBoxLayout()
-        cluster_config_widget = QtWidgets.QWidget()
-        cluster_config_widget.setLayout(cluster_config_layout)
-        run_on_cluster_layout.addWidget(cluster_config_widget)
+        # Cluster selection widgets
+        cluster_select_layout = QtWidgets.QHBoxLayout()
+        cluster_select_widget = QtWidgets.QWidget()
+        cluster_select_widget.setLayout(cluster_select_layout)
+        run_on_cluster_layout.addWidget(cluster_select_widget)
 
         # Cluster Host dropdown
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Cluster Host:"))
+        cluster_select_layout.addWidget(QtWidgets.QLabel("Cluster Host:"))
         self.cluster_host_combo = QtWidgets.QComboBox()
         for host in CONFIG["SlurmLoginNodes"].keys():
             self.cluster_host_combo.addItem(host)
         self.cluster_host_combo.setEditable(True)
         # self.cluster_host_combo.addItems(["localhost", "cluster.example.com"])
-        cluster_config_layout.addWidget(self.cluster_host_combo)
+        cluster_select_layout.addWidget(self.cluster_host_combo)
+
+        self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
+        self.cluster_use_module.setMaximumWidth(80)
+        cluster_select_layout.addWidget(self.cluster_use_module)
+
+        # Cluster configuration widgets
+        cluster_config_layout = QtWidgets.QHBoxLayout()
+        cluster_config_widget = QtWidgets.QWidget()
+        cluster_config_widget.setLayout(cluster_config_layout)
+        run_on_cluster_layout.addWidget(cluster_config_widget)
 
         # Number of nodes
         cluster_config_layout.addWidget(QtWidgets.QLabel("#nodes:"))
@@ -7845,10 +7855,6 @@ class Window(QtWidgets.QMainWindow):
         )
         self.cluster_timeout_edit.setMaximumWidth(100)
         cluster_config_layout.addWidget(self.cluster_timeout_edit)
-
-        self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
-        self.cluster_use_module.setMaximumWidth(80)
-        cluster_config_layout.addWidget(self.cluster_use_module)
 
         slurm_buttons = QtWidgets.QHBoxLayout()
         self.slurm_buttons_widget = QtWidgets.QWidget()
@@ -9952,18 +9958,26 @@ class Window(QtWidgets.QMainWindow):
                 "from picasso_workflow.metaworkflow import InvestigationWorkflowCoordinator"
             )
 
-        cf_url = self.confluence_url_edit.currentText()
+        cf_url = self.confluence_url_edit.text()
         if cf_url == "":
             cf_url = "os.getenv('CONFLUENCE_URL')"
-        cf_space = self.confluence_space_edit.currentText()
+        else:
+            cf_url = f'"{cf_url}"'
+        cf_space = self.confluence_space_edit.text()
         if cf_space == "":
             cf_space = "os.getenv('CONFLUENCE_SPACE')"
-        cf_token = self.confluence_token_edit.currentText()
+        else:
+            cf_space = f'"{cf_space}"'
+        cf_token = self.confluence_token_edit.text()
         if cf_token == "":
             cf_token = "os.getenv('CONFLUENCE_BEARER')"
-        cf_ppage = self.confluence_parent_page_edit.currentText()
+        else:
+            cf_token = f'"{cf_token}"'
+        cf_ppage = self.confluence_parent_page_edit.text()
         if cf_ppage == "":
             cf_ppage = "os.getenv('CONFLUENCE_BASE_PAGE')"
+        else:
+            cf_ppage = f'"{cf_ppage}"'
 
         script_lines.extend(
             [

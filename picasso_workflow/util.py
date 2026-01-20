@@ -2010,6 +2010,12 @@ class DictSimpleTyper:
                 addl_items[f"{k}_originalnocmd"] = result["original"]
             else:
                 d[k] = result
+
+            # also keys may be commands
+            if isinstance(k, tuple):
+                k_result = self.scan(k)
+                if isinstance(result, dict):
+                    d[k_result["parsed"]] = d[k]
         for k, v in addl_items.items():
             d[k] = v
         return d
