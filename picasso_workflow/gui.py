@@ -2636,7 +2636,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description":
                             "Whether to force a method or"
                             " let the alogritm decide on the best method."
-                            "options: 'RCC', 'picked'",
+                            "options: 'RCC', 'picked', 'RSSO'",
                         "default": None,
                     },
                     "max_shift": {
@@ -8119,6 +8119,17 @@ class Window(QtWidgets.QMainWindow):
         workflow_buttons.addWidget(move_down_button)
         move_down_button.clicked.connect(self.move_down)
 
+        self.addl_options_widget = QtWidgets.QWidget()
+        self.addl_options_layout = QtWidgets.QHBoxLayout(
+            self.addl_options_widget
+        )
+        self.addl_options_layout.setContentsMargins(0, 0, 0, 0)
+        self.modules_box.addWidget(self.addl_options_widget, 3, 0)
+
+        # Add options
+        self.always_save = QtWidgets.QCheckBox("Save localizations after every module.")
+        self.addl_options_layout.addWidget(self.always_save)
+
         # resize the widgets
         # Set fixed size for the group box
         self.current_module.setMinimumSize(500, 300)
@@ -10046,6 +10057,7 @@ class Window(QtWidgets.QMainWindow):
         )
 
         # Add coordinator creation based on workflow type
+        always_save = self.always_save.isChecked()
         if workflow_type_index == 0:  # Single Workflow
             # script_lines.extend([
             #     "    # Create single workflow runner",
@@ -10068,7 +10080,7 @@ class Window(QtWidgets.QMainWindow):
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
                     "        base_page,",
-                    "        always_save=True",
+                    f"        always_save={always_save}",
                     "    )",
                     "",
                     "    # Run workflow",
@@ -10083,7 +10095,7 @@ class Window(QtWidgets.QMainWindow):
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
                     "        base_page,",
-                    "        always_save=False",
+                    f"        always_save={always_save}",
                     "    )",
                     "",
                     "    # Run analysis",
@@ -10098,7 +10110,7 @@ class Window(QtWidgets.QMainWindow):
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
                     "        base_page,",
-                    "        always_save=False",
+                    f"        always_save={always_save}",
                     "    )",
                     "",
                     "    # Run investigation",
