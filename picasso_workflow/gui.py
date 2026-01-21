@@ -7838,6 +7838,7 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
         self.cluster_use_module.setMaximumWidth(200)
         self.cluster_use_module.setChecked(True)
+        self.cluster_use_module.setToolTip("Use the miblab SLURM module for picasso-workflow (recommended). Otherwise, use Heinrich's repository.")
         # self.cluster_use_module.connect(self.on_cluster_use_module_state_change)
         cluster_config_layout.addWidget(self.cluster_use_module)
 

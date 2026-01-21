@@ -2015,7 +2015,7 @@ class DictSimpleTyper:
             if isinstance(k, tuple):
                 k_result = self.scan(k)
                 if isinstance(k_result, dict):
-                    d[k_result["parsed"]] = d[k]
+                    addl_items[k_result["parsed"]] = d[k]
         for k, v in addl_items.items():
             d[k] = v
         return d
