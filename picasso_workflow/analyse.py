@@ -6648,27 +6648,25 @@ class AutoPicasso(util.AbstractModuleCollection):
         nneighbors = nneighbor_list[0]
         # print(nneighbors.shape)
         # return
-        kmin = parameters.get("kmin", 1)
+        kmin = int(parameters.get("kmin", 1))
         k_max = nneighbors.shape[1]
         # nspots = nneighbors.shape[0]
-        d = parameters["dimensionality"]
-        min_dist = parameters.get("min_dist", 0)
+        d = int(parameters.get("dimensionality", 2))
         kwargs = {
             # "nn_dists": nneighbors.T[kmin - 1 :, :],
             "kmin": kmin,
             "rho_bound_factor": 10,
         }
-        d = int(parameters.get("dimensionality", 2))
+        if min_dist := parameters.get("min_dist"):
+            kwargs["min_dist"] = float(min_dist)
+        if max_dist := parameters.get("max_dist"):
+            kwargs["max_dist"] = float(max_dist)
+        if bkg_fraction := parameters.get("bkg_fraction"):
+            kwargs["bkg_fraction"] = float(bkg_fraction)
+        kwargs["fit_bkg"] = bool(parameters.get("fit_bkg", False))
         kwargs["d"] = d
         rho_init = 2 / (2 * d * np.pi * np.median(nneighbors[:, 0]) ** d)
         kwargs["rho_init"] = rho_init
-        if min_dist := parameters.get("min_dist"):
-            kwargs["min_dist"] = min_dist
-        if max_dist := parameters.get("max_dist"):
-            kwargs["max_dist"] = max_dist
-        if bkg_fraction := parameters.get("bkg_fraction"):
-            kwargs["bkg_fraction"] = bkg_fraction
-        kwargs["fit_bkg"] = parameters.get("fit_bkg", False)
 
         densities = []
         bkgs = []
@@ -6723,10 +6721,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                             r_theory,
                             k,
                             rho_mle,
-                            d=int(parameters["dimensionality"]),
+                            d=d,
                             min_dist=float(kwargs.get("min_dist", 0)),
                             max_dist=float(kwargs.get("max_dist", np.inf)),
-                            bkg_fraction=bkgs[-1],
+                            bkg_fraction=float(bkgs[-1]),
                             renormalize=True,
                         )
 
@@ -6757,7 +6755,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                                 x,
                                 k,
                                 rho_mle,
-                                d=parameters["dimensionality"],
+                                d=d,
                                 min_dist=kwargs.get("min_dist", 0),
                                 max_dist=kwargs.get("max_dist", np.inf),
                                 bkg_fraction=bkgs[-1],
@@ -6799,7 +6797,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     rvals,
                     k,
                     rho_mle,
-                    d=parameters["dimensionality"],
+                    d=d,
                     min_dist=kwargs.get("min_dist", 0),
                     max_dist=kwargs.get("max_dist", np.inf),
                     renormalize=False,
