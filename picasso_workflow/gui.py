@@ -7359,7 +7359,7 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         # modify_hwidget = QtWidgets.QWidget()
         # modify_hwidget.setLayout(modify_hlayout)
         self.modify_combo = QtWidgets.QComboBox()
-        self.modify_combo.addItems(["multiply", "divide", "add", "subtract"])
+        self.modify_combo.addItems(["", "multiply", "divide", "add", "subtract"])
         self.modify_combo.currentIndexChanged.connect(self._on_modify_operator_selected)
         # modify_hlayout.addWidget(self.modify_combo)
         self.modify_value = QtWidgets.QDoubleSpinBox()
@@ -7380,6 +7380,7 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.index_spin = QtWidgets.QSpinBox()
         self.index_spin.setMinimum(0)
         self.index_spin.setValue(0)
+        self.index_spin.valueChanged.connect(self._on_index_spin)
 
         layout.addWidget(QtWidgets.QLabel("Assembled Command:"))
         self.command_result = QtWidgets.QLineEdit()
@@ -7402,6 +7403,14 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.command_result.setText(command)
 
     def _on_map_option(self, option):
+        command = self.get_command()
+        self.command_result.setText(command)
+
+    def _on_index_option(self, option):
+        command = self.get_command()
+        self.command_result.setText(command)
+
+    def _on_index_spin(self, value):
         command = self.get_command()
         self.command_result.setText(command)
 
@@ -7476,7 +7485,6 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         for i, (module_name, params) in enumerate(workflow_modules):
             self.module_combo.addItem(f"{i}: {module_name}")
         self.module_combo.blockSignals(False)
-            
 
         command = self.get_command()
         self.command_result.setText(command)
@@ -7487,10 +7495,15 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         Args:
             index: Index of selected module in workflow
         """
-        if index < 0 or index >= len(self.workflow_modules):
+        if self.prior_singlestage_list.isChecked():
+            workflow_modules = self.parent.single_workflow_modules
+        else:
+            workflow_modules = self.workflow_modules
+
+        if index < 0 or index >= len(workflow_modules):
             return
 
-        module_name = self.workflow_modules[index][0]
+        module_name = workflow_modules[index][0]
 
         # Clear current results
         self.result_combo.clear()
@@ -8950,7 +8963,7 @@ class Window(QtWidgets.QMainWindow):
         """
         import ast
 
-        print(f"DEBUG: _load_workflow_definition_alt called with folder={folder}")
+        # print(f"DEBUG: _load_workflow_definition_alt called with folder={folder}")
         workflow_file = os.path.join(folder, "start_workflow.py")
 
         logger.debug('loading definition (alt)')
@@ -9014,10 +9027,10 @@ class Window(QtWidgets.QMainWindow):
                                         variables_dict['idx_last_sgl_module'] = (
                                             len(sgl) - 1
                                         )
-                                        print(
-                                            f"DEBUG: Set idx_last_sgl_module="
-                                            f"{variables_dict['idx_last_sgl_module']}"
-                                        )
+                                        # print(
+                                        #     f"DEBUG: Set idx_last_sgl_module="
+                                        #     f"{variables_dict['idx_last_sgl_module']}"
+                                        # )
                                 elif target.id == 'workflow_modules_agg':
                                     agg = safe_eval_node(
                                         stmt.value, 'workflow_modules_agg',
@@ -9035,10 +9048,10 @@ class Window(QtWidgets.QMainWindow):
                                             stmt.value, variables_dict
                                         )
                                         variables_dict['idx_last_sgl_module'] = val
-                                        print(
-                                            f"DEBUG: Found idx_last_sgl_module "
-                                            f"assignment: {val}"
-                                        )
+                                        # print(
+                                        #     f"DEBUG: Found idx_last_sgl_module "
+                                        #     f"assignment: {val}"
+                                        # )
                                     except (ValueError, TypeError):
                                         pass
                 return sgl, agg, multi
@@ -9052,11 +9065,11 @@ class Window(QtWidgets.QMainWindow):
             if multi is not None:
                 workflow_modules_multi = multi
 
-            print("DEBUG: After module-level search:")
-            print(f"  workflow_modules_sgl: {workflow_modules_sgl}")
-            print(f"  workflow_modules_agg: {workflow_modules_agg}")
-            print(f"  workflow_modules_multi: {workflow_modules_multi}")
-            print(f"  variables: {variables}")
+            # print("DEBUG: After module-level search:")
+            # print(f"  workflow_modules_sgl: {workflow_modules_sgl}")
+            # print(f"  workflow_modules_agg: {workflow_modules_agg}")
+            # print(f"  workflow_modules_multi: {workflow_modules_multi}")
+            # print(f"  variables: {variables}")
 
             # Search inside function definitions if nothing meaningful found
             # Note: search functions if lists are None OR empty
@@ -9068,7 +9081,7 @@ class Window(QtWidgets.QMainWindow):
             )
 
             if needs_function_search:
-                print("DEBUG: Searching inside function definitions...")
+                # print("DEBUG: Searching inside function definitions...")
                 for node in ast.walk(tree):
                     if isinstance(node, ast.FunctionDef):
                         # Reset variables for this function scope
@@ -9094,10 +9107,10 @@ class Window(QtWidgets.QMainWindow):
                     and len(workflow_modules_sgl) > 0
                     and (workflow_modules_agg is None
                          or workflow_modules_agg == [])):
-                print(
-                    "DEBUG: Retrying workflow_modules_agg with updated "
-                    f"variables: {variables}"
-                )
+                # print(
+                #     "DEBUG: Retrying workflow_modules_agg with updated "
+                #     f"variables: {variables}"
+                # )
 
                 # Search module level again with updated variables
                 for stmt in tree.body:
@@ -9128,13 +9141,13 @@ class Window(QtWidgets.QMainWindow):
                                             if result is not None:
                                                 workflow_modules_agg = result
 
-                if workflow_modules_agg is not None:
-                    print(
-                        f"DEBUG: After retry, found workflow_modules_agg with "
-                        f"{len(workflow_modules_agg)} modules"
-                    )
-                else:
-                    print("DEBUG: After retry, workflow_modules_agg still None")
+                # if workflow_modules_agg is not None:
+                #     print(
+                #         f"DEBUG: After retry, found workflow_modules_agg with "
+                #         f"{len(workflow_modules_agg)} modules"
+                #     )
+                # else:
+                #     print("DEBUG: After retry, workflow_modules_agg still None")
 
             # Check for workflow_modules_multi dict format
             if workflow_modules_multi is not None and isinstance(
@@ -9159,12 +9172,12 @@ class Window(QtWidgets.QMainWindow):
                 f"workflow_modules_agg={'list' if isinstance(workflow_modules_agg, list) else type(workflow_modules_agg).__name__}, "
                 f"workflow_modules_multi={'dict' if isinstance(workflow_modules_multi, dict) else type(workflow_modules_multi).__name__}"
             )
-            print(
-                f"Alt loader found: "
-                f"workflow_modules_sgl={'list' if isinstance(workflow_modules_sgl, list) else type(workflow_modules_sgl).__name__}, "
-                f"workflow_modules_agg={'list' if isinstance(workflow_modules_agg, list) else type(workflow_modules_agg).__name__}, "
-                f"workflow_modules_multi={'dict' if isinstance(workflow_modules_multi, dict) else type(workflow_modules_multi).__name__}"
-            )
+            # print(
+            #     f"Alt loader found: "
+            #     f"workflow_modules_sgl={'list' if isinstance(workflow_modules_sgl, list) else type(workflow_modules_sgl).__name__}, "
+            #     f"workflow_modules_agg={'list' if isinstance(workflow_modules_agg, list) else type(workflow_modules_agg).__name__}, "
+            #     f"workflow_modules_multi={'dict' if isinstance(workflow_modules_multi, dict) else type(workflow_modules_multi).__name__}"
+            # )
 
             # Load single dataset workflow if found
             if workflow_modules_sgl is not None and isinstance(
@@ -9180,19 +9193,19 @@ class Window(QtWidgets.QMainWindow):
                     f"Loaded {len(workflow_modules_sgl)} modules to "
                     "Single Dataset workflow (alt)"
                 )
-                print(
-                    f"Loaded {len(workflow_modules_sgl)} modules to "
-                    "Single Dataset workflow (alt)"
-                )
+                # print(
+                #     f"Loaded {len(workflow_modules_sgl)} modules to "
+                #     "Single Dataset workflow (alt)"
+                # )
             else:
                 logger.info(
                     "No single dataset modules found in workflow template "
                     "(alt)"
                 )
-                print(
-                    "No single dataset modules found in workflow template "
-                    "(alt)"
-                )
+                # print(
+                #     "No single dataset modules found in workflow template "
+                #     "(alt)"
+                # )
 
             # Load aggregation workflow if found
             if workflow_modules_agg is not None and isinstance(
@@ -9208,19 +9221,19 @@ class Window(QtWidgets.QMainWindow):
                     f"Loaded {len(workflow_modules_agg)} modules to "
                     "Aggregation workflow (alt)"
                 )
-                print(
-                    f"Loaded {len(workflow_modules_agg)} modules to "
-                    "Aggregation workflow (alt)"
-                )
+                # print(
+                #     f"Loaded {len(workflow_modules_agg)} modules to "
+                #     "Aggregation workflow (alt)"
+                # )
                 # Set workflow type to "Aggregation Workflow"
                 self.workflow_type.setCurrentIndex(1)
             else:
                 logger.info(
                     "No aggregation modules found in workflow template (alt)"
                 )
-                print(
-                    "No aggregation modules found in workflow template (alt)"
-                )
+                # print(
+                #     "No aggregation modules found in workflow template (alt)"
+                # )
                 # Set workflow type to "Single Workflow"
                 self.workflow_type.setCurrentIndex(0)
 
