@@ -6803,7 +6803,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     renormalize=False,
                 )
                 if i == 0:
-                    lbl = f"rho_init {1E6*rho_init:.1f} um^2"
+                    lbl = f"rho_init {1E6*rho_init:.1f} um^-2"
                 else:
                     lbl = f"observed k={k}"
                 _ = ax.hist(
@@ -6819,7 +6819,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     lblf = f"k={k} not fitted"
                 elif k == kmin:
                     linestyle = "--"
-                    lblf = f"fit {1E6*rho_mle:.1f} µm^2"
+                    lblf = f"fit {1E6*rho_mle:.1f} µm^-2"
                 else:
                     linestyle = "--"
                     lblf = f"fit k={k}"

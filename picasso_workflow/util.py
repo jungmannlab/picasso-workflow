@@ -1994,6 +1994,7 @@ class DictSimpleTyper:
 
     def scan_dict(self, d):
         addl_items = {}
+        del_keys = []
         for k, v in d.items():
             result = self.scan(v)
             # not elegant, but should work: In case this is a
@@ -2016,8 +2017,12 @@ class DictSimpleTyper:
                 k_result = self.scan(k)
                 if isinstance(k_result, dict):
                     addl_items[k_result["parsed"]] = d[k]
+                    addl_items[f"{k}_originalnocmd"] = d[k]
+                    del_keys.append(k)
         for k, v in addl_items.items():
             d[k] = v
+        for k in del_keys:
+            del d[k]
         return d
 
     def scan_list(self, li, root_level=False):
