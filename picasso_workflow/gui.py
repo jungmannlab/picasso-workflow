@@ -9000,7 +9000,7 @@ class Window(QtWidgets.QMainWindow):
                     return self._safe_eval_node(node, variables_dict)
                 except (ValueError, TypeError) as e:
                     logger.debug(f"Could not evaluate {var_name}: {e}")
-                    print(f"DEBUG: Could not evaluate {var_name}: {e}")
+                    # print(f"DEBUG: Could not evaluate {var_name}: {e}")
                     return None
 
             def search_assignments(statements, variables_dict):

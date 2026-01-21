@@ -69,11 +69,18 @@ def load_config():
         with open(user_config, "r") as f:
             return yaml.safe_load(f)
     # 2. Fallback to package default
-    default_config = importlib.resources.files("picasso_workflow").joinpath(
-        "config.yaml"
-    )
-    with open(default_config, "r") as f:
-        return yaml.safe_load(f)
+    try:
+        default_config = importlib.resources.files("picasso_workflow").joinpath(
+            "config.yaml"
+        )
+        with open(default_config, "r") as f:
+            return yaml.safe_load(f)
+    except FileNotFoundError:
+        template_config = importlib.resources.files("picasso_workflow").joinpath(
+            "config_template.yaml"
+        )
+        with open(template_config, "r") as f:
+            return yaml.safe_load(f)
 
 
 config_logger()
