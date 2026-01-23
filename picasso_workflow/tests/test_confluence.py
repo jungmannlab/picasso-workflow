@@ -313,7 +313,9 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
     # @unittest.skip("")
     def summarize_dataset(self):
         parameters = {"methods": {"nena": {"inputpar": "a"}}}
-        results = {"nena": {"best_vals": (3, 5, 7), "res": 1.23}}
+        results = {
+            "nena": {"best_vals": (3, 5, 7), "res": 1.23, "chisqr": 3.2}
+        }
         self.cr.summarize_dataset(0, parameters, results)
 
         # clean up
@@ -399,12 +401,14 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     def dbscan(self):
-        parameters = {"filepath": "myfile.czi"}
+        parameters = {
+            "filepath": "myfile.czi",
+            "radius": 5,
+            "min_samples": 3,
+        }
         results = {
             "start time": "now",
             "duration": 4.12,
-            "radius": 5,
-            "min_density": 0.3,
         }
         self.cr.dbscan(0, parameters, results)
 
@@ -513,17 +517,54 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
-    def smlm_clusterer(self):
-        parameters = {"filepath": "myfile.czi"}
+    def binding_event_analysis(self):
+        parameters = {}
         results = {
             "start time": "now",
             "duration": 4.12,
+        }
+        self.cr.binding_event_analysis(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def smlm_clusterer(self):
+        parameters = {
+            "filepath": "myfile.czi",
             "radius": 8,
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
             "min_locs": 3,
             "basic_fa": False,
             "radius_z": 2,
         }
         self.cr.smlm_clusterer(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def gaussian_mixture_cluster(self):
+        parameters = {
+            "min_locs": 3,
+            "min_sigma": 0.4,
+            "max_sigma": 1.1,
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "n_locs_in": 2000000,
+            "n_locs_clustered": 1800000,
+            "n_centers": 100000,
+        }
+        self.cr.gaussian_mixture_cluster(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -599,6 +640,28 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
+    def ripleysk2(self):
+        parameters = {
+            "ripleys_threshold": 1.2,
+            "atype": "Ripleys",
+            "metric": "RK",
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "ripleys_significant": [("a", "b")],
+            "fp_ripleys_meanval": "bklab",
+        }
+        self.cr.ripleysk2(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
     def ripleysk_average(self):
         parameters = {
             "ripleys_threshold": 1.2,
@@ -614,6 +677,95 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "ripleys_significant": [("a", "b")],
         }
         self.cr.ripleysk_average(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def ripleysk_average2(self):
+        parameters = {
+            "ripleys_threshold": 1.2,
+            "report_names": ["a", "b", "c"],
+            "fp_workflows": ["/a", "/b", "/c"],
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "output_folders": ["/d"],
+            "fp_ripleys_significant": "/e",
+            "ripleys_significant": [("a", "b")],
+        }
+        self.cr.ripleysk_average2(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def random_val(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.random_val(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def render(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.render(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def find_structures(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "n_clusters": 2,
+            "n_picks": [412, 501],
+        }
+        self.cr.find_structures(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def pairwise_module_executor(self):
+        parameters = {"module_name": "mymodule"}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.pairwise_module_executor(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -645,6 +797,42 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "start time": "now",
             "duration": 4.12,
             "success": True,
+        }
+        self.cr.create_mask(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def create_mask2(self):
+        """Create a density mask"""
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "area": 43,
+        }
+        self.cr.create_mask(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def refine_mask_by_density(self):
+        """Create a density mask"""
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "area_um^2": 421,
         }
         self.cr.create_mask(0, parameters, results)
 
@@ -857,6 +1045,28 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "duration": 4.12,
             "success": True,
             "fp_locs": "path/to/locs",
+            "nlocs_before": 2000,
+            "nlocs_after": 1700,
+        }
+        self.cr.filter_locs(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def filter_transient_binding(self):
+        parameters = {"field": "photons", "minval": 800, "maxval": 1200}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "fields_filtered": ["frame", "std_frame"],
+            "nlocs_before": 4000,
+            "nlocs_after": 3000,
+            "fp_locs": "path/to/locs",
         }
         self.cr.filter_locs(0, parameters, results)
 
@@ -891,8 +1101,134 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "duration": 4.12,
             "success": True,
             "labeling_efficiency": {"ref": 0.57, "tgt": 0.23},
+            "labeling_efficiency_std": {"ref": 0.03, "tgt": 0.01},
         }
         self.cr.labeling_efficiency_analysis(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def find_similar(self):
+        parameters = {
+            "diameter": 5.0,
+            "min_n_locs_per_frame": 0.01,
+            "max_n_locs_per_frame": 0.1,
+            "min_rmsd": 1.0,
+            "max_rmsd": 3.0,
+            "n_plot_structures": 2,
+            "display_pixelsize": 1.0,
+        }
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "n_picks": 5,
+            "n_picked_locs": 150,
+            "n_locs": 2000,
+            "fp_phasespace": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "TestData",
+                "confluence",
+                "testimg.png",
+            ),
+            "fp_phasespace_hexbin": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "TestData",
+                "confluence",
+                "testimg.png",
+            ),
+            "fp_picked_fullfov": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "TestData",
+                "confluence",
+                "testimg.png",
+            ),
+            "fp_renderings": [
+                [
+                    os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "TestData",
+                        "confluence",
+                        "testimg.png",
+                    ),
+                    os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "TestData",
+                        "confluence",
+                        "testimg.png",
+                    ),
+                ]
+            ],
+        }
+        self.cr.find_similar(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def conditional_branch(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.conditional_branch(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def resolution_analysis(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.resolution_analysis(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def resolution_frc_spatial(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.resolution_frc_spatial(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
+    def undrift_rsso(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+        }
+        self.cr.undrift_rsso(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(

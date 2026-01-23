@@ -6,12 +6,13 @@ Initial Date: March 7, 2024
 Description: This module implements functionality for processing non-DNA-PAINT
 images.
 """
-import logging
+# import logging
+from loguru import logger
 from moviepy.editor import ImageSequenceClip
 from imageio import imsave  # package is dependency of moviepy
 import numpy as np
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 def adjust_contrast(img, min_quantile, max_quantile):

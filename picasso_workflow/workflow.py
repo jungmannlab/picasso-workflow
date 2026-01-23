@@ -8,10 +8,14 @@ Description: This module implements the class ReportingAnalyzer,
 """
 import os
 from datetime import datetime
-import logging
+# import logging
+from loguru import logger
 import inspect
 import yaml
 import copy
+import re
+from concurrent.futures import ProcessPoolExecutor
+import traceback
 
 from picasso_workflow.analyse import AutoPicasso, AutoPicassoError
 from picasso_workflow.confluence import (
@@ -39,7 +43,7 @@ yaml.constructor.SafeConstructor.add_constructor(
 )
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 class AggregationWorkflowRunner:
@@ -62,6 +66,7 @@ class AggregationWorkflowRunner:
         else:
             self.postfix = datetime.now().strftime("%y%m%d-%H%M")
         self.continue_workflow = False
+        self.single_workflow_parallel = False
         self.sgl_workflow_locations = []
         self.cpage_names = []
 
@@ -73,6 +78,7 @@ class AggregationWorkflowRunner:
         aggregation_workflow,
         postfix=None,
         continue_previous_runner=False,
+        single_workflow_parallel=False,
     ):
         """To keep flexibility for initialization methods, this is not
         done in __init__. This way in the future, we can instantiate
@@ -106,16 +112,50 @@ class AggregationWorkflowRunner:
                 manual step). If no previous analysis exists in that folder,
                 create a new one.
         """
+        # check whether the report_name has a postfix-format already
+        # Check if report_name already has a postfix pattern
+        report_name = reporter_config["report_name"]
+        postfix_pattern = r"_(\d{6}-\d{4})$"
+        match = re.search(postfix_pattern, report_name)
+
+        extracted_postfix = postfix
+        if match:
+            # Extract existing postfix and validate format
+            existing_postfix = match.group(1)
+            try:
+                # datetime.strptime(existing_postfix, "%y%m%d-%H%M")
+                # Valid postfix found, separate base name from postfix
+                base_report_name = report_name[: match.start()]
+                reporter_config["report_name"] = base_report_name
+                extracted_postfix = existing_postfix
+            except ValueError:
+                # Invalid postfix format, treat as part of the name
+                pass
+
         if continue_previous_runner:
             folder = analysis_config["result_location"]
             report_name = reporter_config["report_name"]
-            postfix = cls._check_previous_runner(folder, report_name)
+            # Use extracted postfix if available, otherwise
+            # check for previous runner
+            if extracted_postfix is not None:
+                postfix = extracted_postfix
+            else:
+                postfix = cls._check_previous_runner(folder, report_name)
             logger.debug(f"Found postfix: {postfix}")
             if postfix is not None:
                 report_name = report_name + "_" + postfix
                 runner_folder = os.path.join(folder, report_name)
-                instance = cls.load(runner_folder)
-                return instance
+                try:
+                    instance = cls.load(runner_folder)
+                    return instance
+                except FileNotFoundError:
+                    logger.debug(f"Could not load runner from {runner_folder}")
+                    pass
+
+        # If we have an extracted postfix but aren't continuing, use it
+        if extracted_postfix is not None and not continue_previous_runner:
+            postfix = extracted_postfix
+
         if (
             sgltilepars := aggregation_workflow.get(
                 "single_dataset_tileparameters"
@@ -126,6 +166,7 @@ class AggregationWorkflowRunner:
                 "single_dataset_tileparameters"."""
             )
         instance = cls(postfix)
+        instance.single_workflow_parallel = single_workflow_parallel
         instance.parameter_tiler = ParameterTiler(instance, sgltilepars)
         instance.all_results = {
             "single_dataset": [None] * instance.parameter_tiler.ntiles,
@@ -228,6 +269,11 @@ class AggregationWorkflowRunner:
         sgl_wkfl_analysis_config = copy.deepcopy(self.analysis_config)
 
         sgl_dataset_success = [None] * len(tags)
+        if self.single_workflow_parallel:
+            wrs = []
+            tasks = []
+            futures = []
+            executor = ProcessPoolExecutor()
         for i, (parameter_set, tag) in enumerate(
             zip(individual_parametersets, tags)
         ):
@@ -275,10 +321,21 @@ class AggregationWorkflowRunner:
                     postfix=self.postfix,
                 )
             self.cpage_names.append(wr.reporter_config["report_name"])
-            sgl_dataset_success[i] = wr.run()
-            self.all_results["single_dataset"][i] = wr.results
-            self.sgl_workflow_locations.append(wr.result_folder)
-            self.save(self.result_folder)
+            if not self.single_workflow_parallel:
+                sgl_dataset_success[i] = wr.run()
+                self.all_results["single_dataset"][i] = wr.results
+                self.sgl_workflow_locations.append(wr.result_folder)
+                self.save(self.result_folder)
+            else:
+                future = executor.submit(wr.run)
+                futures.append(future)
+        if self.single_workflow_parallel:
+            for i, task in enumerate(tasks):
+                sgl_dataset_success[i] = futures[i].result()
+                self.all_results["single_dataset"][i] = wrs[i].results
+                self.sgl_workflow_locations.append(wrs[i].result_folder)
+                self.save(self.result_folder)
+            executor.shutdown()
 
         if not all(sgl_dataset_success):
             msg = (
@@ -332,7 +389,7 @@ class AggregationWorkflowRunner:
                     postfix=self.postfix,
                 )
         else:
-            logger.debug("not dontinuing workflow.starting new.")
+            logger.debug("not continuing workflow.starting new.")
             wr = WorkflowRunner.config_from_dicts(
                 agg_reporter_config,
                 agg_analysis_config,
@@ -342,6 +399,7 @@ class AggregationWorkflowRunner:
         self.cpage_names.append(wr.reporter_config["report_name"])
         wr.run()
         self.all_results["aggregation"] = wr.results
+        self.save(self.result_folder)
 
     def save(self, dirn="."):
         """Save the current config and results into
@@ -521,7 +579,7 @@ class WorkflowRunner:
         self.report_name = reporter_config["report_name"]
         if init_kwargs := reporter_config.get("ConfluenceReporter"):
             init_kwargs["report_name"] = self.report_name
-            logger.debug(init_kwargs)
+            # logger.debug(init_kwargs)
             self.confluencereporter = ConfluenceReporter(**init_kwargs)
 
     def run(self):
@@ -579,7 +637,11 @@ class WorkflowRunner:
             module_parameters = self.parameter_command_executor.run(
                 module_parameters, curr_rootidx=i
             )
-            success = self.call_module(module_name, i, module_parameters)
+            try:
+                success = self.call_module(module_name, i, module_parameters)
+            except AutoPicassoError:
+                pass
+
             self.save(self.result_folder)
             if not success:
                 break
@@ -610,8 +672,8 @@ class WorkflowRunner:
             "analysis_config": pce.run(self.analysis_config),
             "workflow_modules": pce.run(self.workflow_modules),
         }
-        logger.debug("saving data:")
-        logger.debug(str(data))
+        # logger.debug("saving data:")
+        # logger.debug(str(data))
         with open(filepath, "w") as f:
             yaml.dump(data, f)
 
@@ -699,17 +761,39 @@ class WorkflowRunner:
         """
         key = f"{i:02d}_{fun_name}"
         logger.debug(f"Working on {key}")
+
+        # For conditional_branch module, inject the parameter_command_executor
+        # so it can resolve sub-module parameters
+        if fun_name == "conditional_branch":
+            parameters["parameter_command_executor"] = (
+                self.parameter_command_executor
+            )
+
         fun_ap = getattr(self.autopicasso, fun_name)
+        analyse_error = None
         try:
             parameters, self.results[key] = fun_ap(i, parameters)
         except AutoPicassoError as e:
-            self.results[key]["success"] = False
             logger.error(e)
-            raise e
-        logger.debug(f"RESULTS: {self.results[key]}")
+            logger.error(traceback.format_exc())
+            analyse_error = copy.copy(e)
+            self.confluencereporter.report_error(e, fun_name)
+            # raise e
+        except Exception as e:
+            logger.error(e)
+            logger.error(traceback.format_exc())
+            analyse_error = copy.copy(e)
+            self.confluencereporter.report_error(e, fun_name)
+            # raise e
+        # logger.debug(f"RESULTS: {self.results[key]}")
         fun_cr = getattr(self.confluencereporter, fun_name)
         try:
             fun_cr(i, parameters, self.results[key])
         except ConfluenceInterfaceError as e:
             logger.error(e)
+            logger.error(traceback.format_exc())
+
+        if analyse_error is not None:
+            raise analyse_error
+
         return self.results[key]["success"]

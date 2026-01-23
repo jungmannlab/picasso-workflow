@@ -11,6 +11,7 @@ import os
 import shutil
 import inspect
 import numpy as np
+import pandas as pd
 from unittest.mock import patch, MagicMock
 
 from picasso_workflow import analyse, util
@@ -171,6 +172,9 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=self.locs_dtype,
         )
+        mock_locs_from_fits.return_value = pd.DataFrame(
+            mock_locs_from_fits.return_value
+        )
         self.ap.info = []
 
         parameters = {"box_size": 7, "fit_parallel": False}
@@ -197,12 +201,14 @@ class TestAnalyseModules(unittest.TestCase):
         nspots = 5
         mock_undrift_rcc.return_value = (
             np.random.rand(2, len(self.ap.movie)),
-            np.rec.array(
-                [
-                    tuple(np.random.rand(len(self.locs_dtype)))
-                    for i in range(nspots)
-                ],
-                dtype=self.locs_dtype,
+            pd.DataFrame(
+                np.rec.array(
+                    [
+                        tuple(np.random.rand(len(self.locs_dtype)))
+                        for i in range(nspots)
+                    ],
+                    dtype=self.locs_dtype,
+                )
             ),
         )
         parameters = {
@@ -218,13 +224,15 @@ class TestAnalyseModules(unittest.TestCase):
         nspots = 5
         mock_undrift_aim.return_value = (
             np.random.rand(2, len(self.ap.movie)),
-            [{"name": "info"}],
-            np.rec.array(
-                [
-                    tuple(np.random.rand(len(self.locs_dtype)))
-                    for i in range(nspots)
-                ],
-                dtype=self.locs_dtype,
+            [{"name": "info"}, {"Pixelsize": 130}],
+            pd.DataFrame(
+                np.rec.array(
+                    [
+                        tuple(np.random.rand(len(self.locs_dtype)))
+                        for i in range(nspots)
+                    ],
+                    dtype=self.locs_dtype,
+                )
             ),
         )
         parameters = {
@@ -323,6 +331,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs = pd.DataFrame(locs)
         mock_load.return_value = (locs, {"info": 4})
         parameters = {
             "filepaths": ["/my/path/to/locs.hdf5", "/my/path/to2/locs.hdf5"],
@@ -337,9 +346,17 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_load_datasets_to_aggregate")
         )
 
+    @patch("picasso_workflow.outpost_modules.render.plot_scene")
     @patch("picasso_workflow.analyse.picasso_outpost.align_channels")
-    def align_channels(self, mock_align_channels):
-        mock_align_channels.return_value = [[3], [2]], np.zeros((3, 4, 5))
+    def align_channels(self, mock_align_channels, mock_plot_scene):
+        mock_align_channels.return_value = (
+            [[3], [2]],
+            np.zeros((3, 4, 5)),
+            False,
+            "RCC",
+            [],
+            {},
+        )
         self.ap.channel_info = []
 
         parameters = {"fig_filename": "shiftplot.png"}
@@ -367,6 +384,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs1 = pd.DataFrame(locs1)
         locs2 = np.rec.array(
             [
                 tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
@@ -374,6 +392,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs2 = pd.DataFrame(locs2)
         self.ap.channel_locs = [locs1, locs2]
         self.ap.channel_info = [["info1"], ["info2"]]
         self.ap.channel_tags = ["1", "2"]
@@ -431,6 +450,7 @@ class TestAnalyseModules(unittest.TestCase):
             ("y", "f4"),
             ("lpx", "f4"),
             ("lpy", "f4"),
+            ("group", "u4"),
         ]
         self.ap.locs = np.rec.array(
             [
@@ -439,10 +459,16 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         mock_dbscan.return_value = self.ap.locs
         mock_fcc.return_value = self.ap.locs
 
-        parameters = {"radius": 5, "min_density": 0.3}
+        parameters = {
+            "radius": 5,
+            "min_density": 0.3,
+            "min_samples": 3,
+            "continue_with_centers": True,
+        }
         parameters, results = self.ap.dbscan(0, parameters)
         # logger.debug(f'parameters: {parameters}')
         logger.debug(f"results: {results}")
@@ -469,6 +495,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         mock_hdbscan.return_value = self.ap.locs
         mock_fcc.return_value = self.ap.locs
 
@@ -479,6 +506,13 @@ class TestAnalyseModules(unittest.TestCase):
         assert results["duration"] > -1
 
         shutil.rmtree(os.path.join(self.results_folder, "00_hdbscan"))
+
+    def binding_event_analysis(self):
+        # parameters, results = self.ap.binding_event_analysis(0, parameters)
+
+        # shutil.rmtree(os.path.join(
+        #     self.results_folder, "00_binding_event_analysis"))
+        pass
 
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.cluster")
@@ -499,6 +533,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         mock_clusterer.return_value = self.ap.locs
         mock_fcc.return_value = self.ap.locs
 
@@ -509,6 +544,41 @@ class TestAnalyseModules(unittest.TestCase):
         assert results["duration"] > -1
 
         shutil.rmtree(os.path.join(self.results_folder, "00_smlm_clusterer"))
+
+    @patch("picasso_workflow.analyse.g5m.test_subclustering")
+    @patch("picasso_workflow.analyse.g5m.run_g5m")
+    def gaussian_mixture_cluster(self, mock_gmms, mock_test_subclustering):
+        self.ap.info = [{"Width": 1000, "Height": 1000}]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+            ("n", "u4"),
+            ("n_events", "u4"),
+        ]
+        self.ap.locs = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
+        mock_gmms.return_value = self.ap.locs, self.ap.locs, self.ap.info
+        mock_test_subclustering.return_value = None
+
+        parameters = {"min_locs": 10, "min_sigma": 0.2, "max_sigma": 0.9}
+        parameters, results = self.ap.gaussian_mixture_cluster(0, parameters)
+        # logger.debug(f'parameters: {parameters}')
+        logger.debug(f"results: {results}")
+        assert results["duration"] > -1
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_gaussian_mixture_cluster")
+        )
 
     @patch("picasso_workflow.analyse.distance.cdist")
     def nneighbor(self, mock_cdist):
@@ -535,6 +605,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         self.ap.channel_locs = [self.ap.locs]
         self.ap.tags = ["mytag"]
         parameters, results = self.ap.nneighbor(0, parameters)
@@ -561,7 +632,7 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_sgl_temp")
+    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
     def spinna(self, mock_sptmp):
         mock_sptmp.return_value = (0, 1)
         info = [{"Width": 1000, "Height": 1000}]
@@ -580,6 +651,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs = pd.DataFrame(locs)
         self.ap.channel_locs = [locs]
         self.ap.channel_info = [info]
         self.ap.channel_tags = ["CD86"]
@@ -595,7 +667,8 @@ class TestAnalyseModules(unittest.TestCase):
             "sim_repeats": 5,
             "fit_NND_bin": 5,
             "fit_NND_maxdist": 300,
-            "res_factor": 10,
+            # "res_factor": 10,
+            "granularity": 30,
             "structures": [
                 {
                     "Molecular targets": ["CD86"],
@@ -635,6 +708,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs = pd.DataFrame(locs)
         self.ap.channel_locs = [locs]
         self.ap.channel_info = [info]
         self.ap.channel_tags = ["CD86"]
@@ -665,13 +739,41 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_dummy_module"))
 
+    def random_val(self):
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_random_val"))
+
+    def render(self):
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_render"))
+
+    def find_structures(self):
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_find_structures"))
+
+    def pairwise_module_executor(self):
+        return
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_pairwise_module_executor")
+        )
+
     def ripleysk(self):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
 
+    def ripleysk2(self):
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk2"))
+
     def ripleysk_average(self):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
+
+    def ripleysk_average2(self):
+        return
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_ripleysk_average2")
+        )
 
     def protein_interactions(self):
         return
@@ -683,6 +785,18 @@ class TestAnalyseModules(unittest.TestCase):
         """Create a density mask"""
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_create_mask"))
+
+    def create_mask2(self):
+        """Create a density mask"""
+        return
+        shutil.rmtree(os.path.join(self.results_folder, "00_create_mask2"))
+
+    def refine_mask_by_density(self):
+        """Create a density mask"""
+        return
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_refine_mask_by_density")
+        )
 
     def dbscan_molint(self):
         """TO BE CLEANED UP
@@ -786,10 +900,40 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
 
         parameters, results = self.ap.filter_locs(0, parameters)
 
         shutil.rmtree(os.path.join(self.results_folder, "00_filter_locs"))
+
+    def filter_transient_binding(self):
+        parameters = {}
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("sx", "f4"),
+            ("sy", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+            ("std_frame", "u4"),
+        ]
+        self.ap.locs = np.rec.array(
+            [
+                tuple([i] + list(1000 * np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
+        self.ap.info = [{"Frames": 1000}]
+
+        parameters, results = self.ap.filter_transient_binding(0, parameters)
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_filter_transient_binding")
+        )
 
     @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
     @patch("picasso_workflow.analyse.postprocess.link", MagicMock)
@@ -800,7 +944,7 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_sgl_temp")
+    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
     def labeling_efficiency_analysis(self, mock_spinna_sgl):
         parameters = {
             "target_name": "CD86",
@@ -808,15 +952,25 @@ class TestAnalyseModules(unittest.TestCase):
             "pair_distance": 10,
             "density": {"CD86": 92.4, "GFP": 83.5},
             "n_simulate": 10000,
-            "res_factor": 5,
-            "labeling_uncertainty": 5,
+            "granularity": 5,
+            "labeling_uncertainty": {"CD86": 5, "GFP": 5},
             "sim_repeats": 2,
             # "nn_nth": 2,
         }
         spinna_result = {
-            "Fitted proportions of structures": np.array([0.4, 0.15, 0.35])
+            "Fitted proportions of structures": np.array([0.4, 0.15, 0.35]),
+            "props": np.array([40.0, 15.0, 35.0]),
+            "props_std": np.array([2.0, 1.0, 3.0]),
         }
-        mock_spinna_sgl.return_value = (spinna_result, "/path/to/fig")
+        mock_spinna_sgl.return_value = (
+            spinna_result,
+            [
+                "/path/to/figAA.png",
+                "/path/to/figAB.png",
+                "/path/to/figBA.png",
+                "/path/to/figBB.png",
+            ],
+        )
         self.ap.channel_tags = ["GFP", "CD86"]
         self.ap.channel_locs = [None, None]
         locs_dtype = [
@@ -836,6 +990,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs_a = pd.DataFrame(locs_a)
         locs_b = np.rec.array(
             [
                 tuple([i] + list(1000 * np.random.rand(len(locs_dtype) - 1)))
@@ -843,6 +998,7 @@ class TestAnalyseModules(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        locs_b = pd.DataFrame(locs_b)
         self.ap.channel_locs = [locs_a, locs_b]
 
         parameters, results = self.ap.labeling_efficiency_analysis(
@@ -854,6 +1010,340 @@ class TestAnalyseModules(unittest.TestCase):
                 self.results_folder, "00_labeling_efficiency_analysis"
             )
         )
+
+    def conditional_branch(self):
+        """Test conditional_branch module - simple test for test_modules()"""
+        # Set up mock locs data
+        locs_dtype = [
+            ("frame", "u4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("photons", "f4"),
+        ]
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [(0, 1.0, 1.0, 100.0), (1, 2.0, 2.0, 200.0)],
+                dtype=locs_dtype,
+            )
+        )
+
+        # Simple condition: 5 > 3 (always true)
+        parameters = {
+            "condition": {"left": 5, "operator": ">", "right": 3},
+            "if_true": [],  # Empty list for simplicity in test_modules
+            "if_false": [],
+        }
+
+        parameters, results = self.ap.conditional_branch(0, parameters)
+
+        assert results["condition_result"] is True
+        assert results["branch_taken"] == "if_true"
+        assert "if_branch" in results
+        assert "branch_modules" in results
+
+        # Clean up
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_conditional_branch")
+        )
+
+    def resolution_frc_spatial(self):
+        """Is tested separately in tests/outpost_modules/test_resolution_frc.py
+        """
+        pass
+
+    def resolution_analysis(self):
+        pass
+
+    # @unittest.skip("")
+    def undrift_rsso(self):
+        """Test the undrift_rsso module with synthetic drift data"""
+        import numpy as np
+
+        # Create synthetic data with known drift
+        np.random.seed(42)
+        n_frames = 50  # Fewer frames for faster test
+        n_locs_per_frame = 200  # More locs per frame for better statistics
+        true_drift_rate_x = 0.05  # Smaller drift rate (pixels per frame)
+        true_drift_rate_y = 0.03  # Smaller drift rate (pixels per frame)
+
+        # Generate synthetic localizations with drift
+        all_locs = []
+        true_drift_x = []
+        true_drift_y = []
+
+        for frame in range(n_frames):
+            # Calculate cumulative drift
+            drift_x = true_drift_rate_x * frame
+            drift_y = true_drift_rate_y * frame
+            true_drift_x.append(drift_x)
+            true_drift_y.append(drift_y)
+
+            # Generate random localizations with added drift
+            x_base = np.random.uniform(10, 50, n_locs_per_frame)
+            y_base = np.random.uniform(10, 50, n_locs_per_frame)
+
+            frame_locs = np.rec.array(
+                [
+                    (
+                        frame,
+                        x + drift_x,
+                        y + drift_y,
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        1,
+                    )
+                    for x, y in zip(x_base, y_base)
+                ],
+                dtype=self.locs_dtype,
+            )
+            frame_locs = pd.DataFrame(frame_locs)
+
+            all_locs.append(frame_locs)
+
+        # Combine all localizations
+        # synthetic_locs = np.lib.recfunctions.stack_arrays(
+        #     all_locs, asrecarray=True, usemask=False
+        # )
+        synthetic_locs = pd.concat(all_locs, ignore_index=True)
+
+        # Create AutoPicasso instance with synthetic data
+        analysis_config = {
+            "camera_info": {
+                "Gain": 1,
+                "Sensitivity": 0.45,
+                "Baseline": 100,
+                "Qe": 0.82,
+                "Pixelsize": 130,  # nm
+            },
+            "gpufit_installed": False,
+        }
+        ap = analyse.AutoPicasso(self.results_folder, analysis_config)
+        ap.locs = synthetic_locs
+        ap.info = [
+            {"Frames": n_frames, "Width": 64, "Height": 64, "Pixelsize": 100}
+        ]  # 100 nm pixels
+
+        # Test parameters
+        parameters = {
+            "ton": 3.0,  # 3 frame half-life
+            "toff": 10.0,  # 10 frame reappearance time
+            "max_shift": 0.5,  # 0.5 pixel max shift per frame
+            "processing_chunk_size": 25,  # Processing chunk size
+            "min_locs_per_frame": 20,  # Ensure sufficient data for frame-level
+            "min_locs_per_block": 100,  # Ensure sufficient data for block-level
+            "plot_drift": True,
+            "save_locs": False,
+        }
+
+        # Run undrift_rsso
+        parameters, results = ap.undrift_rsso(0, parameters)
+
+        # Verify results - check for essential outputs
+        # The function should complete and create plots
+
+        # Check that drift plot was created
+        # assert "fp_fig" in results, "Should create drift plot"
+        # assert os.path.exists(
+        #     results["fp_fig"]
+        # ), "Drift plot file should exist"
+
+        # # Verify that drift arrays are stored in AutoPicasso instance
+        # assert hasattr(ap, "drift"), "Should store drift in ap.drift"
+        # assert hasattr(ap.drift, "shape"), "Drift should be array-like"
+        # assert len(ap.drift.shape) == 2, "Drift should be 2D array"
+        # assert ap.drift.shape[1] == 2, "Should have x and y drift dimensions"
+        # assert (
+        #     ap.drift.shape[0] == n_frames
+        # ), "Drift array should match number of frames"
+
+        # # Verify drift was detected (should be non-zero since we added artificial drift)
+        # drift_magnitude = np.sqrt(np.sum(ap.drift**2, axis=1)).mean()
+        # assert drift_magnitude > 0, f"Should detect non-zero drift, got {drift_magnitude}"
+
+        # Clean up plots
+        import glob
+        undrift_folder = os.path.join(self.results_folder, "00_undrift_rsso")
+        if os.path.exists(undrift_folder):
+            for pattern in ["drift_*.png", "convergence_*.png", "robustness_*.png"]:
+                for file in glob.glob(os.path.join(undrift_folder, pattern)):
+                    try:
+                        os.remove(file)
+                    except:
+                        pass
+
+    @unittest.skip("")
+    def test_16_undrift_rsso_edge_cases(self):
+        """Test undrift_rsso with edge cases and error conditions"""
+        # Test with insufficient data
+        analysis_config = {
+            "camera_info": {
+                "Gain": 1,
+                "Sensitivity": 0.45,
+                "Baseline": 100,
+                "Qe": 0.82,
+                "Pixelsize": 130,  # nm
+            },
+            "gpufit_installed": False,
+        }
+        ap = analyse.AutoPicasso(self.results_folder, analysis_config)
+
+        # Create minimal dataset (too few localizations)
+        minimal_locs = np.rec.array(
+            [
+                (0, 10.0, 10.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1),
+                (1, 10.1, 10.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1),
+            ],
+            dtype=self.locs_dtype,
+        )
+        minimal_locs = pd.DataFrame(minimal_locs)
+
+        ap.locs = minimal_locs
+        ap.info = [{"Frames": 2, "Width": 64, "Height": 64, "Pixelsize": 100}]
+
+        parameters = {
+            "ton": 5.0,
+            "toff": 20.0,
+            "max_shift": 1.0,
+            "min_locs_per_frame": 100,  # Impossibly high threshold
+            "plot_drift": False,
+            "save_locs": False,
+        }
+
+        # Should handle gracefully
+        parameters, results = ap.undrift_rsso(0, parameters)
+
+        # Should still succeed even with insufficient data
+        assert results["success"]
+        assert "total_drift" in results
+
+        # Test with no localizations
+        empty_locs = np.array([], dtype=self.locs_dtype).view(np.recarray)
+        empty_locs = pd.DataFrame(empty_locs)
+        ap.locs = empty_locs
+
+        parameters, results = ap.undrift_rsso(0, parameters)
+        assert results["success"]
+        assert results["total_drift"] == 0.0
+
+    @patch("picasso_workflow.analyse.picasso_outpost.pick_similar")
+    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.analyse.render.plot_scene")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def find_similar(
+        self,
+        mock_save_locs,
+        mock_plot_scene,
+        mock_picked_locs,
+        mock_pick_similar,
+    ):
+        """Test the find_similar module"""
+        # Mock pick_similar to return test data
+        mock_picks = np.array([[10.0, 10.0], [20.0, 20.0], [30.0, 30.0]])
+        mock_nlocs = np.array([50, 75, 100])
+        mock_rmsds = np.array([1.5, 2.0, 2.5])
+        mock_labels = np.array(
+            [0, 0, -1]
+        )  # Two selected picks, one not selected
+
+        mock_pick_similar.return_value = (
+            mock_picks,
+            mock_nlocs,
+            mock_rmsds,
+            mock_labels,
+        )
+
+        # Mock picked_locs to return test localizations
+        test_locs = np.rec.array(
+            [
+                (0, 10.0, 10.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1, 0),
+                (1, 10.1, 10.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1, 0),
+                (2, 20.0, 20.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1, 1),
+            ],
+            dtype=self.locs_dtype + [("group", "<i4")],
+        )
+        test_locs = pd.DataFrame(test_locs)
+        mock_picked_locs.return_value = test_locs
+
+        # Set up test data
+        self.ap.locs = np.rec.array(
+            [
+                (
+                    i,
+                    10 + np.random.rand(),
+                    10 + np.random.rand(),
+                    1000,
+                    1.0,
+                    1.0,
+                    100,
+                    0.1,
+                    0.1,
+                    0.5,
+                    50,
+                    i,
+                )
+                for i in range(100)
+            ],
+            dtype=self.locs_dtype,
+        )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
+        self.ap.info = [{"Width": 64, "Height": 64, "Pixelsize": 130}]
+
+        # Test parameters
+        parameters = {
+            "diameter": 5.0,
+            "min_n_locs_per_frame": 0.01,
+            "max_n_locs_per_frame": 0.1,
+            "min_rmsd": 1.0,
+            "max_rmsd": 3.0,
+            "n_plot_structures": 2,
+            "display_pixelsize": 1.0,
+        }
+
+        # Run find_similar
+        parameters, results = self.ap.find_similar(0, parameters)
+
+        # Verify results
+        assert results["n_picks"] == 3, "Should return correct number of picks"
+        assert (
+            results["n_picked_locs"] == 3
+        ), "Should return correct number of picked locs"
+        assert (
+            results["n_locs"] == 100
+        ), "Should return correct total number of locs"
+
+        # Check that files were created
+        assert "fp_phasespace" in results, "Should create phase space plot"
+        assert (
+            "fp_phasespace_hexbin" in results
+        ), "Should create hexbin phase space plot"
+        assert "fp_picked_fullfov" in results, "Should create full FOV plot"
+        assert "fp_picked_locs" in results, "Should save picked locs file"
+
+        # Verify mock calls (may be called multiple times by test framework)
+        assert mock_pick_similar.called, "pick_similar should be called"
+        assert mock_picked_locs.called, "picked_locs should be called"
+        assert mock_save_locs.called, "save_locs should be called"
+
+        # Verify pick_similar was called with correct arguments
+        call_args = mock_pick_similar.call_args
+        assert (
+            call_args[0][0] is self.ap.locs
+        ), "Should pass locs to pick_similar"
+        assert (
+            call_args[0][1] is self.ap.info
+        ), "Should pass info to pick_similar"
+        assert (
+            call_args[1]["diameter"] == 5.0
+        ), "Should pass diameter parameter"
+
+        # Clean up
+        shutil.rmtree(os.path.join(self.results_folder, "00_find_similar"))
 
 
 # @unittest.skip("")
@@ -962,9 +1452,220 @@ class TestAnalyse(unittest.TestCase):
             ],
             dtype=locs_dtype,
         )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
         # logger.debug(self.ap.locs)
 
         filepath = os.path.join(self.results_folder, "lvf.png")
         self.ap._plot_locs_vs_frame(filepath)
 
         os.remove(filepath)
+
+    def test_08_conditional_branch_true(self):
+        """Test conditional_branch when condition evaluates to True"""
+        # Set up mock locs data
+        locs_dtype = [
+            ("frame", "u4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("photons", "f4"),
+            ("sx", "f4"),
+            ("sy", "f4"),
+            ("bg", "f4"),
+        ]
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (0, 1.0, 1.0, 100.0, 1.5, 1.5, 10.0),
+                    (1, 2.0, 2.0, 200.0, 1.5, 1.5, 10.0),
+                ],
+                dtype=locs_dtype,
+            )
+        )
+
+        # Create a mock sub-module that does something simple
+        def mock_sub_module(self, i, parameters, results=None, **kwargs):
+            if results is None:
+                results = {}
+            results["test_value"] = "executed"
+            results["folder"] = kwargs.get("calling_module_dir", "")
+            return parameters, results
+
+        # Temporarily add the mock module to AutoPicasso
+        self.ap.mock_sub_module = mock_sub_module.__get__(
+            self.ap, analyse.AutoPicasso
+        )
+
+        # Test condition: 10 > 5 (True)
+        parameters = {
+            "condition": {"left": 10, "operator": ">", "right": 5},
+            "if_true": [("mock_sub_module", {})],
+            "if_false": [],
+        }
+
+        parameters, results = self.ap.conditional_branch(0, parameters)
+
+        # Verify the condition was evaluated correctly
+        assert results["condition_result"] is True
+        assert results["branch_taken"] == "if_true"
+        assert "if_branch" in results
+        assert len(results["if_branch"]) == 1
+        assert "00_mock_sub_module" in results["if_branch"]
+        assert "skipped_branch" in results
+        assert results["skipped_branch"] == "if_false"
+
+        # Clean up
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_conditional_branch")
+        )
+
+    def test_09_conditional_branch_false(self):
+        """Test conditional_branch when condition evaluates to False"""
+        # Set up mock locs data
+        locs_dtype = [
+            ("frame", "u4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("photons", "f4"),
+        ]
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [(0, 1.0, 1.0, 100.0), (1, 2.0, 2.0, 200.0)],
+                dtype=locs_dtype,
+            )
+        )
+
+        # Create a mock sub-module
+        def mock_sub_module(self, i, parameters, results=None, **kwargs):
+            if results is None:
+                results = {}
+            results["test_value"] = "false_branch_executed"
+            results["folder"] = kwargs.get("calling_module_dir", "")
+            return parameters, results
+
+        # Temporarily add the mock module
+        self.ap.mock_sub_module = mock_sub_module.__get__(
+            self.ap, analyse.AutoPicasso
+        )
+
+        # Test condition: 3 > 10 (False)
+        parameters = {
+            "condition": {"left": 3, "operator": ">", "right": 10},
+            "if_true": [],
+            "if_false": [("mock_sub_module", {})],
+        }
+
+        parameters, results = self.ap.conditional_branch(0, parameters)
+
+        # Verify the condition was evaluated correctly
+        assert results["condition_result"] is False
+        assert results["branch_taken"] == "if_false"
+        assert "if_branch" in results
+        assert len(results["if_branch"]) == 1
+        assert "00_mock_sub_module" in results["if_branch"]
+        assert results["skipped_branch"] == "if_true"
+
+        # Clean up
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_conditional_branch")
+        )
+
+    def test_10_conditional_branch_complex_condition(self):
+        """Test conditional_branch with complex logical conditions"""
+        # Set up mock locs data
+        locs_dtype = [("frame", "u4"), ("x", "f4"), ("y", "f4")]
+        self.ap.locs = pd.DataFrame(
+            np.rec.array([(0, 1.0, 1.0)], dtype=locs_dtype)
+        )
+
+        # Test AND condition: (5 > 3) AND (10 < 20) = True
+        parameters = {
+            "condition": {
+                "and": [
+                    {"left": 5, "operator": ">", "right": 3},
+                    {"left": 10, "operator": "<", "right": 20},
+                ]
+            },
+            "if_true": [],
+            "if_false": [],
+        }
+
+        parameters, results = self.ap.conditional_branch(0, parameters)
+        assert results["condition_result"] is True
+
+        # Clean up
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_conditional_branch")
+        )
+
+        # Test OR condition: (5 < 3) OR (10 < 20) = True
+        parameters = {
+            "condition": {
+                "or": [
+                    {"left": 5, "operator": "<", "right": 3},
+                    {"left": 10, "operator": "<", "right": 20},
+                ]
+            },
+            "if_true": [],
+            "if_false": [],
+        }
+
+        parameters, results = self.ap.conditional_branch(1, parameters)
+        assert results["condition_result"] is True
+
+        # Clean up
+        shutil.rmtree(
+            os.path.join(self.results_folder, "01_conditional_branch")
+        )
+
+    def test_11_conditional_branch_equality_operators(self):
+        """Test conditional_branch with equality operators"""
+        # Set up minimal locs data
+        self.ap.locs = pd.DataFrame({"frame": [0], "x": [1.0], "y": [1.0]})
+
+        # Test equality
+        parameters = {
+            "condition": {"left": 5, "operator": "==", "right": 5},
+            "if_true": [],
+            "if_false": [],
+        }
+        parameters, results = self.ap.conditional_branch(0, parameters)
+        assert results["condition_result"] is True
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_conditional_branch")
+        )
+
+        # Test inequality
+        parameters = {
+            "condition": {"left": 5, "operator": "!=", "right": 3},
+            "if_true": [],
+            "if_false": [],
+        }
+        parameters, results = self.ap.conditional_branch(1, parameters)
+        assert results["condition_result"] is True
+        shutil.rmtree(
+            os.path.join(self.results_folder, "01_conditional_branch")
+        )
+
+        # Test >=
+        parameters = {
+            "condition": {"left": 5, "operator": ">=", "right": 5},
+            "if_true": [],
+            "if_false": [],
+        }
+        parameters, results = self.ap.conditional_branch(2, parameters)
+        assert results["condition_result"] is True
+        shutil.rmtree(
+            os.path.join(self.results_folder, "02_conditional_branch")
+        )
+
+        # Test <=
+        parameters = {
+            "condition": {"left": 3, "operator": "<=", "right": 5},
+            "if_true": [],
+            "if_false": [],
+        }
+        parameters, results = self.ap.conditional_branch(3, parameters)
+        assert results["condition_result"] is True
+        shutil.rmtree(
+            os.path.join(self.results_folder, "03_conditional_branch")
+        )

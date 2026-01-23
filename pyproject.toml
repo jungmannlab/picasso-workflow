@@ -14,13 +14,14 @@ dependencies = [
     "numpy",
     "pandas",
     "tables",
+    "numba",
     "openpyxl==3.1.2",
     "picassosr>=0.7.3",
     "moviepy==1.0.3",
     "python-dotenv==1.0.1",
     "pre-commit>=3.5.1",
     "bandit==1.7.8",
-    "coverage==7.4.4",
+    # "coverage>=6.5,<6.6",
     "pytest==8.1.1",
     "isort==5.13.2",
     "aicspylibczi>=3.1.1",
@@ -28,8 +29,18 @@ dependencies = [
     "aicsimageio",
     "psutil",
     "atlassian-python-api",
+    "memory-profiler>=0.61.0",
+    "loguru>=0.7.3",
+    "h5py",
+    # "mpi4py",
+    # "openmpi"
 ]
 keywords = ["picasso"]
+
+[project.optional-dependencies]
+cluster = [
+    "mpi4py>=4.0.2",
+]
 
 [tool.setuptools]
 packages = ["picasso_workflow"]
@@ -55,7 +66,7 @@ exclude = '''
 strict = true
 
 [tool.flake8]
-max-line-length = 88
+max-line-length = 79
 exclude = ".tox,.git,__pycache__,docs"
 ignore = "E203,W503"
 select = "C,E,F,W,B,B9,I"
