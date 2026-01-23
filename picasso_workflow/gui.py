@@ -10181,7 +10181,15 @@ class Window(QtWidgets.QMainWindow):
             login_node, username, port=22, ssh_key_path=ssh_key_path
         )
 
-        assert self.slurm_communicator.test_connection()
+        try:
+            assert self.slurm_communicator.test_connection()
+        except:
+            ssh_key_path = "~/.ssh/id_ed25519"
+            self.slurm_communicator = SlurmCommunicator(
+                login_node, username, port=22, ssh_key_path=ssh_key_path
+            )
+            assert self.slurm_communicator.test_connection()
+            
 
         scriptname = "start_workflow.py"
         self.create_python_script(host_cluster, scriptname)
