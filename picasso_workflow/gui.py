@@ -7855,6 +7855,24 @@ class Window(QtWidgets.QMainWindow):
         # self.cluster_use_module.connect(self.on_cluster_use_module_state_change)
         cluster_config_layout.addWidget(self.cluster_use_module)
 
+        # Cluster configuration widgets
+        cluster_settings_layout = QtWidgets.QHBoxLayout()
+        cluster_settings_widget = QtWidgets.QWidget()
+        cluster_settings_widget.setLayout(cluster_settings_layout)
+        run_on_cluster_layout.addWidget(cluster_settings_widget)
+
+        # user name on cluster login node
+        cluster_settings_layout.addWidget(QtWidgets.QLabel("User name on cluster login node (default '$USER' as provided locally):"))
+        self.cluster_username_edit = QtWidgets.QLineEdit()
+        self.cluster_username_edit.setPlaceholderText("e.g., $USER")
+        defaulttext = CONFIG.get("LoginNodeUserNames", "$USER")
+        if isinstance(defaulttext, dict):
+            defaulttext = defaulttext.get(
+                list(CONFIG["SlurmLoginNodes"].keys())[0], "$USER")
+        self.cluster_username_edit.setText(defaulttext)
+        # self.cluster_username_edit.setMaximumWidth(100)
+        cluster_settings_layout.addWidget(self.cluster_username_edit)
+
         slurm_buttons = QtWidgets.QHBoxLayout()
         self.slurm_buttons_widget = QtWidgets.QWidget()
         self.slurm_buttons_widget.setLayout(slurm_buttons)
@@ -10182,13 +10200,13 @@ class Window(QtWidgets.QMainWindow):
         )
 
         try:
-            assert self.slurm_communicator.test_connection()
+            self.slurm_communicator.test_connection()
         except:
             ssh_key_path = "~/.ssh/id_ed25519"
             self.slurm_communicator = SlurmCommunicator(
                 login_node, username, port=22, ssh_key_path=ssh_key_path
             )
-            assert self.slurm_communicator.test_connection()
+            self.slurm_communicator.test_connection()
             
 
         scriptname = "start_workflow.py"
