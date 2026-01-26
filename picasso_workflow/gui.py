@@ -1981,16 +1981,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "method": {
-                "type": "str",
-                "description": "Clustering method to use",
-                "options": ["voronoi", "dbscan_like", "hierarchical"],
-                "required": True,
-            },
+            # "method": {
+            #     "type": "str",
+            #     "description": "Clustering method to use",
+            #     "options": ["voronoi", "dbscan_like", "hierarchical"],
+            #     "required": True,
+            # },
             "radius": {
                 "type": "float",
-                "description": "Clustering radius parameter",
-                "min": 1.0,
+                "description": "Clustering radius parameter [nm]",
+                "min": 0.0,
                 "max": 1000.0,
                 "default": 50.0,
                 "required": False,
@@ -2008,7 +2008,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "radius_z": {
                 "type": "float",
-                "description": "The smlm radius_z",
+                "description": "The smlm radius_z [nm]",
                 "default": None,
                 "required": False,
             },
@@ -7873,6 +7873,13 @@ class Window(QtWidgets.QMainWindow):
         # self.cluster_username_edit.setMaximumWidth(100)
         cluster_settings_layout.addWidget(self.cluster_username_edit)
 
+        self.slurm_email_edit = QtWidgets.QLineEdit()
+        self.slurm_email_edit.setPlaceholderText("e.g., you@institute.edu")
+        defaulttext = CONFIG.get("SlurmDefault", {}).get("email", "")
+        self.slurm_email_edit.setText(defaulttext)
+        # self.cluster_username_edit.setMaximumWidth(100)
+        cluster_settings_layout.addWidget(self.slurm_email_edit)
+
         slurm_buttons = QtWidgets.QHBoxLayout()
         self.slurm_buttons_widget = QtWidgets.QWidget()
         self.slurm_buttons_widget.setLayout(slurm_buttons)
@@ -10193,21 +10200,25 @@ class Window(QtWidgets.QMainWindow):
             results_folder_local, host_cluster
         )
 
-        username = getpass.getuser()
-        ssh_key_path = "~/.ssh/id_rsa"
+        if self.cluster_username_edit.text == "$USER":
+            username = getpass.getuser()
+        else:
+            username = self.cluster_username_edit.text
+
+        ssh_key_path_options = [
+            os.path.join(os.path.expanduser("~"), ".ssh", "id_rsa"),
+            os.path.join(os.path.expanduser("~"), ".ssh", "id_ed25519"),
+        ]
+        for sshpath in ssh_key_path_options:
+            ssh_key_path = sshpath
+            if os.path.exists(ssh_key_path):
+                break
+        # ssh_key_path = "~/.ssh/id_rsa"
         self.slurm_communicator = SlurmCommunicator(
             login_node, username, port=22, ssh_key_path=ssh_key_path
         )
 
-        try:
-            self.slurm_communicator.test_connection()
-        except:
-            ssh_key_path = "~/.ssh/id_ed25519"
-            self.slurm_communicator = SlurmCommunicator(
-                login_node, username, port=22, ssh_key_path=ssh_key_path
-            )
-            self.slurm_communicator.test_connection()
-            
+        self.slurm_communicator.test_connection()            
 
         scriptname = "start_workflow.py"
         self.create_python_script(host_cluster, scriptname)
@@ -10222,6 +10233,10 @@ class Window(QtWidgets.QMainWindow):
             # "mail-type": "ALL",
             # "mail-user": f"{username}@biochem.mpg.de",
         }
+        if email := self.slurm_email_edit.tex != "":
+            slurm_options["mail-user"] = email
+            slurm_options["mail-type"] = "ALL"
+
         use_pw_mod = self.cluster_use_module.isChecked()
 
         commands = self.slurm_communicator.assemble_slurm_commands(
