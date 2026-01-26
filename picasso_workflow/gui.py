@@ -10200,10 +10200,10 @@ class Window(QtWidgets.QMainWindow):
             results_folder_local, host_cluster
         )
 
-        if self.cluster_username_edit.text == "$USER":
+        if self.cluster_username_edit.text().strip() == "$USER":
             username = getpass.getuser()
         else:
-            username = self.cluster_username_edit.text
+            username = self.cluster_username_edit.text().strip()
 
         ssh_key_path_options = [
             os.path.join(os.path.expanduser("~"), ".ssh", "id_rsa"),
@@ -10233,7 +10233,7 @@ class Window(QtWidgets.QMainWindow):
             # "mail-type": "ALL",
             # "mail-user": f"{username}@biochem.mpg.de",
         }
-        if email := self.slurm_email_edit.text != "":
+        if email := self.slurm_email_edit.text().strip() != "":
             slurm_options["mail-user"] = email
             slurm_options["mail-type"] = "ALL"
 
