@@ -98,7 +98,13 @@ class PathParser:
             drive = drive_map[posixpath.drive]
             # print('old drive: ', posixpath.drive)
             # print('new drive:' , drive)
-            currospath = pathlib.Path(drive, *posixpath.parts[1:])
+            # currospath = pathlib.Path(drive, *posixpath.parts[1:])
+
+            # change logic to not convert to current os but new drive type os
+            if ":" in drive:  # converted path is a windows path
+                currospath = pathlib.PureWindowsPath(drive, *posixpath.parts[1:])
+            else:  # converted path is a Posix path
+                currospath = pathlib.PurePosixPath(drive, *posixpath.parts[1:])
         else:
             # print('no drive')
             drivelen = len(pathlib.Path(list(drive_map.keys())[0]).parts)
@@ -108,11 +114,23 @@ class PathParser:
             if drive := drive_map.get(str(pseudodrive)):
                 # print('found drive:', drive)
                 # found the drive after all
-                currospath = pathlib.Path(drive, *posixpath.parts[drivelen:])
+                # currospath = pathlib.Path(drive, *posixpath.parts[drivelen:])
+
+                # change logic to not convert to current os but new drive type os
+                if ":" in drive:  # converted path is a windows path
+                    currospath = pathlib.PureWindowsPath(drive, *posixpath.parts[1:])
+                else:  # converted path is a Posix path
+                    currospath = pathlib.PurePosixPath(drive, *posixpath.parts[1:])
             else:
                 # print("did not find a drive")
                 # relative path
-                currospath = pathlib.Path(*posixpath.parts)
+                # currospath = pathlib.Path(*posixpath.parts)
+
+                # change logic to not convert to current os but new drive type os
+                if ":" in list(drive_map.values())[0]:  # converted path is a windows path
+                    currospath = pathlib.PureWindowsPath(drive, *posixpath.parts[1:])
+                else:  # converted path is a Posix path
+                    currospath = pathlib.PurePosixPath(drive, *posixpath.parts[1:])
         # print('new path:', currospath)
         return str(currospath)
 
