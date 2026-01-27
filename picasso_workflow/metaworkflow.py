@@ -76,10 +76,22 @@ class PathParser:
         if winpath.drive:
             # absolute path
             drive = drive_map[winpath.drive]
-            currospath = pathlib.Path(drive, *winpath.parts[1:])
+            # currospath = pathlib.Path(drive, *winpath.parts[1:])
+
+            # change logic to not convert to current os but new drive type os
+            if ":" in drive:  # converted path is a windows path
+                currospath = pathlib.PureWindowsPath(drive, *winpath.parts[1:])
+            else:  # converted path is a Posix path
+                currospath = pathlib.PurePosixPath(drive, *winpath.parts[1:])
         else:
             # relative path
-            currospath = pathlib.Path(*winpath.parts)
+            # currospath = pathlib.Path(*winpath.parts)
+
+            # change logic to not convert to current os but new drive type os
+            if ":" in list(drive_map.values())[0]:  # converted path is a windows path
+                currospath = pathlib.PureWindowsPath(drive, *winpath.parts[1:])
+            else:  # converted path is a Posix path
+                currospath = pathlib.PurePosixPath(drive, *winpath.parts[1:])
         return str(currospath)
 
     def posix_path_to_curr_os(self, posixpath, drive_map):
