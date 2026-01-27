@@ -6837,7 +6837,8 @@ class SlurmCommunicator:
         """
         if local:
             filepath = os.path.join(folder, "run_workflow_slurm.sh")
-            with open(filepath, "w") as f:
+            # write with UNIX style newlines ('\n') instead of DOS ('\r\n')
+            with open(filepath, "w", newline='\n') as f:
                 f.write(script_content)
             return filepath
 
@@ -6945,9 +6946,9 @@ class SlurmCommunicator:
 
         sbatch_cmd += f" {script_path}"
 
-        result = self.execute_ssh_command(sbatch_cmd)
-
         print("resulting command: ", sbatch_cmd)
+
+        result = self.execute_ssh_command(sbatch_cmd)
 
         # Parse job ID from output
         job_id = None
@@ -7172,7 +7173,7 @@ class FilePathEditor(QtWidgets.QWidget):
             # Check if widget is still valid (might have been deleted during dialog)
             if path and not self.isHidden():
                 try:
-                    self.lineEdit.setText(path)
+                    self.lineEdit.setText(os.path.normpath(path))
                     # Use QTimer to safely emit signal after returning to event loop
                     QtCore.QTimer.singleShot(0, self.editingFinished.emit)
                 except RuntimeError:
@@ -8899,7 +8900,7 @@ class Window(QtWidgets.QMainWindow):
             ),
         )
         if folder:
-            self.results_folder_display.setText(folder)
+            self.results_folder_display.setText(os.path.normpath(folder))
             # Enable widgets when a folder is selected
             self._set_widgets_enabled(True)
 
