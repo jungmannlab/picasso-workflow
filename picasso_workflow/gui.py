@@ -10280,7 +10280,8 @@ class Window(QtWidgets.QMainWindow):
             output_path = filename
         print("output path", output_path)
 
-        with open(output_path, "w") as f:
+        # write with UNIX style newlines ('\n') instead of DOS ('\r\n')
+        with open(output_path, "w", newline='\n') as f:
             f.write(script_content)
 
         # Make script executable on Unix systems
