@@ -344,6 +344,51 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def zfit(self):
+        """
+        Fits z coordinates to localized spots using an astigmatic calibration.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    calibration : str or dict
+                        filepath to a calibration file or the calibration itself.
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+        """
+        pass
+
+    @abc.abstractmethod
+    def load_picassoconfig(self):
+        """
+        Loads a specific picasso configuration file, as opposed to the default
+        version residing in the picasso installation folder.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    fp_config : str
+                        filepath to a config file.
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+        """
+        pass
+
+    @abc.abstractmethod
     def export_brightfield(self):
         """Opens a single-plane tiff image and saves it to png with
         contrast adjustment.
@@ -2256,7 +2301,9 @@ class ParameterCommandExecutor(DictSimpleTyper):
                     if aritexp[0] == "+":
                         res = res + aritexp[1:]
                     else:
-                        raise NotImplementedError(f"Cannot operate '{aritexp}' on '{res}' (str)")
+                        raise NotImplementedError(
+                            f"Cannot operate '{aritexp}' on '{res}' (str)"
+                        )
                 elif isinstance(res, (int, float)):
                     if not is_valid_expression(aritexp):
                         raise PriorResultError(
@@ -2684,4 +2731,3 @@ def stripplot(data, positions, jitter, ax, color, alpha=1):
         x = pos * np.ones(len(d))
         x += np.random.uniform(-jitter / 2, jitter / 2, size=len(d))
         ax.scatter(x, d, color=color, alpha=alpha)
-

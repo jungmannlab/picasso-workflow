@@ -1007,6 +1007,61 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def load_picassoconfig(self, i, parameters, results):
+        """
+        Loads a specific picasso configuration file, as opposed to the default
+        version residing in the picasso installation folder.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    fp_config : str
+                        filepath to a config file.
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+        """
+        parameters_spec = {
+            "fp_config": {
+                "type": "str",
+                "required": True,
+            },
+            "save_locs": {
+                "type": "dict",
+                "description": "if saving localizations is requested. Items \
+                    correpsond to arguments of save_locs",
+                "required": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+        }
+
+        return parameters_spec, results_spec
+
     def export_brightfield(self):
         """Opens a single-plane tiff image and saves it to png with
         contrast adjustment.
@@ -1549,9 +1604,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "methods": {
                 "type": "dict",
-                "description": (
-                    "Methods to summarize"
-                ),
+                "description": ("Methods to summarize"),
                 "required": True,
                 "properties": {
                     "nena": {
@@ -1573,7 +1626,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         },
                     },
                 },
-            }
+            },
         }
 
         results_spec = {
@@ -2220,7 +2273,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "dims": {
                 "type": "list",
                 "description": "the distance dimensions, e.g. ['x', 'y']",
-                "default": ['x', 'y'],
+                "default": ["x", "y"],
                 "required": False,
             },
             "nth_NN": {
@@ -2633,10 +2686,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     },
                     "force_method": {
                         "type": "str",
-                        "description":
-                            "Whether to force a method or"
-                            " let the alogritm decide on the best method."
-                            "options: 'RCC', 'picked', 'RSSO'",
+                        "description": "Whether to force a method or"
+                        " let the alogritm decide on the best method."
+                        "options: 'RCC', 'picked', 'RSSO'",
                         "default": None,
                     },
                     "max_shift": {
@@ -4197,9 +4249,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "density_std_cutoff": {
                 "type": "float",
-                "description":
-                    "Density range in units of std/median, "
-                    "symmetric around median. Alternative to max/min",
+                "description": "Density range in units of std/median, "
+                "symmetric around median. Alternative to max/min",
                 "min": 0,
                 "max": 1,
                 "default": 0,
@@ -4207,17 +4258,15 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "density_min": {
                 "type": "float",
-                "description":
-                    "Lower density cutoff."
-                    "Alternative to density_std_cutoff",
+                "description": "Lower density cutoff."
+                "Alternative to density_std_cutoff",
                 "default": 0,
                 "required": False,
             },
             "density_max": {
                 "type": "float",
-                "description":
-                    "Higher density cutoff."
-                    "Alternative to density_std_cutoff",
+                "description": "Higher density cutoff."
+                "Alternative to density_std_cutoff",
                 "default": 0,
                 "required": False,
             },
@@ -4228,9 +4277,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "nth_largest": {
                 "type": "int",
-                "description":
-                    "Select the nth largest contiguous area in density "
-                    "range. Set 0 for largest.",
+                "description": "Select the nth largest contiguous area in density "
+                "range. Set 0 for largest.",
                 "required": False,
                 "min": 0,
                 "default": 0,
@@ -5259,9 +5307,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "field": {
                 "type": ["str", "list"],
-                "description": 
-                    "Field to filter by. One or list of columns in locs"
-                    " (e.g. 'photons', 'x', 'y', 'sx', 'sy')",
+                "description": "Field to filter by. One or list of columns in locs"
+                " (e.g. 'photons', 'x', 'y', 'sx', 'sy')",
                 "required": True,
             },
             "minval": {
@@ -5368,7 +5415,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "filter out positions at more extreme temporal positions",
                 "min": 0,
                 "max": 1,
-                "default": .1,
+                "default": 0.1,
                 "required": False,
             },
             "stdframe_cutoff": {
@@ -5376,14 +5423,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "filter out positions with lower standard deviation",
                 "min": 0,
                 # "max": 1,
-                "default": .16,
+                "default": 0.16,
                 "required": False,
             },
             "fp_locs": {
                 "type": "str",
-                "description": 
-                    "The filepath to localizations (self.locs should be the"
-                    " centers). If given, locs are filtered and saved as well.",
+                "description": "The filepath to localizations (self.locs should be the"
+                " centers). If given, locs are filtered and saved as well.",
                 "required": False,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: the filepath to the underlying localizations (self.locs are centers). If given, these are filtered as well and saved with the same filename in the ...
@@ -5802,9 +5848,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "labeling_uncertainty": {
                 "type": "dict",
-                "description":
-                    "Dictionary mapping from target/reference (tag) "
-                    "to labeling uncertainty [nm]",
+                "description": "Dictionary mapping from target/reference (tag) "
+                "to labeling uncertainty [nm]",
                 # "default": 5,
                 "required": True,
             },
@@ -5816,9 +5861,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "density": {
                 "type": "dict",
-                "description":
-                    "Dictionary mapping from target/reference (tag) "
-                    "to molecular density [nm^-2 or nm^-3]",
+                "description": "Dictionary mapping from target/reference (tag) "
+                "to molecular density [nm^-2 or nm^-3]",
                 # "default": 5,
                 "required": True,
             },
@@ -7263,7 +7307,13 @@ class ParameterWidgetInfo:
 class ParameterCmdDialog(QtWidgets.QDialog):
     """Dialog for selecting a command as parameter value."""
 
-    def __init__(self, workflow_modules, module_descriptor, current_module_index=0, parent=None):
+    def __init__(
+        self,
+        workflow_modules,
+        module_descriptor,
+        current_module_index=0,
+        parent=None,
+    ):
         """Initialize the prior result dialog.
 
         Args:
@@ -7305,9 +7355,13 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         # Command type selection
         layout.addWidget(QtWidgets.QLabel("Command type:"))
         self.command_combo = QtWidgets.QComboBox()
-        self.command_combo.addItems(["map", "index", "Previous Module Result", "Prior Result"])#, "sum", "max", "min"])
+        self.command_combo.addItems(
+            ["map", "index", "Previous Module Result", "Prior Result"]
+        )  # , "sum", "max", "min"])
         self.command_combo.setItemDelegate(ToolTipDelegate(self.command_combo))
-        self.command_combo.currentIndexChanged.connect(self._on_command_changed)
+        self.command_combo.currentIndexChanged.connect(
+            self._on_command_changed
+        )
         # self.command_combo.model().setData(
         #     0, "Map different values onto workers (e.g. files to load)", Qt.ToolTipRole
         # )  # Tooltip
@@ -7337,7 +7391,6 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.prior_mode.addButton(self.prior_singlestage_list, 1)
         self.prior_mode.buttonToggled.connect(self._on_prior_mode_selected)
 
-
         self.module_label = QtWidgets.QLabel("Select module:")
         self.module_combo = QtWidgets.QComboBox()
         for i, (module_name, params) in enumerate(workflow_modules):
@@ -7349,7 +7402,6 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.result_combo.currentIndexChanged.connect(self._on_result_selected)
         self.result_combo.setPlaceholderText("Select a result")
 
-
         # modify_vlayout = QtWidgets.QVBoxLayout()
         # self.modify_widget = QtWidgets.QWidget()
         # self.modify_widget.setLayout(modify_vlayout)
@@ -7359,8 +7411,12 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         # modify_hwidget = QtWidgets.QWidget()
         # modify_hwidget.setLayout(modify_hlayout)
         self.modify_combo = QtWidgets.QComboBox()
-        self.modify_combo.addItems(["", "multiply", "divide", "add", "subtract"])
-        self.modify_combo.currentIndexChanged.connect(self._on_modify_operator_selected)
+        self.modify_combo.addItems(
+            ["", "multiply", "divide", "add", "subtract"]
+        )
+        self.modify_combo.currentIndexChanged.connect(
+            self._on_modify_operator_selected
+        )
         # modify_hlayout.addWidget(self.modify_combo)
         self.modify_value = QtWidgets.QDoubleSpinBox()
         self.modify_value.valueChanged.connect(self._on_modify_value_changed)
@@ -7587,7 +7643,7 @@ class ParameterCmdDialog(QtWidgets.QDialog):
 
             module_index = self.module_combo.currentIndex()
             module_name = self.module_combo.currentText()
-            module_name = module_name[module_name.index(":") + 2:]
+            module_name = module_name[module_name.index(":") + 2 :]
             result_name = self.result_combo.currentText()
 
             if self.modify_combo.currentText() == "multiply":
@@ -7667,19 +7723,25 @@ class Window(QtWidgets.QMainWindow):
         for template in CONFIG["Templates"].keys():
             workflow_template_combo.addItem(template)
         workflow_template_combo.setEditable(False)
-        workflow_template_combo.currentTextChanged.connect(self.on_template_changed)
+        workflow_template_combo.currentTextChanged.connect(
+            self.on_template_changed
+        )
         workflow_template_combo.setToolTip("Load a template workflow")
         layout.addWidget(workflow_template_combo, 0, 0)
         # Results folder selection
         results_folder_button = QtWidgets.QPushButton("Results Folder")
-        results_folder_button.setToolTip("The folder must be accessible both from this and the compute machine (cluster).")
+        results_folder_button.setToolTip(
+            "The folder must be accessible both from this and the compute machine (cluster)."
+        )
         # self.files_box.addWidget(results_folder_button, 2, 0)
         layout.addWidget(results_folder_button, 0, 1)
         results_folder_button.clicked.connect(self.select_results_folder)
         self.results_folder_display = QtWidgets.QLineEdit()
         self.results_folder_display.setReadOnly(False)
         self.results_folder_display.setPlaceholderText("No folder selected")
-        self.results_folder_display.textChanged.connect(self.set_results_folder_display)
+        self.results_folder_display.textChanged.connect(
+            self.set_results_folder_display
+        )
         # self.files_box.addWidget(self.results_folder_display, 2, 1, 1, 2)
         layout.addWidget(self.results_folder_display, 0, 2, 1, 2)
         # Investigation type
@@ -7739,16 +7801,20 @@ class Window(QtWidgets.QMainWindow):
             "e.g., https://confluence.example.com"
         )
         self.confluence_url_edit.setToolTip(
-            "If empty, host will load from environment variable")
+            "If empty, host will load from environment variable"
+        )
         self.confluence_url_edit.setText(confluence_config.get("URL", ""))
         confluence_layout.addWidget(self.confluence_url_edit, 0, 1)
 
         # Confluence Space
         confluence_layout.addWidget(QtWidgets.QLabel("Space:"), 1, 0)
         self.confluence_space_edit = QtWidgets.QLineEdit()
-        self.confluence_space_edit.setPlaceholderText("e.g., ~username or TEAM")
+        self.confluence_space_edit.setPlaceholderText(
+            "e.g., ~username or TEAM"
+        )
         self.confluence_space_edit.setToolTip(
-            "If empty, host will load from environment variable")
+            "If empty, host will load from environment variable"
+        )
         self.confluence_space_edit.setText(confluence_config.get("Space", ""))
         confluence_layout.addWidget(self.confluence_space_edit, 1, 1)
 
@@ -7760,7 +7826,8 @@ class Window(QtWidgets.QMainWindow):
         )
         self.confluence_token_edit.setEchoMode(QtWidgets.QLineEdit.Password)
         self.confluence_token_edit.setToolTip(
-            "If empty, host will load from environment variable")
+            "If empty, host will load from environment variable"
+        )
         self.confluence_token_edit.setText(confluence_config.get("Token", ""))
         confluence_layout.addWidget(self.confluence_token_edit, 2, 1)
 
@@ -7768,7 +7835,8 @@ class Window(QtWidgets.QMainWindow):
         confluence_layout.addWidget(QtWidgets.QLabel("Parent Page:"), 3, 0)
         self.confluence_parent_page_edit = QtWidgets.QLineEdit()
         self.confluence_parent_page_edit.setToolTip(
-            "If empty, host will load from environment variable")
+            "If empty, host will load from environment variable"
+        )
         self.confluence_parent_page_edit.setPlaceholderText(
             "Page title to create reports under"
         )
@@ -7851,7 +7919,9 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
         self.cluster_use_module.setMaximumWidth(200)
         self.cluster_use_module.setChecked(True)
-        self.cluster_use_module.setToolTip("Use the miblab SLURM module for picasso-workflow (recommended). Otherwise, use Heinrich's repository.")
+        self.cluster_use_module.setToolTip(
+            "Use the miblab SLURM module for picasso-workflow (recommended). Otherwise, use Heinrich's repository."
+        )
         # self.cluster_use_module.connect(self.on_cluster_use_module_state_change)
         cluster_config_layout.addWidget(self.cluster_use_module)
 
@@ -7862,13 +7932,18 @@ class Window(QtWidgets.QMainWindow):
         run_on_cluster_layout.addWidget(cluster_settings_widget)
 
         # user name on cluster login node
-        cluster_settings_layout.addWidget(QtWidgets.QLabel("User name on cluster login node (default '$USER' as provided locally):"))
+        cluster_settings_layout.addWidget(
+            QtWidgets.QLabel(
+                "User name on cluster login node (default '$USER' as provided locally):"
+            )
+        )
         self.cluster_username_edit = QtWidgets.QLineEdit()
         self.cluster_username_edit.setPlaceholderText("e.g., $USER")
         defaulttext = CONFIG.get("LoginNodeUserNames", "$USER")
         if isinstance(defaulttext, dict):
             defaulttext = defaulttext.get(
-                list(CONFIG["SlurmLoginNodes"].keys())[0], "$USER")
+                list(CONFIG["SlurmLoginNodes"].keys())[0], "$USER"
+            )
         self.cluster_username_edit.setText(defaulttext)
         # self.cluster_username_edit.setMaximumWidth(100)
         cluster_settings_layout.addWidget(self.cluster_username_edit)
@@ -7885,7 +7960,9 @@ class Window(QtWidgets.QMainWindow):
         self.slurm_buttons_widget.setLayout(slurm_buttons)
         run_on_cluster_layout.addWidget(self.slurm_buttons_widget)
 
-        estimate_start_button = QtWidgets.QPushButton("Estimate Start on Cluster")
+        estimate_start_button = QtWidgets.QPushButton(
+            "Estimate Start on Cluster"
+        )
         slurm_buttons.addWidget(estimate_start_button)
         estimate_start_button.clicked.connect(self.estimate_start)
 
@@ -8165,7 +8242,9 @@ class Window(QtWidgets.QMainWindow):
         self.modules_box.addWidget(self.addl_options_widget, 3, 0)
 
         # Add options
-        self.always_save = QtWidgets.QCheckBox("Save localizations after every module.")
+        self.always_save = QtWidgets.QCheckBox(
+            "Save localizations after every module."
+        )
         self.addl_options_layout.addWidget(self.always_save)
 
         # resize the widgets
@@ -8960,7 +9039,7 @@ class Window(QtWidgets.QMainWindow):
                         parts.append(format(val, fmt))
                     else:
                         parts.append(str(val))
-            return ''.join(parts)
+            return "".join(parts)
 
         elif isinstance(node, ast.Name):
             if node.id in variables:
@@ -8968,9 +9047,9 @@ class Window(QtWidgets.QMainWindow):
             raise ValueError(f"Unknown variable: {node.id}")
 
         # Python 3.7 compatibility (ast.Str, ast.Num deprecated but may exist)
-        elif hasattr(ast, 'Str') and isinstance(node, ast.Str):
+        elif hasattr(ast, "Str") and isinstance(node, ast.Str):
             return node.s
-        elif hasattr(ast, 'Num') and isinstance(node, ast.Num):
+        elif hasattr(ast, "Num") and isinstance(node, ast.Num):
             return node.n
 
         raise ValueError(f"Cannot evaluate node: {type(node).__name__}")
@@ -8991,7 +9070,7 @@ class Window(QtWidgets.QMainWindow):
         # print(f"DEBUG: _load_workflow_definition_alt called with folder={folder}")
         workflow_file = os.path.join(folder, "start_workflow.py")
 
-        logger.debug('loading definition (alt)')
+        logger.debug("loading definition (alt)")
 
         if not os.path.exists(workflow_file):
             logger.debug("No start_workflow.py found in folder")
@@ -9000,7 +9079,7 @@ class Window(QtWidgets.QMainWindow):
 
         try:
             # Read and parse the file
-            with open(workflow_file, 'r') as f:
+            with open(workflow_file, "r") as f:
                 source_code = f.read()
 
             tree = ast.parse(source_code)
@@ -9042,37 +9121,42 @@ class Window(QtWidgets.QMainWindow):
                     if isinstance(stmt, ast.Assign):
                         for target in stmt.targets:
                             if isinstance(target, ast.Name):
-                                if target.id == 'workflow_modules_sgl':
+                                if target.id == "workflow_modules_sgl":
                                     sgl = safe_eval_node(
-                                        stmt.value, 'workflow_modules_sgl',
-                                        variables_dict
+                                        stmt.value,
+                                        "workflow_modules_sgl",
+                                        variables_dict,
                                     )
                                     # Update idx_last_sgl_module for later use
                                     if sgl and isinstance(sgl, list):
-                                        variables_dict['idx_last_sgl_module'] = (
-                                            len(sgl) - 1
-                                        )
+                                        variables_dict[
+                                            "idx_last_sgl_module"
+                                        ] = (len(sgl) - 1)
                                         # print(
                                         #     f"DEBUG: Set idx_last_sgl_module="
                                         #     f"{variables_dict['idx_last_sgl_module']}"
                                         # )
-                                elif target.id == 'workflow_modules_agg':
+                                elif target.id == "workflow_modules_agg":
                                     agg = safe_eval_node(
-                                        stmt.value, 'workflow_modules_agg',
-                                        variables_dict
+                                        stmt.value,
+                                        "workflow_modules_agg",
+                                        variables_dict,
                                     )
-                                elif target.id == 'workflow_modules_multi':
+                                elif target.id == "workflow_modules_multi":
                                     multi = safe_eval_node(
-                                        stmt.value, 'workflow_modules_multi',
-                                        variables_dict
+                                        stmt.value,
+                                        "workflow_modules_multi",
+                                        variables_dict,
                                     )
-                                elif target.id == 'idx_last_sgl_module':
+                                elif target.id == "idx_last_sgl_module":
                                     # Try to evaluate the variable assignment
                                     try:
                                         val = self._safe_eval_node(
                                             stmt.value, variables_dict
                                         )
-                                        variables_dict['idx_last_sgl_module'] = val
+                                        variables_dict[
+                                            "idx_last_sgl_module"
+                                        ] = val
                                         # print(
                                         #     f"DEBUG: Found idx_last_sgl_module "
                                         #     f"assignment: {val}"
@@ -9100,9 +9184,13 @@ class Window(QtWidgets.QMainWindow):
             # Note: search functions if lists are None OR empty
             needs_function_search = (
                 (workflow_modules_sgl is None or workflow_modules_sgl == [])
-                and (workflow_modules_agg is None or workflow_modules_agg == [])
-                and (workflow_modules_multi is None
-                     or workflow_modules_multi == {})
+                and (
+                    workflow_modules_agg is None or workflow_modules_agg == []
+                )
+                and (
+                    workflow_modules_multi is None
+                    or workflow_modules_multi == {}
+                )
             )
 
             if needs_function_search:
@@ -9122,16 +9210,22 @@ class Window(QtWidgets.QMainWindow):
                             workflow_modules_sgl = sgl
                         if agg is not None and workflow_modules_agg is None:
                             workflow_modules_agg = agg
-                        if multi is not None and workflow_modules_multi is None:
+                        if (
+                            multi is not None
+                            and workflow_modules_multi is None
+                        ):
                             workflow_modules_multi = multi
 
             # If workflow_modules_sgl was found but workflow_modules_agg was not,
             # try again with the updated variables dict (now has idx_last_sgl_module)
-            if (workflow_modules_sgl is not None
-                    and isinstance(workflow_modules_sgl, list)
-                    and len(workflow_modules_sgl) > 0
-                    and (workflow_modules_agg is None
-                         or workflow_modules_agg == [])):
+            if (
+                workflow_modules_sgl is not None
+                and isinstance(workflow_modules_sgl, list)
+                and len(workflow_modules_sgl) > 0
+                and (
+                    workflow_modules_agg is None or workflow_modules_agg == []
+                )
+            ):
                 # print(
                 #     "DEBUG: Retrying workflow_modules_agg with updated "
                 #     f"variables: {variables}"
@@ -9141,11 +9235,14 @@ class Window(QtWidgets.QMainWindow):
                 for stmt in tree.body:
                     if isinstance(stmt, ast.Assign):
                         for target in stmt.targets:
-                            if (isinstance(target, ast.Name)
-                                    and target.id == 'workflow_modules_agg'):
+                            if (
+                                isinstance(target, ast.Name)
+                                and target.id == "workflow_modules_agg"
+                            ):
                                 result = safe_eval_node(
-                                    stmt.value, 'workflow_modules_agg',
-                                    variables
+                                    stmt.value,
+                                    "workflow_modules_agg",
+                                    variables,
                                 )
                                 if result is not None:
                                     workflow_modules_agg = result
@@ -9157,11 +9254,15 @@ class Window(QtWidgets.QMainWindow):
                             for stmt in node.body:
                                 if isinstance(stmt, ast.Assign):
                                     for target in stmt.targets:
-                                        if (isinstance(target, ast.Name)
-                                                and target.id == 'workflow_modules_agg'):
+                                        if (
+                                            isinstance(target, ast.Name)
+                                            and target.id
+                                            == "workflow_modules_agg"
+                                        ):
                                             result = safe_eval_node(
-                                                stmt.value, 'workflow_modules_agg',
-                                                variables
+                                                stmt.value,
+                                                "workflow_modules_agg",
+                                                variables,
                                             )
                                             if result is not None:
                                                 workflow_modules_agg = result
@@ -9287,7 +9388,7 @@ class Window(QtWidgets.QMainWindow):
         """
         workflow_file = os.path.join(folder, "start_workflow.py")
 
-        logger.debug('loaing definition')
+        logger.debug("loaing definition")
 
         if not os.path.exists(workflow_file):
             logger.debug("No start_workflow.py found in folder")
@@ -9343,7 +9444,9 @@ class Window(QtWidgets.QMainWindow):
 
             # If no modules found at module level, try alternative loader
             if workflow_modules_sgl is None and workflow_modules_agg is None:
-                logger.info("No workflow modules found at module level, trying alternative loader")
+                logger.info(
+                    "No workflow modules found at module level, trying alternative loader"
+                )
                 self._load_workflow_definition_alt(folder)
                 return
 
@@ -10163,10 +10266,12 @@ class Window(QtWidgets.QMainWindow):
 
         # Get output path from results folder
         results_folder = self.results_folder_display.text()
+        print("results folder: ", results_folder)
         if results_folder:
             output_path = os.path.join(results_folder, filename)
         else:
             output_path = filename
+        print("output path", output_path)
 
         with open(output_path, "w") as f:
             f.write(script_content)
@@ -10218,7 +10323,7 @@ class Window(QtWidgets.QMainWindow):
             login_node, username, port=22, ssh_key_path=ssh_key_path
         )
 
-        self.slurm_communicator.test_connection()            
+        self.slurm_communicator.test_connection()
 
         scriptname = "start_workflow.py"
         self.create_python_script(host_cluster, scriptname)
@@ -10240,9 +10345,10 @@ class Window(QtWidgets.QMainWindow):
         use_pw_mod = self.cluster_use_module.isChecked()
 
         commands = self.slurm_communicator.assemble_slurm_commands(
-            scriptname=scriptname, use_pw_module=use_pw_mod)
-            # scriptname=scriptname, use_pw_module=True)
-            # scriptname=scriptname, use_pw_module=False)
+            scriptname=scriptname, use_pw_module=use_pw_mod
+        )
+        # scriptname=scriptname, use_pw_module=True)
+        # scriptname=scriptname, use_pw_module=False)
         script_content = self.slurm_communicator.create_slurm_script(
             job_name,
             commands,
@@ -11049,8 +11155,7 @@ class Window(QtWidgets.QMainWindow):
                 ] = (module_name, param_values)
 
     def _on_parameter_changed(self):
-        """Called when a parameter textbox loses focus (editingFinished signal).
-        """
+        """Called when a parameter textbox loses focus (editingFinished signal)."""
         self._validate_parameters()
         # Auto-save parameters if editing an existing workflow item
         self._update_editing_workflow_item()

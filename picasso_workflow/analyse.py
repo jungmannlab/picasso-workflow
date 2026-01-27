@@ -1415,6 +1415,36 @@ class AutoPicasso(util.AbstractModuleCollection):
         plt.close(fig)
         return results
 
+    def load_picassoconfig(self, i, parameters, results):
+        """
+        Loads a specific picasso configuration file, as opposed to the default
+        version residing in the picasso installation folder.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    fp_config : str
+                        filepath to a config file.
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+        """
+        import picasso
+
+        with open(parameters["fp_config"], "r") as config_file:
+            new_config = yaml.full_load(config_file)
+        if new_config is not None:
+            picasso.CONFIG = new_config
+            pCONFIG = new_config
+
+        return parameters, results
+
     #    @profile_resource_usage
     @module_decorator
     def export_brightfield(self, i, parameters, results):
@@ -6263,7 +6293,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ("calibration", None),
             ("pixelsize", pixelsize),
             ("asynch", True),
-            ("callback_parent", None), # "silent"),
+            ("callback_parent", None),  # "silent"),
             ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
             ("loc_prec_handle", "local"),
         ]
@@ -6283,9 +6313,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             setval = parameters.get(oa, default)
             if oa == "calibration" and setval == "":
                 setval = default
-            elif (
-                oa == "callback_parent"
-                and (setval == "silent" or setval == "None")
+            elif oa == "callback_parent" and (
+                setval == "silent" or setval == "None"
             ):
                 setval = None
             kwargs[oa] = setval
