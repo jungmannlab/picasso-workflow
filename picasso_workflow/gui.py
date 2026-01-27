@@ -1007,6 +1007,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def zfit(self, i, parameters, results):
+        pass
+
     def load_picassoconfig(self, i, parameters, results):
         """
         Loads a specific picasso configuration file, as opposed to the default

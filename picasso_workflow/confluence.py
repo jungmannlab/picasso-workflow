@@ -801,6 +801,9 @@ class ConfluenceReporter(AbstractModuleCollection):
                 os.path.split(res["filename"])[1],
             )
 
+    def zfit(self, i, parameters, results):
+        pass
+
     def load_picassoconfig(self):
         """
         Loads a specific picasso configuration file, as opposed to the default
