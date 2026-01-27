@@ -6933,6 +6933,7 @@ class SlurmCommunicator:
 
         pp = PathParser()
         script_path = pp.convert_path(script_path, dest_machine)
+        print("submitting job in", script_path)
 
         sbatch_cmd = "sbatch"
 
@@ -6942,6 +6943,8 @@ class SlurmCommunicator:
         sbatch_cmd += f" {script_path}"
 
         result = self.execute_ssh_command(sbatch_cmd)
+
+        print("resulting command: ", sbatch_cmd)
 
         # Parse job ID from output
         job_id = None
