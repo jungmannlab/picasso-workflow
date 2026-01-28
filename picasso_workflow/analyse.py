@@ -362,7 +362,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     @property
     def em_wavelength(self):
         cam_name = self.camera_name
-        filter_config = pCONFIG[cam_name].get("Channel Device")
+        filter_config = pCONFIG["Cameras"][cam_name].get("Channel Device")
         filterturret_label = filter_config["Name"]
 
         infofirst = self.info_mm_entry
@@ -1441,9 +1441,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         from picasso import zfit
 
         t0 = time.time()
-        fp_cfg = os.path.join(results["folder"], "config.yaml")
-        with open(fp_cfg, "w") as config_file:
-            yaml.dump(pCONFIG, config_file)
+        # fp_cfg = os.path.join(results["folder"], "config.yaml")
+        # with open(fp_cfg, "w") as config_file:
+        #     yaml.dump(pCONFIG, config_file)
 
         path = parameters.get("fp_calibration")
         if path is None or path == "":
