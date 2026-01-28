@@ -88,7 +88,9 @@ class PathParser:
             # currospath = pathlib.Path(*winpath.parts)
 
             # change logic to not convert to current os but new drive type os
-            if ":" in list(drive_map.values())[0]:  # converted path is a windows path
+            if (
+                ":" in list(drive_map.values())[0]
+            ):  # converted path is a windows path
                 currospath = pathlib.PureWindowsPath(drive, *winpath.parts[1:])
             else:  # converted path is a Posix path
                 currospath = pathlib.PurePosixPath(drive, *winpath.parts[1:])
@@ -108,13 +110,15 @@ class PathParser:
         if posixpath.drive:
             # absolute path
             drive = drive_map[posixpath.drive]
-            # print('old drive: ', posixpath.drive)
-            # print('new drive:' , drive)
+            logger.debug(f"old drive: {posixpath.drive}")
+            logger.debug(f"new drive: {drive}")
             # currospath = pathlib.Path(drive, *posixpath.parts[1:])
 
             # change logic to not convert to current os but new drive type os
             if ":" in drive:  # converted path is a windows path
-                currospath = pathlib.PureWindowsPath(drive, *posixpath.parts[1:])
+                currospath = pathlib.PureWindowsPath(
+                    drive, *posixpath.parts[1:]
+                )
             else:  # converted path is a Posix path
                 currospath = pathlib.PurePosixPath(drive, *posixpath.parts[1:])
         else:
@@ -130,19 +134,29 @@ class PathParser:
 
                 # change logic to not convert to current os but new drive type os
                 if ":" in drive:  # converted path is a windows path
-                    currospath = pathlib.PureWindowsPath(drive, *posixpath.parts[1:])
+                    currospath = pathlib.PureWindowsPath(
+                        drive, *posixpath.parts[drivelen:]
+                    )
                 else:  # converted path is a Posix path
-                    currospath = pathlib.PurePosixPath(drive, *posixpath.parts[1:])
+                    currospath = pathlib.PurePosixPath(
+                        drive, *posixpath.parts[drivelen:]
+                    )
             else:
                 # print("did not find a drive")
                 # relative path
                 # currospath = pathlib.Path(*posixpath.parts)
 
                 # change logic to not convert to current os but new drive type os
-                if ":" in list(drive_map.values())[0]:  # converted path is a windows path
-                    currospath = pathlib.PureWindowsPath(drive, *posixpath.parts[1:])
+                if (
+                    ":" in list(drive_map.values())[0]
+                ):  # converted path is a windows path
+                    currospath = pathlib.PureWindowsPath(
+                        drive, *posixpath.parts[1:]
+                    )
                 else:  # converted path is a Posix path
-                    currospath = pathlib.PurePosixPath(drive, *posixpath.parts[1:])
+                    currospath = pathlib.PurePosixPath(
+                        drive, *posixpath.parts[1:]
+                    )
         # print('new path:', currospath)
         return str(currospath)
 

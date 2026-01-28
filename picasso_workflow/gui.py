@@ -1007,8 +1007,85 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def zfit(self, i, parameters, results):
-        pass
+    def zfit(self):
+        """Fits z positions to previously localized spots.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    magnification_factor : float
+                        the magnification factor for z calibration
+                optional items:
+                    fp_calibration : str
+                        filepath to the 3D calibration yaml file
+                        if not given
+                    save_locs : dict
+                        if saving localizations is requested.
+                        Items correpsond to arguments of save_locs
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        parameters_spec = {
+            "magnification_factor": {
+                "type": "float",
+                "description": "The magnification factor to compensate stage scanning "
+                "calibration vs in-sample measurement.",
+                "default": 0.79,
+                "min": 0,
+                "max": 1e6,
+                "required": False,
+            },
+            "fp_calibration": {
+                "type": "str",
+                "description": "The calibration file path to use. If not given, the filepath"
+                "from config is loaded for the microscope and emission wavelength.",
+                "default": "",
+                "required": False,
+            },
+            "save_locs": {
+                "type": "dict",
+                "description": "if saving localizations is requested. Items \
+                    correpsond to arguments of save_locs",
+                "required": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "fp_calibration": {
+                "type": "str",
+                "description": "The calibration file path used",
+            },
+            "fp_calibration_fig": {
+                "type": "str",
+                "description": "The calibration graph copied to the results folder",
+            },
+        }
+
+        return parameters_spec, results_spec
 
     def load_picassoconfig(self, i, parameters, results):
         """
@@ -6838,7 +6915,7 @@ class SlurmCommunicator:
         if local:
             filepath = os.path.join(folder, "run_workflow_slurm.sh")
             # write with UNIX style newlines ('\n') instead of DOS ('\r\n')
-            with open(filepath, "w", newline='\n') as f:
+            with open(filepath, "w", newline="\n") as f:
                 f.write(script_content)
             return filepath
 
@@ -9914,7 +9991,9 @@ class Window(QtWidgets.QMainWindow):
                 )
                 self.aggregation_workflow_list.setCurrentRow(current_row + 1)
 
-    def create_python_script(self, host_cluster, filename="start_workflow.py"):
+    def create_python_script(
+        self, host_cluster, login_node, filename="start_workflow.py"
+    ):
         """Generate a Python workflow script from current GUI settings.
 
         Args:
@@ -10227,7 +10306,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = SingleWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    "        base_page,",
+                    f"        base_page, dest_machine={login_node},",
                     f"        always_save={always_save}",
                     "    )",
                     "",
@@ -10242,7 +10321,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = AggregationWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    "        base_page,",
+                    f"        base_page, dest_machine={login_node},",
                     f"        always_save={always_save}",
                     "    )",
                     "",
@@ -10257,7 +10336,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = InvestigationWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    "        base_page,",
+                    f"        base_page, dest_machine={login_node},",
                     f"        always_save={always_save}",
                     "    )",
                     "",
@@ -10281,7 +10360,7 @@ class Window(QtWidgets.QMainWindow):
         print("output path", output_path)
 
         # write with UNIX style newlines ('\n') instead of DOS ('\r\n')
-        with open(output_path, "w", newline='\n') as f:
+        with open(output_path, "w", newline="\n") as f:
             f.write(script_content)
 
         # Make script executable on Unix systems
@@ -10334,7 +10413,7 @@ class Window(QtWidgets.QMainWindow):
         self.slurm_communicator.test_connection()
 
         scriptname = "start_workflow.py"
-        self.create_python_script(host_cluster, scriptname)
+        self.create_python_script(host_cluster, login_node, scriptname)
 
         job_name = "mypwjob"
         slurm_options = {

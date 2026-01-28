@@ -335,6 +335,43 @@ class AutoPicasso(util.AbstractModuleCollection):
         self.analysis_config = analysis_config
 
     @property
+    def info_mm_entry(self):
+        try:
+            infofirst = self.info[0]
+        except IndexError:
+            infofirst = self.channel_info[0][0]
+        except Exception:
+            raise AttributeError(
+                "Cannot load camera name from info. Load data first."
+            )
+        return infofirst
+
+    @property
+    def camera_name(self):
+        infofirst = self.info_mm_entry
+        try:
+            cam_name = infofirst["Camera"]
+        except KeyError:
+            logger.debug(
+                "Cannot find camera entry. Probably this is a simulation."
+            )
+            cam_name = None
+        return cam_name
+
+    @property
+    def em_wavelength(self):
+        cam_name = self.camera_name
+        filter_config = pCONFIG[cam_name].get("Channel Device")
+        filterturret_label = filter_config["Name"]
+
+        infofirst = self.info_mm_entry
+        filter_label = infofirst["Micro-Manager Metadata"][filterturret_label]
+
+        em_wl = filter_config["Emission Wavelengths"][filter_label]
+
+        return em_wl
+
+    @property
     def camera_info(self):
         if camera_info := self.analysis_config.get("camera_info"):
             return camera_info
@@ -1366,6 +1403,85 @@ class AutoPicasso(util.AbstractModuleCollection):
             self._save_locs(pars["filename"])
 
         results["locs_columns"] = list(self.locs.columns)
+        return parameters, results
+
+    def zfit(self, i, parameters, results):
+        """Fits z positions to previously localized spots.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    magnification_factor : float
+                        the magnification factor for z calibration
+                optional items:
+                    fp_calibration : str
+                        filepath to the 3D calibration yaml file
+                        if not given
+                    save_locs : dict
+                        if saving localizations is requested.
+                        Items correpsond to arguments of save_locs
+            results : dict
+                the results dict, created by the module_decorator
+                    fp_calibration : str
+                        the filepath to the calibration that has been used.
+                        Either as given, or as loaded from config
+                    fp_calibration_fig : str
+                        filepath to the calbiration graph, if loaded
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        import shutil
+        from picasso import zfit
+
+        t0 = time.time()
+
+        path = parameters.get("fp_calibration")
+        if path is None or path == "":
+            # fp_calib_lam = CONFIG["z-calibrations"].get(camera)
+            # if fp_calib_lam is not None:
+            #     em_combo = self.emission_combos[camera]
+            #     wavelength = em_combo.currentText()
+            #     fp_calib = fp_calib_lam.get(wavelength)
+            camera = self.camera_name
+            em_wl = self.em_wavelength
+            path = pCONFIG.get("z-calibrations").get(camera).get(em_wl)
+
+        results["fp_calibration"] = path
+
+        # try loading the calibration graphs, for documentation
+        fp_fig_src, _ = os.path.splitext(path)
+        fp_fig_src += ".png"
+        if os.path.exists(fp_fig_src):
+            _, fn_fig = os.path.split(fp_fig)
+            fp_fig_dst = os.path.join(results["folder"], fn_fig)
+            shutil.copyfile(fp_fig_src, fp_fig_dst)
+            results["fp_calibration_fig"] = fp_fig_dst
+
+        magnification_factor = parameters["magnification_factor"]
+
+        with open(path, "r") as f:
+            z_calibration = yaml.full_load(f)
+
+        N = len(self.locs)
+        fs = zfit.fit_z_parallel(
+            self.locs,
+            self.info,
+            z_calibration,
+            magnification_factor,
+            filter=0,
+            asynch=True,
+        )
+        n_tasks = len(fs)
+        while lib.n_futures_done(fs) < n_tasks:
+            time.sleep(0.2)
+        locs = zfit.locs_from_futures(fs, filter=0)
+        dt = time.time() - t0
+
         return parameters, results
 
     def _plot_locs_vs_frame(self, filename):
