@@ -10,6 +10,7 @@ from picasso import aim, spinna
 from picasso_workflow.outpost_modules import g5m
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
+import picasso
 import copy
 import gc
 
@@ -1553,7 +1554,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             results : dict
                 the analysis results, updated with:
         """
-        import picasso
+        global pCONFIG
 
         with open(parameters["fp_config"], "r") as config_file:
             new_config = yaml.full_load(config_file)

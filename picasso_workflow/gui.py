@@ -1035,8 +1035,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "magnification_factor": {
                 "type": "float",
-                "description": "The magnification factor to compensate stage scanning "
-                "calibration vs in-sample measurement.",
+                "description":
+                    "The magnification factor to compensate stage scanning "
+                    "calibration vs in-sample measurement.",
                 "default": 0.79,
                 "min": 0,
                 "max": 1e6,
@@ -1044,8 +1045,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "fp_calibration": {
                 "type": "str",
-                "description": "The calibration file path to use. If not given, the filepath"
-                "from config is loaded for the microscope and emission wavelength.",
+                "description":
+                    "The calibration file path to use. If not given, the filepath"
+                    "from config is loaded for the microscope and emission wavelength. "
+                    "Keep in mind this must be a path on the cluster for now"
+                    " (i.e. /fs/mpib/pool-miblab5/... instead of /Volumes/pool...)",
                 "default": "",
                 "required": False,
             },
@@ -1110,11 +1114,15 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "fp_config": {
                 "type": "str",
+                "description":
+                    "Filepath to a specific picasso config. "
+                    "Keep in mind this must be a path on the cluster for now"
+                    " (i.e. /fs/mpib/pool-miblab5/... instead of /Volumes/pool...)",
                 "required": True,
             },
             "save_locs": {
                 "type": "dict",
-                "description": "if saving localizations is requested. Items \
+                "description": "If saving localizations is requested. Items \
                     correpsond to arguments of save_locs",
                 "required": False,
             },
@@ -7014,7 +7022,6 @@ class SlurmCommunicator:
 
         pp = PathParser()
         script_path = pp.convert_path(script_path, dest_machine)
-        print("submitting job in", script_path)
 
         sbatch_cmd = "sbatch"
 
@@ -7022,8 +7029,6 @@ class SlurmCommunicator:
             sbatch_cmd += " " + " ".join(additional_options)
 
         sbatch_cmd += f" {script_path}"
-
-        print("resulting command: ", sbatch_cmd)
 
         result = self.execute_ssh_command(sbatch_cmd)
 
@@ -10352,12 +10357,10 @@ class Window(QtWidgets.QMainWindow):
 
         # Get output path from results folder
         results_folder = self.results_folder_display.text()
-        print("results folder: ", results_folder)
         if results_folder:
             output_path = os.path.join(results_folder, filename)
         else:
             output_path = filename
-        print("output path", output_path)
 
         # write with UNIX style newlines ('\n') instead of DOS ('\r\n')
         with open(output_path, "w", newline="\n") as f:
