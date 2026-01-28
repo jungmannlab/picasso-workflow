@@ -1441,6 +1441,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         from picasso import zfit
 
         t0 = time.time()
+        fp_cfg = os.path.join(results["folder"], "config.yaml")
+        with open(fp_cfg, "w") as config_file:
+            yaml.dump(pCONFIG, config_file)
 
         path = parameters.get("fp_calibration")
         if path is None or path == "":
@@ -1561,6 +1564,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         if new_config is not None:
             picasso.CONFIG = new_config
             pCONFIG = new_config
+
+        fp_cfg = os.path.join(results["folder"], "config.yaml")
+        with open(fp_cfg, "w") as config_file:
+            yaml.dump(pCONFIG, config_file)
 
         return parameters, results
 
