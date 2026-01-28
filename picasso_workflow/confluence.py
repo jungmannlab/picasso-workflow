@@ -851,10 +851,16 @@ class ConfluenceReporter(AbstractModuleCollection):
 
         fig_fps = []
         titles = []
+
         if fp_fig := results.get("fp_calibration_fig"):
             fig_fps.append(fp_fig)
             titles.append("Calibration graphs")
 
+        if fp_fig := results.get("fp_fig_zhist"):
+            fig_fps.append(fp_fig)
+            titles.append("z histogram")
+
+        if len(fig_fps) > 0:
             fn_figs = []
             for fp in fig_fps:
                 try:
@@ -871,9 +877,9 @@ class ConfluenceReporter(AbstractModuleCollection):
             for fn in fn_figs:
                 text += f"""
                     <td>
-                          <ac:image ac:height="350">
-                          <ri:attachment ri:filename="{fn}" />
-                          </ac:image>
+                            <ac:image ac:height="350">
+                            <ri:attachment ri:filename="{fn}" />
+                            </ac:image>
                     </td>"""
             text += "</tr>"
             text += "</table>"
