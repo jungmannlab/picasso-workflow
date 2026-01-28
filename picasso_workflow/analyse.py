@@ -1405,6 +1405,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["locs_columns"] = list(self.locs.columns)
         return parameters, results
 
+    @module_decorator
     def zfit(self, i, parameters, results):
         """Fits z positions to previously localized spots.
 
@@ -1531,6 +1532,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         plt.close(fig)
         return results
 
+    @module_decorator
     def load_picassoconfig(self, i, parameters, results):
         """
         Loads a specific picasso configuration file, as opposed to the default

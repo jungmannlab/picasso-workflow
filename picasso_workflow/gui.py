@@ -1087,7 +1087,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def load_picassoconfig(self, i, parameters, results):
+    def load_picassoconfig(self):
         """
         Loads a specific picasso configuration file, as opposed to the default
         version residing in the picasso installation folder.
@@ -8909,7 +8909,7 @@ class Window(QtWidgets.QMainWindow):
             self.add_files_button.setEnabled(enabled)
             self.remove_files_button.setEnabled(enabled)
             self.clear_files_button.setEnabled(enabled)
-            self.files_table.setEnabled(enabled)
+            # self.files_table.setEnabled(enabled)
         except RuntimeError:
             # we're not in Single Workflow mode
             pass
@@ -10306,7 +10306,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = SingleWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    f"        base_page, dest_machine={login_node},",
+                    f"        base_page, dest_machine='{login_node}',",
                     f"        always_save={always_save}",
                     "    )",
                     "",
@@ -10321,7 +10321,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = AggregationWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    f"        base_page, dest_machine={login_node},",
+                    f"        base_page, dest_machine='{login_node}',",
                     f"        always_save={always_save}",
                     "    )",
                     "",
@@ -10336,7 +10336,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = InvestigationWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    f"        base_page, dest_machine={login_node},",
+                    f"        base_page, dest_machine='{login_node}',",
                     f"        always_save={always_save}",
                     "    )",
                     "",
