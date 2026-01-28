@@ -1458,7 +1458,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fp_fig_src, _ = os.path.splitext(path)
         fp_fig_src += ".png"
         if os.path.exists(fp_fig_src):
-            _, fn_fig = os.path.split(fp_fig)
+            _, fn_fig = os.path.split(fp_fig_src)
             fp_fig_dst = os.path.join(results["folder"], fn_fig)
             shutil.copyfile(fp_fig_src, fp_fig_dst)
             results["fp_calibration_fig"] = fp_fig_dst
