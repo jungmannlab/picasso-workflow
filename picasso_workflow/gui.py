@@ -979,7 +979,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             #     "description": "if saving localizations is requested. Items \
             #         correpsond to arguments of save_locs",
             #     "required": False,
-            },
+            # },
         }
 
         results_spec = {
@@ -7494,7 +7494,7 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.module_label = QtWidgets.QLabel("Select module:")
         self.module_combo = QtWidgets.QComboBox()
         for i, (module_name, params) in enumerate(workflow_modules):
-            self.module_combo.addItem(f"{i}: {module_name}")
+            self.module_combo.addItem(f"{i:02d}: {module_name}")
         self.module_combo.currentIndexChanged.connect(self._on_module_selected)
 
         self.result_label = QtWidgets.QLabel("Select result:")
@@ -7639,7 +7639,7 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             workflow_modules = self.workflow_modules
 
         for i, (module_name, params) in enumerate(workflow_modules):
-            self.module_combo.addItem(f"{i}: {module_name}")
+            self.module_combo.addItem(f"{i:02d}: {module_name}")
         self.module_combo.blockSignals(False)
 
         command = self.get_command()
@@ -7763,7 +7763,7 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             else:
                 mod_str = ""
 
-            command_string = f"('{timing_cmd}get_prior_result{mod_str}', '{cmd_prefix}, {module_index}_{module_name}, {result_name}')"
+            command_string = f"('{timing_cmd}get_prior_result{mod_str}', '{cmd_prefix}, {module_index:02d}_{module_name}, {result_name}')"
         elif command_type == "Previous Module Result":
             result_name = self.result_combo.currentText()
             if self.modify_combo.currentText() == "multiply":
@@ -9620,7 +9620,7 @@ class Window(QtWidgets.QMainWindow):
             # Tuples remain tuples, dicts remain dicts, etc.
             workflow_list.append((module_name, params))
             index = len(workflow_list) - 1
-            list_widget.addItem(f"{index}: {module_name}")
+            list_widget.addItem(f"{index:02d}: {module_name}")
 
     def _convert_param_to_gui_format(self, param_value):
         """Convert parameter value from workflow definition to GUI format.
@@ -9702,13 +9702,13 @@ class Window(QtWidgets.QMainWindow):
         if current_tab_index == 0:  # Single Dataset Workflow
             self.single_workflow_modules.append((module_name, param_values))
             index = len(self.single_workflow_modules) - 1
-            self.single_workflow_list.addItem(f"{index}: {module_name}")
+            self.single_workflow_list.addItem(f"{index:02d}: {module_name}")
         elif current_tab_index == 1:  # Aggregation Workflow
             self.aggregation_workflow_modules.append(
                 (module_name, param_values)
             )
             index = len(self.aggregation_workflow_modules) - 1
-            self.aggregation_workflow_list.addItem(f"{index}: {module_name}")
+            self.aggregation_workflow_list.addItem(f"{index:02d}: {module_name}")
 
     def _renumber_workflow_items(self, list_widget, modules):
         """Update QListWidget items with correct numbering after reordering."""
@@ -9716,7 +9716,7 @@ class Window(QtWidgets.QMainWindow):
             module_name = modules[i][
                 0
             ]  # Extract name from (name, params) tuple
-            list_widget.item(i).setText(f"{i}: {module_name}")
+            list_widget.item(i).setText(f"{i:02d}: {module_name}")
 
     def _on_workflow_selection_changed(self, current_row):
         """Handle selection change in workflow list - display module in Current Module section."""
@@ -10053,6 +10053,8 @@ class Window(QtWidgets.QMainWindow):
                 if name_item and path_item:
                     name = name_item.text()
                     path = path_item.text()
+                    if (path[0] == "'" and path[-1] == "'") or (path[0] == '"' and path[-1] == '"'):
+                        path = path[1:-1]
                     path = self.pathparser.convert_path(path, host_cluster)
 
                     # Create lists for values
@@ -10073,6 +10075,8 @@ class Window(QtWidgets.QMainWindow):
 
                     # Get file path
                     file_path = self.tree_data["file_paths"][dataset][channel]
+                    if (file_path[0] == "'" and file_path[-1] == "'") or (file_path[0] == '"' and file_path[-1] == '"'):
+                        file_path = file_path[1:-1]
                     file_path = self.pathparser.convert_path(
                         file_path, host_cluster
                     )
@@ -10100,6 +10104,8 @@ class Window(QtWidgets.QMainWindow):
 
                     # Get file path
                     file_path = self.tree_data["file_paths"][dataset][channel]
+                    if (file_path[0] == "'" and file_path[-1] == "'") or (file_path[0] == '"' and file_path[-1] == '"'):
+                        file_path = file_path[1:-1]
                     file_path = self.pathparser.convert_path(
                         file_path, host_cluster
                     )
@@ -10400,6 +10406,8 @@ class Window(QtWidgets.QMainWindow):
         # print(f"'{host_cluster}', '{login_node}'")
 
         results_folder_local = self.results_folder_display.text()
+        if (results_folder_local[0] == "'" and results_folder_local[-1] == "'") or (results_folder_local[0] == '"' and results_folder_local[-1] == '"'):
+            results_folder_local = results_folder_local[1:-1]
         if not os.path.exists(results_folder_local):
             os.makedirs(results_folder_local)
         results_folder_host = self.pathparser.convert_path(
