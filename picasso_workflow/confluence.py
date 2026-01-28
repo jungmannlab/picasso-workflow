@@ -931,7 +931,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>Loaded new configuration from: {parameters['fp_config']}</li></ul>
+        <li>Loaded new configuration from: {parameters['fp_config']}</li>
+        <li>saved config for documentation: {results['fp_config']}</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         if postpone_report:

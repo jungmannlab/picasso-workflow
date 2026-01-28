@@ -974,11 +974,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": "{'filename': 'locsvsframe.png'}",
                 "required": False,
             },
-            "save_locs": {
-                "type": "dict",
-                "description": "if saving localizations is requested. Items \
-                    correpsond to arguments of save_locs",
-                "required": False,
+            # "save_locs": {
+            #     "type": "dict",
+            #     "description": "if saving localizations is requested. Items \
+            #         correpsond to arguments of save_locs",
+            #     "required": False,
             },
         }
 
@@ -1060,12 +1060,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": "",
                 "required": False,
             },
-            "save_locs": {
-                "type": "dict",
-                "description": "if saving localizations is requested. Items \
-                    correpsond to arguments of save_locs",
-                "required": False,
-            },
+            # "save_locs": {
+            #     "type": "dict",
+            #     "description": "if saving localizations is requested. Items \
+            #         correpsond to arguments of save_locs",
+            #     "required": False,
+            # },
         }
 
         results_spec = {

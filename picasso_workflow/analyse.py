@@ -1487,7 +1487,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # generate a z coordinate histogram
         fig, ax = plt.subplots()
-        ax.hist(self.locs["z"], nbins=50)
+        ax.hist(self.locs["z"], bins=50)
         ax.set_xlabel("z [nm]")
         ax.set_title("Histogram of z coordinate distribution")
         fp_fig = os.path.join(results["folder"], "z_histogram.png")
@@ -1585,6 +1585,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         fp_cfg = os.path.join(results["folder"], "config.yaml")
         with open(fp_cfg, "w") as config_file:
             yaml.dump(pCONFIG, config_file)
+        results["fp_config"] = fp_cfg
 
         return parameters, results
 
