@@ -808,6 +808,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Minimum net gradient threshold for detection",
                 "min": 0.0,
                 "max": 100000.0,
+                "default": 20000,
                 "required": True,
                 "note": "Required unless auto_netgrad is provided",
             },
@@ -829,17 +830,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "frame_numbers": {
                         "type": ["list", "int"],
                         "description": "Frame range for analysis",
+                        "default": 40,
                     },
                     "filename": {
                         "type": "str",
                         "description": (
                             "Output filename for auto-detection plot"
                         ),
+                        "default": "auto-id.png",
                     },
                     "start_ng": {
                         "type": "float",
                         "description": "Starting net gradient value",
                         "min": -10000.0,
+                        "default": -3000,
                     },
                     "zscore": {
                         "type": "float",
@@ -859,7 +863,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "ids_vs_frame": {
                 "type": "dict",
                 "description": (
-                    "Parameters for plotting identifications vs time"
+                    "Parameters for plotting identifications vs time (dict)"
                 ),
                 "required": False,
                 "properties": {
@@ -868,6 +872,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": "Output filename for plot",
                     }
                 },
+                "default": "{'filename': 'ids_vs_frame.png'}",
             },
         }
 
@@ -963,8 +968,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "locs_vs_frame": {
                 "type": "dict",
-                "description": "for plotting locs vs time, items correspond \
-                    to arguments of _plot_locs_vs_frame",
+                "description": 
+                    "Dictionary for plotting locs vs time. e.g."
+                    "{'filename': 'locsvsframe.png'}",
+                "default": "{'filename': 'locsvsframe.png'}",
                 "required": False,
             },
             "save_locs": {
@@ -1041,7 +1048,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 0.79,
                 "min": 0,
                 "max": 1e6,
-                "required": False,
+                "required": True,
             },
             "fp_calibration": {
                 "type": "str",
@@ -1285,6 +1292,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Field of view of the zoom in rendering around \
                     the center of mass in nm",
                 "min": 0,
+                "default": 10000,
                 "required": False,
             },
             "fullfov_pixelsize": {
@@ -1292,6 +1300,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "The rendered pixel size [nm] of the full FOV \
                     rendering",
                 "min": 0,
+                "default": 130,
                 "required": False,
             },
             "ctrmass_pixelsize": {
@@ -1299,11 +1308,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "The rendered pixel size [nm] of the zoom in \
                     rendering around the center of mass",
                 "min": 0,
+                "default": 100,
                 "required": False,
             },
             "ctrmass_blur_method": {
                 "type": "str",
                 "description": "Blur method",
+                "options": ["gaussian", "gaussian_iso", "smooth", "convolve"],
                 "required": False,
             },
             "ctrmass_min_blur_width": {
