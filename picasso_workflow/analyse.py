@@ -1004,7 +1004,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         identifications = []
 
         if isinstance(frame_numbers, int):
-            frame_numbers = np.linspace(0, len(self.movie), frame_numbers, dtype=np.int)
+            frame_numbers = np.linspace(0, len(self.movie), frame_numbers, dtype=np.int32)
 
         for frame_number in frame_numbers:
             identifications.append(
@@ -6469,6 +6469,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             setval = parameters.get(oa, default)
             if oa == "calibration" and setval == "":
                 setval = default
+            elif oa == "calibration" and isinstance(setval, str):
+                fp_calib = setval
+                with open(fp_calib, "r") as f:
+                    z_calibration = yaml.full_load(f)
+                setval = z_calibration
             elif oa == "callback_parent" and (
                 setval == "silent" or setval == "None"
             ):
