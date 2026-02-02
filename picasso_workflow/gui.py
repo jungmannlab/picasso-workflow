@@ -1907,7 +1907,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 3,
                 "required": True,
             },
-            "min_samples": {
+            "min_locs": {
                 "type": "int",
                 "description": (
                     "Minimum number of localizations in a cluster. Clusters with"
@@ -1925,15 +1925,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 ),
                 "default": True,
                 "required": True,
-            },
-            "save_locs": {
-                "type": "bool",
-                "description": (
-                    "Whether to save clustered localization data to"
-                    + " results folder"
-                ),
-                "default": False,
-                "required": False,
             },
         }
 

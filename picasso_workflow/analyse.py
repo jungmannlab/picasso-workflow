@@ -1003,6 +1003,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         results = {}
         identifications = []
 
+        if isinstance(frame_numbers, int):
+            frame_numbers = np.linspace(0, len(self.movie), frame_numbers, dtype=np.int)
+
         for frame_number in frame_numbers:
             identifications.append(
                 localize.identify_by_frame_number(
