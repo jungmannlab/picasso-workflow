@@ -1899,11 +1899,23 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "min_samples": {
                 "type": "int",
                 "description": (
-                    "Minimum number of samples required for a cluster"
+                    "Number of localizations within radius to consider a "
+                    "given point a core sample."
                 ),
                 "min": 1,
                 "max": 100,
                 "default": 3,
+                "required": True,
+            },
+            "min_samples": {
+                "type": "int",
+                "description": (
+                    "Minimum number of localizations in a cluster. Clusters with"
+                    "fewer localizations will be removed. Default is 0."
+                ),
+                "min": 0,
+                "max": 100,
+                "default": 0,
                 "required": True,
             },
             "continue_with_centers": {
