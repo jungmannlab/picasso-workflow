@@ -1127,12 +1127,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     " (i.e. /fs/mpib/pool-miblab5/... instead of /Volumes/pool...)",
                 "required": True,
             },
-            "save_locs": {
-                "type": "dict",
-                "description": "If saving localizations is requested. Items \
-                    correpsond to arguments of save_locs",
-                "required": False,
-            },
+            # "save_locs": {
+            #     "type": "dict",
+            #     "description": "If saving localizations is requested. Items \
+            #         correpsond to arguments of save_locs",
+            #     "required": False,
+            # },
         }
 
         results_spec = {
@@ -5061,6 +5061,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "The pick similar diameter for \
                     identifying gold std_range, mean_rmsd : float \
                     the pick similar parameters identifying gold",
+                "min": 0.0,
+                "default": 2.0,
                 "required": False,
             },
         }
@@ -5086,6 +5088,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "gold_locs": {
                 "type": "numpy.ndarray",
                 "description": "Identified gold bead localizations",
+            },
+            "fp_gold": {
+                "type": "str",
+                "description": "filepath to the gold locs found",
+            },
+            "fp_nogold": {
+                "type": "str",
+                "description": "Filepath to the non-gold locs",
             },
         }
 
@@ -9045,6 +9055,14 @@ class Window(QtWidgets.QMainWindow):
 
                     # Validate that it's a dictionary
                     if isinstance(file_dict, dict):
+                        # it may still be a dict with keys #tags and 
+                        # filepaths and list values or tags to fileptahs dict
+                        # as expected here
+                        if "#tags" in file_dict.keys() and "filepath" in file_dict.keys() and isinstance(file_dict["filepath"], list):
+                            new_dict = {}
+                            for k, v in zip(file_dict["#tags"], file_dict["filepath"]):
+                                new_dict[k] = v
+                            file_dict = new_dict
                         # Clear existing file list
                         self.files_table.setRowCount(0)
 

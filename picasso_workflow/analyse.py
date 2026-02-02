@@ -4037,10 +4037,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig, ax = plt.subplots()
         frames = np.arange(drift.shape[0])
         for i, dim in enumerate(dimensions):
+            factor = 1e-3 if dim == "z" else 1
             if isinstance(drift, pd.DataFrame):
-                ax.plot(frames, drift[dim] * pixelsize, label=dim)
+                ax.plot(frames, drift[dim] * pixelsize * factor, label=dim)
             else:
-                ax.plot(frames, drift[:, i] * pixelsize, label=dim)
+                ax.plot(frames, drift[:, i] * pixelsize * factor, label=dim)
         ax.set_xlabel("frame")
         ax.set_ylabel("drift [nm]")
         ax.set_title(f"undrift by {method}")
@@ -11204,8 +11205,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         all_xmax = parameters.get("maxval")
         if isinstance(all_field, str):
             all_field = [all_field]
-            all_xmin = [all_xmin]
-            all_xmax = [all_xmax]
+            all_xmin = [float(all_xmin)]
+            all_xmax = [float(all_xmax)]
         else:
             if all_xmin is None:
                 all_xmin = [None] * len(all_field)
