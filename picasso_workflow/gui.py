@@ -679,6 +679,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 ),
                 "required": False,
             },
+            "sample_movie, sample_frame_idx": {
+                "type": "str",
+                "description": (
+                    "sample movie frame indices"
+                ),
+                "required": False,
+            },
         }
 
         return parameters_spec, results_spec

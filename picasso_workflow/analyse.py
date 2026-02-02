@@ -1004,7 +1004,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         identifications = []
 
         if isinstance(frame_numbers, int):
-            frame_numbers = np.linspace(0, len(self.movie), frame_numbers, dtype=np.int32)
+            n_sample = frame_numbers
+            start_sample_pct = 0
+            if len(self.movie) < n_sample:
+                n_sample = len(self.movie)
+
+            start_idx = int(start_sample_pct / 100 * len(self.movie))
+            len_subsample = len(self.movie) - start_idx
+            dn = int(len_subsample / (n_sample - 1))
+            frame_numbers = np.arange(start_idx, len_subsample, dn)
 
         for frame_number in frame_numbers:
             identifications.append(
@@ -6479,6 +6487,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             ):
                 setval = None
             kwargs[oa] = setval
+
+        print("G5M arguments")
+        print(kwargs)
 
         results["g5m_args"] = str(kwargs)
 
