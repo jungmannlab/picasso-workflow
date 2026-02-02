@@ -1578,9 +1578,11 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         with open(parameters["fp_config"], "r") as config_file:
             new_config = yaml.full_load(config_file)
-        if new_config is not None:
-            picasso.CONFIG = new_config
-            pCONFIG = new_config
+
+        # if new_config is not None:
+        picasso.CONFIG = new_config
+        pCONFIG = new_config
+        print(new_config)
 
         fp_cfg = os.path.join(results["folder"], "config.yaml")
         with open(fp_cfg, "w") as config_file:
