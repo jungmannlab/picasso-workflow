@@ -7662,6 +7662,11 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             self.module_combo.addItem(f"{i:02d}: {module_name}")
         self.module_combo.blockSignals(False)
 
+        # Reset to first module when switching lists to prevent index mismatch
+        if self.module_combo.count() > 0:
+            self.module_combo.setCurrentIndex(0)
+            self._on_module_selected(0)
+
         command = self.get_command()
         self.command_result.setText(command)
 
@@ -7676,8 +7681,15 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         else:
             workflow_modules = self.workflow_modules
 
+        # Bounds check and auto-correct invalid index
         if index < 0 or index >= len(workflow_modules):
-            return
+            if len(workflow_modules) > 0:
+                index = 0
+                self.module_combo.setCurrentIndex(0)
+            else:
+                self.result_combo.clear()
+                self.result_combo.addItem("(no modules available)")
+                return
 
         module_name = workflow_modules[index][0]
 
@@ -7758,11 +7770,18 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         elif command_type == "Prior Result":
             if self.prior_thisstage.isChecked():
                 cmd_prefix = "results"
+                workflow_modules = self.workflow_modules
             elif self.prior_singlestage_list.isChecked():
                 cmd_prefix = "all_results, single_dataset, $$all"
+                workflow_modules = self.parent.single_workflow_modules
 
             module_index = self.module_combo.currentIndex()
+            # Validate index against the active workflow list
+            if module_index < 0 or module_index >= len(workflow_modules):
+                return "(invalid module selection)"
             module_name = self.module_combo.currentText()
+            if ":" not in module_name:
+                return "(invalid module selection)"
             module_name = module_name[module_name.index(":") + 2 :]
             result_name = self.result_combo.currentText()
 

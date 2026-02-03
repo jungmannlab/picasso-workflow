@@ -1252,7 +1252,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
             else:
                 autograd_pars["filename"] = os.path.join(
-                    results["folder"], "auto_identification.png"
+                    results["folder"], "auto_identification.png")
 
             potential_pars = [
                 "box_size",
