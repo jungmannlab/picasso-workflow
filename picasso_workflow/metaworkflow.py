@@ -552,7 +552,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             profile_basepage,
         )
 
-    def prepare_analysis(self, workflow_modules):
+    def prepare_analysis(self, workflow_modules, continue_previous_runners=False):
         """
         Args:
             workflow_modules:
@@ -597,7 +597,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
                 reporter_config,
                 analysis_config,
                 wkfl_mods,
-                continue_previous_runner=True,
+                continue_previous_runner=continue_previous_runners,
                 postfix="",
             )
             run_wr_kwargs.append(
@@ -608,8 +608,8 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             )
         return run_wr_kwargs
 
-    def run_analysis(self, workflow_modules):
-        run_wr_kwargs = self.prepare_analysis(workflow_modules)
+    def run_analysis(self, workflow_modules, continue_previous_runners=False):
+        run_wr_kwargs = self.prepare_analysis(workflow_modules, continue_previous_runners)
 
         # print(f'rank {self.rank}, size {self.size}: running {run_awr_kwargs}')
 
@@ -677,7 +677,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             profile_basepage,
         )
 
-    def prepare_analysis(self, workflow_modules_sgl, workflow_modules_agg):
+    def prepare_analysis(self, workflow_modules_sgl, workflow_modules_agg, continue_previous_runners=False):
         """
         Args:
             workflow_modules_multi : dict of
@@ -734,7 +734,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 reporter_config,
                 analysis_config,
                 workflow_modules_multi,
-                continue_previous_runner=True,
+                continue_previous_runner=continue_previous_runners,
                 single_workflow_parallel=False,
                 postfix="",
             )
@@ -746,9 +746,9 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             )
         return run_awr_kwargs
 
-    def run_analysis(self, workflow_modules_sgl, workflow_modules_agg):
+    def run_analysis(self, workflow_modules_sgl, workflow_modules_agg, continue_previous_runners=False):
         run_awr_kwargs = self.prepare_analysis(
-            workflow_modules_sgl, workflow_modules_agg
+            workflow_modules_sgl, workflow_modules_agg, continue_previous_runners
         )
 
         print(f"rank {self.rank}, size {self.size}: running {run_awr_kwargs}")

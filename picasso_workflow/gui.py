@@ -2657,7 +2657,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Output folder for module results",
             },
-            "saved_filepath": {
+            "filepath": {
                 "type": "str",
                 "description": "Path to saved dataset file",
             },
