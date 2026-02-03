@@ -9773,6 +9773,9 @@ class Window(QtWidgets.QMainWindow):
             self.editing_workflow_tab = -1
             return
 
+        # Save current parameters before loading new selection
+        self._update_editing_workflow_item()
+
         # Get the current tab to determine which workflow list to use
         current_tab_index = self.workflow_tabs.currentIndex()
 
@@ -9841,11 +9844,18 @@ class Window(QtWidgets.QMainWindow):
 
     def _on_workflow_tab_changed(self, tab_index):
         """Handle workflow tab change - display selected module if any."""
+        # Save current parameters before switching tabs
+        self._update_editing_workflow_item()
+
         if tab_index == 0:  # Single Dataset Workflow
             current_row = self.single_workflow_list.currentRow()
             if current_row >= 0 and current_row < len(
                 self.single_workflow_modules
             ):
+                # Update editing state to new tab/row
+                self.editing_workflow_tab = tab_index
+                self.editing_workflow_index = current_row
+
                 module_name, param_values = self.single_workflow_modules[
                     current_row
                 ]
@@ -9868,6 +9878,10 @@ class Window(QtWidgets.QMainWindow):
             if current_row >= 0 and current_row < len(
                 self.aggregation_workflow_modules
             ):
+                # Update editing state to new tab/row
+                self.editing_workflow_tab = tab_index
+                self.editing_workflow_index = current_row
+
                 module_name, param_values = self.aggregation_workflow_modules[
                     current_row
                 ]

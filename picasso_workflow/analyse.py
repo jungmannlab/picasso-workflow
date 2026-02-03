@@ -7230,6 +7230,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.channel_locs.append(locs)
             self.channel_info.append(info)
             self.channel_tags.append(tag)
+
+            print(self.channel_info)
         results["filepaths"] = parameters["filepaths"]
         results["tags"] = parameters["tags"]
         return parameters, results
@@ -7367,7 +7369,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
             results["fp_co_shift_locs_out"] = fp_co_shift_locs_out
 
-        if fn := parameters.get("fig_filename"):
+        if fn := parameters.get("fig_filename", "fig_align.png"):
             fig_filepath = os.path.join(results["folder"], fn)
             picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath

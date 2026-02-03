@@ -413,10 +413,11 @@ class AbstractWorkflowCoordinator(abc.ABC):
             # self.size = comm.Get_size()  # Get the total number of processes
             self.rank = int(os.getenv("SLURM_PROCID"))
             self.size = int(os.getenv("SLURM_NTASKS"))
-            logger.debug(f"Assigned rank {self.rank}, size {self.size}.")
+            logger.debug(f"Assigned this node rank {self.rank}, size {self.size}.")
         else:
             self.rank = 0
             self.size = 1
+            logger.debug(f"No SLRUM env vars found. Assigned this node rank {self.rank}, size {self.size}.")
 
         if self.rank == 0:
             ci = confluence.ConfluenceInterface(
