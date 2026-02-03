@@ -7231,7 +7231,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.channel_info.append(info)
             self.channel_tags.append(tag)
 
-            print(self.channel_info)
+        print("Loaded datasets to aggregate")
+        print(self.channel_info)
         results["filepaths"] = parameters["filepaths"]
         results["tags"] = parameters["tags"]
         return parameters, results

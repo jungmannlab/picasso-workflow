@@ -135,6 +135,7 @@ def align_channels(
             )
         )
         fp_figs = []
+        shift_uncertainties = {}  # No uncertainty analysis for RCC method
     elif force_method == "RSSO":
         algo_used = "RSSO"
         # Use max_shift parameter if provided, otherwise default to 10.0
