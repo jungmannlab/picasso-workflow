@@ -1246,10 +1246,14 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         # auto-detect net grad if required:
         if (autograd_pars := parameters.get("auto_netgrad")) is not None:
-            if "filename" in autograd_pars.keys():
+            if "filename" in autograd_pars.keys() and autograd_pars["filename"]:
                 autograd_pars["filename"] = os.path.join(
                     results["folder"], autograd_pars["filename"]
                 )
+            else:
+                autograd_pars["filename"] = os.path.join(
+                    results["folder"], "auto_identification.png"
+
             potential_pars = [
                 "box_size",
                 "frame_numbers",
@@ -1277,10 +1281,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["num_identifications"] = len(self.identifications)
 
         if (pars := parameters.get("ids_vs_frame")) is not None:
-            if "filename" in pars.keys():
-                pars["filename"] = os.path.join(
-                    results["folder"], pars["filename"]
-                )
+            if "filename" in pars.keys() and pars["filename"]:
+                filename = pars["filename"]
+            else:
+                filename = "id_vs_frame.png"
+            pars["filename"] = os.path.join(results["folder"], filename)
             results["ids_vs_frame"] = self._plot_ids_vs_frame(**pars)
 
         # add info
