@@ -7161,6 +7161,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["filepath"] = os.path.join(
             results["folder"], parameters["filename"]
         )
+        root, ext = os.path.splitext(results["filepath"])
+        if ext != ".hdf5":
+            results["filepath"] = root + ".hdf5"
+
         results["nlocs"] = len(self.locs)
         res = self._save_locs(results["filepath"])
         for k, v in res.items():

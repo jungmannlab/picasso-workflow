@@ -639,7 +639,13 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def identify(self, i, parameters, results, postpone_report=False):
+    @module_decorator
+    def identify(
+        self, i, parameters, results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
         """Identifies localizations in a loaded dataset.
 
         Identifies potential localization sites in the loaded movie using
@@ -717,31 +723,73 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Identifications found: {results['num_identifications']:,}
         </li>
         </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        fig_fps = []
+        titles = []
+
+        # if (res_autonetgrad := results.get("auto_netgrad")) is not None:
+        #     logger.debug("Uploading graph for auto_netgrad.")
+        #     self.ci.upload_attachment(
+        #         self.report_page_id, res_autonetgrad["filename"]
+        #     )
+        #     self.ci.update_page_content_with_image_attachment(
+        #         self.report_page_name,
+        #         self.report_page_id,
+        #         os.path.split(res_autonetgrad["filename"])[1],
+        #     )
+        # if (res := results.get("ids_vs_frame")) is not None:
+        #     logger.debug("uploading graph for identifications vs frame.")
+        #     self.ci.upload_attachment(self.report_page_id, res["filename"])
+        #     self.ci.update_page_content_with_image_attachment(
+        #         self.report_page_name,
+        #         self.report_page_id,
+        #         os.path.split(res["filename"])[1],
+        #     )
+
+        if fp_fig := results.get("auto_netgrad", {}).get("filename"):
+            fig_fps.append(fp_fig)
+            titles.append("Automatic min_grad detection")
+
+        if fp_fig := results.get("ids_vs_frame", {}).get("filename"):
+            fig_fps.append(fp_fig)
+            titles.append("#identifications vs frame")
+
+        if len(fig_fps) > 0:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                            <ac:image ac:height="350">
+                            <ri:attachment ri:filename="{fn}" />
+                            </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+
+        text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+
         if postpone_report:
             return text
         else:
             self.ci.update_page_content(
                 self.report_page_name, self.report_page_id, text
-            )
-        if (res_autonetgrad := results.get("auto_netgrad")) is not None:
-            logger.debug("Uploading graph for auto_netgrad.")
-            self.ci.upload_attachment(
-                self.report_page_id, res_autonetgrad["filename"]
-            )
-            self.ci.update_page_content_with_image_attachment(
-                self.report_page_name,
-                self.report_page_id,
-                os.path.split(res_autonetgrad["filename"])[1],
-            )
-        if (res := results.get("ids_vs_frame")) is not None:
-            logger.debug("uploading graph for identifications vs frame.")
-            self.ci.upload_attachment(self.report_page_id, res["filename"])
-            self.ci.update_page_content_with_image_attachment(
-                self.report_page_name,
-                self.report_page_id,
-                os.path.split(res["filename"])[1],
             )
 
     def localize(self, i, parameters, results, postpone_report=False):
