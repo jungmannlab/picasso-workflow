@@ -1806,14 +1806,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 50.0,
                 "required": True,
             },
-            "save_locs": {
-                "type": "bool",
-                "description": (
-                    "Whether to save density-annotated localizations"
-                ),
-                "default": False,
-                "required": False,
-            },
+            # "save_locs": {
+            #     "type": "bool",
+            #     "description": (
+            #         "Whether to save density-annotated localizations"
+            #     ),
+            #     "default": False,
+            #     "required": False,
+            # },
         }
 
         results_spec = {
@@ -2009,12 +2009,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": True,
                 "required": False,
             },
-            "save_locs": {
-                "type": "bool",
-                "description": "Whether to save clustered localization data",
-                "default": False,
-                "required": False,
-            },
+            # "save_locs": {
+            #     "type": "bool",
+            #     "description": "Whether to save clustered localization data",
+            #     "default": False,
+            #     "required": False,
+            # },
         }
 
         results_spec = {
@@ -2855,6 +2855,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "folder": {
                 "type": "str",
                 "description": "Output folder for module results",
+            },
+            "fp_fiducials": {
+                "type": "list",
+                "description": "Filepaths to the fiducials for all channels",
+            },
+            "shifts": {
+                "type": "array",
+                "description": "The shifts of channels relative to first.",
             },
             "alignment_matrix": {
                 "type": "numpy.ndarray",
@@ -6600,11 +6608,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 # Hint: description: Whether to save drift plots (default: True)
                 # Hint: type appears to be bool
             },
-            "save_locs": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Whether to save undrifted localizations (default: True)
-                # Hint: type appears to be bool
-            },
+            # "save_locs": {
+            #     # TODO: Add type, description, min, max, default, required, step, extensions, properties
+            #     # Hint: description: Whether to save undrifted localizations (default: True)
+            #     # Hint: type appears to be bool
+            # },
             "n_processes": {
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: Number of processes for parallel computation (default: auto)
@@ -7308,6 +7316,116 @@ class FilePathEditor(QtWidgets.QWidget):
     def text(self):
         """Get the current text from the line edit."""
         return self.lineEdit.text()
+
+
+class DroppableTableWidget(QtWidgets.QTableWidget):
+    """QTableWidget with drag-and-drop support for files from Finder/Explorer."""
+
+    filesDropped = QtCore.pyqtSignal(list)  # Emits list of file paths
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            paths = []
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    paths.append(url.toLocalFile())
+            if paths:
+                self.filesDropped.emit(paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+
+class DroppableTreeWidget(QtWidgets.QTreeWidget):
+    """QTreeWidget with drag-and-drop support for files and internal moves."""
+
+    filesDropped = QtCore.pyqtSignal(list, object)  # (file_paths, target_item)
+    fileMoved = QtCore.pyqtSignal(object, object)  # (source_item, target_item)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self._drag_source_item = None
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            # External file drop
+            event.acceptProposedAction()
+        elif event.source() == self:
+            # Internal drag
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls() or event.source() == self:
+            # Get item under cursor for visual feedback
+            item = self.itemAt(event.pos())
+            if item:
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+        else:
+            event.ignore()
+
+    def startDrag(self, supportedActions):
+        """Store the source item when starting an internal drag."""
+        items = self.selectedItems()
+        if items:
+            # Only allow dragging channel items (items with a parent)
+            item = items[0]
+            if item.parent() is not None:
+                self._drag_source_item = item
+                super().startDrag(supportedActions)
+            else:
+                self._drag_source_item = None
+        else:
+            self._drag_source_item = None
+
+    def dropEvent(self, event):
+        target_item = self.itemAt(event.pos())
+
+        if event.mimeData().hasUrls():
+            # External file drop
+            paths = []
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    paths.append(url.toLocalFile())
+            if paths and target_item:
+                self.filesDropped.emit(paths, target_item)
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+        elif event.source() == self and self._drag_source_item:
+            # Internal move - only to channel items
+            if target_item and target_item.parent() is not None:
+                # Target is a channel item
+                self.fileMoved.emit(self._drag_source_item, target_item)
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            self._drag_source_item = None
+        else:
+            event.ignore()
 
 
 class FilePathDelegate(QtWidgets.QStyledItemDelegate):
@@ -8197,7 +8315,8 @@ class Window(QtWidgets.QMainWindow):
         self.file_buttons_layout.addWidget(self.clear_files_button)
 
         d = {"Name1": "/path/to/file1.txt", "Name2": "/path/to/file2.txt"}
-        self.files_table = QtWidgets.QTableWidget()
+        self.files_table = DroppableTableWidget()
+        self.files_table.filesDropped.connect(self._on_files_dropped_table)
         self.files_table.setColumnCount(2)
         self.files_table.setHorizontalHeaderLabels(["Name", "File Path"])
         # Configure column stretching - Name column resizes to contents, File Path column stretches
@@ -8217,7 +8336,9 @@ class Window(QtWidgets.QMainWindow):
         self.files_stack.addWidget(self.files_table)
 
         # Create tree for Aggregation Workflow (index 1)
-        self.files_tree_agg = QtWidgets.QTreeWidget()
+        self.files_tree_agg = DroppableTreeWidget()
+        self.files_tree_agg.filesDropped.connect(self._on_files_dropped_tree)
+        self.files_tree_agg.fileMoved.connect(self._on_file_moved_tree)
         self.files_tree_agg.setColumnCount(3)
         self.files_tree_agg.setHeaderLabels(
             ["Dataset", "Channel", "File Path"]
@@ -8241,7 +8362,9 @@ class Window(QtWidgets.QMainWindow):
         self.files_stack.addWidget(self.files_tree_agg)
 
         # Create tree for Investigation Workflow (index 2)
-        self.files_tree_inv = QtWidgets.QTreeWidget()
+        self.files_tree_inv = DroppableTreeWidget()
+        self.files_tree_inv.filesDropped.connect(self._on_files_dropped_tree)
+        self.files_tree_inv.fileMoved.connect(self._on_file_moved_tree)
         self.files_tree_inv.setColumnCount(4)
         self.files_tree_inv.setHeaderLabels(
             ["Dataset", "Channel", "File Path", "Condition"]
@@ -8801,6 +8924,83 @@ class Window(QtWidgets.QMainWindow):
             self.tree_data["conditions"][dataset_name] = condition
 
         self._update_validation_display()
+
+    def _on_files_dropped_table(self, file_paths):
+        """Handle files dropped onto the Single Dataset table."""
+        for path in file_paths:
+            row = self.files_table.rowCount()
+            self.files_table.insertRow(row)
+            # Use basename as default name
+            name = os.path.basename(path)
+            self.files_table.setItem(
+                row, 0, QtWidgets.QTableWidgetItem(name)
+            )
+            self.files_table.setItem(
+                row, 1, QtWidgets.QTableWidgetItem(path)
+            )
+
+    def _on_files_dropped_tree(self, file_paths, target_item):
+        """Handle files dropped onto the Aggregation/Investigation tree."""
+        if not target_item:
+            return
+
+        # Determine if target is a dataset or channel item
+        if target_item.parent() is None:
+            # Dropped on dataset item - distribute files across channels
+            dataset_name = target_item.text(0)
+            channels = self.tree_data["channels"]
+            if not channels:
+                return
+
+            for i, path in enumerate(file_paths):
+                if i < len(channels):
+                    channel = channels[i]
+                    self.tree_data["file_paths"][dataset_name][channel] = path
+        else:
+            # Dropped on channel item - assign files starting from this channel
+            dataset_item = target_item.parent()
+            dataset_name = dataset_item.text(0)
+            target_channel = target_item.text(1)
+
+            channels = self.tree_data["channels"]
+            try:
+                start_idx = channels.index(target_channel)
+            except ValueError:
+                return
+
+            for i, path in enumerate(file_paths):
+                channel_idx = start_idx + i
+                if channel_idx < len(channels):
+                    channel = channels[channel_idx]
+                    self.tree_data["file_paths"][dataset_name][channel] = path
+
+        self._populate_tree_from_data()
+
+    def _on_file_moved_tree(self, source_item, target_item):
+        """Handle file moved between channels within the tree."""
+        if not source_item or not target_item:
+            return
+
+        # Both should be channel items (have parents)
+        if source_item.parent() is None or target_item.parent() is None:
+            return
+
+        source_dataset = source_item.parent().text(0)
+        source_channel = source_item.text(1)
+        source_path = source_item.text(2)
+
+        target_dataset = target_item.parent().text(0)
+        target_channel = target_item.text(1)
+
+        # Move the file path
+        if source_path:
+            # Clear source
+            self.tree_data["file_paths"][source_dataset][source_channel] = ""
+            # Set target
+            self.tree_data["file_paths"][target_dataset][target_channel] = (
+                source_path
+            )
+            self._populate_tree_from_data()
 
     def _update_validation_display(self):
         """Update visual indicators for missing file paths."""
@@ -9833,6 +10033,16 @@ class Window(QtWidgets.QMainWindow):
         for param_name, widget_info in self.parameter_widgets.items():
             if param_name in param_values:
                 value_data = param_values[param_name]
+
+                # Check if value is a command tuple (starts with $ or $$)
+                if isinstance(value_data, tuple) and len(value_data) >= 1:
+                    first_elem = str(value_data[0])
+                    if first_elem.startswith("$"):
+                        # This is a command - convert widget to textbox
+                        self._convert_widget_to_textbox(
+                            param_name, str(value_data)
+                        )
+                        continue
 
                 # Set value in widget
                 self._set_widget_value(
