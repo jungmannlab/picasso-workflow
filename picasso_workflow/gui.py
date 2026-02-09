@@ -516,7 +516,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """
         parameters_spec = {
             "filepath": {
-                "type": "str",
+                "type": "path",
                 "description": "the czi file name to load",
                 "extensions": [".czi"],
                 "required": True,
@@ -595,7 +595,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """
         parameters_spec = {
             "filename": {
-                "type": "str",
+                "type": "path",
                 "description": "Path to the movie file to load",
                 "extensions": [".raw", ".tif", ".tiff", ".ome.tif"],
                 "required": True,
@@ -1058,7 +1058,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": True,
             },
             "fp_calibration": {
-                "type": "str",
+                "type": "path",
                 "description":
                     "The calibration file path to use. If not given, the filepath"
                     "from config is loaded for the microscope and emission wavelength. "
@@ -2086,7 +2086,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
             },
             "fp_locs": {
-                "type": "str",
+                "type": "path",
                 "description": "The filepath of the .hdf5 file to write",
                 "required": False,
             },
@@ -4260,14 +4260,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": True,
             },
             "fp_combined_locs": {
-                "type": "str",
+                "type": "path",
                 "description": "Filepath to the locs combined previously \
                     in 'combine_channels' module. If None or '', \
                     loaded channel_locs is used",
                 "required": False,
             },
             "fp_channel_map": {
-                "type": "str",
+                "type": "path",
                 "description": "Filepath to the map from 'combine_channels' \
                     module, which is a dict from channel name to ID int in \
                     the locs['combine_id']",
@@ -4359,7 +4359,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             #     "required": False,
             # },
             "fp_mask": {
-                "type": "str",
+                "type": "path",
                 "description": "The file path to the mask min_density, \
                     max_density : float the density range to select",
                 "required": True,
@@ -4615,14 +4615,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
             },
             "fp_channel_map": {
-                "type": "str",
+                "type": "path",
                 "description": "Filepath to the map from \
                     'combine_channels' module, which is a dict from \
                     channel name to ID int in the locs['combine_id']",
                 "required": True,
             },
             "fp_mask_dict": {
-                "type": "str",
+                "type": "path",
                 "description": "Filepath to the mask_dict.pkl file \
                     generated in the 'create_mask' module",
                 "required": True,
@@ -5554,7 +5554,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
             },
             "fp_locs": {
-                "type": "str",
+                "type": "path",
                 "description": "The filepath to localizations (self.locs should be the"
                 " centers). If given, locs are filtered and saved as well.",
                 "required": False,
