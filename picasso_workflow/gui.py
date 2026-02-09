@@ -1127,7 +1127,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """
         parameters_spec = {
             "fp_config": {
-                "type": "str",
+                "type": "path",
                 "description":
                     "Filepath to a specific picasso config. "
                     "Keep in mind this must be a path on the cluster for now"
@@ -7318,6 +7318,37 @@ class FilePathEditor(QtWidgets.QWidget):
         return self.lineEdit.text()
 
 
+class DroppableLineEdit(QtWidgets.QLineEdit):
+    """QLineEdit with drag-and-drop support for files from Finder/Explorer."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            # Take the first file path
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    self.setText(url.toLocalFile())
+                    break
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
 class DroppableTableWidget(QtWidgets.QTableWidget):
     """QTableWidget with drag-and-drop support for files from Finder/Explorer."""
 
@@ -10409,8 +10440,12 @@ class Window(QtWidgets.QMainWindow):
                         (".yaml", ".hdf5", ".h5", ".tif", ".png", ".jpg")
                     )
                 ):
+                    # Convert path from local to host machine style
+                    converted_path = self.pathparser.convert_path(
+                        value, host_cluster
+                    )
                     # Use os.path.join for path-like strings
-                    parts = value.replace("\\", "/").split("/")
+                    parts = converted_path.replace("\\", "/").split("/")
                     if len(parts) > 1:
                         if parts[0] == "":
                             parts[0] = "/"
@@ -10997,6 +11032,17 @@ class Window(QtWidgets.QMainWindow):
             widget.setChecked(bool(default))
             return widget, "bool"
 
+        elif param_type == "path":
+            widget = DroppableLineEdit()
+            default = param_metadata.get("default", "")
+            if default is not None:
+                widget.setText(str(default))
+            if param_metadata.get("required", False):
+                widget.setPlaceholderText("Required - drag file here or type path")
+            else:
+                widget.setPlaceholderText("Drag file here or type path")
+            return widget, "path"
+
         else:  # str or fallback
             widget = QtWidgets.QLineEdit()
             default = param_metadata.get("default", "")
@@ -11056,7 +11102,7 @@ class Window(QtWidgets.QMainWindow):
 
         Args:
             widget: The Qt widget
-            original_type: Original type string ('int', 'float', 'bool', 'str', 'options', 'dict')
+            original_type: Original type string ('int', 'float', 'bool', 'str', 'path', 'options', 'dict')
             widget_info: ParameterWidgetInfo (needed for dict types)
 
         Returns:
@@ -11112,7 +11158,7 @@ class Window(QtWidgets.QMainWindow):
         Args:
             widget: The Qt widget
             value_data: Value in actionable format (int, float, bool, str, tuple, list, dict, etc.)
-            original_type: Original type string ('int', 'float', 'bool', 'str', 'options', 'dict')
+            original_type: Original type string ('int', 'float', 'bool', 'str', 'path', 'options', 'dict')
             widget_info: ParameterWidgetInfo (needed for dict types)
         """
         if (
