@@ -9285,6 +9285,8 @@ class Window(QtWidgets.QMainWindow):
         """Load a template"""
         try:
             template_folder = CONFIG["Templates"][template_name]
+            if template_folder[:2] == 'r"' or template_folder[:2] == "r'":
+                template_folder = template_folder[2:-1]
         except KeyError:
             return
         # # Enable widgets when a folder is selected

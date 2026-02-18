@@ -126,7 +126,7 @@ class PathParser:
         else:
             # print('no drive')
             drivelen = len(pathlib.Path(list(drive_map.keys())[0]).parts)
-            pseudodrive = pathlib.Path(*posixpath.parts[:drivelen])
+            pseudodrive = pathlib.PurePosixPath(*posixpath.parts[:drivelen])
             # print('pseudodrive:', pseudodrive)
             # print(drive_map)
             if drive := drive_map.get(str(pseudodrive)):
@@ -157,7 +157,7 @@ class PathParser:
                     )
                 else:  # converted path is a Posix path
                     currospath = pathlib.PurePosixPath(
-                        drive, *posixpath.parts[1:]
+                        drive, *posixpath.parts[drivelen:]
                     )
         # print('new path:', currospath)
         return str(currospath)
