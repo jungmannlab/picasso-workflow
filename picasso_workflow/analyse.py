@@ -7,7 +7,8 @@ Description: This is the picasso interface of picasso-workflow
 """
 from picasso import lib, io, localize, gausslq, postprocess, clusterer
 from picasso import aim, spinna
-from picasso_workflow.outpost_modules import g5m
+# from picasso_workflow.outpost_modules import g5m
+from picasso import g5m
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
 import picasso
@@ -49,7 +50,7 @@ from picasso import (
     postprocess,
     spinna,
 )
-from picasso_workflow.outpost_modules import g5m
+# from picasso_workflow.outpost_modules import g5m
 from scipy.ndimage import label
 from scipy.spatial import KDTree, distance
 from scipy.stats import kstest, norm, poisson
@@ -6471,7 +6472,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         except KeyError as e:
             logger.error(
                 f"""All of the following arguments are required for
-                picasso.g5m.run_g5m: {required_args}"""
+                picasso.g5m.g5m: {required_args}"""
             )
             raise e
         # sigma values are given in nm in parameters but px in gmm
@@ -6498,7 +6499,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         results["g5m_args"] = str(kwargs)
 
-        center_locs, clustered_locs, gmm_info = g5m.run_g5m(
+        center_locs, clustered_locs, gmm_info = g5m.g5m(
             self.locs, self.info, **kwargs
         )
 
@@ -6525,7 +6526,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_fig_subclustering"] = os.path.join(
             results["folder"], "subcluster_test.png"
         )
-        g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
+        # g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
+        clustered_nevents, sparse_nevents = clusterer.test_subclustering(center_locs, self.info)
+        lib.plot_subclustering_check(clustered_nevents, sparse_nevents, results["fp_fig_subclustering"])
 
         results["n_locs_in"] = len(self.locs)
         results["n_locs_clustered"] = len(clustered_locs)
@@ -7721,158 +7724,158 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    #    @profile_resource_usage
-    @module_decorator
-    def spinna_manual(self, i, parameters, results):
-        """Direct implementation of spinna batch analysis.
-        The current locs file(s) are saved into the results folder, and
-        a template csv file is created. This csv needs to be filled out by the
-        user in a manual step before the spinna analysis is carried out.
+    # #    @profile_resource_usage
+    # @module_decorator
+    # def spinna_manual(self, i, parameters, results):
+    #     """Direct implementation of spinna batch analysis.
+    #     The current locs file(s) are saved into the results folder, and
+    #     a template csv file is created. This csv needs to be filled out by the
+    #     user in a manual step before the spinna analysis is carried out.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    proposed_labeling_efficiency : float, range 0-100
-                        labeling efficiency percentage, default for all targets
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_labeling_uncertainty : float
-                        labeling uncertainty [nm]; good value is e.g. 5
-                        used proposed value in spinna_config.csv and can be
-                         alteredmanually after the first run of this module
-                    proposed_n_simulate : int
-                        number of target molecules to simulated;
-                        good value is e.g. 50000
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_density : float
-                        density to simulate;
-                        area density if 2D; volume density if 3D
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_nn_plotted : int
-                        number of nearest neighbors to plot
-                        used proposed value in spinna_config.csv and can be
-                         alteredmanually after the first run of this module
-                and optional keys:
-                    structures : list of dict
-                        SPINNA structures. Each structure dict has
-                            "Molecular targets": list of str,
-                            "Structure title": str,
-                            "TARGET_x": list of float,
-                            "TARGET_y": list of float,
-                            "TARGET_z": list of float,
-                        where TARGET is one each of the target names in
-                        "Molecular targets"
-                    structures_d : float
-                        distance between molecules within auto-generated
-                        structures, in nm. Only necessary if 'structures'
-                        is not given.
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
-        """
-        cfg_fp = os.path.join(results["folder"], "spinna_config.csv")
-        if os.path.exists(cfg_fp):
-            prepped = True
-        else:
-            prepped = False
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #                 proposed_labeling_efficiency : float, range 0-100
+    #                     labeling efficiency percentage, default for all targets
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_labeling_uncertainty : float
+    #                     labeling uncertainty [nm]; good value is e.g. 5
+    #                     used proposed value in spinna_config.csv and can be
+    #                      alteredmanually after the first run of this module
+    #                 proposed_n_simulate : int
+    #                     number of target molecules to simulated;
+    #                     good value is e.g. 50000
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_density : float
+    #                     density to simulate;
+    #                     area density if 2D; volume density if 3D
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_nn_plotted : int
+    #                     number of nearest neighbors to plot
+    #                     used proposed value in spinna_config.csv and can be
+    #                      alteredmanually after the first run of this module
+    #             and optional keys:
+    #                 structures : list of dict
+    #                     SPINNA structures. Each structure dict has
+    #                         "Molecular targets": list of str,
+    #                         "Structure title": str,
+    #                         "TARGET_x": list of float,
+    #                         "TARGET_y": list of float,
+    #                         "TARGET_z": list of float,
+    #                     where TARGET is one each of the target names in
+    #                     "Molecular targets"
+    #                 structures_d : float
+    #                     distance between molecules within auto-generated
+    #                     structures, in nm. Only necessary if 'structures'
+    #                     is not given.
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     cfg_fp = os.path.join(results["folder"], "spinna_config.csv")
+    #     if os.path.exists(cfg_fp):
+    #         prepped = True
+    #     else:
+    #         prepped = False
 
-        if not prepped:
-            spinna_config = {}
-            data_2d = "z" not in self.channel_locs[0].columns
-            if data_2d:
-                spinna_config["rotation_mode"] = ["2D"]
-                area = (
-                    parameters["proposed_n_simulate"]
-                    / parameters["proposed_density"]
-                )
-                spinna_config["area"] = [area]
-                d = 2
-            else:
-                spinna_config["rotation_mode"] = ["3D"]
-                z_range = int(self.locs["z"].max() - self.locs["z"].min())
-                volume = (
-                    parameters["proposed_n_simulate"]
-                    / parameters["proposed_density"]
-                )
-                spinna_config["volume"] = [volume]
-                spinna_config["z_range"] = [z_range]
-                d = 3
+    #     if not prepped:
+    #         spinna_config = {}
+    #         data_2d = "z" not in self.channel_locs[0].columns
+    #         if data_2d:
+    #             spinna_config["rotation_mode"] = ["2D"]
+    #             area = (
+    #                 parameters["proposed_n_simulate"]
+    #                 / parameters["proposed_density"]
+    #             )
+    #             spinna_config["area"] = [area]
+    #             d = 2
+    #         else:
+    #             spinna_config["rotation_mode"] = ["3D"]
+    #             z_range = int(self.locs["z"].max() - self.locs["z"].min())
+    #             volume = (
+    #                 parameters["proposed_n_simulate"]
+    #                 / parameters["proposed_density"]
+    #             )
+    #             spinna_config["volume"] = [volume]
+    #             spinna_config["z_range"] = [z_range]
+    #             d = 3
 
-            # prepare input files for the user to edit, with default values
-            spinna_structs = parameters.get("structures")
-            if spinna_structs is None:
-                spinna_structs = self._create_spinna_structure(
-                    self.channel_tags,
-                    [[1, 2]] * len(self.channel_tags),
-                    distance=parameters["structures_d"],
-                    dimensionality=d,
-                )
-            structs_fn = "spinna_structs.yaml"
-            structs_fp = os.path.join(results["folder"], structs_fn)
-            with open(structs_fp, "w") as f:
-                yaml.dump_all(spinna_structs, f)
+    #         # prepare input files for the user to edit, with default values
+    #         spinna_structs = parameters.get("structures")
+    #         if spinna_structs is None:
+    #             spinna_structs = self._create_spinna_structure(
+    #                 self.channel_tags,
+    #                 [[1, 2]] * len(self.channel_tags),
+    #                 distance=parameters["structures_d"],
+    #                 dimensionality=d,
+    #             )
+    #         structs_fn = "spinna_structs.yaml"
+    #         structs_fp = os.path.join(results["folder"], structs_fn)
+    #         with open(structs_fp, "w") as f:
+    #             yaml.dump_all(spinna_structs, f)
 
-            spinna_config["structures_filename"] = [structs_fp]
-            for locs, info, tag in zip(
-                self.channel_locs, self.channel_info, self.channel_tags
-            ):
-                locs_fn = tag + ".hdf5"
-                locs_fp = os.path.join(results["folder"], locs_fn)
-                io.save_locs(locs_fp, locs, info)
+    #         spinna_config["structures_filename"] = [structs_fp]
+    #         for locs, info, tag in zip(
+    #             self.channel_locs, self.channel_info, self.channel_tags
+    #         ):
+    #             locs_fn = tag + ".hdf5"
+    #             locs_fp = os.path.join(results["folder"], locs_fn)
+    #             io.save_locs(locs_fp, locs, info)
 
-                spinna_config[f"exp_data_{tag}"] = [locs_fp]
-                spinna_config[f"le_{tag}"] = [
-                    parameters["proposed_labeling_efficiency"]
-                ]
-                spinna_config[f"label_unc_{tag}"] = [
-                    parameters["proposed_labeling_uncertainty"]
-                ]
-                spinna_config[f"n_simulated_{tag}"] = [
-                    parameters["proposed_n_simulate"]
-                ]
-            spinna_config["granularity"] = [100]
-            spinna_config["save_filename"] = ["spinna_results"]
-            spinna_config["nn_plotted"] = [parameters["proposed_nn_plotted"]]
+    #             spinna_config[f"exp_data_{tag}"] = [locs_fp]
+    #             spinna_config[f"le_{tag}"] = [
+    #                 parameters["proposed_labeling_efficiency"]
+    #             ]
+    #             spinna_config[f"label_unc_{tag}"] = [
+    #                 parameters["proposed_labeling_uncertainty"]
+    #             ]
+    #             spinna_config[f"n_simulated_{tag}"] = [
+    #                 parameters["proposed_n_simulate"]
+    #             ]
+    #         spinna_config["granularity"] = [100]
+    #         spinna_config["save_filename"] = ["spinna_results"]
+    #         spinna_config["nn_plotted"] = [parameters["proposed_nn_plotted"]]
 
-            # bin size: more than Nyquist subsampling
-            expected_1stNN_peak = (
-                2 / (2 * d * np.pi * parameters["proposed_density"])
-            ) ** (1 / d)
-            spinna_config["NND_bin"] = [expected_1stNN_peak / 10]
-            spinna_config["density"] = parameters["proposed_density"]
-            # max dist: a few times the first NN distance peak
-            spinna_config["NND_maxdist"] = [20 * expected_1stNN_peak]
-            spinna_config["sim_repeats"] = [2]
+    #         # bin size: more than Nyquist subsampling
+    #         expected_1stNN_peak = (
+    #             2 / (2 * d * np.pi * parameters["proposed_density"])
+    #         ) ** (1 / d)
+    #         spinna_config["NND_bin"] = [expected_1stNN_peak / 10]
+    #         spinna_config["density"] = parameters["proposed_density"]
+    #         # max dist: a few times the first NN distance peak
+    #         spinna_config["NND_maxdist"] = [20 * expected_1stNN_peak]
+    #         spinna_config["sim_repeats"] = [2]
 
-            # save config to file
-            pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
+    #         # save config to file
+    #         pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
 
-            msg = "This is a manual step. Please provide input, "
-            msg += "and re-execute the workflow. "
-            msg += f" The file {cfg_fp} has been prepared for you"
-            msg += ", based on the parameters given."
-            results["message"] = msg
-            logger.debug(msg)
-            print(msg)
-            results["success"] = False
-        else:
-            # kick off SPINNA analysis
-            print("starting spinna batch analysis")
-            result_dir, fp_summary, fp_fig = picasso_outpost.spinna_batch(
-                cfg_fp
-            )
+    #         msg = "This is a manual step. Please provide input, "
+    #         msg += "and re-execute the workflow. "
+    #         msg += f" The file {cfg_fp} has been prepared for you"
+    #         msg += ", based on the parameters given."
+    #         results["message"] = msg
+    #         logger.debug(msg)
+    #         print(msg)
+    #         results["success"] = False
+    #     else:
+    #         # kick off SPINNA analysis
+    #         print("starting spinna batch analysis")
+    #         result_dir, fp_summary, fp_fig = picasso_outpost.spinna_batch(
+    #             cfg_fp
+    #         )
 
-            results["message"] = "Successfully performed SPINNA analysis."
-            results["result_dir"] = result_dir
-            results["fp_summary"] = fp_summary
-            results["fp_fig"] = fp_fig
-            results["success"] = True
+    #         results["message"] = "Successfully performed SPINNA analysis."
+    #         results["result_dir"] = result_dir
+    #         results["fp_summary"] = fp_summary
+    #         results["fp_fig"] = fp_fig
+    #         results["success"] = True
 
-        return parameters, results
+    #     return parameters, results
 
     def _create_spinna_structure(
         self, names, multimers, distance, dimensionality=2

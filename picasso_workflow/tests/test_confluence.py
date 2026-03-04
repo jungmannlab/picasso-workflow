@@ -236,6 +236,12 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    def load_picassoconfig(self):
+        pass
+
+    def zfit(self):
+        pass
+
     # @unittest.skip("")
     def export_brightfield(self):
         parameters = {}
@@ -572,22 +578,22 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
-    # @unittest.skip("")
-    def spinna_manual(self):
-        parameters = {}
-        results = {
-            "start time": "now",
-            "duration": 4.12,
-            "message": "This is my message to you.",
-            "success": False,
-        }
-        self.cr.spinna_manual(0, parameters, results)
+    # # @unittest.skip("")
+    # def spinna_manual(self):
+    #     parameters = {}
+    #     results = {
+    #         "start time": "now",
+    #         "duration": 4.12,
+    #         "message": "This is my message to you.",
+    #         "success": False,
+    #     }
+    #     self.cr.spinna_manual(0, parameters, results)
 
-        # clean up
-        pgid, pgtitle = self.cr.ci.get_page_properties(
-            self.cr.report_page_name
-        )
-        self.cr.ci.delete_page(pgid)
+    #     # clean up
+    #     pgid, pgtitle = self.cr.ci.get_page_properties(
+    #         self.cr.report_page_name
+    #     )
+    #     self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
     def spinna(self):

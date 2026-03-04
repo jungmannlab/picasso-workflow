@@ -2998,146 +2998,146 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def spinna_manual(self):
-        """Direct implementation of spinna batch analysis.
-        The current locs file(s) are saved into the results folder, and
-        a template csv file is created. This csv needs to be filled out by the
-        user in a manual step before the spinna analysis is carried out.
+    # def spinna_manual(self):
+    #     """Direct implementation of spinna batch analysis.
+    #     The current locs file(s) are saved into the results folder, and
+    #     a template csv file is created. This csv needs to be filled out by the
+    #     user in a manual step before the spinna analysis is carried out.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    proposed_labeling_efficiency : float, range 0-100
-                        labeling efficiency percentage, default for all targets
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_labeling_uncertainty : float
-                        labeling uncertainty [nm]; good value is e.g. 5
-                        used proposed value in spinna_config.csv and can be
-                         alteredmanually after the first run of this module
-                    proposed_n_simulate : int
-                        number of target molecules to simulated;
-                        good value is e.g. 50000
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_density : int
-                        density to simulate;
-                        area density if 2D; volume density if 3D
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_nn_plotted : int
-                        number of nearest neighbors to plot
-                        used proposed value in spinna_config.csv and can be
-                         alteredmanually after the first run of this module
-                and optional keys:
-                    structures : list of dict
-                        SPINNA structures. Each structure dict has
-                            "Molecular targets": list of str,
-                            "Structure title": str,
-                            "TARGET_x": list of float,
-                            "TARGET_y": list of float,
-                            "TARGET_z": list of float,
-                        where TARGET is one each of the target names in
-                        "Molecular targets"
-                    structures_d : float
-                        distance between molecules within auto-generated
-                        structures, in nm. Only necessary if 'structures'
-                        is not given.
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
-        """
-        parameters_spec = {
-            "proposed_labeling_efficiency": {
-                "type": "float",
-                "description": "Labeling efficiency percentage, default for \
-                    all targets used proposed value in spinna_config.csv and \
-                    can be altered manually after the first run of this \
-                    module",
-                "min": 0.0,
-                "max": 100.0,
-                "required": True,
-            },
-            "proposed_labeling_uncertainty": {
-                "type": "float",
-                "description": "Labeling uncertainty [nm]; good value is e.g.\
-                        5 used proposed value in spinna_config.csv and can be\
-                        altered manually after the first run of this module",
-                "default": 5,
-                "required": True,
-            },
-            "proposed_n_simulate": {
-                "type": "int",
-                "description": "Number of Monte Carlo simulations",
-                "min": 10,
-                "max": 10000,
-                "default": 1000,
-                "required": True,
-            },
-            "proposed_density": {
-                "type": "float",
-                "description": "Density to simulate; area density if 2D; \
-                    volume density if 3D used proposed value in \
-                    spinna_config.csv and can be altered manually after the \
-                    first run of this module",
-                "required": True,
-            },
-            "proposed_nn_plotted": {
-                "type": "int",
-                "description": "Number of nearest neighbors to plot used \
-                    proposed value in spinna_config.csv and can be \
-                    alteredmanually after the first run of this module",
-                "required": True,
-            },
-            "structures": {
-                "type": "list",
-                "element_type": "dict",
-                "description": 'SPINNA structures. Each structure dict has \
-                        "Molecular targets": list of str, \
-                        "Structure title": str, \
-                        "TARGET_x": list of float, \
-                        "TARGET_y": list of float, \
-                        "TARGET_z": list of float, \
-                    where TARGET is one each of the target names in \
-                    "Molecular targets"',
-                "required": False,
-            },
-            "structures_d": {
-                "type": "float",
-                "description": "Distance between molecules within \
-                    auto-generated structures, in nm. Only necessary if \
-                    'structures' is not given.",
-                "required": False,
-            },
-        }
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #                 proposed_labeling_efficiency : float, range 0-100
+    #                     labeling efficiency percentage, default for all targets
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_labeling_uncertainty : float
+    #                     labeling uncertainty [nm]; good value is e.g. 5
+    #                     used proposed value in spinna_config.csv and can be
+    #                      alteredmanually after the first run of this module
+    #                 proposed_n_simulate : int
+    #                     number of target molecules to simulated;
+    #                     good value is e.g. 50000
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_density : int
+    #                     density to simulate;
+    #                     area density if 2D; volume density if 3D
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_nn_plotted : int
+    #                     number of nearest neighbors to plot
+    #                     used proposed value in spinna_config.csv and can be
+    #                      alteredmanually after the first run of this module
+    #             and optional keys:
+    #                 structures : list of dict
+    #                     SPINNA structures. Each structure dict has
+    #                         "Molecular targets": list of str,
+    #                         "Structure title": str,
+    #                         "TARGET_x": list of float,
+    #                         "TARGET_y": list of float,
+    #                         "TARGET_z": list of float,
+    #                     where TARGET is one each of the target names in
+    #                     "Molecular targets"
+    #                 structures_d : float
+    #                     distance between molecules within auto-generated
+    #                     structures, in nm. Only necessary if 'structures'
+    #                     is not given.
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     parameters_spec = {
+    #         "proposed_labeling_efficiency": {
+    #             "type": "float",
+    #             "description": "Labeling efficiency percentage, default for \
+    #                 all targets used proposed value in spinna_config.csv and \
+    #                 can be altered manually after the first run of this \
+    #                 module",
+    #             "min": 0.0,
+    #             "max": 100.0,
+    #             "required": True,
+    #         },
+    #         "proposed_labeling_uncertainty": {
+    #             "type": "float",
+    #             "description": "Labeling uncertainty [nm]; good value is e.g.\
+    #                     5 used proposed value in spinna_config.csv and can be\
+    #                     altered manually after the first run of this module",
+    #             "default": 5,
+    #             "required": True,
+    #         },
+    #         "proposed_n_simulate": {
+    #             "type": "int",
+    #             "description": "Number of Monte Carlo simulations",
+    #             "min": 10,
+    #             "max": 10000,
+    #             "default": 1000,
+    #             "required": True,
+    #         },
+    #         "proposed_density": {
+    #             "type": "float",
+    #             "description": "Density to simulate; area density if 2D; \
+    #                 volume density if 3D used proposed value in \
+    #                 spinna_config.csv and can be altered manually after the \
+    #                 first run of this module",
+    #             "required": True,
+    #         },
+    #         "proposed_nn_plotted": {
+    #             "type": "int",
+    #             "description": "Number of nearest neighbors to plot used \
+    #                 proposed value in spinna_config.csv and can be \
+    #                 alteredmanually after the first run of this module",
+    #             "required": True,
+    #         },
+    #         "structures": {
+    #             "type": "list",
+    #             "element_type": "dict",
+    #             "description": 'SPINNA structures. Each structure dict has \
+    #                     "Molecular targets": list of str, \
+    #                     "Structure title": str, \
+    #                     "TARGET_x": list of float, \
+    #                     "TARGET_y": list of float, \
+    #                     "TARGET_z": list of float, \
+    #                 where TARGET is one each of the target names in \
+    #                 "Molecular targets"',
+    #             "required": False,
+    #         },
+    #         "structures_d": {
+    #             "type": "float",
+    #             "description": "Distance between molecules within \
+    #                 auto-generated structures, in nm. Only necessary if \
+    #                 'structures' is not given.",
+    #             "required": False,
+    #         },
+    #     }
 
-        results_spec = {
-            "start time": {
-                "type": "str",
-                "description": "Module execution start timestamp",
-            },
-            "end time": {
-                "type": "str",
-                "description": "Module execution end timestamp",
-            },
-            "duration": {
-                "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
-            },
-            "folder": {
-                "type": "str",
-                "description": "Output folder for module results",
-            },
-            "spinna_results": {
-                "type": "dict",
-                "description": "SPINNA analysis results",
-            },
-        }
+    #     results_spec = {
+    #         "start time": {
+    #             "type": "str",
+    #             "description": "Module execution start timestamp",
+    #         },
+    #         "end time": {
+    #             "type": "str",
+    #             "description": "Module execution end timestamp",
+    #         },
+    #         "duration": {
+    #             "type": "float",
+    #             "description": "Module execution duration in seconds",
+    #             "min": 0.0,
+    #         },
+    #         "folder": {
+    #             "type": "str",
+    #             "description": "Output folder for module results",
+    #         },
+    #         "spinna_results": {
+    #             "type": "dict",
+    #             "description": "SPINNA analysis results",
+    #         },
+    #     }
 
-        return parameters_spec, results_spec
+    #     return parameters_spec, results_spec
 
     def spinna(self):
         """Direct implementation of spinna batch analysis.

@@ -2755,44 +2755,44 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_name, self.report_page_id, text
             )
 
-    def spinna_manual(self, i, parameters, results, postpone_report=False):
-        """ """
-        logger.debug("Reporting spinna_manual.")
-        text = f"""
-        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: SPINNA-Manual</strong></p>
-        <ul><li>file present: {results.get('success')}</li>
-        <li>Start Time: {results['start time']}</li>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
-        """
-        if not results["success"]:
-            text += "<li>" + results["message"] + "</li>"
-        else:
-            text += f"<li>Result folder: {results['result_dir']}</li>"
-            summary = pd.read_csv(results["fp_summary"])
-            for i, row in summary.iterrows():
-                text += f"<p><strong> Row {i} </strong></p><ul>"
-                for col, val in row.items():
-                    text += f"<li>{col}: {str(val)}</li>"
-                text += "</ul>"
-        text += """</ul>
-        </ac:layout-cell></ac:layout-section></ac:layout>
-        """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
-        if results["success"]:
-            for fp in results["fp_fig"]:
-                self.ci.upload_attachment(self.report_page_id, fp)
-                self.ci.update_page_content_with_image_attachment(
-                    self.report_page_name,
-                    self.report_page_id,
-                    os.path.split(fp)[1],
-                )
+    # def spinna_manual(self, i, parameters, results, postpone_report=False):
+    #     """ """
+    #     logger.debug("Reporting spinna_manual.")
+    #     text = f"""
+    #     <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+    #     <p><strong>Module {i:02d}: SPINNA-Manual</strong></p>
+    #     <ul><li>file present: {results.get('success')}</li>
+    #     <li>Start Time: {results['start time']}</li>
+    #     <li>Duration: {results["duration"] // 60:.0f} min
+    #     {(results["duration"] % 60):.02f} s</li>
+    #     """
+    #     if not results["success"]:
+    #         text += "<li>" + results["message"] + "</li>"
+    #     else:
+    #         text += f"<li>Result folder: {results['result_dir']}</li>"
+    #         summary = pd.read_csv(results["fp_summary"])
+    #         for i, row in summary.iterrows():
+    #             text += f"<p><strong> Row {i} </strong></p><ul>"
+    #             for col, val in row.items():
+    #                 text += f"<li>{col}: {str(val)}</li>"
+    #             text += "</ul>"
+    #     text += """</ul>
+    #     </ac:layout-cell></ac:layout-section></ac:layout>
+    #     """
+    #     if postpone_report:
+    #         return text
+    #     else:
+    #         self.ci.update_page_content(
+    #             self.report_page_name, self.report_page_id, text
+    #         )
+    #     if results["success"]:
+    #         for fp in results["fp_fig"]:
+    #             self.ci.upload_attachment(self.report_page_id, fp)
+    #             self.ci.update_page_content_with_image_attachment(
+    #                 self.report_page_name,
+    #                 self.report_page_id,
+    #                 os.path.split(fp)[1],
+    #             )
 
     @module_decorator
     def spinna(

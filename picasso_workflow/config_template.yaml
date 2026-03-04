@@ -2,6 +2,11 @@
 # user-specific version can be in ~/.config/picasso_workflow/config.yaml or %APPDATA%\picasso_workflow\config.yaml
 Templates:
   TemplateName: "/local/path/to/template"
+TestData:
+  # Path to a directory of real acquired datasets used by integration tests.
+  # Override in ~/.config/picasso_workflow/config.yaml (not here).
+  # Alternatively set the environment variable PW_TEST_DATA_DIR.
+  directory: null
 Confluence:
   URL: ""
   Space: "~user"

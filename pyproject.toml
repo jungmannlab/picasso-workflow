@@ -16,7 +16,7 @@ dependencies = [
     "tables",
     "numba",
     "openpyxl==3.1.2",
-    "picassosr>=0.7.3",
+    "picassosr==0.9.7",
     "moviepy==1.0.3",
     "python-dotenv==1.0.1",
     "pre-commit>=3.5.1",
@@ -101,3 +101,7 @@ fail_under = 80
 minversion = "6.0"
 addopts = "-ra -q"
 testpaths = ["picasso_workflow/tests"]
+markers = [
+    "integration: tests that run the real picasso pipeline (deselect with '-m not integration')",
+    "real_data: tests that require acquired datasets from the lab network volumes (set PW_TEST_DATA_DIR)",
+]
