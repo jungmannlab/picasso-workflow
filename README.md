@@ -214,10 +214,23 @@ cd ~/picasso-workflow
 # Tiers 1–3 (no real data required):
 tools/cluster_tests/submit_all.sh
 
-# All four tiers including real-data tests:
+# All four tiers — option A: set the env var for this session
 export PW_TEST_DATA_DIR=/path/to/real/datasets
 tools/cluster_tests/submit_all.sh
+
+# All four tiers — option B: path already in ~/.config/picasso_workflow/config.yaml
+tools/cluster_tests/submit_all.sh   # no env var needed
 ```
+
+**How `PW_TEST_DATA_DIR` is resolved** (same rule locally and on the cluster):
+
+The `network_test_data` fixture checks these sources in order, stopping at the first non-empty result:
+
+1. `PW_TEST_DATA_DIR` environment variable
+2. `TestData → directory` in `~/.config/picasso_workflow/config.yaml`
+3. _(skip — no path configured)_
+
+On most HPC clusters the home directory is NFS-mounted and shared between login nodes and compute nodes, so `~/.config/picasso_workflow/config.yaml` is the same file everywhere.  If you have already set `TestData.directory` there for local Tier 4 runs, the cluster jobs pick it up automatically without any extra env var.  The env var is only needed if you want to override the config for a specific run.
 
 The script prints the three job IDs and a ready-made `squeue` command:
 

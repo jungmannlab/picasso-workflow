@@ -26,10 +26,34 @@ mkdir -p "$PROJECT_DIR/test-results"
 
 echo "Project directory: $PROJECT_DIR"
 echo "Results directory: $PROJECT_DIR/test-results"
+
+# Resolve PW_TEST_DATA_DIR: env var takes priority, then config.yaml.
+# This mirrors the lookup order in the network_test_data pytest fixture.
+if [[ -z "${PW_TEST_DATA_DIR:-}" ]]; then
+    _cfg_dir=$(python3 - <<'EOF' 2>/dev/null || true
+import pathlib, sys
+try:
+    import yaml
+except ImportError:
+    sys.exit(0)
+cfg = pathlib.Path.home() / ".config" / "picasso_workflow" / "config.yaml"
+if cfg.exists():
+    data = yaml.safe_load(cfg.read_text()) or {}
+    val = (data.get("TestData") or {}).get("directory")
+    if val:
+        print(val, end="")
+EOF
+)
+    if [[ -n "${_cfg_dir:-}" ]]; then
+        export PW_TEST_DATA_DIR="${_cfg_dir}"
+    fi
+fi
+
 if [[ -n "${PW_TEST_DATA_DIR:-}" ]]; then
     echo "Test data:         $PW_TEST_DATA_DIR"
 else
-    echo "Test data:         not set — Tier 4 real_data tests will be skipped"
+    echo "Test data:         not configured (PW_TEST_DATA_DIR unset, no TestData.directory in config.yaml)"
+    echo "                   → Tier 4 real_data tests will be skipped inside the job"
 fi
 echo ""
 

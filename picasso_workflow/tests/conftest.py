@@ -30,10 +30,70 @@ dummy_reporter_config(report_name) → dict
     Available as plain functions (not fixtures) so that test modules can call
     them directly without going through pytest's fixture injection.
 """
+import importlib.util
 import os
+from pathlib import Path
 
 import numpy as np
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# Test-data directory helpers (used both as fixtures and at collection time)
+# ---------------------------------------------------------------------------
+
+def _get_test_data_dir():
+    """Return the configured TestData directory path, or None.
+
+    Resolution order (mirrors the network_test_data fixture):
+      1. PW_TEST_DATA_DIR environment variable
+      2. TestData → directory in ~/.config/picasso_workflow/config.yaml
+    """
+    path = os.getenv("PW_TEST_DATA_DIR")
+    if not path:
+        try:
+            from picasso_workflow import CONFIG
+            path = (CONFIG.get("TestData") or {}).get("directory")
+        except Exception:
+            pass
+    if path and os.path.isdir(str(path)):
+        return str(path)
+    return None
+
+
+def _discover_workflow_scripts(base_dir, max_scripts=20):
+    """Walk base_dir and return paths to start_workflow.py files.
+
+    Traversal is alphabetically sorted so the order is deterministic across
+    runs.  At most max_scripts paths are returned to keep CI runtimes bounded.
+    """
+    found = []
+    for root, dirs, files in os.walk(str(base_dir)):
+        dirs.sort()
+        if "start_workflow.py" in files:
+            found.append(Path(root) / "start_workflow.py")
+            if len(found) >= max_scripts:
+                break
+    return found
+
+
+def pytest_generate_tests(metafunc):
+    """Parametrize 'workflow_script' with discovered start_workflow.py files.
+
+    This hook runs at collection time.  Tests that declare a 'workflow_script'
+    parameter receive one case per start_workflow.py found under the configured
+    TestData directory.  When the directory is not configured the parameter
+    list is empty and those tests are silently not collected.
+    """
+    if "workflow_script" not in metafunc.fixturenames:
+        return
+    base = _get_test_data_dir()
+    scripts = _discover_workflow_scripts(base) if base else []
+    metafunc.parametrize(
+        "workflow_script",
+        scripts,
+        ids=[s.parent.name for s in scripts],
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -31,8 +31,10 @@ Specific sub-tests document their requirements in their docstrings.
         3d_acquisition/
             3d_acquisition_MMStack_Pos0.ome.tif     # 3D movie (for zfit)
 """
+import importlib.util
 import logging
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -90,7 +92,7 @@ def test_load_picassoconfig(tmp_path):
         )
 
     workflow_modules = [
-        ("load_picassoconfig", {"filename": config_path}),
+        ("load_picassoconfig", {"fp_config": config_path}),
     ]
 
     with patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock):
@@ -134,17 +136,28 @@ def test_minimal_pipeline_on_real_data(network_test_data, tmp_path):
         workflow_modules = [
             (
                 "load_dataset_movie",
-                {"filename": movie_path},
+                {
+                    "filename": movie_path,
+                    "sample_movie": {
+                        "filename": "selected_frames.mp4",
+                        "n_sample": 40,
+                        "max_quantile": 0.9998,
+                        "fps": 2,
+                    },
+                },
             ),
             (
                 "identify",
                 {
                     "auto_netgrad": {
                         "filename": "ng_histogram.png",
-                        "frame_numbers": [0, 10, 20],
+                        "frame_numbers": (
+                            "$get_previous_module_result",  # get from prior results
+                            "sample_movie, sample_frame_idx",
+                        ),
                         "box_size": 7,
                         "start_ng": -3000,
-                        "zscore": 5,
+                        "zscore": 10,
                     },
                     "ids_vs_frame": {"filename": "ids_vs_frame.png"},
                     "box_size": 7,
@@ -197,14 +210,25 @@ def test_full_pipeline_undrift_on_real_data(network_test_data, tmp_path):
     workflow_modules = [
         (
             "load_dataset_movie",
-            {"filename": movie_path},
+            {
+                "filename": movie_path,
+                "sample_movie": {
+                    "filename": "selected_frames.mp4",
+                    "n_sample": 40,
+                    "max_quantile": 0.9998,
+                    "fps": 2,
+                },
+            },
         ),
         (
             "identify",
             {
                 "auto_netgrad": {
                     "filename": "ng_histogram.png",
-                    "frame_numbers": [0, 10, 20],
+                    "frame_numbers": (
+                        "$get_previous_module_result",  # get from prior results
+                        "sample_movie, sample_frame_idx",
+                    ),
                     "box_size": 7,
                     "start_ng": -3000,
                     "zscore": 5,
@@ -239,4 +263,69 @@ def test_full_pipeline_undrift_on_real_data(network_test_data, tmp_path):
 
     assert wr.results.get("04_save_single_dataset", {}).get("success"), (
         "Full pipeline did not complete successfully"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Discovered start_workflow.py tests
+# ---------------------------------------------------------------------------
+
+def _import_workflow_script(script_path):
+    """Import a start_workflow.py file and return the module object."""
+    name = f"start_workflow_{Path(script_path).parent.name}"
+    spec = importlib.util.spec_from_file_location(name, str(script_path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_run_discovered_workflow(workflow_script, tmp_path):
+    """Run a start_workflow.py discovered under TestData.directory.
+
+    Each script found by the pytest_generate_tests hook in conftest.py becomes
+    a separate parametrized test case, identified by its parent directory name.
+
+    Only single-dataset workflows (module-level 'workflow_modules_sgl' or
+    'workflow_modules') are executed.  Scripts that use function-based
+    definitions or define only aggregation/multi-dataset workflows are skipped
+    with an explanatory message.
+
+    Confluence reporting is replaced by MagicMock so no credentials or network
+    access are needed.  Results are written to pytest's tmp_path.
+    """
+    script_path = Path(workflow_script)
+
+    try:
+        mod = _import_workflow_script(script_path)
+    except Exception as exc:
+        pytest.skip(f"Could not import {script_path.name}: {exc}")
+
+    workflow_modules = getattr(mod, "workflow_modules_sgl", None) or getattr(
+        mod, "workflow_modules", None
+    )
+    if workflow_modules is None:
+        pytest.skip(
+            f"{script_path.parent.name}: no module-level 'workflow_modules_sgl' "
+            "found — may use function-based or aggregation-only definitions"
+        )
+
+    result_dir = tmp_path / script_path.parent.name
+    result_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock), patch(
+        "picasso_workflow.workflow.ConfluenceInterface", MagicMock
+    ):
+        wr = WorkflowRunner.config_from_dicts(
+            _dummy_reporter_config(script_path.parent.name),
+            _analysis_config(str(result_dir)),
+            workflow_modules,
+        )
+        wr.run()
+
+    failed = [
+        k for k, v in wr.results.items()
+        if isinstance(v, dict) and v.get("success") is False
+    ]
+    assert not failed, (
+        f"{script_path.parent.name}: workflow modules reported failure: {failed}"
     )

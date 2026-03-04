@@ -18,9 +18,9 @@
 #SBATCH --job-name=pw-test-tier4
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --time=02:00:00
+#SBATCH --cpus-per-task=24
+#SBATCH --mem=50G
+#SBATCH --time=12:00:00
 #SBATCH --output=test-results/tier4_%j.log
 #SBATCH --error=test-results/tier4_%j.log
 
