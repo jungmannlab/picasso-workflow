@@ -1463,6 +1463,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         # with open(fp_cfg, "w") as config_file:
         #     yaml.dump(pCONFIG, config_file)
 
+        pixelsize = self.pixelsize
+
         path = parameters.get("fp_calibration")
         if path is None or path == "":
             # fp_calib_lam = CONFIG["z-calibrations"].get(camera)
@@ -1496,6 +1498,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.info,
             z_calibration,
             magnification_factor,
+            pixelsize=pixelsize,
             filter=0,
             asynch=True,
         )
