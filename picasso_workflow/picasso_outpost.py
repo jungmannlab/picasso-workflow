@@ -3546,7 +3546,7 @@ def picked_locs(
             on=["frame", "x", "y", "photons"],
             how='left'
         )
-        mask = merged['_picked'].notna()
+        mask = merged['_picked'].notna().values
         non_picked_locs = locs[~mask]
         return all_picked_locs, non_picked_locs
     else:
