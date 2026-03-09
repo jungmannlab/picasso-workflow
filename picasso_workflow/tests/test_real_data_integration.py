@@ -112,7 +112,7 @@ def test_load_picassoconfig(tmp_path):
 # Minimal 2D pipeline on real movies
 # ---------------------------------------------------------------------------
 
-@pytest.skiip("")
+@pytest.skip("")
 def test_minimal_pipeline_on_real_data(network_test_data, tmp_path):
     """Run load → identify (auto net_gradient) → localize on real movies.
 
