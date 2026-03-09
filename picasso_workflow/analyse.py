@@ -1047,6 +1047,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             np.abs(hist[:bkg_peak_pos] - bkg_peak_height / 2)
         )
         logger.debug(f"bkg_half_lo: {bkg_half_lo}")
+        if len(bkg_half_lo) == 0:
+            bkg_half_lo = [bkg_peak_pos + 2]
         bkg_fwhm = 2 * np.abs(bkg_peak_pos - bkg_half_lo[0])
         bkg_sigma = bkg_fwhm / np.sqrt(4 * np.log(2))
         # threshold at zscore * bkg_sigma

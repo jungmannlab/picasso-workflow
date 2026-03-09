@@ -77,6 +77,29 @@ def _discover_workflow_scripts(base_dir, max_scripts=20):
     return found
 
 
+def _try_call_get_workflow(mod):
+    """Call get_workflow(datasets) with a minimal dummy if present.
+
+    Some start_workflow.py files define workflow_modules_sgl inside a
+    get_workflow(datasets) function rather than at module level.  This helper
+    calls that function with a stub datasets dict so the module list can be
+    extracted for both structural validation and execution testing, without
+    requiring real dataset metadata.
+
+    Returns the dict (or list) returned by get_workflow, or None if the
+    function is absent or raises.
+    """
+    fn = getattr(mod, "get_workflow", None)
+    if fn is None or not callable(fn):
+        return None
+    # Provide enough tags to satisfy typical datasets["#tags"][0/1/...] access
+    dummy_datasets = {"#tags": [f"tag_{i}" for i in range(5)]}
+    try:
+        return fn(dummy_datasets)
+    except Exception:
+        return None
+
+
 def pytest_generate_tests(metafunc):
     """Parametrize 'workflow_script' with discovered start_workflow.py files.
 

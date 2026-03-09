@@ -73,12 +73,15 @@ def _import_template(path):
 def _extract_module_names(mod):
     """Collect every workflow module name declared in a start_workflow module.
 
-    Handles all three naming conventions used in the codebase:
-      - workflow_modules_sgl  (single-dataset list)
-      - workflow_modules_agg  (aggregation list, legacy)
-      - workflow_modules_multi (dict with 'single_dataset_modules' and
-                                'aggregation_modules' keys)
+    Handles all naming conventions used in the codebase:
+      - module-level workflow_modules_sgl  (single-dataset list)
+      - module-level workflow_modules_agg  (aggregation list, legacy)
+      - module-level workflow_modules_multi (dict with single_dataset_modules /
+                                             aggregation_modules keys)
+      - function-based get_workflow(datasets) that returns one of the above
     """
+    from picasso_workflow.tests.conftest import _try_call_get_workflow
+
     names = []
 
     def _collect(seq):
@@ -88,13 +91,20 @@ def _extract_module_names(mod):
             if isinstance(item, (tuple, list)) and len(item) >= 1:
                 names.append(item[0])
 
+    def _collect_multi(multi):
+        if isinstance(multi, dict):
+            _collect(multi.get("single_dataset_modules"))
+            _collect(multi.get("aggregation_modules"))
+        elif isinstance(multi, list):
+            _collect(multi)
+
     _collect(getattr(mod, "workflow_modules_sgl", None))
     _collect(getattr(mod, "workflow_modules_agg", None))
+    _collect_multi(getattr(mod, "workflow_modules_multi", None))
 
-    multi = getattr(mod, "workflow_modules_multi", None)
-    if isinstance(multi, dict):
-        _collect(multi.get("single_dataset_modules"))
-        _collect(multi.get("aggregation_modules"))
+    # If nothing found at module level, try calling get_workflow(dummy)
+    if not names:
+        _collect_multi(_try_call_get_workflow(mod))
 
     return names
 
