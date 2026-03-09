@@ -157,7 +157,7 @@ def test_minimal_pipeline_on_real_data(network_test_data, tmp_path):
                             "sample_movie, sample_frame_idx",
                         ),
                         "box_size": 7,
-                        "start_ng": -3000,
+                        "start_ng": -7500,
                         "zscore": 5,
                     },
                     "ids_vs_frame": {"filename": "ids_vs_frame.png"},
