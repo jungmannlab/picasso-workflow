@@ -1048,7 +1048,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         logger.debug(f"bkg_half_lo: {bkg_half_lo}")
         if len(bkg_half_lo) == 0:
-            bkg_half_lo = [bkg_peak_pos + 2]
+            bkg_half_lo = [bkg_peak_pos - 1]
         bkg_fwhm = 2 * np.abs(bkg_peak_pos - bkg_half_lo[0])
         bkg_sigma = bkg_fwhm / np.sqrt(4 * np.log(2))
         # threshold at zscore * bkg_sigma
@@ -6463,7 +6463,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
             ("bootstrap_check", False),
             ("calibration", None),
-            ("pixelsize", pixelsize),
+            # ("pixelsize", pixelsize),
             ("asynch", True),
             ("callback_parent", None),  # "silent"),
             ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
