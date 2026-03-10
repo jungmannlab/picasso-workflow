@@ -176,12 +176,15 @@ def test_minimal_pipeline_on_real_data(network_test_data, tmp_path):
         print(wr)
         print(wr.__dict__)
         print('locs')
-        print(wr.locs)
+        print(wr.autopicasso.locs)
+        print(wr.results["01_identify"]["num_identifications"])
         assert result.get("success"), (
             f"localize did not succeed for {movie_path}"
         )
-        n_locs = result.get("n_locs", 0)
-        n_locs = len(wr.locs.index)
+        n_locs = wr.results["01_identify"].get("num_identifications", 0)
+        print("n_locs from results"j, n_locs)
+        n_locs = len(wr.autopicasso.locs.index)
+        print("n_locs from locs"j, n_locs)
         assert n_locs > 0, (
             f"No localisations found in {movie_path}; "
             "check that the file is a real DNA-PAINT acquisition"
