@@ -112,7 +112,6 @@ def test_load_picassoconfig(tmp_path):
 # Minimal 2D pipeline on real movies
 # ---------------------------------------------------------------------------
 
-@pytest.skip("")
 def test_minimal_pipeline_on_real_data(network_test_data, tmp_path):
     """Run load → identify (auto net_gradient) → localize on real movies.
 
@@ -170,6 +169,8 @@ def test_minimal_pipeline_on_real_data(network_test_data, tmp_path):
             wr.run()
 
         result = wr.results.get("02_localize", {})
+        print(result)
+        logger.debug(result)
         assert result.get("success"), (
             f"localize did not succeed for {movie_path}"
         )
