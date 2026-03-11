@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools", "setuptools-scm", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -16,7 +16,7 @@ dependencies = [
     "tables",
     "numba",
     "openpyxl==3.1.2",
-    "picassosr>=0.7.3",
+    "picassosr==0.9.9",
     "moviepy==1.0.3",
     "python-dotenv==1.0.1",
     "pre-commit>=3.5.1",
@@ -37,6 +37,9 @@ dependencies = [
 ]
 keywords = ["picasso"]
 
+[project.gui-scripts]
+picasso-workflow-gui = "picasso_workflow.gui:main"
+
 [project.optional-dependencies]
 cluster = [
     "mpi4py>=4.0.2",
@@ -44,6 +47,17 @@ cluster = [
 
 [tool.setuptools]
 packages = ["picasso_workflow"]
+
+[tool.setuptools_scm]
+# Writes the version into a file that is importable at runtime, even when
+# installed from a wheel or sdist (i.e. without a .git directory).
+write_to = "picasso_workflow/_version.py"
+# Shown when the package is imported outside a git repository and no tag
+# is reachable (e.g. a fresh checkout with no tags yet).
+fallback_version = "0.0.0.dev0"
+
+[tool.setuptools.package-data]
+picasso_workflow = ["picasso-workflow.ico"]
 
 [tool.black]
 line-length = 79
@@ -101,3 +115,7 @@ fail_under = 80
 minversion = "6.0"
 addopts = "-ra -q"
 testpaths = ["picasso_workflow/tests"]
+markers = [
+    "integration: tests that run the real picasso pipeline (deselect with '-m not integration')",
+    "real_data: tests that require acquired datasets from the lab network volumes (set PW_TEST_DATA_DIR)",
+]

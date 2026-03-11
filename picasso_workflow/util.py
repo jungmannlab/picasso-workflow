@@ -344,6 +344,51 @@ class AbstractModuleCollection(abc.ABC):
         pass
 
     @abc.abstractmethod
+    def zfit(self):
+        """
+        Fits z coordinates to localized spots using an astigmatic calibration.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    calibration : str or dict
+                        filepath to a calibration file or the calibration itself.
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+        """
+        pass
+
+    @abc.abstractmethod
+    def load_picassoconfig(self):
+        """
+        Loads a specific picasso configuration file, as opposed to the default
+        version residing in the picasso installation folder.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    fp_config : str
+                        filepath to a config file.
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+        """
+        pass
+
+    @abc.abstractmethod
     def export_brightfield(self):
         """Opens a single-plane tiff image and saves it to png with
         contrast adjustment.
@@ -1162,59 +1207,59 @@ class AbstractModuleCollection(abc.ABC):
         """
         pass
 
-    @abc.abstractmethod
-    def spinna_manual(self):
-        """Direct implementation of spinna batch analysis.
-        The current locs file(s) are saved into the results folder, and
-        a template csv file is created. This csv needs to be filled out by the
-        user in a manual step before the spinna analysis is carried out.
+    # @abc.abstractmethod
+    # def spinna_manual(self):
+    #     """Direct implementation of spinna batch analysis.
+    #     The current locs file(s) are saved into the results folder, and
+    #     a template csv file is created. This csv needs to be filled out by the
+    #     user in a manual step before the spinna analysis is carried out.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    proposed_labeling_efficiency : float, range 0-100
-                        labeling efficiency percentage, default for all targets
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_labeling_uncertainty : float
-                        labeling uncertainty [nm]; good value is e.g. 5
-                        used proposed value in spinna_config.csv and can be
-                         alteredmanually after the first run of this module
-                    proposed_n_simulate : int
-                        number of target molecules to simulated;
-                        good value is e.g. 50000
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_density : int
-                        density to simulate;
-                        area density if 2D; volume density if 3D
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_nn_plotted : int
-                        number of nearest neighbors to plot
-                        used proposed value in spinna_config.csv and can be
-                         alteredmanually after the first run of this module
-                and optional keys:
-                    structures : list of dict
-                        SPINNA structures. Each structure dict has
-                            "Molecular targets": list of str,
-                            "Structure title": str,
-                            "TARGET_x": list of float,
-                            "TARGET_y": list of float,
-                            "TARGET_z": list of float,
-                        where TARGET is one each of the target names in
-                        "Molecular targets"
-                    structures_d : float
-                        distance between molecules within auto-generated
-                        structures, in nm. Only necessary if 'structures'
-                        is not given.
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
-        """
-        pass
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #                 proposed_labeling_efficiency : float, range 0-100
+    #                     labeling efficiency percentage, default for all targets
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_labeling_uncertainty : float
+    #                     labeling uncertainty [nm]; good value is e.g. 5
+    #                     used proposed value in spinna_config.csv and can be
+    #                      alteredmanually after the first run of this module
+    #                 proposed_n_simulate : int
+    #                     number of target molecules to simulated;
+    #                     good value is e.g. 50000
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_density : int
+    #                     density to simulate;
+    #                     area density if 2D; volume density if 3D
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_nn_plotted : int
+    #                     number of nearest neighbors to plot
+    #                     used proposed value in spinna_config.csv and can be
+    #                      alteredmanually after the first run of this module
+    #             and optional keys:
+    #                 structures : list of dict
+    #                     SPINNA structures. Each structure dict has
+    #                         "Molecular targets": list of str,
+    #                         "Structure title": str,
+    #                         "TARGET_x": list of float,
+    #                         "TARGET_y": list of float,
+    #                         "TARGET_z": list of float,
+    #                     where TARGET is one each of the target names in
+    #                     "Molecular targets"
+    #                 structures_d : float
+    #                     distance between molecules within auto-generated
+    #                     structures, in nm. Only necessary if 'structures'
+    #                     is not given.
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     pass
 
     @abc.abstractmethod
     def spinna(self):
@@ -2256,7 +2301,9 @@ class ParameterCommandExecutor(DictSimpleTyper):
                     if aritexp[0] == "+":
                         res = res + aritexp[1:]
                     else:
-                        raise NotImplementedError(f"Cannot operate '{aritexp}' on '{res}' (str)")
+                        raise NotImplementedError(
+                            f"Cannot operate '{aritexp}' on '{res}' (str)"
+                        )
                 elif isinstance(res, (int, float)):
                     if not is_valid_expression(aritexp):
                         raise PriorResultError(
@@ -2684,4 +2731,3 @@ def stripplot(data, positions, jitter, ax, color, alpha=1):
         x = pos * np.ones(len(d))
         x += np.random.uniform(-jitter / 2, jitter / 2, size=len(d))
         ax.scatter(x, d, color=color, alpha=alpha)
-

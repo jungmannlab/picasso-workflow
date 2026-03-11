@@ -1,5 +1,10 @@
 from dotenv import load_dotenv
 
+try:
+    from picasso_workflow._version import __version__
+except ImportError:
+    __version__ = "unknown"
+
 # import logging
 from loguru import logger
 import os

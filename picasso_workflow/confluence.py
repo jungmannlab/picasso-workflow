@@ -639,7 +639,13 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
-    def identify(self, i, parameters, results, postpone_report=False):
+    @module_decorator
+    def identify(
+        self, i, parameters, results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
         """Identifies localizations in a loaded dataset.
 
         Identifies potential localization sites in the loaded movie using
@@ -717,31 +723,73 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Identifications found: {results['num_identifications']:,}
         </li>
         </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        fig_fps = []
+        titles = []
+
+        # if (res_autonetgrad := results.get("auto_netgrad")) is not None:
+        #     logger.debug("Uploading graph for auto_netgrad.")
+        #     self.ci.upload_attachment(
+        #         self.report_page_id, res_autonetgrad["filename"]
+        #     )
+        #     self.ci.update_page_content_with_image_attachment(
+        #         self.report_page_name,
+        #         self.report_page_id,
+        #         os.path.split(res_autonetgrad["filename"])[1],
+        #     )
+        # if (res := results.get("ids_vs_frame")) is not None:
+        #     logger.debug("uploading graph for identifications vs frame.")
+        #     self.ci.upload_attachment(self.report_page_id, res["filename"])
+        #     self.ci.update_page_content_with_image_attachment(
+        #         self.report_page_name,
+        #         self.report_page_id,
+        #         os.path.split(res["filename"])[1],
+        #     )
+
+        if fp_fig := results.get("auto_netgrad", {}).get("filename"):
+            fig_fps.append(fp_fig)
+            titles.append("Automatic min_grad detection")
+
+        if fp_fig := results.get("ids_vs_frame", {}).get("filename"):
+            fig_fps.append(fp_fig)
+            titles.append("#identifications vs frame")
+
+        if len(fig_fps) > 0:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                            <ac:image ac:height="350">
+                            <ri:attachment ri:filename="{fn}" />
+                            </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+
+        text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+
         if postpone_report:
             return text
         else:
             self.ci.update_page_content(
                 self.report_page_name, self.report_page_id, text
-            )
-        if (res_autonetgrad := results.get("auto_netgrad")) is not None:
-            logger.debug("Uploading graph for auto_netgrad.")
-            self.ci.upload_attachment(
-                self.report_page_id, res_autonetgrad["filename"]
-            )
-            self.ci.update_page_content_with_image_attachment(
-                self.report_page_name,
-                self.report_page_id,
-                os.path.split(res_autonetgrad["filename"])[1],
-            )
-        if (res := results.get("ids_vs_frame")) is not None:
-            logger.debug("uploading graph for identifications vs frame.")
-            self.ci.upload_attachment(self.report_page_id, res["filename"])
-            self.ci.update_page_content_with_image_attachment(
-                self.report_page_name,
-                self.report_page_id,
-                os.path.split(res["filename"])[1],
             )
 
     def localize(self, i, parameters, results, postpone_report=False):
@@ -799,6 +847,147 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_name,
                 self.report_page_id,
                 os.path.split(res["filename"])[1],
+            )
+
+    @module_decorator
+    def zfit(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Fits z positions to previously localized spots.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    magnification_factor : float
+                        the magnification factor for z calibration
+                optional items:
+                    fp_calibration : str
+                        filepath to the 3D calibration yaml file
+                        if not given
+                    save_locs : dict
+                        if saving localizations is requested.
+                        Items correpsond to arguments of save_locs
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        logger.debug("Reporting zfit.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: fit z coordinate to localizations</strong></p>
+        z fitting using astigmatism.
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Used z calibration from: {results['fp_calibration']}</li>
+        <li>Magnification Factor: {parameters['magnification_factor']}</li></ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        fig_fps = []
+        titles = []
+
+        if fp_fig := results.get("fp_calibration_fig"):
+            fig_fps.append(fp_fig)
+            titles.append("Calibration graphs")
+
+        if fp_fig := results.get("fp_fig_zhist"):
+            fig_fps.append(fp_fig)
+            titles.append("z histogram")
+
+        if len(fig_fps) > 0:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                            <ac:image ac:height="350">
+                            <ri:attachment ri:filename="{fn}" />
+                            </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
+            )
+
+    @module_decorator
+    def load_picassoconfig(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """
+        Loads a specific picasso configuration file, as opposed to the default
+        version residing in the picasso installation folder.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    fp_config : str
+                        filepath to a config file.
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+        """
+        logger.debug("Reporting load_picassoconfig.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Load picasso CONFIG</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Loaded new configuration from: {parameters['fp_config']}</li>
+        <li>saved config for documentation: {results['fp_config']}</li></ul>
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
             )
 
     def export_brightfield(
@@ -2566,44 +2755,44 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_name, self.report_page_id, text
             )
 
-    def spinna_manual(self, i, parameters, results, postpone_report=False):
-        """ """
-        logger.debug("Reporting spinna_manual.")
-        text = f"""
-        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: SPINNA-Manual</strong></p>
-        <ul><li>file present: {results.get('success')}</li>
-        <li>Start Time: {results['start time']}</li>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
-        """
-        if not results["success"]:
-            text += "<li>" + results["message"] + "</li>"
-        else:
-            text += f"<li>Result folder: {results['result_dir']}</li>"
-            summary = pd.read_csv(results["fp_summary"])
-            for i, row in summary.iterrows():
-                text += f"<p><strong> Row {i} </strong></p><ul>"
-                for col, val in row.items():
-                    text += f"<li>{col}: {str(val)}</li>"
-                text += "</ul>"
-        text += """</ul>
-        </ac:layout-cell></ac:layout-section></ac:layout>
-        """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
-        if results["success"]:
-            for fp in results["fp_fig"]:
-                self.ci.upload_attachment(self.report_page_id, fp)
-                self.ci.update_page_content_with_image_attachment(
-                    self.report_page_name,
-                    self.report_page_id,
-                    os.path.split(fp)[1],
-                )
+    # def spinna_manual(self, i, parameters, results, postpone_report=False):
+    #     """ """
+    #     logger.debug("Reporting spinna_manual.")
+    #     text = f"""
+    #     <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+    #     <p><strong>Module {i:02d}: SPINNA-Manual</strong></p>
+    #     <ul><li>file present: {results.get('success')}</li>
+    #     <li>Start Time: {results['start time']}</li>
+    #     <li>Duration: {results["duration"] // 60:.0f} min
+    #     {(results["duration"] % 60):.02f} s</li>
+    #     """
+    #     if not results["success"]:
+    #         text += "<li>" + results["message"] + "</li>"
+    #     else:
+    #         text += f"<li>Result folder: {results['result_dir']}</li>"
+    #         summary = pd.read_csv(results["fp_summary"])
+    #         for i, row in summary.iterrows():
+    #             text += f"<p><strong> Row {i} </strong></p><ul>"
+    #             for col, val in row.items():
+    #                 text += f"<li>{col}: {str(val)}</li>"
+    #             text += "</ul>"
+    #     text += """</ul>
+    #     </ac:layout-cell></ac:layout-section></ac:layout>
+    #     """
+    #     if postpone_report:
+    #         return text
+    #     else:
+    #         self.ci.update_page_content(
+    #             self.report_page_name, self.report_page_id, text
+    #         )
+    #     if results["success"]:
+    #         for fp in results["fp_fig"]:
+    #             self.ci.upload_attachment(self.report_page_id, fp)
+    #             self.ci.update_page_content_with_image_attachment(
+    #                 self.report_page_name,
+    #                 self.report_page_id,
+    #                 os.path.split(fp)[1],
+    #             )
 
     @module_decorator
     def spinna(

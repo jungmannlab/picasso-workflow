@@ -516,7 +516,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """
         parameters_spec = {
             "filepath": {
-                "type": "str",
+                "type": "path",
                 "description": "the czi file name to load",
                 "extensions": [".czi"],
                 "required": True,
@@ -595,7 +595,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """
         parameters_spec = {
             "filename": {
-                "type": "str",
+                "type": "path",
                 "description": "Path to the movie file to load",
                 "extensions": [".raw", ".tif", ".tiff", ".ome.tif"],
                 "required": True,
@@ -676,6 +676,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "dict",
                 "description": (
                     "Results from subsampled movie creation (if requested)"
+                ),
+                "required": False,
+            },
+            "sample_movie, sample_frame_idx": {
+                "type": "str",
+                "description": (
+                    "sample movie frame indices"
                 ),
                 "required": False,
             },
@@ -808,6 +815,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Minimum net gradient threshold for detection",
                 "min": 0.0,
                 "max": 100000.0,
+                "default": 20000,
                 "required": True,
                 "note": "Required unless auto_netgrad is provided",
             },
@@ -829,17 +837,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "frame_numbers": {
                         "type": ["list", "int"],
                         "description": "Frame range for analysis",
+                        "default": 40,
                     },
                     "filename": {
                         "type": "str",
                         "description": (
                             "Output filename for auto-detection plot"
                         ),
+                        "default": "auto-id.png",
                     },
                     "start_ng": {
                         "type": "float",
                         "description": "Starting net gradient value",
                         "min": -10000.0,
+                        "default": -3000,
                     },
                     "zscore": {
                         "type": "float",
@@ -859,7 +870,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "ids_vs_frame": {
                 "type": "dict",
                 "description": (
-                    "Parameters for plotting identifications vs time"
+                    "Parameters for plotting identifications vs time (dict)"
                 ),
                 "required": False,
                 "properties": {
@@ -868,6 +879,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": "Output filename for plot",
                     }
                 },
+                "default": "{'filename': 'ids_vs_frame.png'}",
             },
         }
 
@@ -963,16 +975,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "locs_vs_frame": {
                 "type": "dict",
-                "description": "for plotting locs vs time, items correspond \
-                    to arguments of _plot_locs_vs_frame",
+                "description": 
+                    "Dictionary for plotting locs vs time. e.g."
+                    "{'filename': 'locsvsframe.png'}",
+                "default": "{'filename': 'locsvsframe.png'}",
                 "required": False,
             },
-            "save_locs": {
-                "type": "dict",
-                "description": "if saving localizations is requested. Items \
-                    correpsond to arguments of save_locs",
-                "required": False,
-            },
+            # "save_locs": {
+            #     "type": "dict",
+            #     "description": "if saving localizations is requested. Items \
+            #         correpsond to arguments of save_locs",
+            #     "required": False,
+            # },
         }
 
         results_spec = {
@@ -1002,6 +1016,149 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "list",
                 "description": "list of column names in the localizations \
                     array",
+            },
+        }
+
+        return parameters_spec, results_spec
+
+    def zfit(self):
+        """Fits z positions to previously localized spots.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    magnification_factor : float
+                        the magnification factor for z calibration
+                optional items:
+                    fp_calibration : str
+                        filepath to the 3D calibration yaml file
+                        if not given
+                    save_locs : dict
+                        if saving localizations is requested.
+                        Items correpsond to arguments of save_locs
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        parameters_spec = {
+            "magnification_factor": {
+                "type": "float",
+                "description":
+                    "The magnification factor to compensate stage scanning "
+                    "calibration vs in-sample measurement.",
+                "default": 0.79,
+                "min": 0,
+                "max": 1e6,
+                "required": True,
+            },
+            "fp_calibration": {
+                "type": "path",
+                "description":
+                    "The calibration file path to use. If not given, the filepath"
+                    "from config is loaded for the microscope and emission wavelength. "
+                    "Keep in mind this must be a path on the cluster for now"
+                    " (i.e. /fs/mpib/pool-miblab5/... instead of /Volumes/pool...)",
+                "default": "",
+                "required": False,
+            },
+            # "save_locs": {
+            #     "type": "dict",
+            #     "description": "if saving localizations is requested. Items \
+            #         correpsond to arguments of save_locs",
+            #     "required": False,
+            # },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "fp_calibration": {
+                "type": "str",
+                "description": "The calibration file path used",
+            },
+            "fp_calibration_fig": {
+                "type": "str",
+                "description": "The calibration graph copied to the results folder",
+            },
+        }
+
+        return parameters_spec, results_spec
+
+    def load_picassoconfig(self):
+        """
+        Loads a specific picasso configuration file, as opposed to the default
+        version residing in the picasso installation folder.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    fp_config : str
+                        filepath to a config file.
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+        """
+        parameters_spec = {
+            "fp_config": {
+                "type": "path",
+                "description":
+                    "Filepath to a specific picasso config. "
+                    "Keep in mind this must be a path on the cluster for now"
+                    " (i.e. /fs/mpib/pool-miblab5/... instead of /Volumes/pool...)",
+                "required": True,
+            },
+            # "save_locs": {
+            #     "type": "dict",
+            #     "description": "If saving localizations is requested. Items \
+            #         correpsond to arguments of save_locs",
+            #     "required": False,
+            # },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
             },
         }
 
@@ -1142,6 +1299,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Field of view of the zoom in rendering around \
                     the center of mass in nm",
                 "min": 0,
+                "default": 10000,
                 "required": False,
             },
             "fullfov_pixelsize": {
@@ -1149,6 +1307,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "The rendered pixel size [nm] of the full FOV \
                     rendering",
                 "min": 0,
+                "default": 130,
                 "required": False,
             },
             "ctrmass_pixelsize": {
@@ -1156,11 +1315,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "The rendered pixel size [nm] of the zoom in \
                     rendering around the center of mass",
                 "min": 0,
+                "default": 100,
                 "required": False,
             },
             "ctrmass_blur_method": {
                 "type": "str",
                 "description": "Blur method",
+                "options": ["gaussian", "gaussian_iso", "smooth", "convolve"],
                 "required": False,
             },
             "ctrmass_min_blur_width": {
@@ -1549,9 +1710,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "methods": {
                 "type": "dict",
-                "description": (
-                    "Methods to summarize"
-                ),
+                "description": ("Methods to summarize"),
                 "required": True,
                 "properties": {
                     "nena": {
@@ -1573,7 +1732,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         },
                     },
                 },
-            }
+            },
         }
 
         results_spec = {
@@ -1647,14 +1806,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 50.0,
                 "required": True,
             },
-            "save_locs": {
-                "type": "bool",
-                "description": (
-                    "Whether to save density-annotated localizations"
-                ),
-                "default": False,
-                "required": False,
-            },
+            # "save_locs": {
+            #     "type": "bool",
+            #     "description": (
+            #         "Whether to save density-annotated localizations"
+            #     ),
+            #     "default": False,
+            #     "required": False,
+            # },
         }
 
         results_spec = {
@@ -1747,11 +1906,23 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "min_samples": {
                 "type": "int",
                 "description": (
-                    "Minimum number of samples required for a cluster"
+                    "Number of localizations within radius to consider a "
+                    "given point a core sample."
                 ),
                 "min": 1,
                 "max": 100,
                 "default": 3,
+                "required": True,
+            },
+            "min_locs": {
+                "type": "int",
+                "description": (
+                    "Minimum number of localizations in a cluster. Clusters with"
+                    "fewer localizations will be removed. Default is 0."
+                ),
+                "min": 0,
+                "max": 100,
+                "default": 0,
                 "required": True,
             },
             "continue_with_centers": {
@@ -1761,15 +1932,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 ),
                 "default": True,
                 "required": True,
-            },
-            "save_locs": {
-                "type": "bool",
-                "description": (
-                    "Whether to save clustered localization data to"
-                    + " results folder"
-                ),
-                "default": False,
-                "required": False,
             },
         }
 
@@ -1847,12 +2009,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": True,
                 "required": False,
             },
-            "save_locs": {
-                "type": "bool",
-                "description": "Whether to save clustered localization data",
-                "default": False,
-                "required": False,
-            },
+            # "save_locs": {
+            #     "type": "bool",
+            #     "description": "Whether to save clustered localization data",
+            #     "default": False,
+            #     "required": False,
+            # },
         }
 
         results_spec = {
@@ -1924,7 +2086,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
             },
             "fp_locs": {
-                "type": "str",
+                "type": "path",
                 "description": "The filepath of the .hdf5 file to write",
                 "required": False,
             },
@@ -1981,16 +2143,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         parameters_spec = {
-            "method": {
-                "type": "str",
-                "description": "Clustering method to use",
-                "options": ["voronoi", "dbscan_like", "hierarchical"],
-                "required": True,
-            },
+            # "method": {
+            #     "type": "str",
+            #     "description": "Clustering method to use",
+            #     "options": ["voronoi", "dbscan_like", "hierarchical"],
+            #     "required": True,
+            # },
             "radius": {
                 "type": "float",
-                "description": "Clustering radius parameter",
-                "min": 1.0,
+                "description": "Clustering radius parameter [nm]",
+                "min": 0.0,
                 "max": 1000.0,
                 "default": 50.0,
                 "required": False,
@@ -2008,7 +2170,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "radius_z": {
                 "type": "float",
-                "description": "The smlm radius_z",
+                "description": "The smlm radius_z [nm]",
                 "default": None,
                 "required": False,
             },
@@ -2220,7 +2382,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "dims": {
                 "type": "list",
                 "description": "the distance dimensions, e.g. ['x', 'y']",
-                "default": ['x', 'y'],
+                "default": ["x", "y"],
                 "required": False,
             },
             "nth_NN": {
@@ -2495,7 +2657,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Output folder for module results",
             },
-            "saved_filepath": {
+            "filepath": {
                 "type": "str",
                 "description": "Path to saved dataset file",
             },
@@ -2633,10 +2795,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     },
                     "force_method": {
                         "type": "str",
-                        "description":
-                            "Whether to force a method or"
-                            " let the alogritm decide on the best method."
-                            "options: 'RCC', 'picked', 'RSSO'",
+                        "description": "Whether to force a method or"
+                        " let the alogritm decide on the best method."
+                        "options: 'RCC', 'picked', 'RSSO'",
                         "default": None,
                     },
                     "max_shift": {
@@ -2694,6 +2855,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "folder": {
                 "type": "str",
                 "description": "Output folder for module results",
+            },
+            "fp_fiducials": {
+                "type": "list",
+                "description": "Filepaths to the fiducials for all channels",
+            },
+            "shifts": {
+                "type": "array",
+                "description": "The shifts of channels relative to first.",
             },
             "alignment_matrix": {
                 "type": "numpy.ndarray",
@@ -2829,146 +2998,146 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def spinna_manual(self):
-        """Direct implementation of spinna batch analysis.
-        The current locs file(s) are saved into the results folder, and
-        a template csv file is created. This csv needs to be filled out by the
-        user in a manual step before the spinna analysis is carried out.
+    # def spinna_manual(self):
+    #     """Direct implementation of spinna batch analysis.
+    #     The current locs file(s) are saved into the results folder, and
+    #     a template csv file is created. This csv needs to be filled out by the
+    #     user in a manual step before the spinna analysis is carried out.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    proposed_labeling_efficiency : float, range 0-100
-                        labeling efficiency percentage, default for all targets
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_labeling_uncertainty : float
-                        labeling uncertainty [nm]; good value is e.g. 5
-                        used proposed value in spinna_config.csv and can be
-                         alteredmanually after the first run of this module
-                    proposed_n_simulate : int
-                        number of target molecules to simulated;
-                        good value is e.g. 50000
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_density : int
-                        density to simulate;
-                        area density if 2D; volume density if 3D
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_nn_plotted : int
-                        number of nearest neighbors to plot
-                        used proposed value in spinna_config.csv and can be
-                         alteredmanually after the first run of this module
-                and optional keys:
-                    structures : list of dict
-                        SPINNA structures. Each structure dict has
-                            "Molecular targets": list of str,
-                            "Structure title": str,
-                            "TARGET_x": list of float,
-                            "TARGET_y": list of float,
-                            "TARGET_z": list of float,
-                        where TARGET is one each of the target names in
-                        "Molecular targets"
-                    structures_d : float
-                        distance between molecules within auto-generated
-                        structures, in nm. Only necessary if 'structures'
-                        is not given.
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
-        """
-        parameters_spec = {
-            "proposed_labeling_efficiency": {
-                "type": "float",
-                "description": "Labeling efficiency percentage, default for \
-                    all targets used proposed value in spinna_config.csv and \
-                    can be altered manually after the first run of this \
-                    module",
-                "min": 0.0,
-                "max": 100.0,
-                "required": True,
-            },
-            "proposed_labeling_uncertainty": {
-                "type": "float",
-                "description": "Labeling uncertainty [nm]; good value is e.g.\
-                        5 used proposed value in spinna_config.csv and can be\
-                        altered manually after the first run of this module",
-                "default": 5,
-                "required": True,
-            },
-            "proposed_n_simulate": {
-                "type": "int",
-                "description": "Number of Monte Carlo simulations",
-                "min": 10,
-                "max": 10000,
-                "default": 1000,
-                "required": True,
-            },
-            "proposed_density": {
-                "type": "float",
-                "description": "Density to simulate; area density if 2D; \
-                    volume density if 3D used proposed value in \
-                    spinna_config.csv and can be altered manually after the \
-                    first run of this module",
-                "required": True,
-            },
-            "proposed_nn_plotted": {
-                "type": "int",
-                "description": "Number of nearest neighbors to plot used \
-                    proposed value in spinna_config.csv and can be \
-                    alteredmanually after the first run of this module",
-                "required": True,
-            },
-            "structures": {
-                "type": "list",
-                "element_type": "dict",
-                "description": 'SPINNA structures. Each structure dict has \
-                        "Molecular targets": list of str, \
-                        "Structure title": str, \
-                        "TARGET_x": list of float, \
-                        "TARGET_y": list of float, \
-                        "TARGET_z": list of float, \
-                    where TARGET is one each of the target names in \
-                    "Molecular targets"',
-                "required": False,
-            },
-            "structures_d": {
-                "type": "float",
-                "description": "Distance between molecules within \
-                    auto-generated structures, in nm. Only necessary if \
-                    'structures' is not given.",
-                "required": False,
-            },
-        }
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #                 proposed_labeling_efficiency : float, range 0-100
+    #                     labeling efficiency percentage, default for all targets
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_labeling_uncertainty : float
+    #                     labeling uncertainty [nm]; good value is e.g. 5
+    #                     used proposed value in spinna_config.csv and can be
+    #                      alteredmanually after the first run of this module
+    #                 proposed_n_simulate : int
+    #                     number of target molecules to simulated;
+    #                     good value is e.g. 50000
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_density : int
+    #                     density to simulate;
+    #                     area density if 2D; volume density if 3D
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_nn_plotted : int
+    #                     number of nearest neighbors to plot
+    #                     used proposed value in spinna_config.csv and can be
+    #                      alteredmanually after the first run of this module
+    #             and optional keys:
+    #                 structures : list of dict
+    #                     SPINNA structures. Each structure dict has
+    #                         "Molecular targets": list of str,
+    #                         "Structure title": str,
+    #                         "TARGET_x": list of float,
+    #                         "TARGET_y": list of float,
+    #                         "TARGET_z": list of float,
+    #                     where TARGET is one each of the target names in
+    #                     "Molecular targets"
+    #                 structures_d : float
+    #                     distance between molecules within auto-generated
+    #                     structures, in nm. Only necessary if 'structures'
+    #                     is not given.
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     parameters_spec = {
+    #         "proposed_labeling_efficiency": {
+    #             "type": "float",
+    #             "description": "Labeling efficiency percentage, default for \
+    #                 all targets used proposed value in spinna_config.csv and \
+    #                 can be altered manually after the first run of this \
+    #                 module",
+    #             "min": 0.0,
+    #             "max": 100.0,
+    #             "required": True,
+    #         },
+    #         "proposed_labeling_uncertainty": {
+    #             "type": "float",
+    #             "description": "Labeling uncertainty [nm]; good value is e.g.\
+    #                     5 used proposed value in spinna_config.csv and can be\
+    #                     altered manually after the first run of this module",
+    #             "default": 5,
+    #             "required": True,
+    #         },
+    #         "proposed_n_simulate": {
+    #             "type": "int",
+    #             "description": "Number of Monte Carlo simulations",
+    #             "min": 10,
+    #             "max": 10000,
+    #             "default": 1000,
+    #             "required": True,
+    #         },
+    #         "proposed_density": {
+    #             "type": "float",
+    #             "description": "Density to simulate; area density if 2D; \
+    #                 volume density if 3D used proposed value in \
+    #                 spinna_config.csv and can be altered manually after the \
+    #                 first run of this module",
+    #             "required": True,
+    #         },
+    #         "proposed_nn_plotted": {
+    #             "type": "int",
+    #             "description": "Number of nearest neighbors to plot used \
+    #                 proposed value in spinna_config.csv and can be \
+    #                 alteredmanually after the first run of this module",
+    #             "required": True,
+    #         },
+    #         "structures": {
+    #             "type": "list",
+    #             "element_type": "dict",
+    #             "description": 'SPINNA structures. Each structure dict has \
+    #                     "Molecular targets": list of str, \
+    #                     "Structure title": str, \
+    #                     "TARGET_x": list of float, \
+    #                     "TARGET_y": list of float, \
+    #                     "TARGET_z": list of float, \
+    #                 where TARGET is one each of the target names in \
+    #                 "Molecular targets"',
+    #             "required": False,
+    #         },
+    #         "structures_d": {
+    #             "type": "float",
+    #             "description": "Distance between molecules within \
+    #                 auto-generated structures, in nm. Only necessary if \
+    #                 'structures' is not given.",
+    #             "required": False,
+    #         },
+    #     }
 
-        results_spec = {
-            "start time": {
-                "type": "str",
-                "description": "Module execution start timestamp",
-            },
-            "end time": {
-                "type": "str",
-                "description": "Module execution end timestamp",
-            },
-            "duration": {
-                "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
-            },
-            "folder": {
-                "type": "str",
-                "description": "Output folder for module results",
-            },
-            "spinna_results": {
-                "type": "dict",
-                "description": "SPINNA analysis results",
-            },
-        }
+    #     results_spec = {
+    #         "start time": {
+    #             "type": "str",
+    #             "description": "Module execution start timestamp",
+    #         },
+    #         "end time": {
+    #             "type": "str",
+    #             "description": "Module execution end timestamp",
+    #         },
+    #         "duration": {
+    #             "type": "float",
+    #             "description": "Module execution duration in seconds",
+    #             "min": 0.0,
+    #         },
+    #         "folder": {
+    #             "type": "str",
+    #             "description": "Output folder for module results",
+    #         },
+    #         "spinna_results": {
+    #             "type": "dict",
+    #             "description": "SPINNA analysis results",
+    #         },
+    #     }
 
-        return parameters_spec, results_spec
+    #     return parameters_spec, results_spec
 
     def spinna(self):
         """Direct implementation of spinna batch analysis.
@@ -4091,14 +4260,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": True,
             },
             "fp_combined_locs": {
-                "type": "str",
+                "type": "path",
                 "description": "Filepath to the locs combined previously \
                     in 'combine_channels' module. If None or '', \
                     loaded channel_locs is used",
                 "required": False,
             },
             "fp_channel_map": {
-                "type": "str",
+                "type": "path",
                 "description": "Filepath to the map from 'combine_channels' \
                     module, which is a dict from channel name to ID int in \
                     the locs['combine_id']",
@@ -4190,16 +4359,15 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             #     "required": False,
             # },
             "fp_mask": {
-                "type": "str",
+                "type": "path",
                 "description": "The file path to the mask min_density, \
                     max_density : float the density range to select",
                 "required": True,
             },
             "density_std_cutoff": {
                 "type": "float",
-                "description":
-                    "Density range in units of std/median, "
-                    "symmetric around median. Alternative to max/min",
+                "description": "Density range in units of std/median, "
+                "symmetric around median. Alternative to max/min",
                 "min": 0,
                 "max": 1,
                 "default": 0,
@@ -4207,17 +4375,15 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "density_min": {
                 "type": "float",
-                "description":
-                    "Lower density cutoff."
-                    "Alternative to density_std_cutoff",
+                "description": "Lower density cutoff."
+                "Alternative to density_std_cutoff",
                 "default": 0,
                 "required": False,
             },
             "density_max": {
                 "type": "float",
-                "description":
-                    "Higher density cutoff."
-                    "Alternative to density_std_cutoff",
+                "description": "Higher density cutoff."
+                "Alternative to density_std_cutoff",
                 "default": 0,
                 "required": False,
             },
@@ -4228,9 +4394,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "nth_largest": {
                 "type": "int",
-                "description":
-                    "Select the nth largest contiguous area in density "
-                    "range. Set 0 for largest.",
+                "description": "Select the nth largest contiguous area in density "
+                "range. Set 0 for largest.",
                 "required": False,
                 "min": 0,
                 "default": 0,
@@ -4450,14 +4615,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
             },
             "fp_channel_map": {
-                "type": "str",
+                "type": "path",
                 "description": "Filepath to the map from \
                     'combine_channels' module, which is a dict from \
                     channel name to ID int in the locs['combine_id']",
                 "required": True,
             },
             "fp_mask_dict": {
-                "type": "str",
+                "type": "path",
                 "description": "Filepath to the mask_dict.pkl file \
                     generated in the 'create_mask' module",
                 "required": True,
@@ -4914,6 +5079,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "The pick similar diameter for \
                     identifying gold std_range, mean_rmsd : float \
                     the pick similar parameters identifying gold",
+                "min": 0.0,
+                "default": 2.0,
                 "required": False,
             },
         }
@@ -4939,6 +5106,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "gold_locs": {
                 "type": "numpy.ndarray",
                 "description": "Identified gold bead localizations",
+            },
+            "fp_gold": {
+                "type": "str",
+                "description": "filepath to the gold locs found",
+            },
+            "fp_nogold": {
+                "type": "str",
+                "description": "Filepath to the non-gold locs",
             },
         }
 
@@ -5259,9 +5434,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "field": {
                 "type": ["str", "list"],
-                "description": 
-                    "Field to filter by. One or list of columns in locs"
-                    " (e.g. 'photons', 'x', 'y', 'sx', 'sy')",
+                "description": "Field to filter by. One or list of columns in locs"
+                " (e.g. 'photons', 'x', 'y', 'sx', 'sy')",
                 "required": True,
             },
             "minval": {
@@ -5368,7 +5542,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "filter out positions at more extreme temporal positions",
                 "min": 0,
                 "max": 1,
-                "default": .1,
+                "default": 0.1,
                 "required": False,
             },
             "stdframe_cutoff": {
@@ -5376,14 +5550,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "filter out positions with lower standard deviation",
                 "min": 0,
                 # "max": 1,
-                "default": .16,
+                "default": 0.16,
                 "required": False,
             },
             "fp_locs": {
-                "type": "str",
-                "description": 
-                    "The filepath to localizations (self.locs should be the"
-                    " centers). If given, locs are filtered and saved as well.",
+                "type": "path",
+                "description": "The filepath to localizations (self.locs should be the"
+                " centers). If given, locs are filtered and saved as well.",
                 "required": False,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: the filepath to the underlying localizations (self.locs are centers). If given, these are filtered as well and saved with the same filename in the ...
@@ -5802,9 +5975,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "labeling_uncertainty": {
                 "type": "dict",
-                "description":
-                    "Dictionary mapping from target/reference (tag) "
-                    "to labeling uncertainty [nm]",
+                "description": "Dictionary mapping from target/reference (tag) "
+                "to labeling uncertainty [nm]",
                 # "default": 5,
                 "required": True,
             },
@@ -5816,9 +5988,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "density": {
                 "type": "dict",
-                "description":
-                    "Dictionary mapping from target/reference (tag) "
-                    "to molecular density [nm^-2 or nm^-3]",
+                "description": "Dictionary mapping from target/reference (tag) "
+                "to molecular density [nm^-2 or nm^-3]",
                 # "default": 5,
                 "required": True,
             },
@@ -6437,11 +6608,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 # Hint: description: Whether to save drift plots (default: True)
                 # Hint: type appears to be bool
             },
-            "save_locs": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Whether to save undrifted localizations (default: True)
-                # Hint: type appears to be bool
-            },
+            # "save_locs": {
+            #     # TODO: Add type, description, min, max, default, required, step, extensions, properties
+            #     # Hint: description: Whether to save undrifted localizations (default: True)
+            #     # Hint: type appears to be bool
+            # },
             "n_processes": {
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: Number of processes for parallel computation (default: auto)
@@ -6675,16 +6846,25 @@ class SlurmCommunicator:
         """Assembles picasso-workflow specific commands for running a batch
         job on a SLURM cluster.
         """
+        cluster_env = CONFIG.get("ClusterEnvironment", {})
+        pw_module = cluster_env.get(
+            "pw_module", "picasso-workflow-gui"
+        )
+        anaconda_module = cluster_env.get(
+            "anaconda_module", "anaconda/3/2023.03"
+        )
+        conda_env = cluster_env.get("conda_env", "picasso-workflow")
+
         commands = []
         if use_pw_module:
-            commands.append("module load picasso-workflow-gui")
+            commands.append(f"module load {pw_module}")
         else:
-            commands.append("module load anaconda/3/2023.03")
+            commands.append(f"module load {anaconda_module}")
 
         commands.append("source ~/.bashrc")
 
         if not use_pw_module:
-            commands.append("conda activate picasso-workflow")
+            commands.append(f"conda activate {conda_env}")
 
         commands.append(f"srun {scriptname}")
 
@@ -6790,7 +6970,8 @@ class SlurmCommunicator:
         """
         if local:
             filepath = os.path.join(folder, "run_workflow_slurm.sh")
-            with open(filepath, "w") as f:
+            # write with UNIX style newlines ('\n') instead of DOS ('\r\n')
+            with open(filepath, "w", newline="\n") as f:
                 f.write(script_content)
             return filepath
 
@@ -7122,7 +7303,7 @@ class FilePathEditor(QtWidgets.QWidget):
             # Check if widget is still valid (might have been deleted during dialog)
             if path and not self.isHidden():
                 try:
-                    self.lineEdit.setText(path)
+                    self.lineEdit.setText(os.path.normpath(path))
                     # Use QTimer to safely emit signal after returning to event loop
                     QtCore.QTimer.singleShot(0, self.editingFinished.emit)
                 except RuntimeError:
@@ -7144,6 +7325,147 @@ class FilePathEditor(QtWidgets.QWidget):
     def text(self):
         """Get the current text from the line edit."""
         return self.lineEdit.text()
+
+
+class DroppableLineEdit(QtWidgets.QLineEdit):
+    """QLineEdit with drag-and-drop support for files from Finder/Explorer."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            # Take the first file path
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    self.setText(url.toLocalFile())
+                    break
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
+class DroppableTableWidget(QtWidgets.QTableWidget):
+    """QTableWidget with drag-and-drop support for files from Finder/Explorer."""
+
+    filesDropped = QtCore.pyqtSignal(list)  # Emits list of file paths
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            paths = []
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    paths.append(url.toLocalFile())
+            if paths:
+                self.filesDropped.emit(paths)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+
+class DroppableTreeWidget(QtWidgets.QTreeWidget):
+    """QTreeWidget with drag-and-drop support for files and internal moves."""
+
+    filesDropped = QtCore.pyqtSignal(list, object)  # (file_paths, target_item)
+    fileMoved = QtCore.pyqtSignal(object, object)  # (source_item, target_item)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self._drag_source_item = None
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            # External file drop
+            event.acceptProposedAction()
+        elif event.source() == self:
+            # Internal drag
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls() or event.source() == self:
+            # Get item under cursor for visual feedback
+            item = self.itemAt(event.pos())
+            if item:
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+        else:
+            event.ignore()
+
+    def startDrag(self, supportedActions):
+        """Store the source item when starting an internal drag."""
+        items = self.selectedItems()
+        if items:
+            # Only allow dragging channel items (items with a parent)
+            item = items[0]
+            if item.parent() is not None:
+                self._drag_source_item = item
+                super().startDrag(supportedActions)
+            else:
+                self._drag_source_item = None
+        else:
+            self._drag_source_item = None
+
+    def dropEvent(self, event):
+        target_item = self.itemAt(event.pos())
+
+        if event.mimeData().hasUrls():
+            # External file drop
+            paths = []
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    paths.append(url.toLocalFile())
+            if paths and target_item:
+                self.filesDropped.emit(paths, target_item)
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+        elif event.source() == self and self._drag_source_item:
+            # Internal move - only to channel items
+            if target_item and target_item.parent() is not None:
+                # Target is a channel item
+                self.fileMoved.emit(self._drag_source_item, target_item)
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            self._drag_source_item = None
+        else:
+            event.ignore()
 
 
 class FilePathDelegate(QtWidgets.QStyledItemDelegate):
@@ -7263,7 +7585,13 @@ class ParameterWidgetInfo:
 class ParameterCmdDialog(QtWidgets.QDialog):
     """Dialog for selecting a command as parameter value."""
 
-    def __init__(self, workflow_modules, module_descriptor, current_module_index=0, parent=None):
+    def __init__(
+        self,
+        workflow_modules,
+        module_descriptor,
+        current_module_index=0,
+        parent=None,
+    ):
         """Initialize the prior result dialog.
 
         Args:
@@ -7305,9 +7633,13 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         # Command type selection
         layout.addWidget(QtWidgets.QLabel("Command type:"))
         self.command_combo = QtWidgets.QComboBox()
-        self.command_combo.addItems(["map", "index", "Previous Module Result", "Prior Result"])#, "sum", "max", "min"])
+        self.command_combo.addItems(
+            ["map", "index", "Previous Module Result", "Prior Result"]
+        )  # , "sum", "max", "min"])
         self.command_combo.setItemDelegate(ToolTipDelegate(self.command_combo))
-        self.command_combo.currentIndexChanged.connect(self._on_command_changed)
+        self.command_combo.currentIndexChanged.connect(
+            self._on_command_changed
+        )
         # self.command_combo.model().setData(
         #     0, "Map different values onto workers (e.g. files to load)", Qt.ToolTipRole
         # )  # Tooltip
@@ -7337,18 +7669,16 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.prior_mode.addButton(self.prior_singlestage_list, 1)
         self.prior_mode.buttonToggled.connect(self._on_prior_mode_selected)
 
-
         self.module_label = QtWidgets.QLabel("Select module:")
         self.module_combo = QtWidgets.QComboBox()
         for i, (module_name, params) in enumerate(workflow_modules):
-            self.module_combo.addItem(f"{i}: {module_name}")
+            self.module_combo.addItem(f"{i:02d}: {module_name}")
         self.module_combo.currentIndexChanged.connect(self._on_module_selected)
 
         self.result_label = QtWidgets.QLabel("Select result:")
         self.result_combo = QtWidgets.QComboBox()
         self.result_combo.currentIndexChanged.connect(self._on_result_selected)
         self.result_combo.setPlaceholderText("Select a result")
-
 
         # modify_vlayout = QtWidgets.QVBoxLayout()
         # self.modify_widget = QtWidgets.QWidget()
@@ -7359,8 +7689,12 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         # modify_hwidget = QtWidgets.QWidget()
         # modify_hwidget.setLayout(modify_hlayout)
         self.modify_combo = QtWidgets.QComboBox()
-        self.modify_combo.addItems(["", "multiply", "divide", "add", "subtract"])
-        self.modify_combo.currentIndexChanged.connect(self._on_modify_operator_selected)
+        self.modify_combo.addItems(
+            ["", "multiply", "divide", "add", "subtract"]
+        )
+        self.modify_combo.currentIndexChanged.connect(
+            self._on_modify_operator_selected
+        )
         # modify_hlayout.addWidget(self.modify_combo)
         self.modify_value = QtWidgets.QDoubleSpinBox()
         self.modify_value.valueChanged.connect(self._on_modify_value_changed)
@@ -7483,8 +7817,13 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             workflow_modules = self.workflow_modules
 
         for i, (module_name, params) in enumerate(workflow_modules):
-            self.module_combo.addItem(f"{i}: {module_name}")
+            self.module_combo.addItem(f"{i:02d}: {module_name}")
         self.module_combo.blockSignals(False)
+
+        # Reset to first module when switching lists to prevent index mismatch
+        if self.module_combo.count() > 0:
+            self.module_combo.setCurrentIndex(0)
+            self._on_module_selected(0)
 
         command = self.get_command()
         self.command_result.setText(command)
@@ -7500,8 +7839,15 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         else:
             workflow_modules = self.workflow_modules
 
+        # Bounds check and auto-correct invalid index
         if index < 0 or index >= len(workflow_modules):
-            return
+            if len(workflow_modules) > 0:
+                index = 0
+                self.module_combo.setCurrentIndex(0)
+            else:
+                self.result_combo.clear()
+                self.result_combo.addItem("(no modules available)")
+                return
 
         module_name = workflow_modules[index][0]
 
@@ -7582,12 +7928,19 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         elif command_type == "Prior Result":
             if self.prior_thisstage.isChecked():
                 cmd_prefix = "results"
+                workflow_modules = self.workflow_modules
             elif self.prior_singlestage_list.isChecked():
                 cmd_prefix = "all_results, single_dataset, $$all"
+                workflow_modules = self.parent.single_workflow_modules
 
             module_index = self.module_combo.currentIndex()
+            # Validate index against the active workflow list
+            if module_index < 0 or module_index >= len(workflow_modules):
+                return "(invalid module selection)"
             module_name = self.module_combo.currentText()
-            module_name = module_name[module_name.index(":") + 2:]
+            if ":" not in module_name:
+                return "(invalid module selection)"
+            module_name = module_name[module_name.index(":") + 2 :]
             result_name = self.result_combo.currentText()
 
             if self.modify_combo.currentText() == "multiply":
@@ -7607,7 +7960,7 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             else:
                 mod_str = ""
 
-            command_string = f"('{timing_cmd}get_prior_result{mod_str}', '{cmd_prefix}, {module_index}_{module_name}, {result_name}')"
+            command_string = f"('{timing_cmd}get_prior_result{mod_str}', '{cmd_prefix}, {module_index:02d}_{module_name}, {result_name}')"
         elif command_type == "Previous Module Result":
             result_name = self.result_combo.currentText()
             if self.modify_combo.currentText() == "multiply":
@@ -7667,19 +8020,25 @@ class Window(QtWidgets.QMainWindow):
         for template in CONFIG["Templates"].keys():
             workflow_template_combo.addItem(template)
         workflow_template_combo.setEditable(False)
-        workflow_template_combo.currentTextChanged.connect(self.on_template_changed)
+        workflow_template_combo.currentTextChanged.connect(
+            self.on_template_changed
+        )
         workflow_template_combo.setToolTip("Load a template workflow")
         layout.addWidget(workflow_template_combo, 0, 0)
         # Results folder selection
         results_folder_button = QtWidgets.QPushButton("Results Folder")
-        results_folder_button.setToolTip("The folder must be accessible both from this and the compute machine (cluster).")
+        results_folder_button.setToolTip(
+            "The folder must be accessible both from this and the compute machine (cluster)."
+        )
         # self.files_box.addWidget(results_folder_button, 2, 0)
         layout.addWidget(results_folder_button, 0, 1)
         results_folder_button.clicked.connect(self.select_results_folder)
         self.results_folder_display = QtWidgets.QLineEdit()
         self.results_folder_display.setReadOnly(False)
         self.results_folder_display.setPlaceholderText("No folder selected")
-        self.results_folder_display.textChanged.connect(self.set_results_folder_display)
+        self.results_folder_display.textChanged.connect(
+            self.set_results_folder_display
+        )
         # self.files_box.addWidget(self.results_folder_display, 2, 1, 1, 2)
         layout.addWidget(self.results_folder_display, 0, 2, 1, 2)
         # Investigation type
@@ -7739,16 +8098,20 @@ class Window(QtWidgets.QMainWindow):
             "e.g., https://confluence.example.com"
         )
         self.confluence_url_edit.setToolTip(
-            "If empty, host will load from environment variable")
+            "If empty, host will load from environment variable"
+        )
         self.confluence_url_edit.setText(confluence_config.get("URL", ""))
         confluence_layout.addWidget(self.confluence_url_edit, 0, 1)
 
         # Confluence Space
         confluence_layout.addWidget(QtWidgets.QLabel("Space:"), 1, 0)
         self.confluence_space_edit = QtWidgets.QLineEdit()
-        self.confluence_space_edit.setPlaceholderText("e.g., ~username or TEAM")
+        self.confluence_space_edit.setPlaceholderText(
+            "e.g., ~username or TEAM"
+        )
         self.confluence_space_edit.setToolTip(
-            "If empty, host will load from environment variable")
+            "If empty, host will load from environment variable"
+        )
         self.confluence_space_edit.setText(confluence_config.get("Space", ""))
         confluence_layout.addWidget(self.confluence_space_edit, 1, 1)
 
@@ -7760,7 +8123,8 @@ class Window(QtWidgets.QMainWindow):
         )
         self.confluence_token_edit.setEchoMode(QtWidgets.QLineEdit.Password)
         self.confluence_token_edit.setToolTip(
-            "If empty, host will load from environment variable")
+            "If empty, host will load from environment variable"
+        )
         self.confluence_token_edit.setText(confluence_config.get("Token", ""))
         confluence_layout.addWidget(self.confluence_token_edit, 2, 1)
 
@@ -7768,7 +8132,8 @@ class Window(QtWidgets.QMainWindow):
         confluence_layout.addWidget(QtWidgets.QLabel("Parent Page:"), 3, 0)
         self.confluence_parent_page_edit = QtWidgets.QLineEdit()
         self.confluence_parent_page_edit.setToolTip(
-            "If empty, host will load from environment variable")
+            "If empty, host will load from environment variable"
+        )
         self.confluence_parent_page_edit.setPlaceholderText(
             "Page title to create reports under"
         )
@@ -7851,7 +8216,9 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
         self.cluster_use_module.setMaximumWidth(200)
         self.cluster_use_module.setChecked(True)
-        self.cluster_use_module.setToolTip("Use the miblab SLURM module for picasso-workflow (recommended). Otherwise, use Heinrich's repository.")
+        self.cluster_use_module.setToolTip(
+            "Use the miblab SLURM module for picasso-workflow (recommended). Otherwise, use Heinrich's repository."
+        )
         # self.cluster_use_module.connect(self.on_cluster_use_module_state_change)
         cluster_config_layout.addWidget(self.cluster_use_module)
 
@@ -7862,23 +8229,37 @@ class Window(QtWidgets.QMainWindow):
         run_on_cluster_layout.addWidget(cluster_settings_widget)
 
         # user name on cluster login node
-        cluster_settings_layout.addWidget(QtWidgets.QLabel("User name on cluster login node (default '$USER' as provided locally):"))
+        cluster_settings_layout.addWidget(
+            QtWidgets.QLabel(
+                "User name on cluster login node (default '$USER' as provided locally):"
+            )
+        )
         self.cluster_username_edit = QtWidgets.QLineEdit()
         self.cluster_username_edit.setPlaceholderText("e.g., $USER")
         defaulttext = CONFIG.get("LoginNodeUserNames", "$USER")
         if isinstance(defaulttext, dict):
             defaulttext = defaulttext.get(
-                list(CONFIG["SlurmLoginNodes"].keys())[0], "$USER")
+                list(CONFIG["SlurmLoginNodes"].keys())[0], "$USER"
+            )
         self.cluster_username_edit.setText(defaulttext)
         # self.cluster_username_edit.setMaximumWidth(100)
         cluster_settings_layout.addWidget(self.cluster_username_edit)
+
+        self.slurm_email_edit = QtWidgets.QLineEdit()
+        self.slurm_email_edit.setPlaceholderText("e.g., you@institute.edu")
+        defaulttext = CONFIG.get("SlurmDefault", {}).get("email", "")
+        self.slurm_email_edit.setText(defaulttext)
+        # self.cluster_username_edit.setMaximumWidth(100)
+        cluster_settings_layout.addWidget(self.slurm_email_edit)
 
         slurm_buttons = QtWidgets.QHBoxLayout()
         self.slurm_buttons_widget = QtWidgets.QWidget()
         self.slurm_buttons_widget.setLayout(slurm_buttons)
         run_on_cluster_layout.addWidget(self.slurm_buttons_widget)
 
-        estimate_start_button = QtWidgets.QPushButton("Estimate Start on Cluster")
+        estimate_start_button = QtWidgets.QPushButton(
+            "Estimate Start on Cluster"
+        )
         slurm_buttons.addWidget(estimate_start_button)
         estimate_start_button.clicked.connect(self.estimate_start)
 
@@ -7974,7 +8355,8 @@ class Window(QtWidgets.QMainWindow):
         self.file_buttons_layout.addWidget(self.clear_files_button)
 
         d = {"Name1": "/path/to/file1.txt", "Name2": "/path/to/file2.txt"}
-        self.files_table = QtWidgets.QTableWidget()
+        self.files_table = DroppableTableWidget()
+        self.files_table.filesDropped.connect(self._on_files_dropped_table)
         self.files_table.setColumnCount(2)
         self.files_table.setHorizontalHeaderLabels(["Name", "File Path"])
         # Configure column stretching - Name column resizes to contents, File Path column stretches
@@ -7994,7 +8376,9 @@ class Window(QtWidgets.QMainWindow):
         self.files_stack.addWidget(self.files_table)
 
         # Create tree for Aggregation Workflow (index 1)
-        self.files_tree_agg = QtWidgets.QTreeWidget()
+        self.files_tree_agg = DroppableTreeWidget()
+        self.files_tree_agg.filesDropped.connect(self._on_files_dropped_tree)
+        self.files_tree_agg.fileMoved.connect(self._on_file_moved_tree)
         self.files_tree_agg.setColumnCount(3)
         self.files_tree_agg.setHeaderLabels(
             ["Dataset", "Channel", "File Path"]
@@ -8018,7 +8402,9 @@ class Window(QtWidgets.QMainWindow):
         self.files_stack.addWidget(self.files_tree_agg)
 
         # Create tree for Investigation Workflow (index 2)
-        self.files_tree_inv = QtWidgets.QTreeWidget()
+        self.files_tree_inv = DroppableTreeWidget()
+        self.files_tree_inv.filesDropped.connect(self._on_files_dropped_tree)
+        self.files_tree_inv.fileMoved.connect(self._on_file_moved_tree)
         self.files_tree_inv.setColumnCount(4)
         self.files_tree_inv.setHeaderLabels(
             ["Dataset", "Channel", "File Path", "Condition"]
@@ -8158,7 +8544,9 @@ class Window(QtWidgets.QMainWindow):
         self.modules_box.addWidget(self.addl_options_widget, 3, 0)
 
         # Add options
-        self.always_save = QtWidgets.QCheckBox("Save localizations after every module.")
+        self.always_save = QtWidgets.QCheckBox(
+            "Save localizations after every module."
+        )
         self.addl_options_layout.addWidget(self.always_save)
 
         # resize the widgets
@@ -8577,6 +8965,83 @@ class Window(QtWidgets.QMainWindow):
 
         self._update_validation_display()
 
+    def _on_files_dropped_table(self, file_paths):
+        """Handle files dropped onto the Single Dataset table."""
+        for path in file_paths:
+            row = self.files_table.rowCount()
+            self.files_table.insertRow(row)
+            # Use basename as default name
+            name = os.path.basename(path)
+            self.files_table.setItem(
+                row, 0, QtWidgets.QTableWidgetItem(name)
+            )
+            self.files_table.setItem(
+                row, 1, QtWidgets.QTableWidgetItem(path)
+            )
+
+    def _on_files_dropped_tree(self, file_paths, target_item):
+        """Handle files dropped onto the Aggregation/Investigation tree."""
+        if not target_item:
+            return
+
+        # Determine if target is a dataset or channel item
+        if target_item.parent() is None:
+            # Dropped on dataset item - distribute files across channels
+            dataset_name = target_item.text(0)
+            channels = self.tree_data["channels"]
+            if not channels:
+                return
+
+            for i, path in enumerate(file_paths):
+                if i < len(channels):
+                    channel = channels[i]
+                    self.tree_data["file_paths"][dataset_name][channel] = path
+        else:
+            # Dropped on channel item - assign files starting from this channel
+            dataset_item = target_item.parent()
+            dataset_name = dataset_item.text(0)
+            target_channel = target_item.text(1)
+
+            channels = self.tree_data["channels"]
+            try:
+                start_idx = channels.index(target_channel)
+            except ValueError:
+                return
+
+            for i, path in enumerate(file_paths):
+                channel_idx = start_idx + i
+                if channel_idx < len(channels):
+                    channel = channels[channel_idx]
+                    self.tree_data["file_paths"][dataset_name][channel] = path
+
+        self._populate_tree_from_data()
+
+    def _on_file_moved_tree(self, source_item, target_item):
+        """Handle file moved between channels within the tree."""
+        if not source_item or not target_item:
+            return
+
+        # Both should be channel items (have parents)
+        if source_item.parent() is None or target_item.parent() is None:
+            return
+
+        source_dataset = source_item.parent().text(0)
+        source_channel = source_item.text(1)
+        source_path = source_item.text(2)
+
+        target_dataset = target_item.parent().text(0)
+        target_channel = target_item.text(1)
+
+        # Move the file path
+        if source_path:
+            # Clear source
+            self.tree_data["file_paths"][source_dataset][source_channel] = ""
+            # Set target
+            self.tree_data["file_paths"][target_dataset][target_channel] = (
+                source_path
+            )
+            self._populate_tree_from_data()
+
     def _update_validation_display(self):
         """Update visual indicators for missing file paths."""
         current_tree = self._get_current_tree_widget()
@@ -8739,7 +9204,7 @@ class Window(QtWidgets.QMainWindow):
             self.add_files_button.setEnabled(enabled)
             self.remove_files_button.setEnabled(enabled)
             self.clear_files_button.setEnabled(enabled)
-            self.files_table.setEnabled(enabled)
+            # self.files_table.setEnabled(enabled)
         except RuntimeError:
             # we're not in Single Workflow mode
             pass
@@ -8807,7 +9272,7 @@ class Window(QtWidgets.QMainWindow):
             ),
         )
         if folder:
-            self.results_folder_display.setText(folder)
+            self.results_folder_display.setText(os.path.normpath(folder))
             # Enable widgets when a folder is selected
             self._set_widgets_enabled(True)
 
@@ -8829,6 +9294,8 @@ class Window(QtWidgets.QMainWindow):
         """Load a template"""
         try:
             template_folder = CONFIG["Templates"][template_name]
+            if template_folder[:2] == 'r"' or template_folder[:2] == "r'":
+                template_folder = template_folder[2:-1]
         except KeyError:
             return
         # # Enable widgets when a folder is selected
@@ -8859,6 +9326,14 @@ class Window(QtWidgets.QMainWindow):
 
                     # Validate that it's a dictionary
                     if isinstance(file_dict, dict):
+                        # it may still be a dict with keys #tags and 
+                        # filepaths and list values or tags to fileptahs dict
+                        # as expected here
+                        if "#tags" in file_dict.keys() and "filepath" in file_dict.keys() and isinstance(file_dict["filepath"], list):
+                            new_dict = {}
+                            for k, v in zip(file_dict["#tags"], file_dict["filepath"]):
+                                new_dict[k] = v
+                            file_dict = new_dict
                         # Clear existing file list
                         self.files_table.setRowCount(0)
 
@@ -8953,7 +9428,7 @@ class Window(QtWidgets.QMainWindow):
                         parts.append(format(val, fmt))
                     else:
                         parts.append(str(val))
-            return ''.join(parts)
+            return "".join(parts)
 
         elif isinstance(node, ast.Name):
             if node.id in variables:
@@ -8961,9 +9436,9 @@ class Window(QtWidgets.QMainWindow):
             raise ValueError(f"Unknown variable: {node.id}")
 
         # Python 3.7 compatibility (ast.Str, ast.Num deprecated but may exist)
-        elif hasattr(ast, 'Str') and isinstance(node, ast.Str):
+        elif hasattr(ast, "Str") and isinstance(node, ast.Str):
             return node.s
-        elif hasattr(ast, 'Num') and isinstance(node, ast.Num):
+        elif hasattr(ast, "Num") and isinstance(node, ast.Num):
             return node.n
 
         raise ValueError(f"Cannot evaluate node: {type(node).__name__}")
@@ -8984,7 +9459,7 @@ class Window(QtWidgets.QMainWindow):
         # print(f"DEBUG: _load_workflow_definition_alt called with folder={folder}")
         workflow_file = os.path.join(folder, "start_workflow.py")
 
-        logger.debug('loading definition (alt)')
+        logger.debug("loading definition (alt)")
 
         if not os.path.exists(workflow_file):
             logger.debug("No start_workflow.py found in folder")
@@ -8993,7 +9468,7 @@ class Window(QtWidgets.QMainWindow):
 
         try:
             # Read and parse the file
-            with open(workflow_file, 'r') as f:
+            with open(workflow_file, "r") as f:
                 source_code = f.read()
 
             tree = ast.parse(source_code)
@@ -9035,37 +9510,42 @@ class Window(QtWidgets.QMainWindow):
                     if isinstance(stmt, ast.Assign):
                         for target in stmt.targets:
                             if isinstance(target, ast.Name):
-                                if target.id == 'workflow_modules_sgl':
+                                if target.id == "workflow_modules_sgl":
                                     sgl = safe_eval_node(
-                                        stmt.value, 'workflow_modules_sgl',
-                                        variables_dict
+                                        stmt.value,
+                                        "workflow_modules_sgl",
+                                        variables_dict,
                                     )
                                     # Update idx_last_sgl_module for later use
                                     if sgl and isinstance(sgl, list):
-                                        variables_dict['idx_last_sgl_module'] = (
-                                            len(sgl) - 1
-                                        )
+                                        variables_dict[
+                                            "idx_last_sgl_module"
+                                        ] = (len(sgl) - 1)
                                         # print(
                                         #     f"DEBUG: Set idx_last_sgl_module="
                                         #     f"{variables_dict['idx_last_sgl_module']}"
                                         # )
-                                elif target.id == 'workflow_modules_agg':
+                                elif target.id == "workflow_modules_agg":
                                     agg = safe_eval_node(
-                                        stmt.value, 'workflow_modules_agg',
-                                        variables_dict
+                                        stmt.value,
+                                        "workflow_modules_agg",
+                                        variables_dict,
                                     )
-                                elif target.id == 'workflow_modules_multi':
+                                elif target.id == "workflow_modules_multi":
                                     multi = safe_eval_node(
-                                        stmt.value, 'workflow_modules_multi',
-                                        variables_dict
+                                        stmt.value,
+                                        "workflow_modules_multi",
+                                        variables_dict,
                                     )
-                                elif target.id == 'idx_last_sgl_module':
+                                elif target.id == "idx_last_sgl_module":
                                     # Try to evaluate the variable assignment
                                     try:
                                         val = self._safe_eval_node(
                                             stmt.value, variables_dict
                                         )
-                                        variables_dict['idx_last_sgl_module'] = val
+                                        variables_dict[
+                                            "idx_last_sgl_module"
+                                        ] = val
                                         # print(
                                         #     f"DEBUG: Found idx_last_sgl_module "
                                         #     f"assignment: {val}"
@@ -9093,9 +9573,13 @@ class Window(QtWidgets.QMainWindow):
             # Note: search functions if lists are None OR empty
             needs_function_search = (
                 (workflow_modules_sgl is None or workflow_modules_sgl == [])
-                and (workflow_modules_agg is None or workflow_modules_agg == [])
-                and (workflow_modules_multi is None
-                     or workflow_modules_multi == {})
+                and (
+                    workflow_modules_agg is None or workflow_modules_agg == []
+                )
+                and (
+                    workflow_modules_multi is None
+                    or workflow_modules_multi == {}
+                )
             )
 
             if needs_function_search:
@@ -9115,16 +9599,22 @@ class Window(QtWidgets.QMainWindow):
                             workflow_modules_sgl = sgl
                         if agg is not None and workflow_modules_agg is None:
                             workflow_modules_agg = agg
-                        if multi is not None and workflow_modules_multi is None:
+                        if (
+                            multi is not None
+                            and workflow_modules_multi is None
+                        ):
                             workflow_modules_multi = multi
 
             # If workflow_modules_sgl was found but workflow_modules_agg was not,
             # try again with the updated variables dict (now has idx_last_sgl_module)
-            if (workflow_modules_sgl is not None
-                    and isinstance(workflow_modules_sgl, list)
-                    and len(workflow_modules_sgl) > 0
-                    and (workflow_modules_agg is None
-                         or workflow_modules_agg == [])):
+            if (
+                workflow_modules_sgl is not None
+                and isinstance(workflow_modules_sgl, list)
+                and len(workflow_modules_sgl) > 0
+                and (
+                    workflow_modules_agg is None or workflow_modules_agg == []
+                )
+            ):
                 # print(
                 #     "DEBUG: Retrying workflow_modules_agg with updated "
                 #     f"variables: {variables}"
@@ -9134,11 +9624,14 @@ class Window(QtWidgets.QMainWindow):
                 for stmt in tree.body:
                     if isinstance(stmt, ast.Assign):
                         for target in stmt.targets:
-                            if (isinstance(target, ast.Name)
-                                    and target.id == 'workflow_modules_agg'):
+                            if (
+                                isinstance(target, ast.Name)
+                                and target.id == "workflow_modules_agg"
+                            ):
                                 result = safe_eval_node(
-                                    stmt.value, 'workflow_modules_agg',
-                                    variables
+                                    stmt.value,
+                                    "workflow_modules_agg",
+                                    variables,
                                 )
                                 if result is not None:
                                     workflow_modules_agg = result
@@ -9150,11 +9643,15 @@ class Window(QtWidgets.QMainWindow):
                             for stmt in node.body:
                                 if isinstance(stmt, ast.Assign):
                                     for target in stmt.targets:
-                                        if (isinstance(target, ast.Name)
-                                                and target.id == 'workflow_modules_agg'):
+                                        if (
+                                            isinstance(target, ast.Name)
+                                            and target.id
+                                            == "workflow_modules_agg"
+                                        ):
                                             result = safe_eval_node(
-                                                stmt.value, 'workflow_modules_agg',
-                                                variables
+                                                stmt.value,
+                                                "workflow_modules_agg",
+                                                variables,
                                             )
                                             if result is not None:
                                                 workflow_modules_agg = result
@@ -9280,7 +9777,7 @@ class Window(QtWidgets.QMainWindow):
         """
         workflow_file = os.path.join(folder, "start_workflow.py")
 
-        logger.debug('loaing definition')
+        logger.debug("loaing definition")
 
         if not os.path.exists(workflow_file):
             logger.debug("No start_workflow.py found in folder")
@@ -9336,7 +9833,9 @@ class Window(QtWidgets.QMainWindow):
 
             # If no modules found at module level, try alternative loader
             if workflow_modules_sgl is None and workflow_modules_agg is None:
-                logger.info("No workflow modules found at module level, trying alternative loader")
+                logger.info(
+                    "No workflow modules found at module level, trying alternative loader"
+                )
                 self._load_workflow_definition_alt(folder)
                 return
 
@@ -9410,7 +9909,7 @@ class Window(QtWidgets.QMainWindow):
             # Tuples remain tuples, dicts remain dicts, etc.
             workflow_list.append((module_name, params))
             index = len(workflow_list) - 1
-            list_widget.addItem(f"{index}: {module_name}")
+            list_widget.addItem(f"{index:02d}: {module_name}")
 
     def _convert_param_to_gui_format(self, param_value):
         """Convert parameter value from workflow definition to GUI format.
@@ -9492,13 +9991,13 @@ class Window(QtWidgets.QMainWindow):
         if current_tab_index == 0:  # Single Dataset Workflow
             self.single_workflow_modules.append((module_name, param_values))
             index = len(self.single_workflow_modules) - 1
-            self.single_workflow_list.addItem(f"{index}: {module_name}")
+            self.single_workflow_list.addItem(f"{index:02d}: {module_name}")
         elif current_tab_index == 1:  # Aggregation Workflow
             self.aggregation_workflow_modules.append(
                 (module_name, param_values)
             )
             index = len(self.aggregation_workflow_modules) - 1
-            self.aggregation_workflow_list.addItem(f"{index}: {module_name}")
+            self.aggregation_workflow_list.addItem(f"{index:02d}: {module_name}")
 
     def _renumber_workflow_items(self, list_widget, modules):
         """Update QListWidget items with correct numbering after reordering."""
@@ -9506,7 +10005,7 @@ class Window(QtWidgets.QMainWindow):
             module_name = modules[i][
                 0
             ]  # Extract name from (name, params) tuple
-            list_widget.item(i).setText(f"{i}: {module_name}")
+            list_widget.item(i).setText(f"{i:02d}: {module_name}")
 
     def _on_workflow_selection_changed(self, current_row):
         """Handle selection change in workflow list - display module in Current Module section."""
@@ -9515,6 +10014,9 @@ class Window(QtWidgets.QMainWindow):
             self.editing_workflow_index = -1
             self.editing_workflow_tab = -1
             return
+
+        # Save current parameters before loading new selection
+        self._update_editing_workflow_item()
 
         # Get the current tab to determine which workflow list to use
         current_tab_index = self.workflow_tabs.currentIndex()
@@ -9574,6 +10076,16 @@ class Window(QtWidgets.QMainWindow):
             if param_name in param_values:
                 value_data = param_values[param_name]
 
+                # Check if value is a command tuple (starts with $ or $$)
+                if isinstance(value_data, tuple) and len(value_data) >= 1:
+                    first_elem = str(value_data[0])
+                    if first_elem.startswith("$"):
+                        # This is a command - convert widget to textbox
+                        self._convert_widget_to_textbox(
+                            param_name, str(value_data)
+                        )
+                        continue
+
                 # Set value in widget
                 self._set_widget_value(
                     widget_info.widget,
@@ -9584,11 +10096,18 @@ class Window(QtWidgets.QMainWindow):
 
     def _on_workflow_tab_changed(self, tab_index):
         """Handle workflow tab change - display selected module if any."""
+        # Save current parameters before switching tabs
+        self._update_editing_workflow_item()
+
         if tab_index == 0:  # Single Dataset Workflow
             current_row = self.single_workflow_list.currentRow()
             if current_row >= 0 and current_row < len(
                 self.single_workflow_modules
             ):
+                # Update editing state to new tab/row
+                self.editing_workflow_tab = tab_index
+                self.editing_workflow_index = current_row
+
                 module_name, param_values = self.single_workflow_modules[
                     current_row
                 ]
@@ -9611,6 +10130,10 @@ class Window(QtWidgets.QMainWindow):
             if current_row >= 0 and current_row < len(
                 self.aggregation_workflow_modules
             ):
+                # Update editing state to new tab/row
+                self.editing_workflow_tab = tab_index
+                self.editing_workflow_index = current_row
+
                 module_name, param_values = self.aggregation_workflow_modules[
                     current_row
                 ]
@@ -9797,7 +10320,9 @@ class Window(QtWidgets.QMainWindow):
                 )
                 self.aggregation_workflow_list.setCurrentRow(current_row + 1)
 
-    def create_python_script(self, host_cluster, filename="start_workflow.py"):
+    def create_python_script(
+        self, host_cluster, login_node, filename="start_workflow.py"
+    ):
         """Generate a Python workflow script from current GUI settings.
 
         Args:
@@ -9841,6 +10366,8 @@ class Window(QtWidgets.QMainWindow):
                 if name_item and path_item:
                     name = name_item.text()
                     path = path_item.text()
+                    if (path[0] == "'" and path[-1] == "'") or (path[0] == '"' and path[-1] == '"'):
+                        path = path[1:-1]
                     path = self.pathparser.convert_path(path, host_cluster)
 
                     # Create lists for values
@@ -9861,6 +10388,8 @@ class Window(QtWidgets.QMainWindow):
 
                     # Get file path
                     file_path = self.tree_data["file_paths"][dataset][channel]
+                    if (file_path[0] == "'" and file_path[-1] == "'") or (file_path[0] == '"' and file_path[-1] == '"'):
+                        file_path = file_path[1:-1]
                     file_path = self.pathparser.convert_path(
                         file_path, host_cluster
                     )
@@ -9888,6 +10417,8 @@ class Window(QtWidgets.QMainWindow):
 
                     # Get file path
                     file_path = self.tree_data["file_paths"][dataset][channel]
+                    if (file_path[0] == "'" and file_path[-1] == "'") or (file_path[0] == '"' and file_path[-1] == '"'):
+                        file_path = file_path[1:-1]
                     file_path = self.pathparser.convert_path(
                         file_path, host_cluster
                     )
@@ -9920,8 +10451,12 @@ class Window(QtWidgets.QMainWindow):
                         (".yaml", ".hdf5", ".h5", ".tif", ".png", ".jpg")
                     )
                 ):
+                    # Convert path from local to host machine style
+                    converted_path = self.pathparser.convert_path(
+                        value, host_cluster
+                    )
                     # Use os.path.join for path-like strings
-                    parts = value.replace("\\", "/").split("/")
+                    parts = converted_path.replace("\\", "/").split("/")
                     if len(parts) > 1:
                         if parts[0] == "":
                             parts[0] = "/"
@@ -10076,7 +10611,8 @@ class Window(QtWidgets.QMainWindow):
                 "",
                 'if __name__ == "__main__":',
                 "    # Get working directory",
-                "    working_folder = os.path.dirname(os.path.abspath(__file__))",
+                "    # working_folder = os.path.dirname(os.path.abspath(__file__))",
+                "    working_folder = os.environ.get('PWD', os.getcwd())",
                 "    src_loc_file = os.path.join(working_folder, 'src_loc.yaml')",
                 "    io.save_info(src_loc_file, [datasets])",
                 "",
@@ -10110,7 +10646,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = SingleWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    "        base_page,",
+                    f"        base_page, dest_machine='{login_node}',",
                     f"        always_save={always_save}",
                     "    )",
                     "",
@@ -10125,7 +10661,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = AggregationWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    "        base_page,",
+                    f"        base_page, dest_machine='{login_node}',",
                     f"        always_save={always_save}",
                     "    )",
                     "",
@@ -10140,7 +10676,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = InvestigationWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    "        base_page,",
+                    f"        base_page, dest_machine='{login_node}',",
                     f"        always_save={always_save}",
                     "    )",
                     "",
@@ -10161,7 +10697,8 @@ class Window(QtWidgets.QMainWindow):
         else:
             output_path = filename
 
-        with open(output_path, "w") as f:
+        # write with UNIX style newlines ('\n') instead of DOS ('\r\n')
+        with open(output_path, "w", newline="\n") as f:
             f.write(script_content)
 
         # Make script executable on Unix systems
@@ -10187,30 +10724,36 @@ class Window(QtWidgets.QMainWindow):
         # print(f"'{host_cluster}', '{login_node}'")
 
         results_folder_local = self.results_folder_display.text()
+        if (results_folder_local[0] == "'" and results_folder_local[-1] == "'") or (results_folder_local[0] == '"' and results_folder_local[-1] == '"'):
+            results_folder_local = results_folder_local[1:-1]
         if not os.path.exists(results_folder_local):
             os.makedirs(results_folder_local)
         results_folder_host = self.pathparser.convert_path(
             results_folder_local, host_cluster
         )
 
-        username = getpass.getuser()
-        ssh_key_path = "~/.ssh/id_rsa"
+        if self.cluster_username_edit.text().strip() == "$USER":
+            username = getpass.getuser()
+        else:
+            username = self.cluster_username_edit.text().strip()
+
+        ssh_key_path_options = [
+            os.path.join(os.path.expanduser("~"), ".ssh", "id_rsa"),
+            os.path.join(os.path.expanduser("~"), ".ssh", "id_ed25519"),
+        ]
+        for sshpath in ssh_key_path_options:
+            ssh_key_path = sshpath
+            if os.path.exists(ssh_key_path):
+                break
+        # ssh_key_path = "~/.ssh/id_rsa"
         self.slurm_communicator = SlurmCommunicator(
             login_node, username, port=22, ssh_key_path=ssh_key_path
         )
 
-        try:
-            self.slurm_communicator.test_connection()
-        except:
-            ssh_key_path = "~/.ssh/id_ed25519"
-            self.slurm_communicator = SlurmCommunicator(
-                login_node, username, port=22, ssh_key_path=ssh_key_path
-            )
-            self.slurm_communicator.test_connection()
-            
+        self.slurm_communicator.test_connection()
 
         scriptname = "start_workflow.py"
-        self.create_python_script(host_cluster, scriptname)
+        self.create_python_script(host_cluster, login_node, scriptname)
 
         job_name = "mypwjob"
         slurm_options = {
@@ -10222,12 +10765,17 @@ class Window(QtWidgets.QMainWindow):
             # "mail-type": "ALL",
             # "mail-user": f"{username}@biochem.mpg.de",
         }
+        if email := self.slurm_email_edit.text().strip() != "":
+            slurm_options["mail-user"] = email
+            slurm_options["mail-type"] = "ALL"
+
         use_pw_mod = self.cluster_use_module.isChecked()
 
         commands = self.slurm_communicator.assemble_slurm_commands(
-            scriptname=scriptname, use_pw_module=use_pw_mod)
-            # scriptname=scriptname, use_pw_module=True)
-            # scriptname=scriptname, use_pw_module=False)
+            scriptname=scriptname, use_pw_module=use_pw_mod
+        )
+        # scriptname=scriptname, use_pw_module=True)
+        # scriptname=scriptname, use_pw_module=False)
         script_content = self.slurm_communicator.create_slurm_script(
             job_name,
             commands,
@@ -10496,6 +11044,17 @@ class Window(QtWidgets.QMainWindow):
             widget.setChecked(bool(default))
             return widget, "bool"
 
+        elif param_type == "path":
+            widget = DroppableLineEdit()
+            default = param_metadata.get("default", "")
+            if default is not None:
+                widget.setText(str(default))
+            if param_metadata.get("required", False):
+                widget.setPlaceholderText("Required - drag file here or type path")
+            else:
+                widget.setPlaceholderText("Drag file here or type path")
+            return widget, "path"
+
         else:  # str or fallback
             widget = QtWidgets.QLineEdit()
             default = param_metadata.get("default", "")
@@ -10555,7 +11114,7 @@ class Window(QtWidgets.QMainWindow):
 
         Args:
             widget: The Qt widget
-            original_type: Original type string ('int', 'float', 'bool', 'str', 'options', 'dict')
+            original_type: Original type string ('int', 'float', 'bool', 'str', 'path', 'options', 'dict')
             widget_info: ParameterWidgetInfo (needed for dict types)
 
         Returns:
@@ -10611,7 +11170,7 @@ class Window(QtWidgets.QMainWindow):
         Args:
             widget: The Qt widget
             value_data: Value in actionable format (int, float, bool, str, tuple, list, dict, etc.)
-            original_type: Original type string ('int', 'float', 'bool', 'str', 'options', 'dict')
+            original_type: Original type string ('int', 'float', 'bool', 'str', 'path', 'options', 'dict')
             widget_info: ParameterWidgetInfo (needed for dict types)
         """
         if (
@@ -11034,8 +11593,7 @@ class Window(QtWidgets.QMainWindow):
                 ] = (module_name, param_values)
 
     def _on_parameter_changed(self):
-        """Called when a parameter textbox loses focus (editingFinished signal).
-        """
+        """Called when a parameter textbox loses focus (editingFinished signal)."""
         self._validate_parameters()
         # Auto-save parameters if editing an existing workflow item
         self._update_editing_workflow_item()

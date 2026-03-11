@@ -1,0 +1,44 @@
+#!/bin/bash
+# Tier 3: integration tests against synthetic and bundled data.
+#
+# Requires picassosr to be installed in the conda environment. Uses a
+# session-scoped 5 000-frame synthetic OME-TIFF (written to the node's
+# /tmp by pytest) and the minimal bundled datasets in
+# picasso_workflow/tests/TestData/integration/.  No network volumes are
+# required.
+#
+# Submit via submit_all.sh or directly:
+#   sbatch --export=ALL,PW_PROJECT_DIR=/path/to/picasso-workflow \
+#          tools/cluster_tests/tier3.sbatch
+
+#SBATCH --job-name=pw-test-tier3
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=8G
+#SBATCH --time=00:30:00
+#SBATCH --output=test-results/tier3_%j.log
+#SBATCH --error=test-results/tier3_%j.log
+
+set -uo pipefail
+
+cd "${PW_PROJECT_DIR:?PW_PROJECT_DIR must be set — use submit_all.sh or pass --export=ALL,PW_PROJECT_DIR=...}"
+mkdir -p test-results
+
+echo "Job started at: $(date)"
+echo "Running on:     $(hostname)"
+echo "Job ID:         ${SLURM_JOB_ID}"
+echo "Project dir:    $(pwd)"
+echo ""
+
+module load anaconda/3/2023.03
+source ~/.bashrc
+conda activate picasso-workflow
+
+python -m pytest \
+    -m "integration and not real_data" \
+    --junit-xml="test-results/tier3_${SLURM_JOB_ID}.xml" \
+    -v
+
+echo ""
+echo "Job completed at: $(date)"

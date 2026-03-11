@@ -183,6 +183,12 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
+    def load_picassoconfig(self):
+        pass
+
+    def zfit(self):
+        pass
+
     @patch("picasso_workflow.analyse.io.load_movie")
     def export_brightfield(self, mock_load):
         frame = np.random.randint(0, 1000, size=(1, 32, 32))
@@ -442,7 +448,7 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.dbscan")
     def dbscan(self, mock_dbscan, mock_fcc):
-        self.ap.info = [{"Width": 1000, "Height": 1000}]
+        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -467,6 +473,7 @@ class TestAnalyseModules(unittest.TestCase):
             "radius": 5,
             "min_density": 0.3,
             "min_samples": 3,
+            "min_locs": 8,
             "continue_with_centers": True,
         }
         parameters, results = self.ap.dbscan(0, parameters)
@@ -479,7 +486,7 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.hdbscan")
     def hdbscan(self, mock_hdbscan, mock_fcc):
-        self.ap.info = [{"Width": 1000, "Height": 1000}]
+        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -517,7 +524,7 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.cluster")
     def smlm_clusterer(self, mock_clusterer, mock_fcc):
-        self.ap.info = [{"Width": 1000, "Height": 1000}]
+        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -545,10 +552,11 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_smlm_clusterer"))
 
-    @patch("picasso_workflow.analyse.g5m.test_subclustering")
-    @patch("picasso_workflow.analyse.g5m.run_g5m")
-    def gaussian_mixture_cluster(self, mock_gmms, mock_test_subclustering):
-        self.ap.info = [{"Width": 1000, "Height": 1000}]
+    @patch("picasso_workflow.analyse.lib.plot_subclustering_check")
+    @patch("picasso_workflow.analyse.clusterer.test_subclustering")
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def gaussian_mixture_cluster(self, mock_gmms, mock_test_subclustering, mock_plot):
+        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -568,7 +576,8 @@ class TestAnalyseModules(unittest.TestCase):
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
         mock_gmms.return_value = self.ap.locs, self.ap.locs, self.ap.info
-        mock_test_subclustering.return_value = None
+        mock_test_subclustering.return_value = (None, None)
+        mock_plot.return_value = None
 
         parameters = {"min_locs": 10, "min_sigma": 0.2, "max_sigma": 0.9}
         parameters, results = self.ap.gaussian_mixture_cluster(0, parameters)
@@ -635,7 +644,7 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
     def spinna(self, mock_sptmp):
         mock_sptmp.return_value = (0, 1)
-        info = [{"Width": 1000, "Height": 1000}]
+        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -692,7 +701,7 @@ class TestAnalyseModules(unittest.TestCase):
 
     # @patch("picasso_workflow.analyse.picasso_outpost.spinna_temp", MagicMock)
     def spinna_manual(self):
-        info = [{"Width": 1000, "Height": 1000}]
+        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),

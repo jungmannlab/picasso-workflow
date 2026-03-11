@@ -2,6 +2,11 @@
 # user-specific version can be in ~/.config/picasso_workflow/config.yaml or %APPDATA%\picasso_workflow\config.yaml
 Templates:
   TemplateName: "/local/path/to/template"
+TestData:
+  # Path to a directory of real acquired datasets used by integration tests.
+  # Override in ~/.config/picasso_workflow/config.yaml (not here).
+  # Alternatively set the environment variable PW_TEST_DATA_DIR.
+  directory: null
 Confluence:
   URL: ""
   Space: "~user"
@@ -13,6 +18,10 @@ SlurmDefault:
   timeout: "24:00:00"
 SlurmLoginNodes:
   clusterXXX: cluster001
+ClusterEnvironment:
+  pw_module: "picasso-workflow-gui"       # module name when use_pw_module is checked
+  anaconda_module: "anaconda/3/2023.03"  # module name when use_pw_module is unchecked
+  conda_env: "picasso-workflow"          # conda environment to activate
 Drivepaths:
   machine.local:
     - "/local/machine/path"

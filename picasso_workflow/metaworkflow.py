@@ -76,10 +76,26 @@ class PathParser:
         if winpath.drive:
             # absolute path
             drive = drive_map[winpath.drive]
-            currospath = pathlib.Path(drive, *winpath.parts[1:])
+            # currospath = pathlib.Path(drive, *winpath.parts[1:])
+
+            # change logic to not convert to current os but new drive type os
+            if ":" in drive:  # converted path is a windows path
+                currospath = pathlib.PureWindowsPath(drive, *winpath.parts[1:])
+            else:  # converted path is a Posix path
+                currospath = pathlib.PurePosixPath(drive, *winpath.parts[1:])
         else:
             # relative path
-            currospath = pathlib.Path(*winpath.parts)
+            # currospath = pathlib.Path(*winpath.parts)
+
+            # change logic to not convert to current os but new drive type os
+            if (
+                ":" in list(drive_map.values())[0][:3]
+            ):  # converted path is a windows path
+                # currospath = pathlib.PureWindowsPath(drive, *winpath.parts[1:])
+                currospath = pathlib.PureWindowsPath(winpath)
+            else:  # converted path is a Posix path
+                # currospath = pathlib.PurePosixPath(drive, *winpath.parts[1:])
+                currospath = pathlib.PurePosixPath(winpath)
         return str(currospath)
 
     def posix_path_to_curr_os(self, posixpath, drive_map):
@@ -96,23 +112,53 @@ class PathParser:
         if posixpath.drive:
             # absolute path
             drive = drive_map[posixpath.drive]
-            # print('old drive: ', posixpath.drive)
-            # print('new drive:' , drive)
-            currospath = pathlib.Path(drive, *posixpath.parts[1:])
+            logger.debug(f"old drive: {posixpath.drive}")
+            logger.debug(f"new drive: {drive}")
+            # currospath = pathlib.Path(drive, *posixpath.parts[1:])
+
+            # change logic to not convert to current os but new drive type os
+            if ":" in drive:  # converted path is a windows path
+                currospath = pathlib.PureWindowsPath(
+                    drive, *posixpath.parts[1:]
+                )
+            else:  # converted path is a Posix path
+                currospath = pathlib.PurePosixPath(drive, *posixpath.parts[1:])
         else:
             # print('no drive')
             drivelen = len(pathlib.Path(list(drive_map.keys())[0]).parts)
-            pseudodrive = pathlib.Path(*posixpath.parts[:drivelen])
+            pseudodrive = pathlib.PurePosixPath(*posixpath.parts[:drivelen])
             # print('pseudodrive:', pseudodrive)
             # print(drive_map)
             if drive := drive_map.get(str(pseudodrive)):
                 # print('found drive:', drive)
                 # found the drive after all
-                currospath = pathlib.Path(drive, *posixpath.parts[drivelen:])
+                # currospath = pathlib.Path(drive, *posixpath.parts[drivelen:])
+
+                # change logic to not convert to current os but new drive type os
+                if ":" in drive:  # converted path is a windows path
+                    currospath = pathlib.PureWindowsPath(
+                        drive, *posixpath.parts[drivelen:]
+                    )
+                else:  # converted path is a Posix path
+                    currospath = pathlib.PurePosixPath(
+                        drive, *posixpath.parts[drivelen:]
+                    )
             else:
                 # print("did not find a drive")
                 # relative path
-                currospath = pathlib.Path(*posixpath.parts)
+                # currospath = pathlib.Path(*posixpath.parts)
+
+                # change logic to not convert to current os but new drive type os
+                if (
+                    ":" in list(drive_map.values())[0]
+                ):  # converted path is a windows path
+                    currospath = pathlib.PureWindowsPath(
+                        drive, *posixpath.parts[1:]
+                    )
+                else:  # converted path is a Posix path
+                    currospath = pathlib.PurePosixPath(
+                        drive, *posixpath.parts[drivelen:]
+                    )
         # print('new path:', currospath)
         return str(currospath)
 
@@ -367,10 +413,11 @@ class AbstractWorkflowCoordinator(abc.ABC):
             # self.size = comm.Get_size()  # Get the total number of processes
             self.rank = int(os.getenv("SLURM_PROCID"))
             self.size = int(os.getenv("SLURM_NTASKS"))
-            logger.debug(f"Assigned rank {self.rank}, size {self.size}.")
+            logger.debug(f"Assigned this node rank {self.rank}, size {self.size}.")
         else:
             self.rank = 0
             self.size = 1
+            logger.debug(f"No SLRUM env vars found. Assigned this node rank {self.rank}, size {self.size}.")
 
         if self.rank == 0:
             ci = confluence.ConfluenceInterface(
@@ -506,7 +553,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             profile_basepage,
         )
 
-    def prepare_analysis(self, workflow_modules):
+    def prepare_analysis(self, workflow_modules, continue_previous_runners=False):
         """
         Args:
             workflow_modules:
@@ -551,7 +598,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
                 reporter_config,
                 analysis_config,
                 wkfl_mods,
-                continue_previous_runner=True,
+                continue_previous_runner=continue_previous_runners,
                 postfix="",
             )
             run_wr_kwargs.append(
@@ -562,8 +609,8 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             )
         return run_wr_kwargs
 
-    def run_analysis(self, workflow_modules):
-        run_wr_kwargs = self.prepare_analysis(workflow_modules)
+    def run_analysis(self, workflow_modules, continue_previous_runners=False):
+        run_wr_kwargs = self.prepare_analysis(workflow_modules, continue_previous_runners)
 
         # print(f'rank {self.rank}, size {self.size}: running {run_awr_kwargs}')
 
@@ -631,7 +678,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             profile_basepage,
         )
 
-    def prepare_analysis(self, workflow_modules_sgl, workflow_modules_agg):
+    def prepare_analysis(self, workflow_modules_sgl, workflow_modules_agg, continue_previous_runners=False):
         """
         Args:
             workflow_modules_multi : dict of
@@ -688,7 +735,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 reporter_config,
                 analysis_config,
                 workflow_modules_multi,
-                continue_previous_runner=True,
+                continue_previous_runner=continue_previous_runners,
                 single_workflow_parallel=False,
                 postfix="",
             )
@@ -700,9 +747,9 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             )
         return run_awr_kwargs
 
-    def run_analysis(self, workflow_modules_sgl, workflow_modules_agg):
+    def run_analysis(self, workflow_modules_sgl, workflow_modules_agg, continue_previous_runners=False):
         run_awr_kwargs = self.prepare_analysis(
-            workflow_modules_sgl, workflow_modules_agg
+            workflow_modules_sgl, workflow_modules_agg, continue_previous_runners
         )
 
         print(f"rank {self.rank}, size {self.size}: running {run_awr_kwargs}")

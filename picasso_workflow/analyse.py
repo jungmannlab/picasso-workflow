@@ -7,9 +7,11 @@ Description: This is the picasso interface of picasso-workflow
 """
 from picasso import lib, io, localize, gausslq, postprocess, clusterer
 from picasso import aim, spinna
-from picasso_workflow.outpost_modules import g5m
+# from picasso_workflow.outpost_modules import g5m
+from picasso import g5m
 from picasso import __version__ as picassoversion
 from picasso import CONFIG as pCONFIG
+import picasso
 import copy
 import gc
 
@@ -48,7 +50,7 @@ from picasso import (
     postprocess,
     spinna,
 )
-from picasso_workflow.outpost_modules import g5m
+# from picasso_workflow.outpost_modules import g5m
 from scipy.ndimage import label
 from scipy.spatial import KDTree, distance
 from scipy.stats import kstest, norm, poisson
@@ -333,6 +335,43 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         self.results_folder = os.path.normpath(results_folder)
         self.analysis_config = analysis_config
+
+    @property
+    def info_mm_entry(self):
+        try:
+            infofirst = self.info[0]
+        except IndexError:
+            infofirst = self.channel_info[0][0]
+        except Exception:
+            raise AttributeError(
+                "Cannot load camera name from info. Load data first."
+            )
+        return infofirst
+
+    @property
+    def camera_name(self):
+        infofirst = self.info_mm_entry
+        try:
+            cam_name = infofirst["Camera"]
+        except KeyError:
+            logger.debug(
+                "Cannot find camera entry. Probably this is a simulation."
+            )
+            cam_name = None
+        return cam_name
+
+    @property
+    def em_wavelength(self):
+        cam_name = self.camera_name
+        filter_config = pCONFIG["Cameras"][cam_name].get("Channel Device")
+        filterturret_label = filter_config["Name"]
+
+        infofirst = self.info_mm_entry
+        filter_label = infofirst["Micro-Manager Metadata"][filterturret_label]
+
+        em_wl = filter_config["Emission Wavelengths"][filter_label]
+
+        return em_wl
 
     @property
     def camera_info(self):
@@ -965,6 +1004,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         results = {}
         identifications = []
 
+        if isinstance(frame_numbers, int):
+            n_sample = frame_numbers
+            start_sample_pct = 0
+            if len(self.movie) < n_sample:
+                n_sample = len(self.movie)
+
+            start_idx = int(start_sample_pct / 100 * len(self.movie))
+            len_subsample = len(self.movie) - start_idx
+            dn = int(len_subsample / (n_sample - 1))
+            frame_numbers = np.arange(start_idx, len_subsample, dn)
+
         for frame_number in frame_numbers:
             identifications.append(
                 localize.identify_by_frame_number(
@@ -997,6 +1047,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             np.abs(hist[:bkg_peak_pos] - bkg_peak_height / 2)
         )
         logger.debug(f"bkg_half_lo: {bkg_half_lo}")
+        if len(bkg_half_lo) == 0:
+            bkg_half_lo = [bkg_peak_pos - 1]
         bkg_fwhm = 2 * np.abs(bkg_peak_pos - bkg_half_lo[0])
         bkg_sigma = bkg_fwhm / np.sqrt(4 * np.log(2))
         # threshold at zscore * bkg_sigma
@@ -1197,10 +1249,14 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         # auto-detect net grad if required:
         if (autograd_pars := parameters.get("auto_netgrad")) is not None:
-            if "filename" in autograd_pars.keys():
+            if "filename" in autograd_pars.keys() and autograd_pars["filename"]:
                 autograd_pars["filename"] = os.path.join(
                     results["folder"], autograd_pars["filename"]
                 )
+            else:
+                autograd_pars["filename"] = os.path.join(
+                    results["folder"], "auto_identification.png")
+
             potential_pars = [
                 "box_size",
                 "frame_numbers",
@@ -1228,10 +1284,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["num_identifications"] = len(self.identifications)
 
         if (pars := parameters.get("ids_vs_frame")) is not None:
-            if "filename" in pars.keys():
-                pars["filename"] = os.path.join(
-                    results["folder"], pars["filename"]
-                )
+            if "filename" in pars.keys() and pars["filename"]:
+                filename = pars["filename"]
+            else:
+                filename = "id_vs_frame.png"
+            pars["filename"] = os.path.join(results["folder"], filename)
             results["ids_vs_frame"] = self._plot_ids_vs_frame(**pars)
 
         # add info
@@ -1368,6 +1425,109 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["locs_columns"] = list(self.locs.columns)
         return parameters, results
 
+    @module_decorator
+    def zfit(self, i, parameters, results):
+        """Fits z positions to previously localized spots.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    magnification_factor : float
+                        the magnification factor for z calibration
+                optional items:
+                    fp_calibration : str
+                        filepath to the 3D calibration yaml file
+                        if not given
+                    save_locs : dict
+                        if saving localizations is requested.
+                        Items correpsond to arguments of save_locs
+            results : dict
+                the results dict, created by the module_decorator
+                    fp_calibration : str
+                        the filepath to the calibration that has been used.
+                        Either as given, or as loaded from config
+                    fp_calibration_fig : str
+                        filepath to the calbiration graph, if loaded
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results
+        """
+        import shutil
+        from picasso import zfit
+
+        # fp_cfg = os.path.join(results["folder"], "config.yaml")
+        # with open(fp_cfg, "w") as config_file:
+        #     yaml.dump(pCONFIG, config_file)
+
+        pixelsize = self.pixelsize
+
+        path = parameters.get("fp_calibration")
+        if path is None or path == "":
+            # fp_calib_lam = CONFIG["z-calibrations"].get(camera)
+            # if fp_calib_lam is not None:
+            #     em_combo = self.emission_combos[camera]
+            #     wavelength = em_combo.currentText()
+            #     fp_calib = fp_calib_lam.get(wavelength)
+            camera = self.camera_name
+            em_wl = self.em_wavelength
+            path = pCONFIG.get("z-calibrations").get(camera).get(em_wl)
+
+        results["fp_calibration"] = path
+
+        # try loading the calibration graphs, for documentation
+        fp_fig_src, _ = os.path.splitext(path)
+        fp_fig_src += ".png"
+        if os.path.exists(fp_fig_src):
+            _, fn_fig = os.path.split(fp_fig_src)
+            fp_fig_dst = os.path.join(results["folder"], fn_fig)
+            shutil.copyfile(fp_fig_src, fp_fig_dst)
+            results["fp_calibration_fig"] = fp_fig_dst
+
+        magnification_factor = parameters["magnification_factor"]
+
+        with open(path, "r") as f:
+            z_calibration = yaml.full_load(f)
+
+        N = len(self.locs)
+        fs = zfit.fit_z_parallel(
+            self.locs,
+            self.info,
+            z_calibration,
+            magnification_factor,
+            pixelsize=pixelsize,
+            filter=0,
+            asynch=True,
+        )
+        n_tasks = len(fs)
+        while lib.n_futures_done(fs) < n_tasks:
+            time.sleep(0.2)
+        self.locs = zfit.locs_from_futures(fs, filter=0)
+
+        # generate a z coordinate histogram
+        fig, ax = plt.subplots()
+        ax.hist(self.locs["z"], bins=50)
+        ax.set_xlabel("z [nm]")
+        ax.set_title("Histogram of z coordinate distribution")
+        fp_fig = os.path.join(results["folder"], "z_histogram.png")
+        fig.savefig(fp_fig)
+        results["fp_fig_zhist"] = fp_fig
+
+        # add info
+        zfit_info = {
+            "Generated by": "Picasso zfit",
+            "Calibration filepath": results["fp_calibration"],
+            "magnification factor": f"{magnification_factor}",
+            "Wrapped by": "picasso-workflow : zfit",
+            # "parameters": parameters,
+        }
+        self.info = self.info + [zfit_info]
+
+        return parameters, results
+
     def _plot_locs_vs_frame(self, filename):
         results = {}
         frames = np.arange(len(self.movie))
@@ -1414,6 +1574,44 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig.savefig(results["filename"])
         plt.close(fig)
         return results
+
+    @module_decorator
+    def load_picassoconfig(self, i, parameters, results):
+        """
+        Loads a specific picasso configuration file, as opposed to the default
+        version residing in the picasso installation folder.
+
+        Args:
+            i : int
+                the module index in the protocol
+            parameters : dict
+                necessary items:
+                    fp_config : str
+                        filepath to a config file.
+            results : dict
+                the results dict, created by the module_decorator
+        Returns:
+            parameters : dict
+                as input, potentially changed values, for consistency
+            results : dict
+                the analysis results, updated with:
+        """
+        global pCONFIG
+
+        with open(parameters["fp_config"], "r") as config_file:
+            new_config = yaml.full_load(config_file)
+
+        # if new_config is not None:
+        picasso.CONFIG = new_config
+        pCONFIG = new_config
+        print(new_config)
+
+        fp_cfg = os.path.join(results["folder"], "config.yaml")
+        with open(fp_cfg, "w") as config_file:
+            yaml.dump(pCONFIG, config_file)
+        results["fp_config"] = fp_cfg
+
+        return parameters, results
 
     #    @profile_resource_usage
     @module_decorator
@@ -3861,10 +4059,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         fig, ax = plt.subplots()
         frames = np.arange(drift.shape[0])
         for i, dim in enumerate(dimensions):
+            factor = 1e-3 if dim == "z" else 1
             if isinstance(drift, pd.DataFrame):
-                ax.plot(frames, drift[dim] * pixelsize, label=dim)
+                ax.plot(frames, drift[dim] * pixelsize * factor, label=dim)
             else:
-                ax.plot(frames, drift[:, i] * pixelsize, label=dim)
+                ax.plot(frames, drift[:, i] * pixelsize * factor, label=dim)
         ax.set_xlabel("frame")
         ax.set_ylabel("drift [nm]")
         ax.set_title(f"undrift by {method}")
@@ -4178,7 +4377,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                     radius : float
                         The DBSCAN radius parameter in nm
                     min_samples : int
-                        Minimum number of samples required for a cluster
+                        Number of localizations within radius to consider a given point
+                        a core sample.
+                    min_locs : int
+                        Minimum number of localizations in a cluster. Clusters with
+                        fewer localizations will be removed. Default is 0.
                     continue_with_centers : bool
                         Whether to replace localizations with cluster centers
                 Optional keys:
@@ -4209,11 +4412,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             results : dict
                 Input results with clustering outputs and file paths
         """
-        pixelsize = self.pixelsize
+        pixelsize = int(self.pixelsize)
         radius = parameters["radius"] / pixelsize
         min_samples = parameters["min_samples"]
+        min_locs = parameters["min_locs"]
         # label locs according to clusters
-        self.locs = clusterer.dbscan(self.locs, radius, min_samples, pixelsize)
+        self.locs = clusterer.dbscan(
+            self.locs, radius, min_samples, min_locs, pixelsize)
         dbscan_info = {
             "Generated by": "Picasso DBSCAN",
             "Radius": radius,
@@ -6261,9 +6466,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
             ("bootstrap_check", False),
             ("calibration", None),
-            ("pixelsize", pixelsize),
+            # ("pixelsize", pixelsize),
             ("asynch", True),
-            ("callback_parent", None), # "silent"),
+            ("callback_parent", None),  # "silent"),
             ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
             ("loc_prec_handle", "local"),
         ]
@@ -6272,7 +6477,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         except KeyError as e:
             logger.error(
                 f"""All of the following arguments are required for
-                picasso.g5m.run_g5m: {required_args}"""
+                picasso.g5m.g5m: {required_args}"""
             )
             raise e
         # sigma values are given in nm in parameters but px in gmm
@@ -6283,16 +6488,23 @@ class AutoPicasso(util.AbstractModuleCollection):
             setval = parameters.get(oa, default)
             if oa == "calibration" and setval == "":
                 setval = default
-            elif (
-                oa == "callback_parent"
-                and (setval == "silent" or setval == "None")
+            elif oa == "calibration" and isinstance(setval, str):
+                fp_calib = setval
+                with open(fp_calib, "r") as f:
+                    z_calibration = yaml.full_load(f)
+                setval = z_calibration
+            elif oa == "callback_parent" and (
+                setval == "silent" or setval == "None"
             ):
                 setval = None
             kwargs[oa] = setval
 
+        print("G5M arguments")
+        print(kwargs)
+
         results["g5m_args"] = str(kwargs)
 
-        center_locs, clustered_locs, gmm_info = g5m.run_g5m(
+        center_locs, clustered_locs, gmm_info = g5m.g5m(
             self.locs, self.info, **kwargs
         )
 
@@ -6319,7 +6531,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_fig_subclustering"] = os.path.join(
             results["folder"], "subcluster_test.png"
         )
-        g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
+        # g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
+        clustered_nevents, sparse_nevents = clusterer.test_subclustering(center_locs, self.info)
+        lib.plot_subclustering_check(clustered_nevents, sparse_nevents, results["fp_fig_subclustering"])
 
         results["n_locs_in"] = len(self.locs)
         results["n_locs_clustered"] = len(clustered_locs)
@@ -6960,6 +7174,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["filepath"] = os.path.join(
             results["folder"], parameters["filename"]
         )
+        root, ext = os.path.splitext(results["filepath"])
+        if ext != ".hdf5":
+            results["filepath"] = root + ".hdf5"
+
         results["nlocs"] = len(self.locs)
         res = self._save_locs(results["filepath"])
         for k, v in res.items():
@@ -7020,6 +7238,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.channel_locs.append(locs)
             self.channel_info.append(info)
             self.channel_tags.append(tag)
+
+        print("Loaded datasets to aggregate")
+        print(self.channel_info)
         results["filepaths"] = parameters["filepaths"]
         results["tags"] = parameters["tags"]
         return parameters, results
@@ -7157,7 +7378,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
             results["fp_co_shift_locs_out"] = fp_co_shift_locs_out
 
-        if fn := parameters.get("fig_filename"):
+        if fn := parameters.get("fig_filename", "fig_align.png"):
             fig_filepath = os.path.join(results["folder"], fn)
             picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath
@@ -7508,158 +7729,158 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    #    @profile_resource_usage
-    @module_decorator
-    def spinna_manual(self, i, parameters, results):
-        """Direct implementation of spinna batch analysis.
-        The current locs file(s) are saved into the results folder, and
-        a template csv file is created. This csv needs to be filled out by the
-        user in a manual step before the spinna analysis is carried out.
+    # #    @profile_resource_usage
+    # @module_decorator
+    # def spinna_manual(self, i, parameters, results):
+    #     """Direct implementation of spinna batch analysis.
+    #     The current locs file(s) are saved into the results folder, and
+    #     a template csv file is created. This csv needs to be filled out by the
+    #     user in a manual step before the spinna analysis is carried out.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    proposed_labeling_efficiency : float, range 0-100
-                        labeling efficiency percentage, default for all targets
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_labeling_uncertainty : float
-                        labeling uncertainty [nm]; good value is e.g. 5
-                        used proposed value in spinna_config.csv and can be
-                         alteredmanually after the first run of this module
-                    proposed_n_simulate : int
-                        number of target molecules to simulated;
-                        good value is e.g. 50000
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_density : float
-                        density to simulate;
-                        area density if 2D; volume density if 3D
-                        used proposed value in spinna_config.csv and can be
-                        altered manually after the first run of this module
-                    proposed_nn_plotted : int
-                        number of nearest neighbors to plot
-                        used proposed value in spinna_config.csv and can be
-                         alteredmanually after the first run of this module
-                and optional keys:
-                    structures : list of dict
-                        SPINNA structures. Each structure dict has
-                            "Molecular targets": list of str,
-                            "Structure title": str,
-                            "TARGET_x": list of float,
-                            "TARGET_y": list of float,
-                            "TARGET_z": list of float,
-                        where TARGET is one each of the target names in
-                        "Molecular targets"
-                    structures_d : float
-                        distance between molecules within auto-generated
-                        structures, in nm. Only necessary if 'structures'
-                        is not given.
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
-        """
-        cfg_fp = os.path.join(results["folder"], "spinna_config.csv")
-        if os.path.exists(cfg_fp):
-            prepped = True
-        else:
-            prepped = False
+    #     Args:
+    #         i : int
+    #             the index of the module
+    #         parameters: dict
+    #             with required keys:
+    #                 proposed_labeling_efficiency : float, range 0-100
+    #                     labeling efficiency percentage, default for all targets
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_labeling_uncertainty : float
+    #                     labeling uncertainty [nm]; good value is e.g. 5
+    #                     used proposed value in spinna_config.csv and can be
+    #                      alteredmanually after the first run of this module
+    #                 proposed_n_simulate : int
+    #                     number of target molecules to simulated;
+    #                     good value is e.g. 50000
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_density : float
+    #                     density to simulate;
+    #                     area density if 2D; volume density if 3D
+    #                     used proposed value in spinna_config.csv and can be
+    #                     altered manually after the first run of this module
+    #                 proposed_nn_plotted : int
+    #                     number of nearest neighbors to plot
+    #                     used proposed value in spinna_config.csv and can be
+    #                      alteredmanually after the first run of this module
+    #             and optional keys:
+    #                 structures : list of dict
+    #                     SPINNA structures. Each structure dict has
+    #                         "Molecular targets": list of str,
+    #                         "Structure title": str,
+    #                         "TARGET_x": list of float,
+    #                         "TARGET_y": list of float,
+    #                         "TARGET_z": list of float,
+    #                     where TARGET is one each of the target names in
+    #                     "Molecular targets"
+    #                 structures_d : float
+    #                     distance between molecules within auto-generated
+    #                     structures, in nm. Only necessary if 'structures'
+    #                     is not given.
+    #         results : dict
+    #             the results this function generates. This is created
+    #             in the decorator wrapper
+    #     """
+    #     cfg_fp = os.path.join(results["folder"], "spinna_config.csv")
+    #     if os.path.exists(cfg_fp):
+    #         prepped = True
+    #     else:
+    #         prepped = False
 
-        if not prepped:
-            spinna_config = {}
-            data_2d = "z" not in self.channel_locs[0].columns
-            if data_2d:
-                spinna_config["rotation_mode"] = ["2D"]
-                area = (
-                    parameters["proposed_n_simulate"]
-                    / parameters["proposed_density"]
-                )
-                spinna_config["area"] = [area]
-                d = 2
-            else:
-                spinna_config["rotation_mode"] = ["3D"]
-                z_range = int(self.locs["z"].max() - self.locs["z"].min())
-                volume = (
-                    parameters["proposed_n_simulate"]
-                    / parameters["proposed_density"]
-                )
-                spinna_config["volume"] = [volume]
-                spinna_config["z_range"] = [z_range]
-                d = 3
+    #     if not prepped:
+    #         spinna_config = {}
+    #         data_2d = "z" not in self.channel_locs[0].columns
+    #         if data_2d:
+    #             spinna_config["rotation_mode"] = ["2D"]
+    #             area = (
+    #                 parameters["proposed_n_simulate"]
+    #                 / parameters["proposed_density"]
+    #             )
+    #             spinna_config["area"] = [area]
+    #             d = 2
+    #         else:
+    #             spinna_config["rotation_mode"] = ["3D"]
+    #             z_range = int(self.locs["z"].max() - self.locs["z"].min())
+    #             volume = (
+    #                 parameters["proposed_n_simulate"]
+    #                 / parameters["proposed_density"]
+    #             )
+    #             spinna_config["volume"] = [volume]
+    #             spinna_config["z_range"] = [z_range]
+    #             d = 3
 
-            # prepare input files for the user to edit, with default values
-            spinna_structs = parameters.get("structures")
-            if spinna_structs is None:
-                spinna_structs = self._create_spinna_structure(
-                    self.channel_tags,
-                    [[1, 2]] * len(self.channel_tags),
-                    distance=parameters["structures_d"],
-                    dimensionality=d,
-                )
-            structs_fn = "spinna_structs.yaml"
-            structs_fp = os.path.join(results["folder"], structs_fn)
-            with open(structs_fp, "w") as f:
-                yaml.dump_all(spinna_structs, f)
+    #         # prepare input files for the user to edit, with default values
+    #         spinna_structs = parameters.get("structures")
+    #         if spinna_structs is None:
+    #             spinna_structs = self._create_spinna_structure(
+    #                 self.channel_tags,
+    #                 [[1, 2]] * len(self.channel_tags),
+    #                 distance=parameters["structures_d"],
+    #                 dimensionality=d,
+    #             )
+    #         structs_fn = "spinna_structs.yaml"
+    #         structs_fp = os.path.join(results["folder"], structs_fn)
+    #         with open(structs_fp, "w") as f:
+    #             yaml.dump_all(spinna_structs, f)
 
-            spinna_config["structures_filename"] = [structs_fp]
-            for locs, info, tag in zip(
-                self.channel_locs, self.channel_info, self.channel_tags
-            ):
-                locs_fn = tag + ".hdf5"
-                locs_fp = os.path.join(results["folder"], locs_fn)
-                io.save_locs(locs_fp, locs, info)
+    #         spinna_config["structures_filename"] = [structs_fp]
+    #         for locs, info, tag in zip(
+    #             self.channel_locs, self.channel_info, self.channel_tags
+    #         ):
+    #             locs_fn = tag + ".hdf5"
+    #             locs_fp = os.path.join(results["folder"], locs_fn)
+    #             io.save_locs(locs_fp, locs, info)
 
-                spinna_config[f"exp_data_{tag}"] = [locs_fp]
-                spinna_config[f"le_{tag}"] = [
-                    parameters["proposed_labeling_efficiency"]
-                ]
-                spinna_config[f"label_unc_{tag}"] = [
-                    parameters["proposed_labeling_uncertainty"]
-                ]
-                spinna_config[f"n_simulated_{tag}"] = [
-                    parameters["proposed_n_simulate"]
-                ]
-            spinna_config["granularity"] = [100]
-            spinna_config["save_filename"] = ["spinna_results"]
-            spinna_config["nn_plotted"] = [parameters["proposed_nn_plotted"]]
+    #             spinna_config[f"exp_data_{tag}"] = [locs_fp]
+    #             spinna_config[f"le_{tag}"] = [
+    #                 parameters["proposed_labeling_efficiency"]
+    #             ]
+    #             spinna_config[f"label_unc_{tag}"] = [
+    #                 parameters["proposed_labeling_uncertainty"]
+    #             ]
+    #             spinna_config[f"n_simulated_{tag}"] = [
+    #                 parameters["proposed_n_simulate"]
+    #             ]
+    #         spinna_config["granularity"] = [100]
+    #         spinna_config["save_filename"] = ["spinna_results"]
+    #         spinna_config["nn_plotted"] = [parameters["proposed_nn_plotted"]]
 
-            # bin size: more than Nyquist subsampling
-            expected_1stNN_peak = (
-                2 / (2 * d * np.pi * parameters["proposed_density"])
-            ) ** (1 / d)
-            spinna_config["NND_bin"] = [expected_1stNN_peak / 10]
-            spinna_config["density"] = parameters["proposed_density"]
-            # max dist: a few times the first NN distance peak
-            spinna_config["NND_maxdist"] = [20 * expected_1stNN_peak]
-            spinna_config["sim_repeats"] = [2]
+    #         # bin size: more than Nyquist subsampling
+    #         expected_1stNN_peak = (
+    #             2 / (2 * d * np.pi * parameters["proposed_density"])
+    #         ) ** (1 / d)
+    #         spinna_config["NND_bin"] = [expected_1stNN_peak / 10]
+    #         spinna_config["density"] = parameters["proposed_density"]
+    #         # max dist: a few times the first NN distance peak
+    #         spinna_config["NND_maxdist"] = [20 * expected_1stNN_peak]
+    #         spinna_config["sim_repeats"] = [2]
 
-            # save config to file
-            pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
+    #         # save config to file
+    #         pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
 
-            msg = "This is a manual step. Please provide input, "
-            msg += "and re-execute the workflow. "
-            msg += f" The file {cfg_fp} has been prepared for you"
-            msg += ", based on the parameters given."
-            results["message"] = msg
-            logger.debug(msg)
-            print(msg)
-            results["success"] = False
-        else:
-            # kick off SPINNA analysis
-            print("starting spinna batch analysis")
-            result_dir, fp_summary, fp_fig = picasso_outpost.spinna_batch(
-                cfg_fp
-            )
+    #         msg = "This is a manual step. Please provide input, "
+    #         msg += "and re-execute the workflow. "
+    #         msg += f" The file {cfg_fp} has been prepared for you"
+    #         msg += ", based on the parameters given."
+    #         results["message"] = msg
+    #         logger.debug(msg)
+    #         print(msg)
+    #         results["success"] = False
+    #     else:
+    #         # kick off SPINNA analysis
+    #         print("starting spinna batch analysis")
+    #         result_dir, fp_summary, fp_fig = picasso_outpost.spinna_batch(
+    #             cfg_fp
+    #         )
 
-            results["message"] = "Successfully performed SPINNA analysis."
-            results["result_dir"] = result_dir
-            results["fp_summary"] = fp_summary
-            results["fp_fig"] = fp_fig
-            results["success"] = True
+    #         results["message"] = "Successfully performed SPINNA analysis."
+    #         results["result_dir"] = result_dir
+    #         results["fp_summary"] = fp_summary
+    #         results["fp_fig"] = fp_fig
+    #         results["success"] = True
 
-        return parameters, results
+    #     return parameters, results
 
     def _create_spinna_structure(
         self, names, multimers, distance, dimensionality=2
@@ -11029,8 +11250,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         all_xmax = parameters.get("maxval")
         if isinstance(all_field, str):
             all_field = [all_field]
-            all_xmin = [all_xmin]
-            all_xmax = [all_xmax]
+            all_xmin = [float(all_xmin)]
+            all_xmax = [float(all_xmax)]
         else:
             if all_xmin is None:
                 all_xmin = [None] * len(all_field)

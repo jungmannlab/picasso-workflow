@@ -135,6 +135,7 @@ def align_channels(
             )
         )
         fp_figs = []
+        shift_uncertainties = {}  # No uncertainty analysis for RCC method
     elif force_method == "RSSO":
         algo_used = "RSSO"
         # Use max_shift parameter if provided, otherwise default to 10.0
@@ -1808,23 +1809,23 @@ def normalize_spot(spot, maxval=255, dtype=np.uint8):
     return sp.astype(dtype)
 
 
-def spinna_batch(parameters_filename):
-    """This function runs a spinna batch analysis from file,
-    as run via command line in picasso.__main__.
+# def spinna_batch(parameters_filename):
+#     """This function runs a spinna batch analysis from file,
+#     as run via command line in picasso.__main__.
 
-    Returns:
-        result_dir : str
-            folder containing the results
-        fp_summary : str
-            the filepath of the summary csv file
-        fp_fig : list of str
-            filepaths of the NND figures
-    """
-    result_dir, fp_summary, fp_fig = spinna_batch_analysis(parameters_filename)
-    # print("result_dir", result_dir)
-    # print("fp_summary", fp_summary)
-    # print("fp_fig", fp_fig)
-    return result_dir, fp_summary, fp_fig
+#     Returns:
+#         result_dir : str
+#             folder containing the results
+#         fp_summary : str
+#             the filepath of the summary csv file
+#         fp_fig : list of str
+#             filepaths of the NND figures
+#     """
+#     result_dir, fp_summary, fp_fig = spinna_batch_analysis(parameters_filename)
+#     # print("result_dir", result_dir)
+#     # print("fp_summary", fp_summary)
+#     # print("fp_fig", fp_fig)
+#     return result_dir, fp_summary, fp_fig
 
 
 def single_spinna_run(
@@ -3545,7 +3546,7 @@ def picked_locs(
             on=["frame", "x", "y", "photons"],
             how='left'
         )
-        mask = merged['_picked'].notna()
+        mask = merged['_picked'].notna().values
         non_picked_locs = locs[~mask]
         return all_picked_locs, non_picked_locs
     else:
