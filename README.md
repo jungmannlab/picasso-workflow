@@ -21,6 +21,7 @@ A package for automated DNA-PAINT analysis workflows
 - [Usage](#usage)
 - [Testing](#testing)
 - [CI / GitHub Actions](#ci--github-actions)
+- [Releasing](#releasing)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -599,6 +600,88 @@ After each run, JUnit XML reports are uploaded as workflow artifacts:
 - **`cluster-test-results-tier4`** — `tier4_<jobid>.xml` (master pushes only)
 
 Download them from the *Actions* tab → select a run → *Artifacts* section.
+
+## Releasing
+
+Versions are derived automatically from git tags by
+[setuptools-scm](https://github.com/pypa/setuptools_scm).
+There are no version numbers to edit in any file — **the tag IS the
+version**.  After `pip install -e .`, the current version is always
+accessible at:
+
+```python
+import picasso_workflow
+print(picasso_workflow.__version__)
+```
+
+Between tagged commits the version looks like `1.2.3.dev4+gabcdef`
+(commits since tag + short hash).  On an exact tag it is just `1.2.3`.
+
+### Release workflow
+
+```
+develop:  A──B──C──D          (feature work, tests pass)
+                    \
+master:              M──[tag v1.2.3]
+                    /
+develop (synced):  M
+```
+
+**1. Finish and test on `develop`**
+
+Make sure all CI checks pass on `develop` before touching `master`.
+
+**2. Merge `develop` → `master`**
+
+```bash
+git checkout master
+git merge --no-ff develop      # --no-ff keeps the merge commit
+git push origin master
+```
+
+Or open a pull request and merge it on GitHub.
+
+**3. Tag the release on `master`**
+
+```bash
+git checkout master             # (already there)
+git tag v1.2.3                  # annotated tags are fine too: git tag -a v1.2.3 -m "v1.2.3"
+git push origin v1.2.3
+```
+
+Tag format must be `vMAJOR.MINOR.PATCH` (e.g. `v1.2.3`).
+
+**4. Sync `develop` back to `master`**
+
+```bash
+git checkout develop
+git merge master                # fast-forwards develop to the merge commit
+git push origin develop
+```
+
+This is a fast-forward (no new commit), so `develop` and `master` now
+point to the same commit and are in sync for the next cycle.
+
+### Choosing a version number
+
+Follow [Semantic Versioning](https://semver.org):
+
+| Change | Example bump |
+|---|---|
+| Bug fix, small patch | `v1.2.2` → `v1.2.3` |
+| New feature, backwards-compatible | `v1.2.3` → `v1.3.0` |
+| Breaking change | `v1.3.0` → `v2.0.0` |
+
+### First release (no tags yet)
+
+Until the first tag is pushed, the version reported is `0.0.0.dev0`.
+Create the initial tag on `master` after the first merge:
+
+```bash
+git checkout master
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 ## Contributing
 

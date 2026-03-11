@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools", "setuptools-scm", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -47,6 +47,14 @@ cluster = [
 
 [tool.setuptools]
 packages = ["picasso_workflow"]
+
+[tool.setuptools_scm]
+# Writes the version into a file that is importable at runtime, even when
+# installed from a wheel or sdist (i.e. without a .git directory).
+write_to = "picasso_workflow/_version.py"
+# Shown when the package is imported outside a git repository and no tag
+# is reachable (e.g. a fresh checkout with no tags yet).
+fallback_version = "0.0.0.dev0"
 
 [tool.setuptools.package-data]
 picasso_workflow = ["picasso-workflow.ico"]
