@@ -37,6 +37,19 @@ via picassosr.
 
 ## Installation
 
+### Prerequisites
+
+Make sure to have (ana)conda installed. On Mac OS, open the terminal (command + space,
+type "terminal" hit enter). Then, one after another execute the follwing commands
+- `curl -O https://repo.anaconda.com/archive/Anaconda3-2024.09-MacOSX-x86_64.sh`
+- `bash Anaconda3-2024.09-MacOSX-x86_64.sh`
+- `~/anaconda3/bin/conda init`
+- `conda config --remove channels defaults`
+- `conda config --add channels conda-forge`
+- close the terminal and reopen it, to apply the changes.
+
+### picasso-workflow specific installation
+
 - create a new anaconda environment: `conda create -n picasso-workflow python=3.10`
 - If you want to use a local development version of picasso, install that first:
 	- `cd /path/to/picasso`
@@ -49,6 +62,7 @@ via picassosr.
 ## Usage
 
 - see examples in the folder "examples".
+- if you have access, see examples in "/Volumes/pool-miblab/users/grabmayr/picasso-workflow_testdata"
 
 ### One-click installers
 
