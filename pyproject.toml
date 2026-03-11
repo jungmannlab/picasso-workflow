@@ -37,6 +37,9 @@ dependencies = [
 ]
 keywords = ["picasso"]
 
+[project.gui-scripts]
+picasso-workflow-gui = "picasso_workflow.gui:main"
+
 [project.optional-dependencies]
 cluster = [
     "mpi4py>=4.0.2",
@@ -44,6 +47,9 @@ cluster = [
 
 [tool.setuptools]
 packages = ["picasso_workflow"]
+
+[tool.setuptools.package-data]
+picasso_workflow = ["picasso-workflow.ico"]
 
 [tool.black]
 line-length = 79

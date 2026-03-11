@@ -6846,16 +6846,25 @@ class SlurmCommunicator:
         """Assembles picasso-workflow specific commands for running a batch
         job on a SLURM cluster.
         """
+        cluster_env = CONFIG.get("ClusterEnvironment", {})
+        pw_module = cluster_env.get(
+            "pw_module", "picasso-workflow-gui"
+        )
+        anaconda_module = cluster_env.get(
+            "anaconda_module", "anaconda/3/2023.03"
+        )
+        conda_env = cluster_env.get("conda_env", "picasso-workflow")
+
         commands = []
         if use_pw_module:
-            commands.append("module load picasso-workflow-gui")
+            commands.append(f"module load {pw_module}")
         else:
-            commands.append("module load anaconda/3/2023.03")
+            commands.append(f"module load {anaconda_module}")
 
         commands.append("source ~/.bashrc")
 
         if not use_pw_module:
-            commands.append("conda activate picasso-workflow")
+            commands.append(f"conda activate {conda_env}")
 
         commands.append(f"srun {scriptname}")
 

@@ -18,6 +18,10 @@ SlurmDefault:
   timeout: "24:00:00"
 SlurmLoginNodes:
   clusterXXX: cluster001
+ClusterEnvironment:
+  pw_module: "picasso-workflow-gui"       # module name when use_pw_module is checked
+  anaconda_module: "anaconda/3/2023.03"  # module name when use_pw_module is unchecked
+  conda_env: "picasso-workflow"          # conda environment to activate
 Drivepaths:
   machine.local:
     - "/local/machine/path"

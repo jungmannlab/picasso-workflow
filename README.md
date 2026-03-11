@@ -3,10 +3,12 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 master:
-![master test](https://img.shields.io/github/actions/workflow/status/jungmannlab/picasso-workflow/run-unittests.yml?branch=master)
+![master unit tests](https://img.shields.io/github/actions/workflow/status/jungmannlab/picasso-workflow/run-unittests.yml?branch=master&label=unit%20tests)
+![master cluster tests](https://img.shields.io/github/actions/workflow/status/jungmannlab/picasso-workflow/run-cluster-tests.yml?branch=master&label=cluster%20tests)
 
 develop:
-![develop test](https://img.shields.io/github/actions/workflow/status/jungmannlab/picasso-workflow/run-unittests.yml?branch=develop)
+![develop unit tests](https://img.shields.io/github/actions/workflow/status/jungmannlab/picasso-workflow/run-unittests.yml?branch=develop&label=unit%20tests)
+![develop cluster tests](https://img.shields.io/github/actions/workflow/status/jungmannlab/picasso-workflow/run-cluster-tests.yml?branch=develop&label=cluster%20tests)
 ![Coveralls develop](https://img.shields.io/coverallsCoverage/github/jungmannlab/picasso-workflow?branch=develop)
 
 
@@ -18,6 +20,7 @@ A package for automated DNA-PAINT analysis workflows
 - [Installation](#installation)
 - [Usage](#usage)
 - [Testing](#testing)
+- [CI / GitHub Actions](#ci--github-actions)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -45,6 +48,145 @@ via picassosr.
 ## Usage
 
 - see examples in the folder "examples".
+
+### One-click installers
+
+Three installer scripts handle the full setup (find conda → create
+environment → `pip install` → create shortcut/app bundle) in a single
+double-click.
+
+| Script | Platform | Who runs it |
+|---|---|---|
+| `tools/install_windows_personal.bat` | Windows | Any user — creates shortcut on your own desktop for testing |
+| `tools/install_windows_allusers.bat` | Windows | Administrator — creates shortcut on every user's desktop |
+| `tools/install_mac.command` | macOS | Any user — creates `~/Applications/picasso-workflow.app` |
+
+**Windows**: double-click the `.bat` file.  The all-users variant
+automatically requests elevation (UAC prompt).
+
+**macOS**: double-click `install_mac.command` in Finder.  On first run,
+macOS may block it — go to *System Settings → Privacy & Security* and
+click *Open Anyway*, then double-click again.
+
+After installation the GUI can also be launched from the terminal:
+
+```bash
+# terminal (any platform, environment activated):
+picasso-workflow-gui
+
+# or:
+python -m picasso_workflow.gui
+```
+
+### Windows Server deployment — per-user desktop shortcut
+
+On a shared Windows Server, placing a shortcut in
+`C:\Users\Public\Desktop` makes it appear on **every** user's desktop
+without GPO or per-user scripting.  The helper script
+`tools\deploy_gui_shortcut.ps1` does this automatically.
+
+**Prerequisites**
+
+1. Install the package in the shared conda environment (once, by an
+   administrator):
+   ```powershell
+   conda activate picasso-workflow
+   pip install -e C:\path\to\picasso-workflow
+   ```
+   `pip install` reads the `[project.gui-scripts]` entry point in
+   `pyproject.toml` and creates
+   `<conda-env>\Scripts\picasso-workflow-gui.exe` — a native Windows
+   executable that launches the GUI without a console window.
+
+2. Verify it works interactively:
+   ```powershell
+   conda activate picasso-workflow
+   picasso-workflow-gui
+   ```
+
+**Step 1 — Test as a normal user (no admin needed)**
+
+Run without `-AllUsers` to create a shortcut on your own desktop only.
+This lets you verify the install before involving an administrator:
+
+```powershell
+conda activate picasso-workflow
+powershell -ExecutionPolicy Bypass -File tools\deploy_gui_shortcut.ps1
+```
+
+Double-click the shortcut that appears on your desktop.  If the GUI
+opens correctly, the install is working.
+
+**Step 2 — Deploy to all users (Administrator required)**
+
+Once verified, ask an administrator to run the same script with
+`-AllUsers` from an elevated prompt:
+
+```powershell
+# Option A — environment is already activated:
+conda activate picasso-workflow
+powershell -ExecutionPolicy Bypass -File tools\deploy_gui_shortcut.ps1 -AllUsers
+
+# Option B — specify the environment path explicitly:
+powershell -ExecutionPolicy Bypass -File tools\deploy_gui_shortcut.ps1 `
+    -CondaEnvPath "C:\ProgramData\Anaconda3\envs\picasso-workflow" -AllUsers
+```
+
+This writes `C:\Users\Public\Desktop\picasso-workflow.lnk`, which
+appears on every user's desktop.  Re-run after upgrading the package or
+moving the conda environment.
+
+**What the script does**
+
+| Step | Action |
+|---|---|
+| 1 | Resolves the conda environment path (`$CONDA_PREFIX` or `-CondaEnvPath`) |
+| 2 | Locates `Scripts\picasso-workflow-gui.exe` inside that environment |
+| 3 | Without `-AllUsers`: creates shortcut on your personal desktop |
+| 3 | With `-AllUsers`: creates shortcut in `C:\Users\Public\Desktop` |
+
+No registry edits, no GPO, no per-user configuration needed.
+
+### macOS deployment — single-user app bundle
+
+On macOS the standard way to make a Python GUI launchable from Finder (or
+pinnable to the Dock) is a `.app` bundle.  The helper script
+`tools/deploy_gui_mac.sh` builds one and places it in `~/Applications/`.
+
+**Prerequisites** — same as Windows: install the package in the conda
+environment first:
+
+```bash
+conda activate picasso-workflow
+pip install -e /path/to/picasso-workflow
+picasso-workflow-gui   # verify it launches from the terminal
+```
+
+**Creating the app bundle (no sudo required)**
+
+```bash
+# With the environment already activated:
+conda activate picasso-workflow
+bash tools/deploy_gui_mac.sh
+
+# Or with an explicit environment path:
+CONDA_ENV_PATH=~/miniconda3/envs/picasso-workflow \
+    bash tools/deploy_gui_mac.sh
+```
+
+The script creates `~/Applications/picasso-workflow.app`.  To make it
+easily accessible:
+
+- **Dock**: drag `~/Applications/picasso-workflow.app` onto the Dock
+- **Desktop alias**: in Finder open `~/Applications`, then drag the app
+  to `~/Desktop` while holding `Cmd+Alt`
+
+**Icon** — the script converts `picasso_workflow/picasso-workflow.ico`
+to the macOS `.icns` format automatically using `sips` and `iconutil`
+(both are built into macOS).  No extra tools needed.
+
+Re-run the script after upgrading the package or moving the conda
+environment.
 
 ## Testing
 
@@ -333,6 +475,130 @@ When adding a module, make sure all tiers remain green:
    and re-run `python tools/snapshot_templates.py`.
 5. On a lab machine with `PW_TEST_DATA_DIR` set, run
    `pytest -m "integration and real_data"` — Tier 4 must pass.
+
+## CI / GitHub Actions
+
+Two GitHub Actions workflows run automatically on every push and pull request
+to `master` and `develop`.
+
+| Workflow file | Runner | What it runs | When |
+|---|---|---|---|
+| `run-unittests.yml` | Windows self-hosted | `pytest` (all mocked unit tests) + coverage | every push / PR |
+| `run-cluster-tests.yml` | Linux self-hosted on cluster | SLURM Tiers 1–3 (unit + template + integration) | every push / PR |
+| `run-cluster-tests.yml` | Linux self-hosted on cluster | SLURM Tier 4 (real data) | push to `master` only |
+
+### How the cluster CI workflow works
+
+`run-cluster-tests.yml` runs on a self-hosted runner registered on the
+cluster login node.  It submits individual `sbatch` jobs (the same scripts
+used manually via `submit_all.sh`) and polls `squeue` until they finish,
+then checks exit codes via `sacct` and uploads the JUnit XML reports as
+workflow artifacts.
+
+```
+GitHub Actions runner (login node)
+    │
+    ├─ sbatch tier1_2.sbatch  ──► compute node  [unit + template, ≤15 min]
+    │       afterok ↓
+    ├─ sbatch tier3.sbatch    ──► compute node  [integration,     ≤30 min]
+    │       (on push to master only)
+    │       afterok ↓
+    └─ sbatch tier4.sbatch    ──► compute node  [real data,       ≤12 h  ]
+```
+
+### Setting up the cluster self-hosted runner
+
+This only needs to be done once per cluster.  Run all commands on the
+**cluster login node** that has access to `sbatch`.
+
+**1. Register the runner in GitHub**
+
+Go to the repository → *Settings* → *Actions* → *Runners* →
+*New self-hosted runner*.  Select **Linux / x64** and follow the
+displayed download and configuration commands.
+
+When the interactive `config.sh` script asks for labels, enter:
+
+```
+self-hosted,linux,cluster
+```
+
+These three labels are what `run-cluster-tests.yml` uses to select this
+runner (`runs-on: [self-hosted, linux, cluster]`).
+
+**2. Install the runner as a persistent service**
+
+So the runner survives SSH session disconnects and cluster reboots:
+
+```bash
+cd ~/actions-runner          # or wherever you installed it
+sudo ./svc.sh install        # installs a systemd service
+sudo ./svc.sh start
+sudo ./svc.sh status         # should show "active (running)"
+```
+
+If you do not have `sudo` on the login node, use a `screen` or `tmux`
+session as a fallback:
+
+```bash
+screen -S gh-runner
+cd ~/actions-runner
+./run.sh
+# Ctrl-A D to detach
+```
+
+**3. Verify SLURM is on the runner's PATH**
+
+The runner process inherits the environment of the user who started it.
+Check that `sbatch`, `squeue`, and `sacct` are accessible:
+
+```bash
+which sbatch squeue sacct
+```
+
+If not, add the SLURM `bin` directory to `~/.bashrc` (or `~/.profile`
+for non-interactive sessions) and restart the runner service.
+
+**4. Ensure the conda environment exists**
+
+The `.sbatch` scripts activate the `picasso-workflow` conda environment.
+Follow the [Installation](#installation) steps on the cluster if you
+have not done so already, then verify:
+
+```bash
+conda activate picasso-workflow
+python -c "import picasso; import picasso_workflow; print('OK')"
+```
+
+If the module name `anaconda/3/2023.03` used in the `.sbatch` files does
+not exist on your cluster, edit the `module load` line in each file
+(`tools/cluster_tests/tier1_2.sbatch`, `tier3.sbatch`, `tier4.sbatch`).
+
+### Enabling Tier 4 real-data tests in CI
+
+Tier 4 runs only on push to `master` and requires the path to the real
+acquired-data directory.  Set it as a repository-level Actions variable
+(not a secret — it is a plain path):
+
+*Settings → Secrets and variables → Actions → Variables → New repository variable*
+
+| Name | Example value |
+|---|---|
+| `PW_TEST_DATA_DIR` | `/fs/pool-miblab1/users/you/test-datasets` |
+
+The path must be accessible on the cluster compute nodes (pool volumes
+must be mounted there).  If the variable is not set or the directory is
+not mounted, all `real_data` tests are skipped automatically and the CI
+job still passes.
+
+### Artifacts
+
+After each run, JUnit XML reports are uploaded as workflow artifacts:
+
+- **`cluster-test-results-tier1-3`** — `tier1_2_<jobid>.xml` and `tier3_<jobid>.xml`
+- **`cluster-test-results-tier4`** — `tier4_<jobid>.xml` (master pushes only)
+
+Download them from the *Actions* tab → select a run → *Artifacts* section.
 
 ## Contributing
 

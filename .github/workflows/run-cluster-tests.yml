@@ -1,0 +1,154 @@
+name: Cluster Tests (SLURM)
+# Submits SLURM jobs on the HPC cluster and polls for completion.
+#
+# Prerequisites
+# -------------
+# A GitHub Actions self-hosted runner must be registered on the cluster
+# login node with the labels [self-hosted, linux, cluster].  The runner
+# process must have access to `sbatch`, `squeue`, and `sacct` (i.e. the
+# SLURM binaries must be on its PATH).
+#
+# Tiers 1–3 run on every push and pull-request to master/develop.
+# Tier 4 (real acquired-data tests, ≤12 h) runs only on push to master.
+# Set the repository-level Actions variable PW_TEST_DATA_DIR to the path
+# of the real-data directory on the cluster to enable Tier 4.
+
+on:
+  push:
+    branches:
+      - master
+      - develop
+  pull_request:
+    branches:
+      - master
+      - develop
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Tiers 1 + 2 + 3: unit tests, template validation, synthetic-data
+  # integration tests.  No real acquired data required.
+  # ---------------------------------------------------------------------------
+  tiers-1-3:
+    name: Tiers 1–3 (unit + template + integration)
+    runs-on: [self-hosted, linux, cluster]
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create results directory
+        run: mkdir -p "$GITHUB_WORKSPACE/test-results"
+
+      - name: Submit tiers 1+2 and 3 to SLURM
+        id: submit
+        run: |
+          COMMON=(
+            --parsable
+            --chdir="$GITHUB_WORKSPACE"
+            --export="ALL,PW_PROJECT_DIR=$GITHUB_WORKSPACE"
+          )
+
+          jid1=$(sbatch "${COMMON[@]}" tools/cluster_tests/tier1_2.sbatch)
+          echo "Submitted Tier 1+2: job $jid1"
+
+          jid2=$(sbatch "${COMMON[@]}" \
+            --dependency=afterok:"$jid1" \
+            tools/cluster_tests/tier3.sbatch)
+          echo "Submitted Tier 3:   job $jid2 (depends on $jid1)"
+
+          echo "jid1=$jid1" >> "$GITHUB_OUTPUT"
+          echo "jid2=$jid2" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for SLURM jobs to finish
+        run: |
+          jobs="${{ steps.submit.outputs.jid1 }},${{ steps.submit.outputs.jid2 }}"
+          echo "Polling SLURM jobs: $jobs"
+          while squeue -j "$jobs" --noheader 2>/dev/null | grep -q .; do
+            echo "$(date -u '+%H:%M:%S') UTC — still running …"
+            sleep 30
+          done
+          echo "All jobs finished."
+
+      - name: Check SLURM exit codes
+        run: |
+          failed=0
+          for jid in ${{ steps.submit.outputs.jid1 }} ${{ steps.submit.outputs.jid2 }}; do
+            state=$(sacct -j "$jid" --format=State --noheader -P | head -1 | tr -d ' ')
+            echo "Job $jid: $state"
+            if [[ "$state" != "COMPLETED" ]]; then
+              echo "::error::SLURM job $jid did not complete successfully (state=$state)"
+              failed=1
+            fi
+          done
+          exit $failed
+
+      - name: Upload JUnit XML results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-test-results-tier1-3
+          path: |
+            ${{ github.workspace }}/test-results/tier1_2_*.xml
+            ${{ github.workspace }}/test-results/tier3_*.xml
+
+  # ---------------------------------------------------------------------------
+  # Tier 4: real acquired-data tests.
+  # Only runs on push to master.  Requires the repository-level Actions
+  # variable PW_TEST_DATA_DIR to point to the lab data directory on the
+  # cluster.  If the variable is empty the sbatch job starts but all
+  # real_data tests are skipped automatically (no failure).
+  # ---------------------------------------------------------------------------
+  tier-4:
+    name: Tier 4 (real data, master only)
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    needs: tiers-1-3
+    runs-on: [self-hosted, linux, cluster]
+    timeout-minutes: 780   # 13 h — covers the 12 h walltime + queue wait
+    env:
+      PW_TEST_DATA_DIR: ${{ vars.PW_TEST_DATA_DIR }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create results directory
+        run: mkdir -p "$GITHUB_WORKSPACE/test-results"
+
+      - name: Submit tier 4 to SLURM
+        id: submit
+        run: |
+          jid=$(sbatch --parsable \
+            --chdir="$GITHUB_WORKSPACE" \
+            --export="ALL,PW_PROJECT_DIR=$GITHUB_WORKSPACE,PW_TEST_DATA_DIR=${PW_TEST_DATA_DIR:-}" \
+            tools/cluster_tests/tier4.sbatch)
+          echo "Submitted Tier 4: job $jid"
+          echo "jid=$jid" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for SLURM job to finish
+        run: |
+          jid="${{ steps.submit.outputs.jid }}"
+          echo "Polling SLURM job: $jid"
+          while squeue -j "$jid" --noheader 2>/dev/null | grep -q .; do
+            echo "$(date -u '+%H:%M:%S') UTC — still running …"
+            sleep 120
+          done
+          echo "Job finished."
+
+      - name: Check SLURM exit code
+        run: |
+          jid="${{ steps.submit.outputs.jid }}"
+          state=$(sacct -j "$jid" --format=State --noheader -P | head -1 | tr -d ' ')
+          echo "Job $jid: $state"
+          if [[ "$state" != "COMPLETED" ]]; then
+            echo "::error::Tier 4 SLURM job $jid did not complete successfully (state=$state)"
+            exit 1
+          fi
+
+      - name: Upload JUnit XML results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-test-results-tier4
+          path: ${{ github.workspace }}/test-results/tier4_*.xml
