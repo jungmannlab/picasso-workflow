@@ -37,7 +37,7 @@
 #>
 
 param(
-    [string]$CondaEnvPath = $env:CONDA_PREFIX,
+    [string]$CondaEnvPath = "",
     [string]$ShortcutName = "picasso-workflow",
     [switch]$AllUsers
 )
@@ -65,12 +65,33 @@ a shortcut on your own desktop for testing.
 # ---------------------------------------------------------------------------
 # 1. Resolve the conda environment
 # ---------------------------------------------------------------------------
+
+# Use $env:CONDA_PREFIX if conda is initialised for this PS session,
+# otherwise search well-known installation directories automatically.
+if (-not $CondaEnvPath) { $CondaEnvPath = $env:CONDA_PREFIX }
+
+if (-not $CondaEnvPath) {
+    $candidates = @(
+        "$env:USERPROFILE\miniconda3\envs\picasso-workflow",
+        "$env:USERPROFILE\anaconda3\envs\picasso-workflow",
+        "$env:USERPROFILE\AppData\Local\miniconda3\envs\picasso-workflow",
+        "$env:USERPROFILE\AppData\Local\anaconda3\envs\picasso-workflow",
+        "C:\ProgramData\Miniconda3\envs\picasso-workflow",
+        "C:\ProgramData\Anaconda3\envs\picasso-workflow"
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path "$c\Scripts\picasso-workflow-gui.exe") {
+            $CondaEnvPath = $c
+            Write-Host "Auto-detected conda environment: $CondaEnvPath"
+            break
+        }
+    }
+}
+
 if (-not $CondaEnvPath) {
     Write-Error @"
-No conda environment path found.
-Either activate the environment first:
-    conda activate picasso-workflow
-or pass it explicitly:
+Could not find the picasso-workflow conda environment.
+Pass the path explicitly:
     .\deploy_gui_shortcut.ps1 -CondaEnvPath "C:\...\envs\picasso-workflow"
 "@
     exit 1
