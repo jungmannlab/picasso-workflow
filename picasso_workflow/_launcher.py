@@ -12,7 +12,30 @@ directly to picasso_workflow.gui:main.
 """
 
 
+def _hide_console_window() -> None:
+    """Hide the console window on Windows so no black terminal flashes up.
+
+    console_scripts creates an exe backed by python.exe (always present in
+    conda envs), whereas gui_scripts uses pythonw.exe which may be absent.
+    We therefore use console_scripts and hide the window ourselves.
+    """
+    import sys
+
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+    except Exception:
+        pass
+
+
 def main() -> None:
+    _hide_console_window()
+
     import sys
     from pathlib import Path
 

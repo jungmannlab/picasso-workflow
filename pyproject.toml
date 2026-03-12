@@ -38,7 +38,7 @@ dependencies = [
 ]
 keywords = ["picasso"]
 
-[project.gui-scripts]
+[project.scripts]
 picasso-workflow-gui = "picasso_workflow._launcher:main"
 
 [project.optional-dependencies]
