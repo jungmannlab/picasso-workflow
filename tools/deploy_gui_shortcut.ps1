@@ -65,58 +65,58 @@ a shortcut on your own desktop for testing.
 # ---------------------------------------------------------------------------
 # 1. Resolve the conda environment
 # ---------------------------------------------------------------------------
+# Search every plausible location and accept the first one that actually
+# contains the installed exe.  This handles three common situations:
+#   a. -CondaEnvPath was passed explicitly
+#   b. $env:CONDA_PREFIX points to the named env (conda was activated)
+#   c. $env:CONDA_PREFIX points to the base installation (base env active)
+#   d. conda is not on PATH at all in this PowerShell session
 
-# Use $env:CONDA_PREFIX if conda is initialised for this PS session,
-# otherwise search well-known installation directories automatically.
-if (-not $CondaEnvPath) { $CondaEnvPath = $env:CONDA_PREFIX }
+$candidates = [System.Collections.Generic.List[string]]::new()
 
-if (-not $CondaEnvPath) {
-    $candidates = @(
-        "$env:USERPROFILE\miniconda3\envs\picasso-workflow",
-        "$env:USERPROFILE\anaconda3\envs\picasso-workflow",
-        "$env:USERPROFILE\AppData\Local\miniconda3\envs\picasso-workflow",
-        "$env:USERPROFILE\AppData\Local\anaconda3\envs\picasso-workflow",
-        "C:\ProgramData\Miniconda3\envs\picasso-workflow",
-        "C:\ProgramData\Anaconda3\envs\picasso-workflow"
-    )
-    foreach ($c in $candidates) {
-        if (Test-Path "$c\Scripts\picasso-workflow-gui.exe") {
-            $CondaEnvPath = $c
-            Write-Host "Auto-detected conda environment: $CondaEnvPath"
-            break
-        }
+# Explicit argument takes priority
+if ($CondaEnvPath) { $candidates.Add($CondaEnvPath) }
+
+# CONDA_PREFIX: try both the value itself and its envs\picasso-workflow child
+if ($env:CONDA_PREFIX) {
+    $candidates.Add($env:CONDA_PREFIX)
+    $candidates.Add("$env:CONDA_PREFIX\envs\picasso-workflow")
+}
+
+# Well-known installation directories
+foreach ($base in @(
+    "$env:USERPROFILE\miniconda3",
+    "$env:USERPROFILE\anaconda3",
+    "$env:USERPROFILE\AppData\Local\miniconda3",
+    "$env:USERPROFILE\AppData\Local\anaconda3",
+    "C:\ProgramData\Miniconda3",
+    "C:\ProgramData\Anaconda3"
+)) {
+    $candidates.Add("$base\envs\picasso-workflow")
+}
+
+$CondaEnvPath = ""
+foreach ($c in $candidates) {
+    if (Test-Path "$c\Scripts\picasso-workflow-gui.exe") {
+        $CondaEnvPath = $c
+        Write-Host "Found conda environment: $CondaEnvPath"
+        break
     }
 }
 
 if (-not $CondaEnvPath) {
     Write-Error @"
-Could not find the picasso-workflow conda environment.
-Pass the path explicitly:
+Could not find picasso-workflow-gui.exe in any known location.
+Make sure the package is installed, then pass the env path explicitly:
     .\deploy_gui_shortcut.ps1 -CondaEnvPath "C:\...\envs\picasso-workflow"
 "@
     exit 1
 }
 
-if (-not (Test-Path $CondaEnvPath)) {
-    Write-Error "Conda environment path not found: $CondaEnvPath"
-    exit 1
-}
-
 # ---------------------------------------------------------------------------
-# 2. Find the GUI executable created by the gui-scripts entry point
+# 2. Build the exe path (already verified to exist by the search above)
 # ---------------------------------------------------------------------------
 $ExePath = Join-Path $CondaEnvPath "Scripts\picasso-workflow-gui.exe"
-
-if (-not (Test-Path $ExePath)) {
-    Write-Error @"
-Executable not found: $ExePath
-
-Make sure the package is installed in this environment:
-    conda activate picasso-workflow
-    pip install -e C:\path\to\picasso-workflow
-"@
-    exit 1
-}
 
 # ---------------------------------------------------------------------------
 # 3. Locate the icon installed with the package
