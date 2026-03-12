@@ -27,7 +27,10 @@ from PyQt5.QtCore import Qt, QEvent
 
 
 logger = logging.getLogger(__name__)
-__GUIVERSION__ = "0.1.0"
+try:
+    from picasso_workflow._version import __version__ as __GUIVERSION__
+except ImportError:
+    __GUIVERSION__ = "unknown"
 
 
 class ModuleDescriptor(util.AbstractModuleCollection):
