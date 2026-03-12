@@ -140,18 +140,36 @@ $ExePath = Join-Path $CondaEnvPath "Scripts\picasso-workflow-gui.exe"
 # 3. Locate the icon — ask Python so editable installs work too
 # ---------------------------------------------------------------------------
 $python  = Join-Path $CondaEnvPath "python.exe"
-$IconPath = & $python -c @"
-import importlib.resources, sys
+$RawIconPath = & $python -c @"
+import sys, pathlib
+# Strategy 1: importlib.resources (works for wheel installs)
 try:
+    import importlib.resources
     p = importlib.resources.files('picasso_workflow').joinpath('picasso-workflow.ico')
-    # resolve to a real filesystem path
-    import pathlib
-    print(str(pathlib.Path(str(p)).resolve()))
+    r = pathlib.Path(str(p)).resolve()
+    if r.exists():
+        print(str(r))
+        sys.exit(0)
 except Exception:
-    sys.exit(1)
+    pass
+# Strategy 2: __file__ (works for editable installs)
+try:
+    import picasso_workflow
+    r = pathlib.Path(picasso_workflow.__file__).parent / 'picasso-workflow.ico'
+    if r.exists():
+        print(str(r))
+        sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
 "@ 2>$null
 
-if (-not $IconPath -or -not (Test-Path $IconPath)) {
+# Trim whitespace/newlines that Python adds to the output
+$IconPath = if ($RawIconPath) { $RawIconPath.Trim() } else { "" }
+
+if ($IconPath -and (Test-Path $IconPath)) {
+    Write-Host "Icon: $IconPath"
+} else {
     Write-Warning "Icon not found - shortcut will use the default Python icon."
     $IconPath = $ExePath
 }
