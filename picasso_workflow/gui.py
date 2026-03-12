@@ -27,7 +27,10 @@ from PyQt5.QtCore import Qt, QEvent
 
 
 logger = logging.getLogger(__name__)
-__GUIVERSION__ = "0.1.0"
+try:
+    from picasso_workflow._version import __version__ as __GUIVERSION__
+except ImportError:
+    __GUIVERSION__ = "unknown"
 
 
 class ModuleDescriptor(util.AbstractModuleCollection):
@@ -681,9 +684,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "sample_movie, sample_frame_idx": {
                 "type": "str",
-                "description": (
-                    "sample movie frame indices"
-                ),
+                "description": ("sample movie frame indices"),
                 "required": False,
             },
         }
@@ -975,9 +976,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "locs_vs_frame": {
                 "type": "dict",
-                "description": 
-                    "Dictionary for plotting locs vs time. e.g."
-                    "{'filename': 'locsvsframe.png'}",
+                "description": "Dictionary for plotting locs vs time. e.g."
+                "{'filename': 'locsvsframe.png'}",
                 "default": "{'filename': 'locsvsframe.png'}",
                 "required": False,
             },
@@ -1049,9 +1049,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "magnification_factor": {
                 "type": "float",
-                "description":
-                    "The magnification factor to compensate stage scanning "
-                    "calibration vs in-sample measurement.",
+                "description": "The magnification factor to compensate stage scanning "
+                "calibration vs in-sample measurement.",
                 "default": 0.79,
                 "min": 0,
                 "max": 1e6,
@@ -1059,11 +1058,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "fp_calibration": {
                 "type": "path",
-                "description":
-                    "The calibration file path to use. If not given, the filepath"
-                    "from config is loaded for the microscope and emission wavelength. "
-                    "Keep in mind this must be a path on the cluster for now"
-                    " (i.e. /fs/mpib/pool-miblab5/... instead of /Volumes/pool...)",
+                "description": "The calibration file path to use. If not given, the filepath"
+                "from config is loaded for the microscope and emission wavelength. "
+                "Keep in mind this must be a path on the cluster for now"
+                " (i.e. /fs/mpib/pool-miblab5/... instead of /Volumes/pool...)",
                 "default": "",
                 "required": False,
             },
@@ -1128,10 +1126,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "fp_config": {
                 "type": "path",
-                "description":
-                    "Filepath to a specific picasso config. "
-                    "Keep in mind this must be a path on the cluster for now"
-                    " (i.e. /fs/mpib/pool-miblab5/... instead of /Volumes/pool...)",
+                "description": "Filepath to a specific picasso config. "
+                "Keep in mind this must be a path on the cluster for now"
+                " (i.e. /fs/mpib/pool-miblab5/... instead of /Volumes/pool...)",
                 "required": True,
             },
             # "save_locs": {
@@ -6847,9 +6844,7 @@ class SlurmCommunicator:
         job on a SLURM cluster.
         """
         cluster_env = CONFIG.get("ClusterEnvironment", {})
-        pw_module = cluster_env.get(
-            "pw_module", "picasso-workflow-gui"
-        )
+        pw_module = cluster_env.get("pw_module", "picasso-workflow-gui")
         anaconda_module = cluster_env.get(
             "anaconda_module", "anaconda/3/2023.03"
         )
@@ -8972,12 +8967,8 @@ class Window(QtWidgets.QMainWindow):
             self.files_table.insertRow(row)
             # Use basename as default name
             name = os.path.basename(path)
-            self.files_table.setItem(
-                row, 0, QtWidgets.QTableWidgetItem(name)
-            )
-            self.files_table.setItem(
-                row, 1, QtWidgets.QTableWidgetItem(path)
-            )
+            self.files_table.setItem(row, 0, QtWidgets.QTableWidgetItem(name))
+            self.files_table.setItem(row, 1, QtWidgets.QTableWidgetItem(path))
 
     def _on_files_dropped_tree(self, file_paths, target_item):
         """Handle files dropped onto the Aggregation/Investigation tree."""
@@ -9037,9 +9028,9 @@ class Window(QtWidgets.QMainWindow):
             # Clear source
             self.tree_data["file_paths"][source_dataset][source_channel] = ""
             # Set target
-            self.tree_data["file_paths"][target_dataset][target_channel] = (
-                source_path
-            )
+            self.tree_data["file_paths"][target_dataset][
+                target_channel
+            ] = source_path
             self._populate_tree_from_data()
 
     def _update_validation_display(self):
@@ -9326,12 +9317,18 @@ class Window(QtWidgets.QMainWindow):
 
                     # Validate that it's a dictionary
                     if isinstance(file_dict, dict):
-                        # it may still be a dict with keys #tags and 
+                        # it may still be a dict with keys #tags and
                         # filepaths and list values or tags to fileptahs dict
                         # as expected here
-                        if "#tags" in file_dict.keys() and "filepath" in file_dict.keys() and isinstance(file_dict["filepath"], list):
+                        if (
+                            "#tags" in file_dict.keys()
+                            and "filepath" in file_dict.keys()
+                            and isinstance(file_dict["filepath"], list)
+                        ):
                             new_dict = {}
-                            for k, v in zip(file_dict["#tags"], file_dict["filepath"]):
+                            for k, v in zip(
+                                file_dict["#tags"], file_dict["filepath"]
+                            ):
                                 new_dict[k] = v
                             file_dict = new_dict
                         # Clear existing file list
@@ -9997,7 +9994,9 @@ class Window(QtWidgets.QMainWindow):
                 (module_name, param_values)
             )
             index = len(self.aggregation_workflow_modules) - 1
-            self.aggregation_workflow_list.addItem(f"{index:02d}: {module_name}")
+            self.aggregation_workflow_list.addItem(
+                f"{index:02d}: {module_name}"
+            )
 
     def _renumber_workflow_items(self, list_widget, modules):
         """Update QListWidget items with correct numbering after reordering."""
@@ -10366,7 +10365,9 @@ class Window(QtWidgets.QMainWindow):
                 if name_item and path_item:
                     name = name_item.text()
                     path = path_item.text()
-                    if (path[0] == "'" and path[-1] == "'") or (path[0] == '"' and path[-1] == '"'):
+                    if (path[0] == "'" and path[-1] == "'") or (
+                        path[0] == '"' and path[-1] == '"'
+                    ):
                         path = path[1:-1]
                     path = self.pathparser.convert_path(path, host_cluster)
 
@@ -10388,7 +10389,9 @@ class Window(QtWidgets.QMainWindow):
 
                     # Get file path
                     file_path = self.tree_data["file_paths"][dataset][channel]
-                    if (file_path[0] == "'" and file_path[-1] == "'") or (file_path[0] == '"' and file_path[-1] == '"'):
+                    if (file_path[0] == "'" and file_path[-1] == "'") or (
+                        file_path[0] == '"' and file_path[-1] == '"'
+                    ):
                         file_path = file_path[1:-1]
                     file_path = self.pathparser.convert_path(
                         file_path, host_cluster
@@ -10417,7 +10420,9 @@ class Window(QtWidgets.QMainWindow):
 
                     # Get file path
                     file_path = self.tree_data["file_paths"][dataset][channel]
-                    if (file_path[0] == "'" and file_path[-1] == "'") or (file_path[0] == '"' and file_path[-1] == '"'):
+                    if (file_path[0] == "'" and file_path[-1] == "'") or (
+                        file_path[0] == '"' and file_path[-1] == '"'
+                    ):
                         file_path = file_path[1:-1]
                     file_path = self.pathparser.convert_path(
                         file_path, host_cluster
@@ -10724,7 +10729,11 @@ class Window(QtWidgets.QMainWindow):
         # print(f"'{host_cluster}', '{login_node}'")
 
         results_folder_local = self.results_folder_display.text()
-        if (results_folder_local[0] == "'" and results_folder_local[-1] == "'") or (results_folder_local[0] == '"' and results_folder_local[-1] == '"'):
+        if (
+            results_folder_local[0] == "'" and results_folder_local[-1] == "'"
+        ) or (
+            results_folder_local[0] == '"' and results_folder_local[-1] == '"'
+        ):
             results_folder_local = results_folder_local[1:-1]
         if not os.path.exists(results_folder_local):
             os.makedirs(results_folder_local)
@@ -11050,7 +11059,9 @@ class Window(QtWidgets.QMainWindow):
             if default is not None:
                 widget.setText(str(default))
             if param_metadata.get("required", False):
-                widget.setPlaceholderText("Required - drag file here or type path")
+                widget.setPlaceholderText(
+                    "Required - drag file here or type path"
+                )
             else:
                 widget.setPlaceholderText("Drag file here or type path")
             return widget, "path"
@@ -11711,22 +11722,65 @@ class Window(QtWidgets.QMainWindow):
             self._validate_parameters()
 
 
+def _app_icon():
+    """Return a QIcon for the application, or an empty QIcon on failure."""
+    try:
+        import importlib.resources
+        import pathlib
+
+        # Strategy 1: importlib.resources (wheel installs)
+        try:
+            p = importlib.resources.files("picasso_workflow").joinpath(
+                "picasso-workflow.ico"
+            )
+            ico = pathlib.Path(str(p)).resolve()
+            if ico.exists():
+                return QtGui.QIcon(str(ico))
+        except Exception:
+            pass
+
+        # Strategy 2: relative to this file (editable installs)
+        ico = pathlib.Path(__file__).parent / "picasso-workflow.ico"
+        if ico.exists():
+            return QtGui.QIcon(str(ico))
+    except Exception:
+        pass
+    return QtGui.QIcon()
+
+
 def main():
     app = QtWidgets.QApplication(sys.argv)
-    window = Window()
-    window.show()
+    app.setWindowIcon(_app_icon())
 
-    def excepthook(type, value, tback):
-        lib.cancel_dialogs()
-        QtCore.QCoreApplication.instance().processEvents()
-        message = "".join(traceback.format_exception(type, value, tback))
-        errorbox = QtWidgets.QMessageBox.critical(
-            window, "An error occured", message
+    # Keep a reference so the excepthook closure can use it even before
+    # Window() returns.  It is None only if construction itself raises.
+    window = None
+
+    def excepthook(exc_type, exc_value, exc_tb):
+        message = "".join(
+            traceback.format_exception(exc_type, exc_value, exc_tb)
         )
-        errorbox.exec_()
-        sys.__excepthook__(type, value, tback)
+        try:
+            lib.cancel_dialogs()
+            QtCore.QCoreApplication.instance().processEvents()
+        except Exception:
+            pass
+        # QMessageBox.critical already shows the dialog and returns the
+        # clicked button (an int) — do not call .exec_() on the return value.
+        QtWidgets.QMessageBox.critical(window, "An error occurred", message)
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
 
+    # Install before creating Window so construction errors are caught.
     sys.excepthook = excepthook
+
+    try:
+        window = Window()
+    except Exception:
+        message = traceback.format_exc()
+        QtWidgets.QMessageBox.critical(None, "Startup error", message)
+        sys.exit(1)
+
+    window.show()
     sys.exit(app.exec_())
 
 

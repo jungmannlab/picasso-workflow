@@ -7,7 +7,7 @@
     inside the active conda environment and writes a .lnk shortcut.
 
     Without -AllUsers (default): writes to your personal desktop
-    (~\Desktop).  No admin rights required — use this to test first.
+    (~\Desktop).  No admin rights required - use this to test first.
 
     With -AllUsers: writes to C:\Users\Public\Desktop so every user on
     the machine sees the shortcut.  Requires Administrator privileges.
@@ -27,17 +27,17 @@
     (C:\Users\Public\Desktop).  Requires Administrator privileges.
 
 .EXAMPLE
-    # Test as a normal user — shortcut appears on your own desktop:
+    # Test as a normal user - shortcut appears on your own desktop:
     conda activate picasso-workflow
     powershell -ExecutionPolicy Bypass -File tools\deploy_gui_shortcut.ps1
 
 .EXAMPLE
-    # Deploy to all users — run from an elevated prompt:
+    # Deploy to all users - run from an elevated prompt:
     powershell -ExecutionPolicy Bypass -File tools\deploy_gui_shortcut.ps1 -AllUsers
 #>
 
 param(
-    [string]$CondaEnvPath = $env:CONDA_PREFIX,
+    [string]$CondaEnvPath = "",
     [string]$ShortcutName = "picasso-workflow",
     [switch]$AllUsers
 )
@@ -65,45 +65,112 @@ a shortcut on your own desktop for testing.
 # ---------------------------------------------------------------------------
 # 1. Resolve the conda environment
 # ---------------------------------------------------------------------------
+# Strategy (first match wins):
+#   A. -CondaEnvPath passed explicitly
+#   B. picasso-workflow-gui is on PATH (conda env is active) -> derive path
+#   C. $env:CONDA_PREFIX points to the named env and contains the exe
+#   D. $env:CONDA_PREFIX is the base env -> check its envs\picasso-workflow
+#   E. Scan well-known installation directories
+
+# A: explicit argument
+if ($CondaEnvPath -and -not (Test-Path "$CondaEnvPath\Scripts\picasso-workflow-gui.exe")) {
+    Write-Warning "Executable not found in specified path: $CondaEnvPath"
+    $CondaEnvPath = ""
+}
+
+# B: exe on PATH (env is active) - most reliable when conda activate was run
+if (-not $CondaEnvPath) {
+    $cmd = Get-Command "picasso-workflow-gui" -ErrorAction SilentlyContinue
+    if ($cmd) {
+        # Scripts\ is one level below the env root
+        $CondaEnvPath = Split-Path $cmd.Source -Parent | Split-Path -Parent
+        Write-Host "Found via PATH: $CondaEnvPath"
+    }
+}
+
+# C/D: CONDA_PREFIX (may point to the named env or to the base installation)
+if (-not $CondaEnvPath -and $env:CONDA_PREFIX) {
+    foreach ($candidate in @($env:CONDA_PREFIX, "$env:CONDA_PREFIX\envs\picasso-workflow")) {
+        if (Test-Path "$candidate\Scripts\picasso-workflow-gui.exe") {
+            $CondaEnvPath = $candidate
+            Write-Host "Found via CONDA_PREFIX: $CondaEnvPath"
+            break
+        }
+    }
+}
+
+# E: scan well-known locations (covers installs where env was not activated)
+if (-not $CondaEnvPath) {
+    foreach ($base in @(
+        "$env:USERPROFILE\.conda",
+        "$env:USERPROFILE\miniconda3",
+        "$env:USERPROFILE\anaconda3",
+        "$env:USERPROFILE\AppData\Local\miniconda3",
+        "$env:USERPROFILE\AppData\Local\anaconda3",
+        "C:\ProgramData\Miniconda3",
+        "C:\ProgramData\Anaconda3"
+    )) {
+        $candidate = "$base\envs\picasso-workflow"
+        if (Test-Path "$candidate\Scripts\picasso-workflow-gui.exe") {
+            $CondaEnvPath = $candidate
+            Write-Host "Found in well-known location: $CondaEnvPath"
+            break
+        }
+    }
+}
+
 if (-not $CondaEnvPath) {
     Write-Error @"
-No conda environment path found.
-Either activate the environment first:
-    conda activate picasso-workflow
-or pass it explicitly:
+Could not find picasso-workflow-gui.exe.
+Make sure the package is installed in the active environment:
+    pip install -e C:\path\to\picasso-workflow
+Then re-run this script with the conda environment activated, or pass the
+path explicitly:
     .\deploy_gui_shortcut.ps1 -CondaEnvPath "C:\...\envs\picasso-workflow"
 "@
     exit 1
 }
 
-if (-not (Test-Path $CondaEnvPath)) {
-    Write-Error "Conda environment path not found: $CondaEnvPath"
-    exit 1
-}
-
 # ---------------------------------------------------------------------------
-# 2. Find the GUI executable created by the gui-scripts entry point
+# 2. Build the exe path (already verified to exist by the search above)
 # ---------------------------------------------------------------------------
 $ExePath = Join-Path $CondaEnvPath "Scripts\picasso-workflow-gui.exe"
 
-if (-not (Test-Path $ExePath)) {
-    Write-Error @"
-Executable not found: $ExePath
-
-Make sure the package is installed in this environment:
-    conda activate picasso-workflow
-    pip install -e C:\path\to\picasso-workflow
-"@
-    exit 1
-}
-
 # ---------------------------------------------------------------------------
-# 3. Locate the icon installed with the package
+# 3. Locate the icon — ask Python so editable installs work too
 # ---------------------------------------------------------------------------
-$IconPath = Join-Path $CondaEnvPath "Lib\site-packages\picasso_workflow\picasso-workflow.ico"
+$python  = Join-Path $CondaEnvPath "python.exe"
+$RawIconPath = & $python -c @"
+import sys, pathlib
+# Strategy 1: importlib.resources (works for wheel installs)
+try:
+    import importlib.resources
+    p = importlib.resources.files('picasso_workflow').joinpath('picasso-workflow.ico')
+    r = pathlib.Path(str(p)).resolve()
+    if r.exists():
+        print(str(r))
+        sys.exit(0)
+except Exception:
+    pass
+# Strategy 2: __file__ (works for editable installs)
+try:
+    import picasso_workflow
+    r = pathlib.Path(picasso_workflow.__file__).parent / 'picasso-workflow.ico'
+    if r.exists():
+        print(str(r))
+        sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+"@ 2>$null
 
-if (-not (Test-Path $IconPath)) {
-    Write-Warning "Icon not found at $IconPath — shortcut will use the default Python icon."
+# Trim whitespace/newlines that Python adds to the output
+$IconPath = if ($RawIconPath) { $RawIconPath.Trim() } else { "" }
+
+if ($IconPath -and (Test-Path $IconPath)) {
+    Write-Host "Icon: $IconPath"
+} else {
+    Write-Warning "Icon not found - shortcut will use the default Python icon."
     $IconPath = $ExePath
 }
 
@@ -124,7 +191,7 @@ $Shell    = New-Object -ComObject WScript.Shell
 $Shortcut = $Shell.CreateShortcut($ShortcutPath)
 
 $Shortcut.TargetPath       = $ExePath
-$Shortcut.WorkingDirectory = $CondaEnvPath
+$Shortcut.WorkingDirectory = $env:USERPROFILE
 $Shortcut.Description      = "picasso-workflow GUI"
 $Shortcut.IconLocation     = "$IconPath,0"
 

@@ -162,6 +162,49 @@ moving the conda environment.
 
 No registry edits, no GPO, no per-user configuration needed.
 
+### Site-wide default configuration (all-users installs)
+
+When picasso-workflow is installed for all users, individual users may not
+have their own `config.yaml` yet.  An administrator can place a shared
+default at:
+
+| Platform | Site config path |
+|---|---|
+| Windows | `C:\ProgramData\picasso_workflow\config.yaml` |
+| macOS / Linux | `/etc/picasso_workflow/config.yaml` |
+
+Config files are **deep-merged** in this priority order (highest wins):
+
+1. Per-user — `~/.config/picasso_workflow/config.yaml`
+2. Site-wide — path above
+3. Bundled package default
+
+Each file only needs to contain the keys it wants to override.  For
+example, a site config that sets shared cluster and Confluence defaults
+while leaving everything else to the package default:
+
+```yaml
+Confluence:
+  URL: "https://confluence.example.com"
+  Space: "PAINT"
+SlurmLoginNodes:
+  hpccluster: hpcl8001
+ClusterEnvironment:
+  anaconda_module: "anaconda/3/2023.03"
+  conda_env: "picasso-workflow"
+```
+
+Users then only need their own config if they want to override something
+specific (e.g. their personal Confluence page or a different template
+path).  Keys they do not specify are inherited from the site config.
+
+To create the directory and drop in the config on Windows (elevated prompt):
+
+```powershell
+New-Item -ItemType Directory -Force "C:\ProgramData\picasso_workflow"
+# then copy or create config.yaml there
+```
+
 ### macOS deployment — single-user app bundle
 
 On macOS the standard way to make a Python GUI launchable from Finder (or
@@ -197,8 +240,8 @@ easily accessible:
   to `~/Desktop` while holding `Cmd+Alt`
 
 **Icon** — the script converts `picasso_workflow/picasso-workflow.ico`
-to the macOS `.icns` format automatically using `sips` and `iconutil`
-(both are built into macOS).  No extra tools needed.
+to the macOS `.icns` format automatically using Pillow (installed with
+the package) and `iconutil` (built into macOS).  No extra tools needed.
 
 Re-run the script after upgrading the package or moving the conda
 environment.

@@ -66,26 +66,70 @@ def config_logger():
     )
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Return a new dict with override merged on top of base, recursively."""
+    result = base.copy()
+    for key, val in override.items():
+        if (
+            key in result
+            and isinstance(result[key], dict)
+            and isinstance(val, dict)
+        ):
+            result[key] = _deep_merge(result[key], val)
+        else:
+            result[key] = val
+    return result
+
+
+def _site_config_path() -> Path:
+    """Return the platform-appropriate site-wide config path."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("ProgramData", r"C:\ProgramData"))
+    else:
+        base = Path("/etc")
+    return base / "picasso_workflow" / "config.yaml"
+
+
+def _load_yaml(path) -> dict:
+    with open(path, "r") as f:
+        return yaml.safe_load(f) or {}
+
+
 def load_config():
-    """Load the picasso-workflow configuration yaml file"""
-    # 1. User config path
-    user_config = Path.home() / ".config" / "picasso_workflow" / "config.yaml"
-    if user_config.exists():
-        with open(user_config, "r") as f:
-            return yaml.safe_load(f)
-    # 2. Fallback to package default
+    """Load the picasso-workflow configuration yaml file.
+
+    Configs are deep-merged in increasing priority order so that
+    higher-priority files only need to specify the keys they override:
+
+      1. Bundled package default (config.yaml / config_template.yaml)
+      2. Site-wide admin config  (C:\\ProgramData\\picasso_workflow\\config.yaml
+                                  or /etc/picasso_workflow/config.yaml)
+      3. Per-user config         (~/.config/picasso_workflow/config.yaml)
+    """
+    # 1. Package default
     try:
-        default_config = importlib.resources.files("picasso_workflow").joinpath(
+        pkg_config = importlib.resources.files("picasso_workflow").joinpath(
             "config.yaml"
         )
-        with open(default_config, "r") as f:
-            return yaml.safe_load(f)
-    except FileNotFoundError:
-        template_config = importlib.resources.files("picasso_workflow").joinpath(
-            "config_template.yaml"
-        )
-        with open(template_config, "r") as f:
-            return yaml.safe_load(f)
+        config = _load_yaml(pkg_config)
+    except (FileNotFoundError, TypeError):
+        # template = importlib.resources.files("picasso_workflow").joinpath(
+        #     "config_template.yaml"
+        # )
+        # config = _load_yaml(template)
+        config = {}
+
+    # 2. Site-wide admin config (optional)
+    site_config = _site_config_path()
+    if site_config.exists():
+        config = _deep_merge(config, _load_yaml(site_config))
+
+    # 3. Per-user config (optional)
+    user_config = Path.home() / ".config" / "picasso_workflow" / "config.yaml"
+    if user_config.exists():
+        config = _deep_merge(config, _load_yaml(user_config))
+
+    return config
 
 
 config_logger()

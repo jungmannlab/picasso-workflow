@@ -7,7 +7,7 @@ setlocal EnableDelayedExpansion
 net session >nul 2>&1
 if errorlevel 1 (
     echo Requesting Administrator privileges ...
-    powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs -Wait"
+    powershell -Command "Start-Process cmd.exe -ArgumentList '/c ""%~f0""' -Verb RunAs -Wait"
     exit /b
 )
 

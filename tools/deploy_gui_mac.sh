@@ -62,6 +62,9 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 # -- Launcher script (runs inside the bundle, no shell environment assumed) --
 cat > "$APP_BUNDLE/Contents/MacOS/$APP_NAME" <<LAUNCHER
 #!/usr/bin/env bash
+# Use the user's home directory as working directory so that relative paths
+# (e.g. the logs/ directory created by config_logger) land somewhere writable.
+cd "\$HOME"
 source "${CONDA_SH}"
 conda activate "${CONDA_ENV_PATH}"
 exec "${EXEC_PATH}" "\$@"
@@ -97,23 +100,39 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# -- Icon (convert .ico -> .icns if sips + iconutil are available) --
+# -- Icon: .ico -> .icns via Python/Pillow + iconutil --
+# sips cannot reliably read .ico files; Pillow (installed with the package)
+# handles them correctly.
 ICON_ICO="$(cd "$(dirname "$0")/.." && pwd)/picasso_workflow/picasso-workflow.ico"
 ICON_ICNS="$APP_BUNDLE/Contents/Resources/${APP_NAME}.icns"
 
-if [[ -f "$ICON_ICO" ]] && command -v sips &>/dev/null && command -v iconutil &>/dev/null; then
+if [[ -f "$ICON_ICO" ]] && command -v iconutil &>/dev/null; then
     ICON_TMP="$(mktemp -d)/iconbuild.iconset"
     mkdir -p "$ICON_TMP"
-    for SIZE in 16 32 64 128 256 512; do
-        sips -z $SIZE $SIZE "$ICON_ICO" \
-            --out "$ICON_TMP/icon_${SIZE}x${SIZE}.png" &>/dev/null
-        sips -z $((SIZE*2)) $((SIZE*2)) "$ICON_ICO" \
-            --out "$ICON_TMP/icon_${SIZE}x${SIZE}@2x.png" &>/dev/null
-    done
-    iconutil -c icns "$ICON_TMP" -o "$ICON_ICNS"
-    echo "Icon: converted picasso-workflow.ico -> icns"
+
+    python3 - "$ICON_ICO" "$ICON_TMP" <<'PYEOF'
+import sys
+from pathlib import Path
+from PIL import Image
+
+ico_path = Path(sys.argv[1])
+out_dir  = Path(sys.argv[2])
+img = Image.open(ico_path).convert("RGBA")
+
+for size in [16, 32, 64, 128, 256, 512]:
+    for scale, suffix in [(1, ""), (2, "@2x")]:
+        px = size * scale
+        resized = img.resize((px, px), Image.LANCZOS)
+        resized.save(out_dir / f"icon_{size}x{size}{suffix}.png")
+PYEOF
+
+    if iconutil -c icns "$ICON_TMP" -o "$ICON_ICNS" 2>/dev/null; then
+        echo "Icon: converted picasso-workflow.ico -> icns"
+    else
+        echo "Icon: iconutil failed — no custom icon set."
+    fi
 else
-    echo "Icon: sips/iconutil not available or .ico missing — no custom icon set."
+    echo "Icon: .ico missing or iconutil not available — no custom icon set."
 fi
 
 # ---------------------------------------------------------------------------
