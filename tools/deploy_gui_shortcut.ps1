@@ -7,7 +7,7 @@
     inside the active conda environment and writes a .lnk shortcut.
 
     Without -AllUsers (default): writes to your personal desktop
-    (~\Desktop).  No admin rights required — use this to test first.
+    (~\Desktop).  No admin rights required - use this to test first.
 
     With -AllUsers: writes to C:\Users\Public\Desktop so every user on
     the machine sees the shortcut.  Requires Administrator privileges.
@@ -27,12 +27,12 @@
     (C:\Users\Public\Desktop).  Requires Administrator privileges.
 
 .EXAMPLE
-    # Test as a normal user — shortcut appears on your own desktop:
+    # Test as a normal user - shortcut appears on your own desktop:
     conda activate picasso-workflow
     powershell -ExecutionPolicy Bypass -File tools\deploy_gui_shortcut.ps1
 
 .EXAMPLE
-    # Deploy to all users — run from an elevated prompt:
+    # Deploy to all users - run from an elevated prompt:
     powershell -ExecutionPolicy Bypass -File tools\deploy_gui_shortcut.ps1 -AllUsers
 #>
 
@@ -124,7 +124,7 @@ Make sure the package is installed in this environment:
 $IconPath = Join-Path $CondaEnvPath "Lib\site-packages\picasso_workflow\picasso-workflow.ico"
 
 if (-not (Test-Path $IconPath)) {
-    Write-Warning "Icon not found at $IconPath — shortcut will use the default Python icon."
+    Write-Warning "Icon not found at $IconPath - shortcut will use the default Python icon."
     $IconPath = $ExePath
 }
 
