@@ -1,5 +1,12 @@
-# default located in picasso-workflow/picasso_workflow folder
-# user-specific version can be in ~/.config/picasso_workflow/config.yaml or %APPDATA%\picasso_workflow\config.yaml
+# Bundled package default — lowest priority.
+#
+# Config loading order (deep-merged, highest priority wins):
+#   1. Per-user:   ~/.config/picasso_workflow/config.yaml
+#   2. Site-wide:  C:\ProgramData\picasso_workflow\config.yaml  (Windows)
+#                  /etc/picasso_workflow/config.yaml             (macOS/Linux)
+#   3. This file:  bundled package default
+#
+# Each file only needs to specify the keys it wants to override.
 Templates:
   TemplateName: "/local/path/to/template"
 TestData:
