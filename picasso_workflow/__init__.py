@@ -113,10 +113,11 @@ def load_config():
         )
         config = _load_yaml(pkg_config)
     except (FileNotFoundError, TypeError):
-        template = importlib.resources.files("picasso_workflow").joinpath(
-            "config_template.yaml"
-        )
-        config = _load_yaml(template)
+        # template = importlib.resources.files("picasso_workflow").joinpath(
+        #     "config_template.yaml"
+        # )
+        # config = _load_yaml(template)
+        config = {}
 
     # 2. Site-wide admin config (optional)
     site_config = _site_config_path()
