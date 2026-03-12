@@ -11713,20 +11713,36 @@ class Window(QtWidgets.QMainWindow):
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
-    window = Window()
-    window.show()
 
-    def excepthook(type, value, tback):
-        lib.cancel_dialogs()
-        QtCore.QCoreApplication.instance().processEvents()
-        message = "".join(traceback.format_exception(type, value, tback))
-        errorbox = QtWidgets.QMessageBox.critical(
-            window, "An error occured", message
+    # Keep a reference so the excepthook closure can use it even before
+    # Window() returns.  It is None only if construction itself raises.
+    window = None
+
+    def excepthook(exc_type, exc_value, exc_tb):
+        message = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        try:
+            lib.cancel_dialogs()
+            QtCore.QCoreApplication.instance().processEvents()
+        except Exception:
+            pass
+        # QMessageBox.critical already shows the dialog and returns the
+        # clicked button (an int) — do not call .exec_() on the return value.
+        QtWidgets.QMessageBox.critical(
+            window, "An error occurred", message
         )
-        errorbox.exec_()
-        sys.__excepthook__(type, value, tback)
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
 
+    # Install before creating Window so construction errors are caught.
     sys.excepthook = excepthook
+
+    try:
+        window = Window()
+    except Exception:
+        message = traceback.format_exc()
+        QtWidgets.QMessageBox.critical(None, "Startup error", message)
+        sys.exit(1)
+
+    window.show()
     sys.exit(app.exec_())
 
 

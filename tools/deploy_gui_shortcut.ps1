@@ -124,7 +124,7 @@ $Shell    = New-Object -ComObject WScript.Shell
 $Shortcut = $Shell.CreateShortcut($ShortcutPath)
 
 $Shortcut.TargetPath       = $ExePath
-$Shortcut.WorkingDirectory = $CondaEnvPath
+$Shortcut.WorkingDirectory = $env:USERPROFILE
 $Shortcut.Description      = "picasso-workflow GUI"
 $Shortcut.IconLocation     = "$IconPath,0"
 

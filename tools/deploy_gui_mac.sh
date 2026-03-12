@@ -62,6 +62,9 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 # -- Launcher script (runs inside the bundle, no shell environment assumed) --
 cat > "$APP_BUNDLE/Contents/MacOS/$APP_NAME" <<LAUNCHER
 #!/usr/bin/env bash
+# Use the user's home directory as working directory so that relative paths
+# (e.g. the logs/ directory created by config_logger) land somewhere writable.
+cd "\$HOME"
 source "${CONDA_SH}"
 conda activate "${CONDA_ENV_PATH}"
 exec "${EXEC_PATH}" "\$@"
