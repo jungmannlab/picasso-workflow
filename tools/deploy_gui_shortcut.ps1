@@ -137,12 +137,22 @@ path explicitly:
 $ExePath = Join-Path $CondaEnvPath "Scripts\picasso-workflow-gui.exe"
 
 # ---------------------------------------------------------------------------
-# 3. Locate the icon installed with the package
+# 3. Locate the icon — ask Python so editable installs work too
 # ---------------------------------------------------------------------------
-$IconPath = Join-Path $CondaEnvPath "Lib\site-packages\picasso_workflow\picasso-workflow.ico"
+$python  = Join-Path $CondaEnvPath "python.exe"
+$IconPath = & $python -c @"
+import importlib.resources, sys
+try:
+    p = importlib.resources.files('picasso_workflow').joinpath('picasso-workflow.ico')
+    # resolve to a real filesystem path
+    import pathlib
+    print(str(pathlib.Path(str(p)).resolve()))
+except Exception:
+    sys.exit(1)
+"@ 2>$null
 
-if (-not (Test-Path $IconPath)) {
-    Write-Warning "Icon not found at $IconPath - shortcut will use the default Python icon."
+if (-not $IconPath -or -not (Test-Path $IconPath)) {
+    Write-Warning "Icon not found - shortcut will use the default Python icon."
     $IconPath = $ExePath
 }
 
