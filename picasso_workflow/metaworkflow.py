@@ -389,6 +389,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
         confluence_url,
         confluence_space,
         confluence_token,
+        confluence_username,
         base_page,
         investigation_description="",
         dest_machine=None,
@@ -404,6 +405,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
         self.confluence_url = confluence_url
         self.confluence_space = confluence_space
         self.confluence_token = confluence_token
+        self.confluence_username = confluence_username
 
         self.always_save = always_save
 
@@ -424,6 +426,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
                 self.confluence_url,
                 self.confluence_space,
                 base_page,
+                self.confluence_username,
                 token=self.confluence_token,
             )
             try:
@@ -444,6 +447,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
             self.confluence_url,
             self.confluence_space,
             self.root_page,
+            self.confluence_username,
             token=self.confluence_token,
         )
 
@@ -452,6 +456,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
                 self.confluence_url,
                 profile_space,
                 profile_basepage,
+                self.confluence_username,
                 self.confluence_token,
             )
             self.profiler.init_profile_page()
@@ -493,6 +498,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
                 "base_url": self.confluence_url,
                 "space_key": self.confluence_space,
                 "parent_page_title": report_name,
+                "username": self.confluence_username,
                 "token": self.confluence_token,
             },
         }
@@ -527,6 +533,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         confluence_url,
         confluence_space,
         confluence_token,
+        confluence_username,
         base_page,
         dest_machine=None,
         always_save=False,
@@ -546,6 +553,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             confluence_url,
             confluence_space,
             confluence_token,
+            confluence_username,
             base_page,
             dest_machine,
             always_save,
@@ -781,6 +789,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         confluence_url,
         confluence_space,
         confluence_token,
+        confluence_username,
         base_page,
         dest_machine="hpcl8",
         investigation_description="",
@@ -817,6 +826,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             confluence_url,
             confluence_space,
             confluence_token,
+            confluence_username,
             base_page,
             investigation_description,
             dest_machine,
@@ -1269,12 +1279,13 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
 
 class PerformanceProfiler:
     def __init__(
-        self, confluence_url, confluence_space, base_page, confluence_token
+        self, confluence_url, confluence_space, base_page, confluence_username, confluence_token
     ):
         self.ci = confluence.ConfluenceInterface(
             confluence_url,
             confluence_space,
             base_page,
+            confluence_username,
             token=confluence_token,
         )
 
