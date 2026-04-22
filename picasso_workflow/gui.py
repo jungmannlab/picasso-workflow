@@ -8098,8 +8098,20 @@ class Window(QtWidgets.QMainWindow):
         self.confluence_url_edit.setText(confluence_config.get("URL", ""))
         confluence_layout.addWidget(self.confluence_url_edit, 0, 1)
 
+        # Confluence Username
+        confluence_layout.addWidget(QtWidgets.QLabel("Username:"), 1, 0)
+        self.confluence_username_edit = QtWidgets.QLineEdit()
+        self.confluence_username_edit.setPlaceholderText(
+            "The email of your confluence acccount"
+        )
+        self.confluence_username_edit.setToolTip(
+            "If empty, host will load from environment variable"
+        )
+        self.confluence_username_edit.setText(confluence_config.get("Username", ""))
+        confluence_layout.addWidget(self.confluence_username_edit, 1, 1)
+
         # Confluence Space
-        confluence_layout.addWidget(QtWidgets.QLabel("Space:"), 1, 0)
+        confluence_layout.addWidget(QtWidgets.QLabel("Space:"), 2, 0)
         self.confluence_space_edit = QtWidgets.QLineEdit()
         self.confluence_space_edit.setPlaceholderText(
             "e.g., ~username or TEAM"
@@ -8108,10 +8120,10 @@ class Window(QtWidgets.QMainWindow):
             "If empty, host will load from environment variable"
         )
         self.confluence_space_edit.setText(confluence_config.get("Space", ""))
-        confluence_layout.addWidget(self.confluence_space_edit, 1, 1)
+        confluence_layout.addWidget(self.confluence_space_edit, 2, 1)
 
         # Confluence Token
-        confluence_layout.addWidget(QtWidgets.QLabel("Token:"), 2, 0)
+        confluence_layout.addWidget(QtWidgets.QLabel("Token:"), 3, 0)
         self.confluence_token_edit = QtWidgets.QLineEdit()
         self.confluence_token_edit.setPlaceholderText(
             "API token (or set CONFLUENCE_BEARER env var)"
@@ -8121,10 +8133,10 @@ class Window(QtWidgets.QMainWindow):
             "If empty, host will load from environment variable"
         )
         self.confluence_token_edit.setText(confluence_config.get("Token", ""))
-        confluence_layout.addWidget(self.confluence_token_edit, 2, 1)
+        confluence_layout.addWidget(self.confluence_token_edit, 3, 1)
 
         # Parent Page
-        confluence_layout.addWidget(QtWidgets.QLabel("Parent Page:"), 3, 0)
+        confluence_layout.addWidget(QtWidgets.QLabel("Parent Page:"), 4, 0)
         self.confluence_parent_page_edit = QtWidgets.QLineEdit()
         self.confluence_parent_page_edit.setToolTip(
             "If empty, host will load from environment variable"
@@ -8135,7 +8147,7 @@ class Window(QtWidgets.QMainWindow):
         self.confluence_parent_page_edit.setText(
             confluence_config.get("DefaultPage", "")
         )
-        confluence_layout.addWidget(self.confluence_parent_page_edit, 3, 1)
+        confluence_layout.addWidget(self.confluence_parent_page_edit, 4, 1)
 
         # Add stretch to push widgets to the top
         docconfig_layout.setRowStretch(1, 1)
@@ -10541,6 +10553,11 @@ class Window(QtWidgets.QMainWindow):
             cf_url = "os.getenv('CONFLUENCE_URL')"
         else:
             cf_url = f'"{cf_url}"'
+        cf_username = self.confluence_username_edit.text()
+        if cf_username == "":
+            cf_username = "os.getenv('CONFLUENCE_USERNAME')"
+        else:
+            cf_username = f'"{cf_username}"'
         cf_space = self.confluence_space_edit.text()
         if cf_space == "":
             cf_space = "os.getenv('CONFLUENCE_SPACE')"
@@ -10565,6 +10582,7 @@ class Window(QtWidgets.QMainWindow):
                 f"confluence_url = {cf_url}",
                 f"confluence_token = {cf_token}",
                 f"confluence_space = {cf_space}",
+                f"confluence_username = {cf_username}",
                 f"base_page = {cf_ppage}",
                 "",
                 "",
@@ -10639,6 +10657,7 @@ class Window(QtWidgets.QMainWindow):
             #     "        confluence_url=confluence_url,",
             #     "        confluence_space=confluence_space,",
             #     "        confluence_token=confluence_token,",
+            #     "        confluence_username=confluence_username,",
             #     "        base_page=base_page,",
             #     "    )",
             #     "",
@@ -10651,7 +10670,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = SingleWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    f"        base_page, dest_machine='{login_node}',",
+                    f"       confluence_username, base_page, dest_machine='{login_node}',",
                     f"        always_save={always_save}",
                     "    )",
                     "",
@@ -10666,7 +10685,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = AggregationWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    f"        base_page, dest_machine='{login_node}',",
+                    f"       confluence_username, base_page, dest_machine='{login_node}',",
                     f"        always_save={always_save}",
                     "    )",
                     "",
@@ -10681,7 +10700,7 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = InvestigationWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    f"        base_page, dest_machine='{login_node}',",
+                    f"       confluence_username, base_page, dest_machine='{login_node}',",
                     f"        always_save={always_save}",
                     "    )",
                     "",
