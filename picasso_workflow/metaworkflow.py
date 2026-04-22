@@ -426,7 +426,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
                 self.confluence_url,
                 self.confluence_space,
                 base_page,
-                self.confluence_username,
+                username=self.confluence_username,
                 token=self.confluence_token,
             )
             try:
@@ -653,6 +653,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         confluence_url,
         confluence_space,
         confluence_token,
+        confluence_username,
         base_page,
         dest_machine="hpcl8001",
         investigation_description="",
@@ -679,6 +680,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             confluence_url,
             confluence_space,
             confluence_token,
+            confluence_username,
             base_page,
             dest_machine,
             always_save,
@@ -722,6 +724,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                         self.confluence_space,
                         self.root_page,
                         token=self.confluence_token,
+                        username=self.confluence_username
                     )
                     ci.create_page(report_name, "")
                 except Exception:
@@ -1285,7 +1288,7 @@ class PerformanceProfiler:
             confluence_url,
             confluence_space,
             base_page,
-            confluence_username,
+            username=confluence_username,
             token=confluence_token,
         )
 
