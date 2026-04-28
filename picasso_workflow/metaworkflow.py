@@ -738,7 +738,6 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                         self.root_page,
                         username=self.confluence_username,
                         token=self.confluence_token,
-                        username=self.confluence_username,
                     )
                     ci.create_page(report_name, "")
                 except Exception:
