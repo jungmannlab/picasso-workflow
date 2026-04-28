@@ -6851,12 +6851,13 @@ class SlurmCommunicator:
         conda_env = cluster_env.get("conda_env", "picasso-workflow")
 
         commands = []
+
+        commands.append("source ~/.bashrc")
+
         if use_pw_module:
             commands.append(f"module load {pw_module}")
         else:
             commands.append(f"module load {anaconda_module}")
-
-        commands.append("source ~/.bashrc")
 
         if not use_pw_module:
             commands.append(f"conda activate {conda_env}")
@@ -8107,7 +8108,9 @@ class Window(QtWidgets.QMainWindow):
         self.confluence_username_edit.setToolTip(
             "If empty, host will load from environment variable"
         )
-        self.confluence_username_edit.setText(confluence_config.get("Username", ""))
+        self.confluence_username_edit.setText(
+            confluence_config.get("Username", "")
+        )
         confluence_layout.addWidget(self.confluence_username_edit, 1, 1)
 
         # Confluence Space
