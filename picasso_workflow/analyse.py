@@ -414,7 +414,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                             "Micro-Manager Metadata"
                         ].get(f"{cam_name}-{category}")
                         cat_vals += f"{category}: {category_value}; "
-                        sensitivity = sensitivity.get(category_value, {})
+                        
+                        if category_value in sensitivity:
+                            sensitivity = sensitivity[category_value]
+                        elif str(category_value) in sensitivity:
+                            sensitivity = sensitivity[str(category_value)]
+                        else:
+                            try:
+                                sensitivity = sensitivity.get(int(category_value), {})
+                            except (ValueError, TypeError):
+                                sensitivity = {}
                     if isinstance(sensitivity, dict):
                         raise PicassoConfigError(
                             f"""Could not find sensitivity value for camera
@@ -429,12 +438,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                     "Qe": 1,  # relevant are detected, not incident photons
                     "Pixelsize": cam_config["Pixelsize"],
                 }
+                for category in cam_config.get("Sensitivity Categories"):
+                    category_key = f"{cam_name}-{category}"
+                    
+                    
+                    category_value = self.info[0].get(category_key)
                 self.analysis_config["camera_info"] = camera_info
                 return camera_info
             else:
-                raise PicassoConfigError(
-                    f"Cannot load camera {cam_name} from picasso CONFIG."
-                )
                 raise AttributeError(
                     f"Cannot find camera '{cam_name}' in info."
                 )
@@ -845,25 +856,37 @@ class AutoPicasso(util.AbstractModuleCollection):
 
                 # find camera sensitivity
                 sensitivity = cam_config.get("Sensitivity")
-                # sensitivity starts being a dict, and ends as a value
-                cat_vals = ""
-                for category in cam_config.get("Sensitivity Categories"):
-                    category_value = self.info[0].get(f"{cam_name}-{category}")
-                    cat_vals += f"{category}: {category_value}; "
-                    sensitivity = sensitivity.get(category_value, {})
                 if isinstance(sensitivity, dict):
-                    raise PicassoConfigError(
-                        f"""Could not find sensitivity value for camera
-                        {cam_name} with category values {cat_vals} in picasso
-                        CONFIG."""
-                    )
+                    # sensitivity starts being a dict, and ends as a value
+                    cat_vals = ""
+                    for category in cam_config.get("Sensitivity Categories"):
+                        category_value = self.info[0].get(f"{cam_name}-{category}")
+                        if category_value is None and "Micro-Manager Metadata" in self.info[0]:
+                            category_value = self.info[0]["Micro-Manager Metadata"].get(f"{cam_name}-{category}")
+                        cat_vals += f"{category}: {category_value}; "
+                        
+                        if category_value in sensitivity:
+                            sensitivity = sensitivity[category_value]
+                        elif str(category_value) in sensitivity:
+                            sensitivity = sensitivity[str(category_value)]
+                        else:
+                            try:
+                                sensitivity = sensitivity.get(int(category_value), {})
+                            except (ValueError, TypeError):
+                                sensitivity = {}
+                    if isinstance(sensitivity, dict):
+                        raise PicassoConfigError(
+                            f"""Could not find sensitivity value for camera
+                            {cam_name} with category values {cat_vals} in picasso
+                            CONFIG."""
+                        )
 
                 camera_info = {
                     "Baseline": cam_config["Baseline"],
                     "Gain": cam_config.get("Gain", 1),
                     "Sensitivity": sensitivity,
-                    "qe": 1,  # relevant are detected, not incident photons
-                    "pixelsize": cam_config["Pixelsize"],
+                    "Qe": 1,  # relevant are detected, not incident photons
+                    "Pixelsize": cam_config["Pixelsize"],
                 }
                 self.analysis_config["camera_info"] = camera_info
             else:
