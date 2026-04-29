@@ -6862,7 +6862,7 @@ class SlurmCommunicator:
         if not use_pw_module:
             commands.append(f"conda activate {conda_env}")
 
-        commands.append(f"srun {scriptname}")
+        commands.append(f"srun python {scriptname}")
 
         return commands
 
@@ -6900,7 +6900,7 @@ class SlurmCommunicator:
         Returns:
             str: Complete SLURM script content
         """
-        script_lines = ["#!/bin/bash"]
+        script_lines = ["#!/bin/bash -l"]
 
         # Add SLURM directives
         script_lines.append(f"#SBATCH --job-name={job_name}")
