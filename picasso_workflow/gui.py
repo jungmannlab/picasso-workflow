@@ -6854,6 +6854,7 @@ class SlurmCommunicator:
 
         commands.append("source ~/.bashrc")
 
+        commands.append("source /etc/profile.d/modules.sh")
         if use_pw_module:
             commands.append(f"module load {pw_module}")
         else:
@@ -6861,6 +6862,25 @@ class SlurmCommunicator:
 
         if not use_pw_module:
             commands.append(f"conda activate {conda_env}")
+
+        # instead of using slurm modules, let's directly append paths.
+        bin_path = cluster_env.get("BinPath", None)
+        if bin_path:
+            commands.append(f"export PATH={bin_path}:$PATH")
+        lib_path = cluster_env.get("LibraryPath", None)
+        if lib_path:
+            commands.append(
+                f"export LD_LIBRARY_PATH={lib_path}:$LD_LIBRARY_PATH"
+            )
+        python_path = cluster_env.get("PythonPath", None)
+        if python_path:
+            commands.append(f"export PYTHONPATH={python_path}:$PYTHONPATH")
+        conda_env = cluster_env.get("CondaEnv", None)
+        if conda_env:
+            commands.append(f"export CONDA_DEFAULT_ENV={conda_env}")
+        conda_prefix = cluster_env.get("CondaPrefix", None)
+        if conda_prefix:
+            commands.append(f"export CONDA_PREFIX={conda_prefix}")
 
         commands.append(f"srun python {scriptname}")
 
@@ -6900,7 +6920,7 @@ class SlurmCommunicator:
         Returns:
             str: Complete SLURM script content
         """
-        script_lines = ["#!/bin/bash -l"]
+        script_lines = ["#!/bin/bash"]
 
         # Add SLURM directives
         script_lines.append(f"#SBATCH --job-name={job_name}")
