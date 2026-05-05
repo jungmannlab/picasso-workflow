@@ -6838,12 +6838,12 @@ class SlurmCommunicator:
         return result["success"]
 
     def assemble_slurm_commands(
-        self, scriptname="start_workflow.py", use_pw_module=True
+        self, host_cluster, scriptname="start_workflow.py", use_pw_module=True
     ):
         """Assembles picasso-workflow specific commands for running a batch
         job on a SLURM cluster.
         """
-        cluster_env = CONFIG.get("ClusterEnvironment", {})
+        cluster_env = CONFIG.get("ClusterEnvironment", {}).get(host_cluster)
         pw_module = cluster_env.get("pw_module", "picasso-workflow-gui")
         anaconda_module = cluster_env.get(
             "anaconda_module", "anaconda/3/2023.03"
@@ -10829,7 +10829,7 @@ class Window(QtWidgets.QMainWindow):
         use_pw_mod = self.cluster_use_module.isChecked()
 
         commands = self.slurm_communicator.assemble_slurm_commands(
-            scriptname=scriptname, use_pw_module=use_pw_mod
+            host_cluster, scriptname=scriptname, use_pw_module=use_pw_mod
         )
         # scriptname=scriptname, use_pw_module=True)
         # scriptname=scriptname, use_pw_module=False)
