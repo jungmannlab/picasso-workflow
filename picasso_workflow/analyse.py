@@ -7905,6 +7905,56 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #     return parameters, results
 
+    @module_decorator
+    def spinna_batch(self, i, parameters, results):
+        """Direct implementation of spinna batch analysis.
+        The current locs file(s) are saved into the results folder, and
+        a template csv file is created. This csv needs to be filled out by the
+        user in a manual step before the spinna analysis is carried out.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_spinna_batch_config : str
+                        path to the spinna batch analysis config file.
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        cfg_fp = parameters["fp_spinna_batch_config"]
+        if self.channel_tags:
+            all_locs = self.channel_locs
+            all_info = self.channel_info
+            all_tags = self.channel_tags
+        else:
+            all_locs = [self.locs]
+            all_info = [self.info]
+            all_tags = ["locs"]
+        all_locs_fp = []
+        for locs, info, tag in zip(all_locs, all_info, all_tags):
+            locs_fn = tag + ".hdf5"
+            locs_fp = os.path.join(results["folder"], locs_fn)
+            all_locs_fp.append(locs_fp)
+            io.save_locs(locs_fp, locs, info)
+
+        spinna_config = pd.DataFrame.from_csv(cfg_fp)
+        for tag, locs_fp in zip(all_tags, all_locs_fp):
+            spinna_config[f"exp_data_{tag}"] = [locs_fp]
+        pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
+        result_dir, fp_summary, fp_fig = picasso_outpost.spinna_batch(
+            cfg_fp
+        )
+
+        results["message"] = "Successfully performed SPINNA analysis."
+        results["result_dir"] = result_dir
+        results["fp_summary"] = fp_summary
+        results["fp_fig"] = fp_fig
+        results["success"] = True
+        return parameters, results
+
     def _create_spinna_structure(
         self, names, multimers, distance, dimensionality=2
     ):

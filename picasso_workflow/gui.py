@@ -3306,6 +3306,54 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def spinna_batch(self):
+        """Direct implementation of spinna batch analysis.
+        The current locs file(s) are saved into the results folder, and
+        a template csv file is created. This csv needs to be filled out by the
+        user in a manual step before the spinna analysis is carried out.
+
+        Args:
+            i : int
+                the index of the module
+            parameters: dict
+                with required keys:
+                    fp_spinna_batch_config : str
+                        path to the spinna batch analysis config file.
+                and optional keys:
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        parameters_spec = {
+            "fp_spinna_batch_config": {
+                "type": "path",
+                "description": "Path to the spinna batch analysis config file.",
+                "required": True,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+        }
+
+        return parameters_spec, results_spec
+
     def ripleysk(self):
         """Perforn Ripley's K analysis between the channels using
         Magdalena's code.
