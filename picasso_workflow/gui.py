@@ -6838,7 +6838,7 @@ class SlurmCommunicator:
         return result["success"]
 
     def assemble_slurm_commands(
-        self, host_cluster, scriptname="start_workflow.py", use_pw_module=True
+        self, host_cluster, scriptname="start_workflow.py"
     ):
         """Assembles picasso-workflow specific commands for running a batch
         job on a SLURM cluster.
@@ -6855,13 +6855,13 @@ class SlurmCommunicator:
         commands.append("source ~/.bashrc")
 
         commands.append("source /etc/profile.d/modules.sh")
-        if use_pw_module:
-            commands.append(f"module load {pw_module}")
-        else:
-            commands.append(f"module load {anaconda_module}")
+        # if use_pw_module:
+        #     commands.append(f"module load {pw_module}")
+        # else:
+        #     commands.append(f"module load {anaconda_module}")
 
-        if not use_pw_module:
-            commands.append(f"conda activate {conda_env}")
+        # if not use_pw_module:
+        #     commands.append(f"conda activate {conda_env}")
 
         # instead of using slurm modules, let's directly append paths.
         bin_path = cluster_env.get("BinPath", None)
@@ -8243,14 +8243,14 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_timeout_edit.setMaximumWidth(100)
         cluster_config_layout.addWidget(self.cluster_timeout_edit)
 
-        self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
-        self.cluster_use_module.setMaximumWidth(200)
-        self.cluster_use_module.setChecked(True)
-        self.cluster_use_module.setToolTip(
-            "Use the miblab SLURM module for picasso-workflow (recommended). Otherwise, use Heinrich's repository."
-        )
-        # self.cluster_use_module.connect(self.on_cluster_use_module_state_change)
-        cluster_config_layout.addWidget(self.cluster_use_module)
+        # self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
+        # self.cluster_use_module.setMaximumWidth(200)
+        # self.cluster_use_module.setChecked(True)
+        # self.cluster_use_module.setToolTip(
+        #     "Use the miblab SLURM module for picasso-workflow (recommended). Otherwise, use Heinrich's repository."
+        # )
+        # # self.cluster_use_module.connect(self.on_cluster_use_module_state_change)
+        # cluster_config_layout.addWidget(self.cluster_use_module)
 
         # Cluster configuration widgets
         cluster_settings_layout = QtWidgets.QHBoxLayout()
@@ -10826,10 +10826,10 @@ class Window(QtWidgets.QMainWindow):
             slurm_options["mail-user"] = email
             slurm_options["mail-type"] = "ALL"
 
-        use_pw_mod = self.cluster_use_module.isChecked()
+        # use_pw_mod = self.cluster_use_module.isChecked()
 
         commands = self.slurm_communicator.assemble_slurm_commands(
-            host_cluster, scriptname=scriptname, use_pw_module=use_pw_mod
+            host_cluster, scriptname=scriptname
         )
         # scriptname=scriptname, use_pw_module=True)
         # scriptname=scriptname, use_pw_module=False)
