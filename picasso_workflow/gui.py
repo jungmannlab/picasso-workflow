@@ -7374,6 +7374,49 @@ class DroppableLineEdit(QtWidgets.QLineEdit):
             super().dropEvent(event)
 
 
+class DroppableFolderLineEdit(QtWidgets.QLineEdit):
+    """QLineEdit for folder paths with drag-and-drop support.
+
+    Dropping a folder populates the path with that folder; dropping a file
+    populates it with the file's containing directory.
+    """
+
+    folderDropped = QtCore.pyqtSignal(str)  # Emits the dropped folder path
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            # Take the first dropped item
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    path = url.toLocalFile()
+                    if not os.path.isdir(path):
+                        # A file was dropped: use its containing directory
+                        path = os.path.dirname(path)
+                    path = os.path.normpath(path)
+                    self.setText(path)
+                    self.folderDropped.emit(path)
+                    break
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
 class DroppableTableWidget(QtWidgets.QTableWidget):
     """QTableWidget with drag-and-drop support for files from Finder/Explorer."""
 
@@ -8049,11 +8092,16 @@ class Window(QtWidgets.QMainWindow):
         # self.files_box.addWidget(results_folder_button, 2, 0)
         layout.addWidget(results_folder_button, 0, 1)
         results_folder_button.clicked.connect(self.select_results_folder)
-        self.results_folder_display = QtWidgets.QLineEdit()
+        self.results_folder_display = DroppableFolderLineEdit()
         self.results_folder_display.setReadOnly(False)
-        self.results_folder_display.setPlaceholderText("No folder selected")
+        self.results_folder_display.setPlaceholderText(
+            "No folder selected (drag & drop a folder here)"
+        )
         self.results_folder_display.textChanged.connect(
             self.set_results_folder_display
+        )
+        self.results_folder_display.folderDropped.connect(
+            self.on_results_folder_dropped
         )
         # self.files_box.addWidget(self.results_folder_display, 2, 1, 1, 2)
         layout.addWidget(self.results_folder_display, 0, 2, 1, 2)
@@ -9315,6 +9363,19 @@ class Window(QtWidgets.QMainWindow):
     def set_results_folder_display(self, folder):
         # Enable widgets when a folder is selected
         self._set_widgets_enabled(True)
+
+    def on_results_folder_dropped(self, folder):
+        """Handle a folder dragged & dropped onto the results folder field.
+
+        Mirrors select_results_folder so a dropped folder loads its YAML
+        file list and workflow definition just like a folder picked via
+        the dialog.
+        """
+        if not folder or not os.path.isdir(folder):
+            return
+        self._set_widgets_enabled(True)
+        self._load_yaml_file_list(folder)
+        self._load_workflow_definition(folder)
 
     def on_template_changed(self, template_name):
         """Load a template"""
@@ -10693,8 +10754,8 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = SingleWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    "        base_page,",
                     "        confluence_username=confluence_username,",
+                    "        base_page,",
                     f"        dest_machine='{login_node}',",
                     f"        always_save={always_save},",
                     "    )",
@@ -10710,8 +10771,8 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = AggregationWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    "        base_page,",
                     "        confluence_username=confluence_username,",
+                    "        base_page,",
                     f"        dest_machine='{login_node}',",
                     f"        always_save={always_save},",
                     "    )",
