@@ -451,12 +451,17 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Analysis Hard- and Software</strong></p>
+        <ac:structured-macro ac:name="expand" ac:schema-version="1">
+        <ac:parameter ac:name="title">Parameters</ac:parameter>
+        <ac:rich-text-body>
         <ul>
         """
         for k, v in results.items():
-            text += f"<li>{k}: {v}</li>"
+            text += f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
         text += """
         </ul>
+        </ac:rich-text-body>
+        </ac:structured-macro>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(
@@ -4626,7 +4631,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         {result_text}"""
 
         if fp_fig := results.get("fp_fig_before"):
-            text += "<ul><table>"
+            text += "<table>"
             text += "<tr><td><b>Before Filtering</b></td>"
             text += "<td><b>After Filtering</b></td></tr>"
             text += "<tr><td>"
@@ -4650,7 +4655,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 <ac:image ac:width="350"><ri:attachment
                 ri:filename="{fp_fig}" />
                 </ac:image>"""
-            text += "</td></tr></table></ul>"
+            text += "</td></tr></table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -4724,7 +4729,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         """
 
         if fp_fig := results.get("fp_fig_before"):
-            text += "<ul><table>"
+            text += "<table>"
             text += "<tr><td><b>Before Filtering</b></td>"
             text += "<td><b>After Filtering</b></td></tr>"
             text += "<tr><td>"
@@ -4748,7 +4753,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 <ac:image ac:width="350"><ri:attachment
                 ri:filename="{fp_fig}" />
                 </ac:image>"""
-            text += "</td></tr></table></ul>"
+            text += "</td></tr></table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
