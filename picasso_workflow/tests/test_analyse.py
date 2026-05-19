@@ -715,6 +715,7 @@ class TestAnalyseModules(unittest.TestCase):
                 "sim_repeats": [5, 5],
             }
         ).to_csv(cfg_fp, index=False)
+        cfg_original = pd.read_csv(cfg_fp)
 
         result_dir = os.path.join(
             self.results_folder, "spinna_batch_config_fitting_results"
@@ -737,8 +738,13 @@ class TestAnalyseModules(unittest.TestCase):
         parameters = {"fp_spinna_batch_config": cfg_fp}
         parameters, results = self.ap.spinna_batch(0, parameters)
 
-        # results are passed through from picasso_outpost.spinna_batch
-        mock_spinna_batch.assert_called_once_with(cfg_fp)
+        # the modified config is written to a copy in the results
+        # folder, and that copy is the one passed to picasso.
+        cfg_fp_used = os.path.join(
+            results["folder"], "spinna_batch_config.csv"
+        )
+        mock_spinna_batch.assert_called_once_with(cfg_fp_used)
+        assert results["fp_spinna_batch_config"] == cfg_fp_used
         assert results["success"] is True
         assert results["result_dir"] == result_dir
         assert results["fp_summary"] == fp_summary
@@ -747,13 +753,16 @@ class TestAnalyseModules(unittest.TestCase):
         # the current locs are saved once per channel
         mock_save_locs.assert_called_once()
 
-        # the locs filepath is written into the config for every row,
-        # under the target-specific column.
-        written_cfg = pd.read_csv(cfg_fp)
+        # the locs filepath is written into the config copy for every
+        # row, under the target-specific column.
+        written_cfg = pd.read_csv(cfg_fp_used)
         assert "exp_data_CD86" in written_cfg.columns
         assert len(written_cfg) == 2
         expected_locs_fp = os.path.join(results["folder"], "CD86.hdf5")
         assert list(written_cfg["exp_data_CD86"]) == [expected_locs_fp] * 2
+
+        # the user's original config file is left untouched
+        pd.testing.assert_frame_equal(pd.read_csv(cfg_fp), cfg_original)
 
         os.remove(cfg_fp)
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna_batch"))
@@ -793,8 +802,83 @@ class TestAnalyseModules(unittest.TestCase):
 
         assert results["success"] is True
         mock_save_locs.assert_called_once()
-        written_cfg = pd.read_csv(cfg_fp)
+        cfg_fp_used = os.path.join(
+            results["folder"], "spinna_batch_config_sgl.csv"
+        )
+        assert results["fp_spinna_batch_config"] == cfg_fp_used
+        written_cfg = pd.read_csv(cfg_fp_used)
         assert "exp_data_locs" in written_cfg.columns
+
+        os.remove(cfg_fp)
+        shutil.rmtree(os.path.join(self.results_folder, "00_spinna_batch"))
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "srcmachineXXX": ["/src/pool-a", "/src/pool-b"],
+                "dstmachineXXX": ["/dst/pool-a", "/dst/pool-b"],
+            }
+        },
+    )
+    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def test_spinna_batch_converts_paths(
+        self, mock_save_locs, mock_spinna_batch, mock_node
+    ):
+        """Cross-machine file paths in the config are converted, while
+        the workflow's own channel keeps its local locs filepath."""
+        mock_node.return_value = "dstmachine001"
+        mock_spinna_batch.return_value = ("res_dir", "summary.csv", [])
+
+        cfg_fp = os.path.join(
+            self.results_folder, "spinna_batch_config_conv.csv"
+        )
+        pd.DataFrame(
+            {
+                "structures_filename": ["/src/pool-a/structs.yaml"],
+                "exp_data_OTHER": ["/src/pool-b/other.hdf5"],
+                "mask_filename_OTHER": ["/src/pool-a/mask.npy"],
+                "granularity": [30],
+                "save_filename": ["run1"],
+                "NND_bin": [5],
+                "NND_maxdist": [300],
+                "sim_repeats": [5],
+            }
+        ).to_csv(cfg_fp, index=False)
+
+        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        locs = pd.DataFrame(
+            np.rec.array(
+                [(i, 0.0, 0.0) for i in range(5)],
+                dtype=[("frame", "u4"), ("x", "f4"), ("y", "f4")],
+            )
+        )
+        self.ap.channel_locs = [locs]
+        self.ap.channel_info = [info]
+        self.ap.channel_tags = ["CD86"]
+
+        parameters = {"fp_spinna_batch_config": cfg_fp}
+        parameters, results = self.ap.spinna_batch(0, parameters)
+
+        written_cfg = pd.read_csv(results["fp_spinna_batch_config"])
+        # foreign-machine paths converted to the current machine's roots
+        assert (
+            written_cfg["structures_filename"].iloc[0]
+            == "/dst/pool-a/structs.yaml"
+        )
+        assert (
+            written_cfg["exp_data_OTHER"].iloc[0]
+            == "/dst/pool-b/other.hdf5"
+        )
+        assert (
+            written_cfg["mask_filename_OTHER"].iloc[0]
+            == "/dst/pool-a/mask.npy"
+        )
+        # this workflow's own channel keeps its freshly saved local locs
+        expected_locs_fp = os.path.join(results["folder"], "CD86.hdf5")
+        assert written_cfg["exp_data_CD86"].iloc[0] == expected_locs_fp
 
         os.remove(cfg_fp)
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna_batch"))

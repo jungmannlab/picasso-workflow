@@ -7,6 +7,7 @@ Description: Test the module util.py
 """
 import logging
 import unittest
+from unittest.mock import patch
 
 from picasso_workflow import util
 
@@ -215,3 +216,57 @@ class TestUtil(unittest.TestCase):
         expression = "* 3.1415"
         val = util.is_valid_expression(expression)
         assert val
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "srcmachineXXX": ["/src/pool-a", "/src/pool-b"],
+                "dstmachineXXX": ["/dst/pool-a", "/dst/pool-b"],
+            }
+        },
+    )
+    def test_07_convert_filepath_for_machine(self, mock_node):
+        mock_node.return_value = "dstmachine007"
+        # a path under a known source drive root gets converted
+        assert (
+            util.convert_filepath_for_machine("/src/pool-a/x/data.hdf5")
+            == "/dst/pool-a/x/data.hdf5"
+        )
+        # a path under no known drive root is returned unchanged
+        assert (
+            util.convert_filepath_for_machine("/home/user/data.hdf5")
+            == "/home/user/data.hdf5"
+        )
+        # non-string / empty values pass through unchanged
+        assert util.convert_filepath_for_machine(None) is None
+        assert util.convert_filepath_for_machine("") == ""
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "srcmachineXXX": ["/src/pool-a"],
+                "dstmachineXXX": ["/dst/pool-a"],
+            }
+        },
+    )
+    def test_08_pathparser_convert_path_robust(self, mock_node):
+        """convert_path returns the path unchanged (no exception) when
+        the machine or source drive root cannot be resolved."""
+        from picasso_workflow.metaworkflow import PathParser
+
+        # current machine not listed in Drivepaths -> unchanged
+        mock_node.return_value = "unknownmachine"
+        assert (
+            PathParser().convert_path("/src/pool-a/data.hdf5", None)
+            == "/src/pool-a/data.hdf5"
+        )
+        # path under no known drive root -> unchanged
+        mock_node.return_value = "dstmachine001"
+        assert (
+            PathParser().convert_path("/elsewhere/data.hdf5", None)
+            == "/elsewhere/data.hdf5"
+        )

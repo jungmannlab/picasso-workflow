@@ -190,35 +190,50 @@ class PathParser:
 
     def convert_path(self, src_path, dest_machine):
         """Convert a path from a source machine style to a dest
-        machine style and volume notation
+        machine style and volume notation.
+
+        If the destination machine cannot be resolved (it is not listed
+        in the Drivepaths config), or the source path is not located
+        under any known drive root, the path is returned unchanged.
         """
-        # if dest_machine not in self.drive_paths.keys():
-        #     raise ValueError(
-        #         f"Machine {dest_machine} not defined in .env! \
-        #         ({self.drive_paths.keys()})"
-        #     )
-        # print(CONFIG)
         # find current machine key
         if dest_machine is None:
-            for dest_machine in self.drive_paths.keys():
-                if self.check_machine(platform.node(), dest_machine):
+            for machine in self.drive_paths.keys():
+                if self.check_machine(platform.node(), machine):
+                    dest_machine = machine
                     break
+            if dest_machine is None:
+                logger.warning(
+                    f"Current machine {platform.node()} is not listed "
+                    "in the Drivepaths config; path not converted."
+                )
+                return src_path
         dest_paths = self.get_machine_drivepaths(dest_machine)
-        # print('dest_machine', dest_machine, 'paths', dest_paths)
+        if dest_paths is None:
+            logger.warning(
+                f"Destination machine {dest_machine} is not listed in "
+                "the Drivepaths config; path not converted."
+            )
+            return src_path
 
-        for src_machine, drivepaths in self.drive_paths.items():
-            src_on_machine = any([p in src_path for p in drivepaths])
-            if src_on_machine:
-                # src_machine has all drive paths defined
+        # find the source machine: the one with drive roots that the
+        # source path is located under
+        src_machine = None
+        for machine, drivepaths in self.drive_paths.items():
+            if any([p in src_path for p in drivepaths]):
+                src_machine = machine
                 break
+        if src_machine is None:
+            logger.debug(
+                f"Path {src_path} is not under any known drive root; "
+                "path not converted."
+            )
+            return src_path
 
         logger.debug(f"found src machine: {src_machine}")
         logger.debug(f"dest machine: {dest_machine}")
 
         drive_map = {}
-        # for src_p, dest_p in zip(
-        #     self.drive_paths[src_machine], self.drive_paths[dest_machine]
-        # ):
         for src_p, dest_p in zip(self.drive_paths[src_machine], dest_paths):
             drive_map[src_p] = dest_p
 

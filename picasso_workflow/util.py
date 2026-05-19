@@ -1325,8 +1325,14 @@ class AbstractModuleCollection(abc.ABC):
         results folder. Their filepaths are written into the SPINNA
         batch config csv (given via ``fp_spinna_batch_config``) as one
         ``exp_data_<tag>`` column per channel, so the batch analysis
-        runs on the locs produced by this workflow. The updated config
-        is then passed on to picasso's batch analysis.
+        runs on the locs produced by this workflow.
+
+        File-path columns of the config csv (``structures_filename``,
+        ``exp_data_*`` and ``mask_filename_*``) are converted to the
+        current machine using the Drivepaths config. The modified
+        config is written to a copy inside the module's results folder
+        -- the user's original csv is not changed -- and that copy is
+        passed on to picasso's batch analysis.
 
         The config csv must already be prepared by the user; only the
         ``exp_data_*`` columns are filled in here. See
@@ -2758,3 +2764,34 @@ def stripplot(data, positions, jitter, ax, color, alpha=1):
         x = pos * np.ones(len(d))
         x += np.random.uniform(-jitter / 2, jitter / 2, size=len(d))
         ax.scatter(x, d, color=color, alpha=alpha)
+
+
+def convert_filepath_for_machine(path, dest_machine=None):
+    """Convert a file path written on another machine to the path
+    valid on the current (or given) machine, using the Drivepaths
+    section of the picasso-workflow config.
+
+    This is the entry point for analysis modules that need to adjust
+    user-provided file paths to the machine the analysis runs on.
+    metaworkflow.PathParser is imported lazily to avoid a circular
+    import (metaworkflow imports the workflow runners, which import
+    analyse/util).
+
+    Non-string or empty values, and paths that are not located under
+    any known drive root, are returned unchanged (see
+    PathParser.convert_path).
+
+    Args:
+        path : str
+            the file path to convert.
+        dest_machine : str or None
+            target machine pattern key (e.g. 'hpcl8XXX'); None
+            auto-detects the current machine via platform.node().
+    Returns:
+        the converted path (str), or the input value unchanged.
+    """
+    if not isinstance(path, str) or not path:
+        return path
+    from picasso_workflow.metaworkflow import PathParser
+
+    return PathParser().convert_path(path, dest_machine)

@@ -3313,8 +3313,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         results folder. Their filepaths are written into the SPINNA
         batch config csv (given via ``fp_spinna_batch_config``) as one
         ``exp_data_<tag>`` column per channel, so the batch analysis
-        runs on the locs produced by this workflow. The updated config
-        is then passed on to picasso's batch analysis.
+        runs on the locs produced by this workflow.
+
+        File-path columns of the config csv (``structures_filename``,
+        ``exp_data_*`` and ``mask_filename_*``) are converted to the
+        current machine using the Drivepaths config. The modified
+        config is written to a copy inside the module's results folder
+        -- the user's original csv is not changed -- and that copy is
+        passed on to picasso's batch analysis.
 
         The config csv must already be prepared by the user; only the
         ``exp_data_*`` columns are filled in here. See
@@ -3358,6 +3364,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "folder": {
                 "type": "str",
                 "description": "Output folder for module results",
+            },
+            "fp_spinna_batch_config": {
+                "type": "str",
+                "description": "Path to the config csv copy actually used",
             },
             "result_dir": {
                 "type": "str",
