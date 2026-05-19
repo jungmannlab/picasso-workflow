@@ -1771,6 +1771,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     return False
         
         has_z = check_has_z(render_locs)
+        
+        # Read colormap choice (default to magma)
+        cmap_choice = parameters.get("colormap", "magma")
 
         # render whole field of view
         fullfov_pixelsize = parameters.get("fullfov_pixelsize", pixelsize)
@@ -1859,6 +1862,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     "min_blur_width": parameters.get(
                         "ctrmass_min_blur_width", 0
                     ),
+                    "cmap": cmap_choice,
                 }
                 if has_z and parameters.get("ctrmass_ang") is not None:
                     tile_kwargs["ang"] = parameters.get("ctrmass_ang")
@@ -1887,6 +1891,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             fullfov_pixelsize,
             pixelsize,
             fp=None,
+            render_kwargs={"cmap": cmap_choice},
         )
 
         # Draw outlines of selected ROIs if present
@@ -1955,6 +1960,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ],
                 "blur_method": parameters.get("ctrmass_blur_method"),
                 "min_blur_width": parameters.get("ctrmass_min_blur_width", 0),
+                "cmap": cmap_choice,
             }
             if has_z and parameters.get("ctrmass_ang") is not None:
                 render_kwargs["ang"] = parameters.get("ctrmass_ang")
