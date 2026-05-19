@@ -31,9 +31,17 @@ def module_decorator(method):
             <ac:rich-text-body>
             <ul>
             """
+        def _format_val(v):
+            if type(v).__module__ == "numpy" and hasattr(v, "item"):
+                try:
+                    return str(v.item())
+                except Exception:
+                    pass
+            return str(v)
+
         for k, v in parameters.items():
             parameter_text += (
-                f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+                f"<li>{html.escape(str(k))}: {html.escape(_format_val(v))}</li>"
             )
 
         parameter_text += """
@@ -50,7 +58,7 @@ def module_decorator(method):
             """
         for k, v in results.items():
             result_text += (
-                f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+                f"<li>{html.escape(str(k))}: {html.escape(_format_val(v))}</li>"
             )
 
         result_text += """
