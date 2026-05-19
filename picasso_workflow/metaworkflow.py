@@ -544,17 +544,17 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         self.analysis_name = os.path.split(working_folder)[-1]
 
         super().__init__(
-            analysis_name,
-            working_folder,
-            confluence_url,
-            confluence_space,
-            confluence_token,
-            base_page,
-            confluence_username,
-            dest_machine,
-            always_save,
-            profile_space,
-            profile_basepage,
+            analysis_name=analysis_name,
+            working_folder=working_folder,
+            confluence_url=confluence_url,
+            confluence_space=confluence_space,
+            confluence_token=confluence_token,
+            confluence_username=confluence_username,
+            base_page=base_page,
+            dest_machine=dest_machine,
+            always_save=always_save,
+            profile_space=profile_space,
+            profile_basepage=profile_basepage,
         )
 
     def prepare_analysis(
@@ -675,17 +675,18 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         self.analysis_name = analysis_name
 
         super().__init__(
-            analysis_name,
-            working_folder,
-            confluence_url,
-            confluence_space,
-            confluence_token,
-            confluence_username,
-            base_page,
-            dest_machine,
-            always_save,
-            profile_space,
-            profile_basepage,
+            analysis_name=analysis_name,
+            working_folder=working_folder,
+            confluence_url=confluence_url,
+            confluence_space=confluence_space,
+            confluence_token=confluence_token,
+            confluence_username=confluence_username,
+            base_page=base_page,
+            investigation_description=investigation_description,
+            dest_machine=dest_machine,
+            always_save=always_save,
+            profile_space=profile_space,
+            profile_basepage=profile_basepage,
         )
 
     def prepare_analysis(
@@ -836,18 +837,18 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         self.analysis_name = analysis_name
 
         super().__init__(
-            analysis_name,
-            working_folder,
-            confluence_url,
-            confluence_space,
-            confluence_token,
-            base_page,
-            confluence_username,
-            investigation_description,
-            dest_machine,
-            always_save,
-            profile_space,
-            profile_basepage,
+            analysis_name=analysis_name,
+            working_folder=working_folder,
+            confluence_url=confluence_url,
+            confluence_space=confluence_space,
+            confluence_token=confluence_token,
+            confluence_username=confluence_username,
+            base_page=base_page,
+            investigation_description=investigation_description,
+            dest_machine=dest_machine,
+            always_save=always_save,
+            profile_space=profile_space,
+            profile_basepage=profile_basepage,
         )
 
     def prepare_sglcell_analysis(self, get_workflow_modules):
