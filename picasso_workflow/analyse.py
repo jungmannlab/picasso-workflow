@@ -1756,6 +1756,22 @@ class AutoPicasso(util.AbstractModuleCollection):
             x_mean = np.mean(self.locs["x"])
             y_mean = np.mean(self.locs["y"])
 
+        # Check if the dataset is 3D (has a 'z' column) to prevent rotation KeyErrors in 2D
+        def check_has_z(locs):
+            if isinstance(locs, list):
+                if not locs:
+                    return False
+                locs = locs[0]
+            try:
+                return "z" in locs.dtype.names
+            except AttributeError:
+                try:
+                    return "z" in locs.columns
+                except (AttributeError, TypeError):
+                    return False
+        
+        has_z = check_has_z(render_locs)
+
         # render whole field of view
         fullfov_pixelsize = parameters.get("fullfov_pixelsize", pixelsize)
 
@@ -1803,8 +1819,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                         candidates.append((count, center_x, center_y))
 
             candidates.sort(key=lambda item: item[0], reverse=True)
-
-            n_rois = parameters.get("n_active_rois", 5)
+            n_rois = parameters.get("n_active_rois")
+            if n_rois is None:
+                n_rois = 3
             roi_centers = []
             min_distance = roi_size  # non-overlapping
 
@@ -1842,8 +1859,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     "min_blur_width": parameters.get(
                         "ctrmass_min_blur_width", 0
                     ),
-                    "ang": parameters.get("ctrmass_ang"),
                 }
+                if has_z and parameters.get("ctrmass_ang") is not None:
+                    tile_kwargs["ang"] = parameters.get("ctrmass_ang")
 
                 roi_fp = os.path.join(
                     results["folder"], f"locs_active_roi_{idx + 1}_{rcode}.png"
@@ -1937,8 +1955,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ],
                 "blur_method": parameters.get("ctrmass_blur_method"),
                 "min_blur_width": parameters.get("ctrmass_min_blur_width", 0),
-                "ang": parameters.get("ctrmass_ang"),
             }
+            if has_z and parameters.get("ctrmass_ang") is not None:
+                render_kwargs["ang"] = parameters.get("ctrmass_ang")
             results["fp_scene_ctrmass"] = os.path.join(
                 results["folder"], f"locs_ctrmass_{rcode}.png"
             )
