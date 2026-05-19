@@ -10400,8 +10400,10 @@ class Window(QtWidgets.QMainWindow):
                 # )
 
             # Load aggregation workflow if found
-            if workflow_modules_agg is not None and isinstance(
-                workflow_modules_agg, list
+            if (
+                workflow_modules_agg is not None
+                and isinstance(workflow_modules_agg, list)
+                and len(workflow_modules_agg) > 0
             ):
                 self._populate_workflow_from_definition(
                     workflow_modules_agg,
@@ -10542,8 +10544,10 @@ class Window(QtWidgets.QMainWindow):
                 )
 
             # Load aggregation workflow if present
-            if workflow_modules_agg is not None and isinstance(
-                workflow_modules_agg, list
+            if (
+                workflow_modules_agg is not None
+                and isinstance(workflow_modules_agg, list)
+                and len(workflow_modules_agg) > 0
             ):
                 self._populate_workflow_from_definition(
                     workflow_modules_agg,
