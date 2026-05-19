@@ -1923,7 +1923,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # Add text label for each active site
                 ax_overview.text(
                     x_min_um + 0.03 * width_um,
-                    y_max_um - 0.12 * height_um,
+                    y_min_um + 0.12 * height_um,
                     str(idx + 1),
                     color="red",
                     fontsize=10,
