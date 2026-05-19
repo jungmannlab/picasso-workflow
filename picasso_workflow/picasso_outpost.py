@@ -43,6 +43,7 @@ from scipy.optimize import minimize
 from sklearn.cluster import OPTICS
 from scipy import stats
 import itertools
+import glob
 
 
 # logger = logging.getLogger(__name__)
@@ -1809,23 +1810,40 @@ def normalize_spot(spot, maxval=255, dtype=np.uint8):
     return sp.astype(dtype)
 
 
-# def spinna_batch(parameters_filename):
-#     """This function runs a spinna batch analysis from file,
-#     as run via command line in picasso.__main__.
+def spinna_batch(parameters_filename):
+    """This function runs a spinna batch analysis from file,
+    as run via command line in picasso.__main__.
 
-#     Returns:
-#         result_dir : str
-#             folder containing the results
-#         fp_summary : str
-#             the filepath of the summary csv file
-#         fp_fig : list of str
-#             filepaths of the NND figures
-#     """
-#     result_dir, fp_summary, fp_fig = spinna_batch_analysis(parameters_filename)
-#     # print("result_dir", result_dir)
-#     # print("fp_summary", fp_summary)
-#     # print("fp_fig", fp_fig)
-#     return result_dir, fp_summary, fp_fig
+    picasso's ``_spinna_batch_analysis`` derives the result directory
+    from the parameters filename (appending an index if a directory of
+    that name already exists) and saves the summary csv and the NND
+    figures there, but it does not return any paths. They are therefore
+    reconstructed here with the same logic picasso uses internally.
+
+    Args:
+        parameters_filename : str
+            the filepath of the spinna batch analysis config (.csv) file
+
+    Returns:
+        result_dir : str
+            folder containing the results
+        fp_summary : str
+            the filepath of the summary csv file
+        fp_fig : list of str
+            filepaths of the NND figures
+    """
+    result_dir = parameters_filename.replace(".csv", "_fitting_results")
+    if os.path.isdir(result_dir):
+        i = 1
+        while os.path.isdir(f"{result_dir}_{i}"):
+            i += 1
+        result_dir = f"{result_dir}_{i}"
+
+    spinna_batch_analysis(parameters_filename)
+
+    fp_summary = os.path.join(result_dir, "summary_results.csv")
+    fp_fig = sorted(glob.glob(os.path.join(result_dir, "*_NND_*.png")))
+    return result_dir, fp_summary, fp_fig
 
 
 def single_spinna_run(

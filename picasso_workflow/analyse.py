@@ -7905,6 +7905,112 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #     return parameters, results
 
+    @module_decorator
+    def spinna_batch(self, i, parameters, results):
+        """Run a SPINNA batch analysis from a pre-existing config file.
+
+        The current locs file(s) are saved as .hdf5 into the module's
+        results folder. Their filepaths are written into the SPINNA
+        batch config csv (given via ``fp_spinna_batch_config``) as one
+        ``exp_data_<tag>`` column per channel, so the batch analysis
+        runs on the locs produced by this workflow.
+
+        File-path columns of the config csv (``structures_filename``,
+        ``exp_data_*`` and ``mask_filename_*``) may have been written
+        on a different machine; they are converted to the current
+        machine using the Drivepaths config (see
+        ``util.convert_filepath_for_machine``). The modified config is
+        written to a copy inside the module's results folder -- the
+        user's original csv is not changed -- and that copy is passed
+        on to picasso's batch analysis.
+
+        The config csv must already be prepared by the user; only the
+        ``exp_data_*`` columns are filled in here. See
+        ``picasso.__main__._spinna_batch_analysis`` for the columns
+        expected in the config file.
+
+        Args:
+            i : int
+                the index of the module
+            parameters : dict
+                with required keys:
+                    fp_spinna_batch_config : str
+                        path to the user-prepared spinna batch
+                        analysis config csv file.
+                    use_workflow_locs : bool
+                        whether to use the locs previously processed in
+                        this workflow, otherwise those specified in the
+                        csv. Default: False
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper. Keys populated here:
+                    fp_spinna_batch_config : str
+                        path to the config csv copy actually used
+                    result_dir : str
+                        folder containing the spinna results
+                    fp_summary : str
+                        filepath of the summary csv file
+                    fp_figs : list of str
+                        filepaths of the NND figures
+        """
+        cfg_fp = parameters["fp_spinna_batch_config"]
+        use_workflow_locs = parameters.get("use_workflow_locs", False)
+        if use_workflow_locs:
+            if self.channel_tags:
+                all_locs = self.channel_locs
+                all_info = self.channel_info
+                all_tags = self.channel_tags
+            else:
+                all_locs = [self.locs]
+                all_info = [self.info]
+                all_tags = ["locs"]
+            all_locs_fp = []
+            for locs, info, tag in zip(all_locs, all_info, all_tags):
+                locs_fn = tag + ".hdf5"
+                locs_fp = os.path.join(results["folder"], locs_fn)
+                all_locs_fp.append(locs_fp)
+                io.save_locs(locs_fp, locs, info)
+
+        spinna_config = pd.read_csv(cfg_fp)
+
+        # convert cross-machine file paths in the user-provided config
+        path_cols = [
+            c
+            for c in spinna_config.columns
+            if c == "structures_filename"
+            or c.startswith("exp_data_")
+            or c.startswith("mask_filename_")
+        ]
+        for col in path_cols:
+            spinna_config[col] = spinna_config[col].map(
+                util.convert_filepath_for_machine
+            )
+
+        if use_workflow_locs:
+            # inject this workflow's freshly saved locs for its own channels
+            # (already current-machine paths, hence after the conversion)
+            for tag, locs_fp in zip(all_tags, all_locs_fp):
+                spinna_config[f"exp_data_{tag}"] = locs_fp
+
+        # write the modified config to a copy in the results folder, so
+        # the user's input is untouched and picasso's *_fitting_results
+        # directory lands inside the module folder.
+        cfg_fp_used = os.path.join(
+            results["folder"], os.path.basename(cfg_fp)
+        )
+        spinna_config.to_csv(cfg_fp_used, index=False)
+        result_dir, fp_summary, fp_figs = picasso_outpost.spinna_batch(
+            cfg_fp_used
+        )
+
+        results["message"] = "Successfully performed SPINNA analysis."
+        results["fp_spinna_batch_config"] = cfg_fp_used
+        results["result_dir"] = result_dir
+        results["fp_summary"] = fp_summary
+        results["fp_figs"] = fp_figs
+        results["success"] = True
+        return parameters, results
+
     def _create_spinna_structure(
         self, names, multimers, distance, dimensionality=2
     ):

@@ -7,6 +7,7 @@ Description: Test the module util.py
 """
 import logging
 import unittest
+from unittest.mock import patch
 
 from picasso_workflow import util
 
@@ -211,7 +212,103 @@ class TestUtil(unittest.TestCase):
         logger.debug(f"tags out: {tags}")
         assert tags == ["RESI-1", "RESI-2"]
 
+    def test_05_ParameterTiler_tags_only(self):
+        """With only a '#tags' entry (no mapped files), the tiler must
+        produce exactly one workflow set - this is what the single
+        workflow 'no input files' mode relies on."""
+        tile_entries = {"#tags": ["myrun"]}
+        tiler = util.ParameterTiler(self, tile_entries)
+        di = [
+            ("analysis_documentation", {}),
+            ("spinna_batch", {"fp_spinna_batch_config": "cfg.csv"}),
+        ]
+        res_out, tags = tiler.run(di)
+        assert len(res_out) == 1
+        assert res_out[0] == di
+        assert tags == ["myrun"]
+
     def test_06_valid_expression(self):
         expression = "* 3.1415"
         val = util.is_valid_expression(expression)
         assert val
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "srcmachineXXX": ["/src/pool-a", "/src/pool-b"],
+                "dstmachineXXX": ["/dst/pool-a", "/dst/pool-b"],
+            }
+        },
+    )
+    def test_07_convert_filepath_for_machine(self, mock_node):
+        mock_node.return_value = "dstmachine007"
+        # a path under a known source drive root gets converted
+        assert (
+            util.convert_filepath_for_machine("/src/pool-a/x/data.hdf5")
+            == "/dst/pool-a/x/data.hdf5"
+        )
+        # a path under no known drive root is returned unchanged
+        assert (
+            util.convert_filepath_for_machine("/home/user/data.hdf5")
+            == "/home/user/data.hdf5"
+        )
+        # non-string / empty values pass through unchanged
+        assert util.convert_filepath_for_machine(None) is None
+        assert util.convert_filepath_for_machine("") == ""
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "srcmachineXXX": ["/src/pool-a"],
+                "dstmachineXXX": ["/dst/pool-a"],
+            }
+        },
+    )
+    def test_08_pathparser_convert_path_robust(self, mock_node):
+        """convert_path returns the path unchanged (no exception) when
+        the machine or source drive root cannot be resolved."""
+        from picasso_workflow.metaworkflow import PathParser
+
+        # current machine not listed in Drivepaths -> unchanged
+        mock_node.return_value = "unknownmachine"
+        assert (
+            PathParser().convert_path("/src/pool-a/data.hdf5", None)
+            == "/src/pool-a/data.hdf5"
+        )
+        # path under no known drive root -> unchanged
+        mock_node.return_value = "dstmachine001"
+        assert (
+            PathParser().convert_path("/elsewhere/data.hdf5", None)
+            == "/elsewhere/data.hdf5"
+        )
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "winmachineXXX": ["U:"],
+                "dstmachineXXX": ["/dst/pool"],
+            }
+        },
+    )
+    def test_09_convert_path_mixed_separators(self, mock_node):
+        """A Windows path (drive letter) with mixed '/' and '\\'
+        separators is recognised as Windows and converted completely -
+        no backslash may survive in the result."""
+        from picasso_workflow.metaworkflow import PathParser
+
+        mock_node.return_value = "dstmachine001"
+        pp = PathParser()
+        # a drive-letter path is Windows regardless of slash counts
+        assert pp.check_path_style("U:/a/b/c\\d") is False
+        assert pp.check_path_style("/posix/a/b") is True
+        result = pp.convert_path(
+            "U:/users/honsa/data\\sub\\file.hdf5", None
+        )
+        assert result == "/dst/pool/users/honsa/data/sub/file.hdf5"
+        assert "\\" not in result

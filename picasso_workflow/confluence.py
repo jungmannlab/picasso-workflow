@@ -2823,7 +2823,71 @@ class ConfluenceReporter(AbstractModuleCollection):
         {result_text}
         """
         fig_fps = results.get("fp_figs", [])
-        titles = ["" for i in range(len(fig_fps))]
+        titles = ["" for _ in range(len(fig_fps))]
+
+        if len(fig_fps) > 0:
+            fn_figs = []
+            for fp in fig_fps:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_figs.append(os.path.split(fp)[1])
+
+            text += "<table><tr>"
+            for tit in titles:
+                text += f"<td><b>{tit}</b></td>"
+            text += "</tr>"
+            text += "<tr>"
+            for fn in fn_figs:
+                text += f"""
+                    <td>
+                          <ac:image ac:height="350">
+                          <ri:attachment ri:filename="{fn}" />
+                          </ac:image>
+                    </td>"""
+            text += "</tr>"
+            text += "</table>"
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
+            )
+
+    @module_decorator
+    def spinna_batch(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Report the SPINNA batch analysis module to Confluence.
+
+        Writes the module summary, parameters and results, and embeds
+        the NND figures (``results['fp_figs']``) as a table.
+        """
+        logger.debug("Reporting spinna_batch.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: SPINNA batch analysis</strong></p>
+        Summary:
+        <ul>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+        fig_fps = results.get("fp_figs", [])
+        titles = ["" for _ in range(len(fig_fps))]
 
         if len(fig_fps) > 0:
             fn_figs = []
@@ -5089,6 +5153,12 @@ class ConfluenceInterface:
         else:
             self.username = None
         self.space_key = space_key
+
+        logger.debug(f"confluence_url: {self.base_url}")
+        logger.debug(f"confluence_space: {self.space_key}")
+        logger.debug(f"confluence_token: {self.bearer_token}")
+        logger.debug(f"confluence_username: {self.username}")
+
         self.connect()
 
         self.parent_page_id, _ = self.get_page_properties(parent_page_title)
