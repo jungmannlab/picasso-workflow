@@ -108,7 +108,12 @@ class PathParser:
                 the map from windows drive (e.g. "W:") to posix drive
                 (e.g. "/Volumes/pool-miblab4")
         """
-        posixpath = pathlib.PurePosixPath(posixpath)
+        # Backslashes are only ever path separators in these data paths,
+        # never filename characters. Normalise them so a mixed-separator
+        # path (e.g. "U:/a/b\\c\\d") splits into every component, instead
+        # of leaving a backslash-joined tail unconverted (PurePosixPath
+        # only ever splits on "/").
+        posixpath = pathlib.PurePosixPath(str(posixpath).replace("\\", "/"))
         if posixpath.drive:
             # absolute path
             drive = drive_map[posixpath.drive]
@@ -163,13 +168,25 @@ class PathParser:
         return str(currospath)
 
     def check_path_style(self, path):
-        """Check whether a path is windows or posix style by
-        comparing the number of / and \
+        """Check whether a path is windows or posix style.
+
+        A leading drive letter (e.g. "U:") or UNC prefix ("\\\\server")
+        unambiguously marks a Windows path; a leading "/" marks a posix
+        path. These take precedence over separator counting: a Windows
+        path may well contain forward slashes (e.g.
+        "U:/users/foo\\bar"), so counting "/" against "\\" would
+        misclassify it as posix and lose the backslash-joined parts.
+        Only relative paths (no such prefix) fall back to comparing the
+        number of "/" and "\\" separators.
         """
+        path = str(path)
+        if re.match(r"[A-Za-z]:", path) or path.startswith("\\\\"):
+            return False  # windows
+        if path.startswith("/"):
+            return True  # posix
         num_fwd = path.count("/")
         num_bwd = path.count("\\")
-        is_posix = num_fwd > num_bwd
-        return is_posix
+        return num_fwd > num_bwd
 
     def check_machine(self, machine, pattern):
         """Checks a machine against a machine pattern, for example
@@ -190,35 +207,50 @@ class PathParser:
 
     def convert_path(self, src_path, dest_machine):
         """Convert a path from a source machine style to a dest
-        machine style and volume notation
+        machine style and volume notation.
+
+        If the destination machine cannot be resolved (it is not listed
+        in the Drivepaths config), or the source path is not located
+        under any known drive root, the path is returned unchanged.
         """
-        # if dest_machine not in self.drive_paths.keys():
-        #     raise ValueError(
-        #         f"Machine {dest_machine} not defined in .env! \
-        #         ({self.drive_paths.keys()})"
-        #     )
-        # print(CONFIG)
         # find current machine key
         if dest_machine is None:
-            for dest_machine in self.drive_paths.keys():
-                if self.check_machine(platform.node(), dest_machine):
+            for machine in self.drive_paths.keys():
+                if self.check_machine(platform.node(), machine):
+                    dest_machine = machine
                     break
+            if dest_machine is None:
+                logger.warning(
+                    f"Current machine {platform.node()} is not listed "
+                    "in the Drivepaths config; path not converted."
+                )
+                return src_path
         dest_paths = self.get_machine_drivepaths(dest_machine)
-        # print('dest_machine', dest_machine, 'paths', dest_paths)
+        if dest_paths is None:
+            logger.warning(
+                f"Destination machine {dest_machine} is not listed in "
+                "the Drivepaths config; path not converted."
+            )
+            return src_path
 
-        for src_machine, drivepaths in self.drive_paths.items():
-            src_on_machine = any([p in src_path for p in drivepaths])
-            if src_on_machine:
-                # src_machine has all drive paths defined
+        # find the source machine: the one with drive roots that the
+        # source path is located under
+        src_machine = None
+        for machine, drivepaths in self.drive_paths.items():
+            if any([p in src_path for p in drivepaths]):
+                src_machine = machine
                 break
+        if src_machine is None:
+            logger.debug(
+                f"Path {src_path} is not under any known drive root; "
+                "path not converted."
+            )
+            return src_path
 
         logger.debug(f"found src machine: {src_machine}")
         logger.debug(f"dest machine: {dest_machine}")
 
         drive_map = {}
-        # for src_p, dest_p in zip(
-        #     self.drive_paths[src_machine], self.drive_paths[dest_machine]
-        # ):
         for src_p, dest_p in zip(self.drive_paths[src_machine], dest_paths):
             drive_map[src_p] = dest_p
 
@@ -389,7 +421,8 @@ class AbstractWorkflowCoordinator(abc.ABC):
         confluence_url,
         confluence_space,
         confluence_token,
-        base_page,
+        confluence_username=None,
+        base_page="base_page",
         investigation_description="",
         dest_machine=None,
         always_save=False,
@@ -404,6 +437,12 @@ class AbstractWorkflowCoordinator(abc.ABC):
         self.confluence_url = confluence_url
         self.confluence_space = confluence_space
         self.confluence_token = confluence_token
+        self.confluence_username = confluence_username
+
+        logger.debug(f"confluence_url: {confluence_url}")
+        logger.debug(f"confluence_space: {confluence_space}")
+        logger.debug(f"confluence_token: {confluence_token}")
+        logger.debug(f"confluence_username: {confluence_username}")
 
         self.always_save = always_save
 
@@ -413,17 +452,22 @@ class AbstractWorkflowCoordinator(abc.ABC):
             # self.size = comm.Get_size()  # Get the total number of processes
             self.rank = int(os.getenv("SLURM_PROCID"))
             self.size = int(os.getenv("SLURM_NTASKS"))
-            logger.debug(f"Assigned this node rank {self.rank}, size {self.size}.")
+            logger.debug(
+                f"Assigned this node rank {self.rank}, size {self.size}."
+            )
         else:
             self.rank = 0
             self.size = 1
-            logger.debug(f"No SLRUM env vars found. Assigned this node rank {self.rank}, size {self.size}.")
+            logger.debug(
+                f"No SLRUM env vars found. Assigned this node rank {self.rank}, size {self.size}."
+            )
 
         if self.rank == 0:
             ci = confluence.ConfluenceInterface(
                 self.confluence_url,
                 self.confluence_space,
                 base_page,
+                username=self.confluence_username,
                 token=self.confluence_token,
             )
             try:
@@ -444,6 +488,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
             self.confluence_url,
             self.confluence_space,
             self.root_page,
+            self.confluence_username,
             token=self.confluence_token,
         )
 
@@ -452,6 +497,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
                 self.confluence_url,
                 profile_space,
                 profile_basepage,
+                self.confluence_username,
                 self.confluence_token,
             )
             self.profiler.init_profile_page()
@@ -493,6 +539,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
                 "base_url": self.confluence_url,
                 "space_key": self.confluence_space,
                 "parent_page_title": report_name,
+                "username": self.confluence_username,
                 "token": self.confluence_token,
             },
         }
@@ -527,17 +574,26 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         confluence_url,
         confluence_space,
         confluence_token,
-        base_page,
+        confluence_username=None,
+        base_page="base_page",
         dest_machine=None,
         always_save=False,
         profile_space=None,
         profile_basepage=None,
     ):
-        self.dataset_filepaths = io.load_info(src_loc_file)[0]
-        self.tile_entries = {
-            "filepath": list(self.dataset_filepaths.values()),
-            "#tags": list(self.dataset_filepaths.keys()),
-        }
+        if src_loc_file is None:
+            # "no input files" mode: run the workflow exactly once, with
+            # no dataset filepath mapping. Useful for workflows whose
+            # modules load data themselves (e.g. spinna_batch reads its
+            # source files from a config csv).
+            self.dataset_filepaths = {}
+            self.tile_entries = {"#tags": [analysis_name]}
+        else:
+            self.dataset_filepaths = io.load_info(src_loc_file)[0]
+            self.tile_entries = {
+                "filepath": list(self.dataset_filepaths.values()),
+                "#tags": list(self.dataset_filepaths.keys()),
+            }
         self.analysis_name = os.path.split(working_folder)[-1]
 
         super().__init__(
@@ -546,6 +602,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             confluence_url,
             confluence_space,
             confluence_token,
+            confluence_username,
             base_page,
             dest_machine,
             always_save,
@@ -553,7 +610,9 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             profile_basepage,
         )
 
-    def prepare_analysis(self, workflow_modules, continue_previous_runners=False):
+    def prepare_analysis(
+        self, workflow_modules, continue_previous_runners=False
+    ):
         """
         Args:
             workflow_modules:
@@ -610,7 +669,9 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         return run_wr_kwargs
 
     def run_analysis(self, workflow_modules, continue_previous_runners=False):
-        run_wr_kwargs = self.prepare_analysis(workflow_modules, continue_previous_runners)
+        run_wr_kwargs = self.prepare_analysis(
+            workflow_modules, continue_previous_runners
+        )
 
         # print(f'rank {self.rank}, size {self.size}: running {run_awr_kwargs}')
 
@@ -645,7 +706,8 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         confluence_url,
         confluence_space,
         confluence_token,
-        base_page,
+        confluence_username=None,
+        base_page="base_page",
         dest_machine="hpcl8001",
         investigation_description="",
         always_save=False,
@@ -671,6 +733,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             confluence_url,
             confluence_space,
             confluence_token,
+            confluence_username,
             base_page,
             dest_machine,
             always_save,
@@ -678,7 +741,12 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             profile_basepage,
         )
 
-    def prepare_analysis(self, workflow_modules_sgl, workflow_modules_agg, continue_previous_runners=False):
+    def prepare_analysis(
+        self,
+        workflow_modules_sgl,
+        workflow_modules_agg,
+        continue_previous_runners=False,
+    ):
         """
         Args:
             workflow_modules_multi : dict of
@@ -713,6 +781,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                         self.confluence_url,
                         self.confluence_space,
                         self.root_page,
+                        username=self.confluence_username,
                         token=self.confluence_token,
                     )
                     ci.create_page(report_name, "")
@@ -747,9 +816,16 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             )
         return run_awr_kwargs
 
-    def run_analysis(self, workflow_modules_sgl, workflow_modules_agg, continue_previous_runners=False):
+    def run_analysis(
+        self,
+        workflow_modules_sgl,
+        workflow_modules_agg,
+        continue_previous_runners=False,
+    ):
         run_awr_kwargs = self.prepare_analysis(
-            workflow_modules_sgl, workflow_modules_agg, continue_previous_runners
+            workflow_modules_sgl,
+            workflow_modules_agg,
+            continue_previous_runners,
         )
 
         print(f"rank {self.rank}, size {self.size}: running {run_awr_kwargs}")
@@ -781,7 +857,8 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         confluence_url,
         confluence_space,
         confluence_token,
-        base_page,
+        confluence_username=None,
+        base_page="base_page",
         dest_machine="hpcl8",
         investigation_description="",
         always_save=False,
@@ -817,6 +894,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             confluence_url,
             confluence_space,
             confluence_token,
+            confluence_username,
             base_page,
             investigation_description,
             dest_machine,
@@ -1269,12 +1347,18 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
 
 class PerformanceProfiler:
     def __init__(
-        self, confluence_url, confluence_space, base_page, confluence_token
+        self,
+        confluence_url,
+        confluence_space,
+        base_page,
+        confluence_username,
+        confluence_token,
     ):
         self.ci = confluence.ConfluenceInterface(
             confluence_url,
             confluence_space,
             base_page,
+            username=confluence_username,
             token=confluence_token,
         )
 

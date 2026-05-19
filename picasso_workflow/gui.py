@@ -3306,6 +3306,97 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def spinna_batch(self):
+        """Run a SPINNA batch analysis from a pre-existing config file.
+
+        The current locs file(s) are saved as .hdf5 into the module's
+        results folder. Their filepaths are written into the SPINNA
+        batch config csv (given via ``fp_spinna_batch_config``) as one
+        ``exp_data_<tag>`` column per channel, so the batch analysis
+        runs on the locs produced by this workflow.
+
+        File-path columns of the config csv (``structures_filename``,
+        ``exp_data_*`` and ``mask_filename_*``) are converted to the
+        current machine using the Drivepaths config. The modified
+        config is written to a copy inside the module's results folder
+        -- the user's original csv is not changed -- and that copy is
+        passed on to picasso's batch analysis.
+
+        The config csv must already be prepared by the user; only the
+        ``exp_data_*`` columns are filled in here. See
+        ``picasso.__main__._spinna_batch_analysis`` for the columns
+        expected in the config file.
+
+        Args:
+            i : int
+                the index of the module
+            parameters : dict
+                with required keys:
+                    fp_spinna_batch_config : str
+                        path to the user-prepared spinna batch
+                        analysis config csv file.
+                with optional keys:
+                    use_workflow_locs : bool
+                        whether to use the locs previously processed in
+                        this workflow, otherwise those specified in the
+                        csv. Default: False
+            results : dict
+                the results this function generates. This is created
+                in the decorator wrapper
+        """
+        parameters_spec = {
+            "fp_spinna_batch_config": {
+                "type": "path",
+                "description": "Path to the spinna batch analysis config file.",
+                "required": True,
+            },
+            "use_workflow_locs": {
+                "type": "bool",
+                "description": "Use locs from workflow, otherwise as specified in csv.",
+                "required": False,
+                "default": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "fp_spinna_batch_config": {
+                "type": "str",
+                "description": "Path to the config csv copy actually used",
+            },
+            "result_dir": {
+                "type": "str",
+                "description": "Folder containing the SPINNA batch results",
+            },
+            "fp_summary": {
+                "type": "str",
+                "description": "Filepath of the SPINNA summary csv file",
+            },
+            "fp_figs": {
+                "type": "list",
+                "element_type": "str",
+                "description": "Filepaths of the NND figures",
+            },
+        }
+
+        return parameters_spec, results_spec
+
     def ripleysk(self):
         """Perforn Ripley's K analysis between the channels using
         Magdalena's code.
@@ -6838,12 +6929,12 @@ class SlurmCommunicator:
         return result["success"]
 
     def assemble_slurm_commands(
-        self, scriptname="start_workflow.py", use_pw_module=True
+        self, host_cluster, scriptname="start_workflow.py"
     ):
         """Assembles picasso-workflow specific commands for running a batch
         job on a SLURM cluster.
         """
-        cluster_env = CONFIG.get("ClusterEnvironment", {})
+        cluster_env = CONFIG.get("ClusterEnvironment", {}).get(host_cluster)
         pw_module = cluster_env.get("pw_module", "picasso-workflow-gui")
         anaconda_module = cluster_env.get(
             "anaconda_module", "anaconda/3/2023.03"
@@ -6851,17 +6942,38 @@ class SlurmCommunicator:
         conda_env = cluster_env.get("conda_env", "picasso-workflow")
 
         commands = []
-        if use_pw_module:
-            commands.append(f"module load {pw_module}")
-        else:
-            commands.append(f"module load {anaconda_module}")
 
         commands.append("source ~/.bashrc")
 
-        if not use_pw_module:
-            commands.append(f"conda activate {conda_env}")
+        commands.append("source /etc/profile.d/modules.sh")
+        # if use_pw_module:
+        #     commands.append(f"module load {pw_module}")
+        # else:
+        #     commands.append(f"module load {anaconda_module}")
 
-        commands.append(f"srun {scriptname}")
+        # if not use_pw_module:
+        #     commands.append(f"conda activate {conda_env}")
+
+        # instead of using slurm modules, let's directly append paths.
+        bin_path = cluster_env.get("BinPath", None)
+        if bin_path:
+            commands.append(f"export PATH={bin_path}:$PATH")
+        lib_path = cluster_env.get("LibraryPath", None)
+        if lib_path:
+            commands.append(
+                f"export LD_LIBRARY_PATH={lib_path}:$LD_LIBRARY_PATH"
+            )
+        python_path = cluster_env.get("PythonPath", None)
+        if python_path:
+            commands.append(f"export PYTHONPATH={python_path}:$PYTHONPATH")
+        conda_env = cluster_env.get("CondaEnv", None)
+        if conda_env:
+            commands.append(f"export CONDA_DEFAULT_ENV={conda_env}")
+        conda_prefix = cluster_env.get("CondaPrefix", None)
+        if conda_prefix:
+            commands.append(f"export CONDA_PREFIX={conda_prefix}")
+
+        commands.append(f"srun python {scriptname}")
 
         return commands
 
@@ -7347,6 +7459,49 @@ class DroppableLineEdit(QtWidgets.QLineEdit):
             for url in event.mimeData().urls():
                 if url.isLocalFile():
                     self.setText(url.toLocalFile())
+                    break
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
+class DroppableFolderLineEdit(QtWidgets.QLineEdit):
+    """QLineEdit for folder paths with drag-and-drop support.
+
+    Dropping a folder populates the path with that folder; dropping a file
+    populates it with the file's containing directory.
+    """
+
+    folderDropped = QtCore.pyqtSignal(str)  # Emits the dropped folder path
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            # Take the first dropped item
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    path = url.toLocalFile()
+                    if not os.path.isdir(path):
+                        # A file was dropped: use its containing directory
+                        path = os.path.dirname(path)
+                    path = os.path.normpath(path)
+                    self.setText(path)
+                    self.folderDropped.emit(path)
                     break
             event.acceptProposedAction()
         else:
@@ -8028,11 +8183,16 @@ class Window(QtWidgets.QMainWindow):
         # self.files_box.addWidget(results_folder_button, 2, 0)
         layout.addWidget(results_folder_button, 0, 1)
         results_folder_button.clicked.connect(self.select_results_folder)
-        self.results_folder_display = QtWidgets.QLineEdit()
+        self.results_folder_display = DroppableFolderLineEdit()
         self.results_folder_display.setReadOnly(False)
-        self.results_folder_display.setPlaceholderText("No folder selected")
+        self.results_folder_display.setPlaceholderText(
+            "No folder selected (drag & drop a folder here)"
+        )
         self.results_folder_display.textChanged.connect(
             self.set_results_folder_display
+        )
+        self.results_folder_display.folderDropped.connect(
+            self.on_results_folder_dropped
         )
         # self.files_box.addWidget(self.results_folder_display, 2, 1, 1, 2)
         layout.addWidget(self.results_folder_display, 0, 2, 1, 2)
@@ -8098,8 +8258,22 @@ class Window(QtWidgets.QMainWindow):
         self.confluence_url_edit.setText(confluence_config.get("URL", ""))
         confluence_layout.addWidget(self.confluence_url_edit, 0, 1)
 
+        # Confluence Username
+        confluence_layout.addWidget(QtWidgets.QLabel("Username:"), 1, 0)
+        self.confluence_username_edit = QtWidgets.QLineEdit()
+        self.confluence_username_edit.setPlaceholderText(
+            "The email of your confluence acccount"
+        )
+        self.confluence_username_edit.setToolTip(
+            "If empty, host will load from environment variable"
+        )
+        self.confluence_username_edit.setText(
+            confluence_config.get("Username", "")
+        )
+        confluence_layout.addWidget(self.confluence_username_edit, 1, 1)
+
         # Confluence Space
-        confluence_layout.addWidget(QtWidgets.QLabel("Space:"), 1, 0)
+        confluence_layout.addWidget(QtWidgets.QLabel("Space:"), 2, 0)
         self.confluence_space_edit = QtWidgets.QLineEdit()
         self.confluence_space_edit.setPlaceholderText(
             "e.g., ~username or TEAM"
@@ -8108,10 +8282,10 @@ class Window(QtWidgets.QMainWindow):
             "If empty, host will load from environment variable"
         )
         self.confluence_space_edit.setText(confluence_config.get("Space", ""))
-        confluence_layout.addWidget(self.confluence_space_edit, 1, 1)
+        confluence_layout.addWidget(self.confluence_space_edit, 2, 1)
 
         # Confluence Token
-        confluence_layout.addWidget(QtWidgets.QLabel("Token:"), 2, 0)
+        confluence_layout.addWidget(QtWidgets.QLabel("Token:"), 3, 0)
         self.confluence_token_edit = QtWidgets.QLineEdit()
         self.confluence_token_edit.setPlaceholderText(
             "API token (or set CONFLUENCE_BEARER env var)"
@@ -8121,10 +8295,10 @@ class Window(QtWidgets.QMainWindow):
             "If empty, host will load from environment variable"
         )
         self.confluence_token_edit.setText(confluence_config.get("Token", ""))
-        confluence_layout.addWidget(self.confluence_token_edit, 2, 1)
+        confluence_layout.addWidget(self.confluence_token_edit, 3, 1)
 
         # Parent Page
-        confluence_layout.addWidget(QtWidgets.QLabel("Parent Page:"), 3, 0)
+        confluence_layout.addWidget(QtWidgets.QLabel("Parent Page:"), 4, 0)
         self.confluence_parent_page_edit = QtWidgets.QLineEdit()
         self.confluence_parent_page_edit.setToolTip(
             "If empty, host will load from environment variable"
@@ -8135,7 +8309,7 @@ class Window(QtWidgets.QMainWindow):
         self.confluence_parent_page_edit.setText(
             confluence_config.get("DefaultPage", "")
         )
-        confluence_layout.addWidget(self.confluence_parent_page_edit, 3, 1)
+        confluence_layout.addWidget(self.confluence_parent_page_edit, 4, 1)
 
         # Add stretch to push widgets to the top
         docconfig_layout.setRowStretch(1, 1)
@@ -8208,14 +8382,14 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_timeout_edit.setMaximumWidth(100)
         cluster_config_layout.addWidget(self.cluster_timeout_edit)
 
-        self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
-        self.cluster_use_module.setMaximumWidth(200)
-        self.cluster_use_module.setChecked(True)
-        self.cluster_use_module.setToolTip(
-            "Use the miblab SLURM module for picasso-workflow (recommended). Otherwise, use Heinrich's repository."
-        )
-        # self.cluster_use_module.connect(self.on_cluster_use_module_state_change)
-        cluster_config_layout.addWidget(self.cluster_use_module)
+        # self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
+        # self.cluster_use_module.setMaximumWidth(200)
+        # self.cluster_use_module.setChecked(True)
+        # self.cluster_use_module.setToolTip(
+        #     "Use the miblab SLURM module for picasso-workflow (recommended). Otherwise, use Heinrich's repository."
+        # )
+        # # self.cluster_use_module.connect(self.on_cluster_use_module_state_change)
+        # cluster_config_layout.addWidget(self.cluster_use_module)
 
         # Cluster configuration widgets
         cluster_settings_layout = QtWidgets.QHBoxLayout()
@@ -8329,13 +8503,39 @@ class Window(QtWidgets.QMainWindow):
         self.tabs.setTabToolTip(3, "Not Implemented yet")
 
         # select files to process
+        # Single Workflow only: choose how input data is provided - an
+        # explicit file list, auto-detection from the results folder, or
+        # no input files at all (the workflow runs once and its modules
+        # load any data themselves).
+        self.files_mode_label = QtWidgets.QLabel("Input files:")
+        self.files_mode_combo = QtWidgets.QComboBox()
+        self.files_mode_combo.addItems(
+            [
+                "Specify input files",
+                "Auto-detect input files",
+                "No input files (run once)",
+            ]
+        )
+        self.files_mode_combo.setToolTip(
+            "Specify input files: use the explicit file list below.\n"
+            "Auto-detect input files: the generated script scans the "
+            "results folder for DNA-PAINT raw files at run time.\n"
+            "No input files: run the workflow exactly once with no "
+            "dataset, for workflows whose modules load data themselves."
+        )
+        self.files_mode_combo.currentIndexChanged.connect(
+            self._on_files_mode_changed
+        )
+        self.files_box.addWidget(self.files_mode_label, 0, 0)
+        self.files_box.addWidget(self.files_mode_combo, 0, 1, 1, 2)
+
         # Create button container for dynamic button layout
         self.file_buttons_widget = QtWidgets.QWidget()
         self.file_buttons_layout = QtWidgets.QHBoxLayout(
             self.file_buttons_widget
         )
         self.file_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        self.files_box.addWidget(self.file_buttons_widget, 0, 0, 1, 3)
+        self.files_box.addWidget(self.file_buttons_widget, 1, 0, 1, 3)
 
         # Initial buttons for Single Workflow (will be managed by _update_file_buttons)
         self.add_files_button = QtWidgets.QPushButton("Add files")
@@ -8365,7 +8565,7 @@ class Window(QtWidgets.QMainWindow):
 
         # Create QStackedWidget to hold all file selection widgets
         self.files_stack = QtWidgets.QStackedWidget()
-        self.files_box.addWidget(self.files_stack, 1, 0, 1, 3)
+        self.files_box.addWidget(self.files_stack, 2, 0, 1, 3)
 
         # Add existing table to stack (index 0 - Single Workflow)
         self.files_stack.addWidget(self.files_table)
@@ -9133,6 +9333,58 @@ class Window(QtWidgets.QMainWindow):
 
         return errors
 
+    # marker comment emitted into a generated "no input files" workflow
+    # script, used to restore the combo box when the script is loaded.
+    _NOFILES_MARKER = "# run workflow once without input files"
+
+    def _on_files_mode_changed(self, _index):
+        """Handle the input-files mode combo box being changed."""
+        self._apply_files_mode_state()
+
+    def _apply_files_mode_state(self):
+        """Enable the explicit file table/buttons only in 'Specify input
+        files' mode (combo index 0).
+
+        Only relevant for Single Workflow - the combo box is hidden for
+        the tree-based workflow types.
+        """
+        if self.workflow_type.currentIndex() != 0:
+            return
+        explicit = self.files_mode_combo.currentIndex() == 0
+        self.files_table.setEnabled(explicit)
+        for name in (
+            "add_files_button",
+            "remove_files_button",
+            "clear_files_button",
+        ):
+            btn = getattr(self, name, None)
+            if btn is not None:
+                try:
+                    btn.setEnabled(explicit)
+                except RuntimeError:
+                    pass
+
+    def _apply_files_mode_from_source(self, source_text):
+        """Restore the input-files mode combo box from a loaded workflow
+        script.
+
+        An auto-detect script calls find_dnapaint_raw at run time; a
+        no-files script carries the _NOFILES_MARKER comment. Both modes
+        are Single-Workflow only, so their presence also pins the
+        workflow type to Single Workflow. Must be called after the
+        workflow type has been set by the loader.
+        """
+        if "find_dnapaint_raw" in source_text:
+            mode = 1  # Auto-detect input files
+        elif self._NOFILES_MARKER in source_text:
+            mode = 2  # No input files
+        else:
+            mode = 0  # Specify input files
+        if mode != 0 and self.workflow_type.currentIndex() != 0:
+            self.workflow_type.setCurrentIndex(0)
+        self.files_mode_combo.setCurrentIndex(mode)
+        self._apply_files_mode_state()
+
     def _update_file_buttons(self, workflow_type_index):
         """Update button layout based on workflow type."""
         # Clear existing buttons
@@ -9154,6 +9406,9 @@ class Window(QtWidgets.QMainWindow):
             self.file_buttons_layout.addWidget(self.add_files_button)
             self.file_buttons_layout.addWidget(self.remove_files_button)
             self.file_buttons_layout.addWidget(self.clear_files_button)
+
+            # Buttons were just recreated - re-apply the files-mode state
+            self._apply_files_mode_state()
 
         else:  # Aggregation or Investigation
             self.add_dataset_button = QtWidgets.QPushButton("Add Dataset")
@@ -9191,6 +9446,7 @@ class Window(QtWidgets.QMainWindow):
         """Enable or disable file and module widgets based on results folder selection."""
         self.workflow_type.setEnabled(enabled)
         # Files box widgets
+        self.files_mode_combo.setEnabled(enabled)
         try:
             self.add_files_button.setEnabled(enabled)
             self.remove_files_button.setEnabled(enabled)
@@ -9207,6 +9463,10 @@ class Window(QtWidgets.QMainWindow):
 
         # runing config
         self.run_tabs.setEnabled(enabled)
+
+        # Keep the explicit file table disabled in non-explicit modes
+        if enabled:
+            self._apply_files_mode_state()
 
     def add_files(self):
         """Add a new row to the table below the selected row or at the end."""
@@ -9280,6 +9540,19 @@ class Window(QtWidgets.QMainWindow):
     def set_results_folder_display(self, folder):
         # Enable widgets when a folder is selected
         self._set_widgets_enabled(True)
+
+    def on_results_folder_dropped(self, folder):
+        """Handle a folder dragged & dropped onto the results folder field.
+
+        Mirrors select_results_folder so a dropped folder loads its YAML
+        file list and workflow definition just like a folder picked via
+        the dialog.
+        """
+        if not folder or not os.path.isdir(folder):
+            return
+        self._set_widgets_enabled(True)
+        self._load_yaml_file_list(folder)
+        self._load_workflow_definition(folder)
 
     def on_template_changed(self, template_name):
         """Load a template"""
@@ -9781,6 +10054,11 @@ class Window(QtWidgets.QMainWindow):
             return
 
         try:
+            # Read raw source to detect run-time options that are not
+            # exposed as module-level variables (e.g. find_dnapaint_raw).
+            with open(workflow_file, "r") as f:
+                source_text = f.read()
+
             # Dynamically load the Python file
             spec = importlib.util.spec_from_file_location(
                 "start_workflow", workflow_file
@@ -9834,6 +10112,7 @@ class Window(QtWidgets.QMainWindow):
                     "No workflow modules found at module level, trying alternative loader"
                 )
                 self._load_workflow_definition_alt(folder)
+                self._apply_files_mode_from_source(source_text)
                 return
 
             # Load single dataset workflow if present
@@ -9877,6 +10156,9 @@ class Window(QtWidgets.QMainWindow):
                 )
                 # Set workflow type to "Single Dataset Workflow"
                 self.workflow_type.setCurrentIndex(0)
+
+            # Restore the input-files mode (explicit / auto-detect / none)
+            self._apply_files_mode_from_source(source_text)
 
         except Exception as e:
             logger.error(f"Error loading start_workflow.py: {e}")
@@ -10171,8 +10453,16 @@ class Window(QtWidgets.QMainWindow):
         # Switch visible widget
         self.files_stack.setCurrentIndex(type_index)
 
+        # The input-files mode selector is only meaningful for Single
+        # Workflow
+        self.files_mode_label.setVisible(type_index == 0)
+        self.files_mode_combo.setVisible(type_index == 0)
+
         # Update buttons
         self._update_file_buttons(type_index)
+
+        # Re-apply the files-mode state for the (now current) workflow type
+        self._apply_files_mode_state()
 
         # Tab indices:
         # 0 = Single Dataset Workflow
@@ -10343,6 +10633,18 @@ class Window(QtWidgets.QMainWindow):
             else "Unknown"
         )
 
+        # Single Workflow input-files mode (combo index): 0 = explicit
+        # file list, 1 = auto-detect raw files in the results folder at
+        # run time, 2 = no input files (run the workflow exactly once).
+        # The mode is only meaningful for Single Workflow.
+        files_mode = (
+            self.files_mode_combo.currentIndex()
+            if workflow_type_index == 0
+            else 0
+        )
+        use_autodetect = files_mode == 1
+        no_input_files = files_mode == 2
+
         # Validate tree data for Aggregation/Investigation workflows
         if workflow_type_index > 0:  # Tree-based workflows
             errors = self._validate_tree_data()
@@ -10357,7 +10659,13 @@ class Window(QtWidgets.QMainWindow):
         # Build datasets dict based on workflow type
         datasets = {}
 
-        if workflow_type_index == 0:  # Single Workflow
+        if workflow_type_index == 0 and (use_autodetect or no_input_files):
+            # Auto-detect: datasets are discovered at run time by
+            # find_dnapaint_raw. No input files: the workflow runs once
+            # with no datasets. Either way, no dict is baked in.
+            pass
+
+        elif workflow_type_index == 0:  # Single Workflow
             # Use simple table format
             for row in range(self.files_table.rowCount()):
                 name_item = self.files_table.item(row, 0)
@@ -10519,14 +10827,24 @@ class Window(QtWidgets.QMainWindow):
             f"Workflow type: {workflow_type_name}",
             '"""',
             "import os",
-            "from picasso import io",
         ]
+        if not use_autodetect and not no_input_files:
+            # io.save_info writes src_loc.yaml from the explicit datasets
+            # dict. In auto-detect mode find_dnapaint_raw handles that
+            # itself; in no-input-files mode there is no src_loc.yaml.
+            script_lines.append("from picasso import io")
 
         # Add appropriate import based on workflow type
         if workflow_type_index == 0:  # Single Workflow
-            script_lines.append(
-                "from picasso_workflow.metaworkflow import SingleWorkflowCoordinator"
-            )
+            if use_autodetect:
+                script_lines.append(
+                    "from picasso_workflow.metaworkflow import "
+                    "find_dnapaint_raw, SingleWorkflowCoordinator"
+                )
+            else:
+                script_lines.append(
+                    "from picasso_workflow.metaworkflow import SingleWorkflowCoordinator"
+                )
         elif workflow_type_index == 1:  # Aggregation Workflow
             script_lines.append(
                 "from picasso_workflow.metaworkflow import AggregationWorkflowCoordinator"
@@ -10541,6 +10859,11 @@ class Window(QtWidgets.QMainWindow):
             cf_url = "os.getenv('CONFLUENCE_URL')"
         else:
             cf_url = f'"{cf_url}"'
+        cf_username = self.confluence_username_edit.text()
+        if cf_username == "":
+            cf_username = "os.getenv('CONFLUENCE_USERNAME')"
+        else:
+            cf_username = f'"{cf_username}"'
         cf_space = self.confluence_space_edit.text()
         if cf_space == "":
             cf_space = "os.getenv('CONFLUENCE_SPACE')"
@@ -10565,26 +10888,35 @@ class Window(QtWidgets.QMainWindow):
                 f"confluence_url = {cf_url}",
                 f"confluence_token = {cf_token}",
                 f"confluence_space = {cf_space}",
+                f"confluence_username = {cf_username}",
                 f"base_page = {cf_ppage}",
-                "",
-                "",
-                "# Dataset configuration",
-                "datasets = {",
             ]
         )
 
-        # Add datasets
-        for key, values in datasets.items():
-            if isinstance(values, list) and len(values) == 1:
-                formatted = format_value(values[0])
-                script_lines.append(f"    {repr(key)}: {formatted},")
-            else:
-                script_lines.append(f"    {repr(key)}: [")
-                for value in values:
-                    formatted = format_value(value)
-                    script_lines.append(f"        {formatted},")
-                script_lines.append("    ],")
-        script_lines.append("}")
+        if not use_autodetect and not no_input_files:
+            # Explicit dataset configuration. In auto-detect mode the
+            # datasets dict is built at run time by find_dnapaint_raw; in
+            # no-input-files mode there is no datasets dict at all.
+            script_lines.extend(
+                [
+                    "",
+                    "",
+                    "# Dataset configuration",
+                    "datasets = {",
+                ]
+            )
+            # Add datasets
+            for key, values in datasets.items():
+                if isinstance(values, list) and len(values) == 1:
+                    formatted = format_value(values[0])
+                    script_lines.append(f"    {repr(key)}: {formatted},")
+                else:
+                    script_lines.append(f"    {repr(key)}: [")
+                    for value in values:
+                        formatted = format_value(value)
+                        script_lines.append(f"        {formatted},")
+                    script_lines.append("    ],")
+            script_lines.append("}")
 
         script_lines.extend(
             [
@@ -10610,23 +10942,45 @@ class Window(QtWidgets.QMainWindow):
             + format_modules(self.aggregation_workflow_modules)
         )
 
-        script_lines.extend(
+        main_lines = [
+            "",
+            "",
+            'if __name__ == "__main__":',
+            "    # Get working directory",
+            "    # working_folder = os.path.dirname(os.path.abspath(__file__))",
+            "    working_folder = os.environ.get('PWD', os.getcwd())",
+        ]
+        if use_autodetect:
+            main_lines.extend(
+                [
+                    "    # parse the working folder for DNA-PAINT raw"
+                    " datasets to analyse",
+                    "    datasets, src_loc_file = "
+                    "find_dnapaint_raw(working_folder)",
+                ]
+            )
+        elif not no_input_files:
+            main_lines.extend(
+                [
+                    "    src_loc_file = os.path.join(working_folder, 'src_loc.yaml')",
+                    "    io.save_info(src_loc_file, [datasets])",
+                ]
+            )
+        if not no_input_files:
+            main_lines.extend(
+                [
+                    "",
+                    "    print('datasets', datasets)",
+                    "    print('src_loc', src_loc_file)",
+                ]
+            )
+        main_lines.extend(
             [
-                "",
-                "",
-                'if __name__ == "__main__":',
-                "    # Get working directory",
-                "    # working_folder = os.path.dirname(os.path.abspath(__file__))",
-                "    working_folder = os.environ.get('PWD', os.getcwd())",
-                "    src_loc_file = os.path.join(working_folder, 'src_loc.yaml')",
-                "    io.save_info(src_loc_file, [datasets])",
-                "",
-                "    print('datasets', datasets)",
-                "    print('src_loc', src_loc_file)",
                 "    analysis_name = os.path.split(working_folder)[-1]",
                 "",
             ]
         )
+        script_lines.extend(main_lines)
 
         # Add coordinator creation based on workflow type
         always_save = self.always_save.isChecked()
@@ -10639,20 +10993,32 @@ class Window(QtWidgets.QMainWindow):
             #     "        confluence_url=confluence_url,",
             #     "        confluence_space=confluence_space,",
             #     "        confluence_token=confluence_token,",
+            #     "        confluence_username=confluence_username,",
             #     "        base_page=base_page,",
             #     "    )",
             #     "",
             #     "    # Run workflow",
             #     "    runner.run_workflow(workflow_modules_sgl)",
             # ])
+            if no_input_files:
+                # run the workflow exactly once with no dataset; the
+                # marker comment lets the GUI restore the mode on load.
+                src_loc_arg_line = (
+                    f"        None,  {self._NOFILES_MARKER}"
+                )
+            else:
+                src_loc_arg_line = "        src_loc_file,"
             script_lines.extend(
                 [
                     "    # Create single workflow coordinator",
                     "    coordinator = SingleWorkflowCoordinator(",
-                    "        src_loc_file, analysis_name, working_folder,",
+                    src_loc_arg_line,
+                    "        analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    f"        base_page, dest_machine='{login_node}',",
-                    f"        always_save={always_save}",
+                    "        confluence_username=confluence_username,",
+                    "        base_page=base_page,",
+                    f"        dest_machine='{login_node}',",
+                    f"        always_save={always_save},",
                     "    )",
                     "",
                     "    # Run workflow",
@@ -10666,8 +11032,10 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = AggregationWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    f"        base_page, dest_machine='{login_node}',",
-                    f"        always_save={always_save}",
+                    "        confluence_username=confluence_username,",
+                    "        base_page=base_page,",
+                    f"        dest_machine='{login_node}',",
+                    f"        always_save={always_save},",
                     "    )",
                     "",
                     "    # Run analysis",
@@ -10681,8 +11049,10 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator = InvestigationWorkflowCoordinator(",
                     "        src_loc_file, analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
-                    f"        base_page, dest_machine='{login_node}',",
-                    f"        always_save={always_save}",
+                    "        base_page=base_page,",
+                    "        confluence_username=confluence_username,",
+                    f"        dest_machine='{login_node}',",
+                    f"        always_save={always_save},",
                     "    )",
                     "",
                     "    # Run investigation",
@@ -10778,10 +11148,10 @@ class Window(QtWidgets.QMainWindow):
             slurm_options["mail-user"] = email
             slurm_options["mail-type"] = "ALL"
 
-        use_pw_mod = self.cluster_use_module.isChecked()
+        # use_pw_mod = self.cluster_use_module.isChecked()
 
         commands = self.slurm_communicator.assemble_slurm_commands(
-            scriptname=scriptname, use_pw_module=use_pw_mod
+            host_cluster, scriptname=scriptname
         )
         # scriptname=scriptname, use_pw_module=True)
         # scriptname=scriptname, use_pw_module=False)

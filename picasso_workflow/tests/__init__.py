@@ -23,6 +23,8 @@ def set_test_confluence_vars():
     confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
     confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
     confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
+    confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
+
     if confluence_url.startswith('"') and confluence_url.endswith('"'):
         confluence_url = confluence_url[1:-1]
         os.environ["TEST_CONFLUENCE_URL"] = confluence_url
@@ -35,6 +37,9 @@ def set_test_confluence_vars():
     if confluence_page.startswith('"') and confluence_page.endswith('"'):
         confluence_page = confluence_page[1:-1]
         os.environ["TEST_CONFLUENCE_PAGE"] = confluence_page
+    if confluence_username.startswith('"') and confluence_username.endswith('"'):
+        confluence_username = confluence_username[1:-1]
+        os.environ["TEST_CONFLUENCE_USERNAME"] = confluence_username
 
 
 ensure_temp_folder()
