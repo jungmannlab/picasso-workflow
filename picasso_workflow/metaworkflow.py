@@ -358,19 +358,11 @@ class PathParser:
 
 
 def find_dnapaint_raw(working_folder):
-    datasets = {}
-    for root, dirs, files in os.walk(working_folder):
-        for file in files:
-            match = re.search(r"_MMStack_Pos(\d+).ome.tif", file)
-            if match is not None:
-                key = os.path.split(root)[-1]
-                datasets[key] = os.path.join(root, file)
-                continue
-            match = re.search(r"_NDTiffStack.tif", file)
-            if match is not None:
-                key = os.path.split(root)[-1]
-                datasets[key] = os.path.join(root, file)
-                continue
+    from picasso_workflow import util
+    from picasso import io
+    
+    datasets = util.find_raw_movies(working_folder)
+    
     dest_file = os.path.join(working_folder, "src_loc.yaml")
     io.save_info(dest_file, [datasets])
     return datasets, dest_file
