@@ -2823,7 +2823,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         {result_text}
         """
         fig_fps = results.get("fp_figs", [])
-        titles = ["" for i in range(len(fig_fps))]
+        titles = ["" for _ in range(len(fig_fps))]
 
         if len(fig_fps) > 0:
             fn_figs = []
@@ -2868,7 +2868,11 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """ """
+        """Report the SPINNA batch analysis module to Confluence.
+
+        Writes the module summary, parameters and results, and embeds
+        the NND figures (``results['fp_figs']``) as a table.
+        """
         logger.debug("Reporting spinna_batch.")
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -2883,7 +2887,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         {result_text}
         """
         fig_fps = results.get("fp_figs", [])
-        titles = ["" for i in range(len(fig_fps))]
+        titles = ["" for _ in range(len(fig_fps))]
 
         if len(fig_fps) > 0:
             fn_figs = []

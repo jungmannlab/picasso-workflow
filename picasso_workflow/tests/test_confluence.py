@@ -625,6 +625,40 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
+    def spinna_batch(self):
+        parameters = {
+            "fp_spinna_batch_config": "spinna_batch_config.csv",
+        }
+        result_dir = "spinna_batch_config_fitting_results"
+        # with NND figures: exercises the figure-table branch
+        results = {
+            "start time": "now",
+            "duration": 124.5,
+            "message": "Successfully performed SPINNA analysis.",
+            "result_dir": result_dir,
+            "fp_summary": os.path.join(result_dir, "summary_results.csv"),
+            "fp_figs": [
+                os.path.join(result_dir, "run1_NND_A_A.png"),
+                os.path.join(result_dir, "run1_NND_A_B.png"),
+            ],
+            "success": True,
+        }
+        self.cr.spinna_batch(0, parameters, results)
+
+        # without NND figures: exercises the empty branch
+        results_no_figs = {
+            "start time": "now",
+            "duration": 4.12,
+        }
+        self.cr.spinna_batch(1, parameters, results_no_figs)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    # @unittest.skip("")
     def ripleysk(self):
         parameters = {
             "ripleys_threshold": 1.2,

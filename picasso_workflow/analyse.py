@@ -7907,22 +7907,37 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @module_decorator
     def spinna_batch(self, i, parameters, results):
-        """Direct implementation of spinna batch analysis.
-        The current locs file(s) are saved into the results folder, and
-        a template csv file is created. This csv needs to be filled out by the
-        user in a manual step before the spinna analysis is carried out.
+        """Run a SPINNA batch analysis from a pre-existing config file.
+
+        The current locs file(s) are saved as .hdf5 into the module's
+        results folder. Their filepaths are written into the SPINNA
+        batch config csv (given via ``fp_spinna_batch_config``) as one
+        ``exp_data_<tag>`` column per channel, so the batch analysis
+        runs on the locs produced by this workflow. The updated config
+        is then passed on to picasso's batch analysis.
+
+        The config csv must already be prepared by the user; only the
+        ``exp_data_*`` columns are filled in here. See
+        ``picasso.__main__._spinna_batch_analysis`` for the columns
+        expected in the config file.
 
         Args:
             i : int
                 the index of the module
-            parameters: dict
+            parameters : dict
                 with required keys:
                     fp_spinna_batch_config : str
-                        path to the spinna batch analysis config file.
-                and optional keys:
+                        path to the user-prepared spinna batch
+                        analysis config csv file.
             results : dict
                 the results this function generates. This is created
-                in the decorator wrapper
+                in the decorator wrapper. Keys populated here:
+                    result_dir : str
+                        folder containing the spinna results
+                    fp_summary : str
+                        filepath of the summary csv file
+                    fp_figs : list of str
+                        filepaths of the NND figures
         """
         cfg_fp = parameters["fp_spinna_batch_config"]
         if self.channel_tags:
@@ -7940,18 +7955,18 @@ class AutoPicasso(util.AbstractModuleCollection):
             all_locs_fp.append(locs_fp)
             io.save_locs(locs_fp, locs, info)
 
-        spinna_config = pd.DataFrame.from_csv(cfg_fp)
+        spinna_config = pd.read_csv(cfg_fp)
         for tag, locs_fp in zip(all_tags, all_locs_fp):
-            spinna_config[f"exp_data_{tag}"] = [locs_fp]
-        pd.DataFrame.from_dict(spinna_config).to_csv(cfg_fp)
-        result_dir, fp_summary, fp_fig = picasso_outpost.spinna_batch(
+            spinna_config[f"exp_data_{tag}"] = locs_fp
+        spinna_config.to_csv(cfg_fp, index=False)
+        result_dir, fp_summary, fp_figs = picasso_outpost.spinna_batch(
             cfg_fp
         )
 
         results["message"] = "Successfully performed SPINNA analysis."
         results["result_dir"] = result_dir
         results["fp_summary"] = fp_summary
-        results["fp_fig"] = fp_fig
+        results["fp_figs"] = fp_figs
         results["success"] = True
         return parameters, results
 

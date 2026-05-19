@@ -699,6 +699,106 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
 
+    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def spinna_batch(self, mock_save_locs, mock_spinna_batch):
+        # a minimal spinna batch config with two analysis rows; the
+        # module must broadcast the locs filepath across all rows.
+        cfg_fp = os.path.join(self.results_folder, "spinna_batch_config.csv")
+        pd.DataFrame(
+            {
+                "structures_filename": ["structures.yaml"] * 2,
+                "granularity": [30, 30],
+                "save_filename": ["run1", "run2"],
+                "NND_bin": [5, 5],
+                "NND_maxdist": [300, 300],
+                "sim_repeats": [5, 5],
+            }
+        ).to_csv(cfg_fp, index=False)
+
+        result_dir = os.path.join(
+            self.results_folder, "spinna_batch_config_fitting_results"
+        )
+        fp_summary = os.path.join(result_dir, "summary_results.csv")
+        fp_figs = [os.path.join(result_dir, "run1_NND_CD86_CD86.png")]
+        mock_spinna_batch.return_value = (result_dir, fp_summary, fp_figs)
+
+        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        locs_dtype = [("frame", "u4"), ("x", "f4"), ("y", "f4")]
+        locs = pd.DataFrame(
+            np.rec.array(
+                [(i, 0.0, 0.0) for i in range(5)], dtype=locs_dtype
+            )
+        )
+        self.ap.channel_locs = [locs]
+        self.ap.channel_info = [info]
+        self.ap.channel_tags = ["CD86"]
+
+        parameters = {"fp_spinna_batch_config": cfg_fp}
+        parameters, results = self.ap.spinna_batch(0, parameters)
+
+        # results are passed through from picasso_outpost.spinna_batch
+        mock_spinna_batch.assert_called_once_with(cfg_fp)
+        assert results["success"] is True
+        assert results["result_dir"] == result_dir
+        assert results["fp_summary"] == fp_summary
+        assert results["fp_figs"] == fp_figs
+
+        # the current locs are saved once per channel
+        mock_save_locs.assert_called_once()
+
+        # the locs filepath is written into the config for every row,
+        # under the target-specific column.
+        written_cfg = pd.read_csv(cfg_fp)
+        assert "exp_data_CD86" in written_cfg.columns
+        assert len(written_cfg) == 2
+        expected_locs_fp = os.path.join(results["folder"], "CD86.hdf5")
+        assert list(written_cfg["exp_data_CD86"]) == [expected_locs_fp] * 2
+
+        os.remove(cfg_fp)
+        shutil.rmtree(os.path.join(self.results_folder, "00_spinna_batch"))
+
+    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def test_spinna_batch_single_dataset(
+        self, mock_save_locs, mock_spinna_batch
+    ):
+        """spinna_batch falls back to self.locs when no channels are set."""
+        cfg_fp = os.path.join(
+            self.results_folder, "spinna_batch_config_sgl.csv"
+        )
+        pd.DataFrame(
+            {
+                "structures_filename": ["structures.yaml"],
+                "granularity": [30],
+                "save_filename": ["run1"],
+                "NND_bin": [5],
+                "NND_maxdist": [300],
+                "sim_repeats": [5],
+            }
+        ).to_csv(cfg_fp, index=False)
+        mock_spinna_batch.return_value = ("res_dir", "summary.csv", [])
+
+        self.ap.channel_tags = None
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [(i, 0.0, 0.0) for i in range(3)],
+                dtype=[("frame", "u4"), ("x", "f4"), ("y", "f4")],
+            )
+        )
+        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+
+        parameters = {"fp_spinna_batch_config": cfg_fp}
+        parameters, results = self.ap.spinna_batch(0, parameters)
+
+        assert results["success"] is True
+        mock_save_locs.assert_called_once()
+        written_cfg = pd.read_csv(cfg_fp)
+        assert "exp_data_locs" in written_cfg.columns
+
+        os.remove(cfg_fp)
+        shutil.rmtree(os.path.join(self.results_folder, "00_spinna_batch"))
+
     # @patch("picasso_workflow.analyse.picasso_outpost.spinna_temp", MagicMock)
     def spinna_manual(self):
         info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]

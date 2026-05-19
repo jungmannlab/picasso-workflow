@@ -3307,19 +3307,28 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         return parameters_spec, results_spec
 
     def spinna_batch(self):
-        """Direct implementation of spinna batch analysis.
-        The current locs file(s) are saved into the results folder, and
-        a template csv file is created. This csv needs to be filled out by the
-        user in a manual step before the spinna analysis is carried out.
+        """Run a SPINNA batch analysis from a pre-existing config file.
+
+        The current locs file(s) are saved as .hdf5 into the module's
+        results folder. Their filepaths are written into the SPINNA
+        batch config csv (given via ``fp_spinna_batch_config``) as one
+        ``exp_data_<tag>`` column per channel, so the batch analysis
+        runs on the locs produced by this workflow. The updated config
+        is then passed on to picasso's batch analysis.
+
+        The config csv must already be prepared by the user; only the
+        ``exp_data_*`` columns are filled in here. See
+        ``picasso.__main__._spinna_batch_analysis`` for the columns
+        expected in the config file.
 
         Args:
             i : int
                 the index of the module
-            parameters: dict
+            parameters : dict
                 with required keys:
                     fp_spinna_batch_config : str
-                        path to the spinna batch analysis config file.
-                and optional keys:
+                        path to the user-prepared spinna batch
+                        analysis config csv file.
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -3349,6 +3358,19 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "folder": {
                 "type": "str",
                 "description": "Output folder for module results",
+            },
+            "result_dir": {
+                "type": "str",
+                "description": "Folder containing the SPINNA batch results",
+            },
+            "fp_summary": {
+                "type": "str",
+                "description": "Filepath of the SPINNA summary csv file",
+            },
+            "fp_figs": {
+                "type": "list",
+                "element_type": "str",
+                "description": "Filepaths of the NND figures",
             },
         }
 
