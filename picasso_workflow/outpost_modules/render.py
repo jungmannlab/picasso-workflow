@@ -344,12 +344,12 @@ def plot_scene(
     ax.imshow(
         bgra,
         aspect="equal",
-        origin="lower",
+        origin="upper",
         extent=[
             x_offset / 1000,
             (bgra.shape[1] * image_px_size + x_offset) / 1000,
-            y_offset / 1000,
             (bgra.shape[0] * image_px_size + y_offset) / 1000,
+            y_offset / 1000,
         ],
     )
     ax.axis("off")
