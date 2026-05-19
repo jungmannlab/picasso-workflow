@@ -407,6 +407,11 @@ class AbstractWorkflowCoordinator(abc.ABC):
         self.confluence_token = confluence_token
         self.confluence_username = confluence_username
 
+        logger.debug(f"confluence_url: {confluence_url}")
+        logger.debug(f"confluence_space: {confluence_space}")
+        logger.debug(f"confluence_token: {confluence_token}")
+        logger.debug(f"confluence_username: {confluence_username}")
+
         self.always_save = always_save
 
         if ON_CLUSTER:

@@ -5153,6 +5153,12 @@ class ConfluenceInterface:
         else:
             self.username = None
         self.space_key = space_key
+
+        logger.debug(f"confluence_url: {self.base_url}")
+        logger.debug(f"confluence_space: {self.space_key}")
+        logger.debug(f"confluence_token: {self.bearer_token}")
+        logger.debug(f"confluence_username: {self.username}")
+
         self.connect()
 
         self.parent_page_id, _ = self.get_page_properties(parent_page_title)
