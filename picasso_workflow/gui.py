@@ -1341,6 +1341,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "angle",
                 "required": False,
             },
+            "generate_active_rois": {
+                "type": "bool",
+                "description": "Whether to generate density-driven active site zoom-in previews next to the overview image",
+                "default": True,
+                "required": False,
+            },
+            "n_active_rois": {
+                "type": "int",
+                "description": "Number of high-density active sites (ROIs) to generate",
+                "min": 1,
+                "max": 25,
+                "default": 3,
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -1369,6 +1383,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "filepath to center of mass zoom rendering \
                     (conditional, only if ctrmass_fov_nm provided)",
+            },
+            "fp_scene_rois": {
+                "type": "list",
+                "description": "list of filepaths to the density-driven active site Zoom-In previews",
             },
         }
 
