@@ -1831,6 +1831,18 @@ class AutoPicasso(util.AbstractModuleCollection):
             for count, cx, cy in candidates:
                 if len(roi_centers) >= n_rois:
                     break
+
+                # Shift ROI center if it would place the ROI viewport boundary outside the image area
+                if (x_max - x_min) >= roi_size:
+                    cx = np.clip(cx, x_min + roi_size / 2.0, x_max - roi_size / 2.0)
+                else:
+                    cx = (x_min + x_max) / 2.0
+
+                if (y_max - y_min) >= roi_size:
+                    cy = np.clip(cy, y_min + roi_size / 2.0, y_max - roi_size / 2.0)
+                else:
+                    cy = (y_min + y_max) / 2.0
+
                 too_close = False
                 for sx, sy in roi_centers:
                     dist = np.sqrt((cx - sx) ** 2 + (cy - sy) ** 2)
