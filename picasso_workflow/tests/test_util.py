@@ -285,3 +285,30 @@ class TestUtil(unittest.TestCase):
             PathParser().convert_path("/elsewhere/data.hdf5", None)
             == "/elsewhere/data.hdf5"
         )
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "winmachineXXX": ["U:"],
+                "dstmachineXXX": ["/dst/pool"],
+            }
+        },
+    )
+    def test_09_convert_path_mixed_separators(self, mock_node):
+        """A Windows path (drive letter) with mixed '/' and '\\'
+        separators is recognised as Windows and converted completely -
+        no backslash may survive in the result."""
+        from picasso_workflow.metaworkflow import PathParser
+
+        mock_node.return_value = "dstmachine001"
+        pp = PathParser()
+        # a drive-letter path is Windows regardless of slash counts
+        assert pp.check_path_style("U:/a/b/c\\d") is False
+        assert pp.check_path_style("/posix/a/b") is True
+        result = pp.convert_path(
+            "U:/users/honsa/data\\sub\\file.hdf5", None
+        )
+        assert result == "/dst/pool/users/honsa/data/sub/file.hdf5"
+        assert "\\" not in result

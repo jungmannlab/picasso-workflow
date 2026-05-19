@@ -108,7 +108,12 @@ class PathParser:
                 the map from windows drive (e.g. "W:") to posix drive
                 (e.g. "/Volumes/pool-miblab4")
         """
-        posixpath = pathlib.PurePosixPath(posixpath)
+        # Backslashes are only ever path separators in these data paths,
+        # never filename characters. Normalise them so a mixed-separator
+        # path (e.g. "U:/a/b\\c\\d") splits into every component, instead
+        # of leaving a backslash-joined tail unconverted (PurePosixPath
+        # only ever splits on "/").
+        posixpath = pathlib.PurePosixPath(str(posixpath).replace("\\", "/"))
         if posixpath.drive:
             # absolute path
             drive = drive_map[posixpath.drive]
@@ -163,13 +168,25 @@ class PathParser:
         return str(currospath)
 
     def check_path_style(self, path):
-        """Check whether a path is windows or posix style by
-        comparing the number of / and \
+        """Check whether a path is windows or posix style.
+
+        A leading drive letter (e.g. "U:") or UNC prefix ("\\\\server")
+        unambiguously marks a Windows path; a leading "/" marks a posix
+        path. These take precedence over separator counting: a Windows
+        path may well contain forward slashes (e.g.
+        "U:/users/foo\\bar"), so counting "/" against "\\" would
+        misclassify it as posix and lose the backslash-joined parts.
+        Only relative paths (no such prefix) fall back to comparing the
+        number of "/" and "\\" separators.
         """
+        path = str(path)
+        if re.match(r"[A-Za-z]:", path) or path.startswith("\\\\"):
+            return False  # windows
+        if path.startswith("/"):
+            return True  # posix
         num_fwd = path.count("/")
         num_bwd = path.count("\\")
-        is_posix = num_fwd > num_bwd
-        return is_posix
+        return num_fwd > num_bwd
 
     def check_machine(self, machine, pattern):
         """Checks a machine against a machine pattern, for example
