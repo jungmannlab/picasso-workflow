@@ -224,7 +224,7 @@ def scale_contrast(images):
                 if _.max() != 0  # the maximum value in image is 0.0
             ]
         )
-        / 4
+        / 40
     )
     # upper = INITIAL_REL_MAXIMUM * max_
 
