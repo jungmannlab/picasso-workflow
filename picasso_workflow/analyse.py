@@ -7954,7 +7954,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         filepaths of the NND figures
         """
         cfg_fp = parameters["fp_spinna_batch_config"]
-        use_workflow_locs = parameters["use_workflow_locs"]
+        use_workflow_locs = parameters.get("use_workflow_locs", False)
         if use_workflow_locs:
             if self.channel_tags:
                 all_locs = self.channel_locs
