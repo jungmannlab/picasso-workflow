@@ -55,7 +55,7 @@ packages = ["picasso_workflow"]
 write_to = "picasso_workflow/_version.py"
 # Shown when the package is imported outside a git repository and no tag
 # is reachable (e.g. a fresh checkout with no tags yet).
-fallback_version = "0.0.0.dev0"
+fallback_version = "0.3.3.dev0"
 
 [tool.setuptools.package-data]
 picasso_workflow = ["picasso-workflow.ico"]

@@ -7937,6 +7937,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     fp_spinna_batch_config : str
                         path to the user-prepared spinna batch
                         analysis config csv file.
+                with optional keys:
                     use_workflow_locs : bool
                         whether to use the locs previously processed in
                         this workflow, otherwise those specified in the
