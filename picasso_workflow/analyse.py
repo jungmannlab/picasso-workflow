@@ -1906,6 +1906,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             render_kwargs={"cmap": cmap_choice},
         )
 
+        # Save unmarked copy of the overview image
+        results["fp_scene_fullfov_unmarked"] = os.path.join(
+            results["folder"], f"locs_fullfov_unmarked_{rcode}.png"
+        )
+        fig_overview.savefig(
+            results["fp_scene_fullfov_unmarked"], bbox_inches="tight", pad_inches=0
+        )
+
         # Draw outlines of selected ROIs if present
         if selected_rois:
             import matplotlib.patches as patches

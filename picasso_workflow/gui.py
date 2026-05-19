@@ -1377,6 +1377,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "filepath to full FOV rendering",
             },
+            "fp_scene_fullfov_unmarked": {
+                "type": "str",
+                "description": "filepath to full FOV rendering without outlines",
+            },
             "fp_scene_ctrmass": {
                 "type": "str",
                 "description": "filepath to center of mass zoom rendering \
