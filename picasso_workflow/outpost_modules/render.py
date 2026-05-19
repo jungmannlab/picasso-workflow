@@ -345,9 +345,7 @@ def plot_scene(
             (bgra.shape[0] * image_px_size + y_offset) / 1000,
         ],
     )
-    ax.set_xlabel("x [µm]")
-    ax.set_ylabel("y [µm]")
-    ax.set_title(title)
+    ax.axis("off")
     if fp is not None:
-        fig.savefig(fp)
+        fig.savefig(fp, bbox_inches="tight", pad_inches=0)
     return fig, ax
