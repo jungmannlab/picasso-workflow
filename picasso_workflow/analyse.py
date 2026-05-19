@@ -1769,9 +1769,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     return "z" in locs.columns
                 except (AttributeError, TypeError):
                     return False
-        
+
         has_z = check_has_z(render_locs)
-        
+
         # Read colormap choice (default to magma)
         cmap_choice = parameters.get("colormap", "magma")
 
@@ -1834,12 +1834,16 @@ class AutoPicasso(util.AbstractModuleCollection):
 
                 # Shift ROI center if it would place the ROI viewport boundary outside the image area
                 if (x_max - x_min) >= roi_size:
-                    cx = np.clip(cx, x_min + roi_size / 2.0, x_max - roi_size / 2.0)
+                    cx = np.clip(
+                        cx, x_min + roi_size / 2.0, x_max - roi_size / 2.0
+                    )
                 else:
                     cx = (x_min + x_max) / 2.0
 
                 if (y_max - y_min) >= roi_size:
-                    cy = np.clip(cy, y_min + roi_size / 2.0, y_max - roi_size / 2.0)
+                    cy = np.clip(
+                        cy, y_min + roi_size / 2.0, y_max - roi_size / 2.0
+                    )
                 else:
                     cy = (y_min + y_max) / 2.0
 
@@ -1911,10 +1915,30 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["folder"], f"locs_fullfov_unmarked_{rcode}.png"
         )
         fig_overview.savefig(
-            results["fp_scene_fullfov_unmarked"], bbox_inches="tight", pad_inches=0
+            results["fp_scene_fullfov_unmarked"],
+            bbox_inches="tight",
+            pad_inches=0,
         )
 
-        # Draw outlines of selected ROIs if present
+        # Draw outlines of selected ROIs if present, or Zoom-In outline if Zoom-In is displayed
+        x_mean_clipped = x_mean
+        y_mean_clipped = y_mean
+        if parameters.get("ctrmass_fov_nm"):
+            zoom_size = parameters.get("ctrmass_fov_nm") / pixelsize
+            if (x_max - x_min) >= zoom_size:
+                x_mean_clipped = np.clip(
+                    x_mean, x_min + zoom_size / 2.0, x_max - zoom_size / 2.0
+                )
+            else:
+                x_mean_clipped = (x_min + x_max) / 2.0
+
+            if (y_max - y_min) >= zoom_size:
+                y_mean_clipped = np.clip(
+                    y_mean, y_min + zoom_size / 2.0, y_max - zoom_size / 2.0
+                )
+            else:
+                y_mean_clipped = (y_min + y_max) / 2.0
+
         if selected_rois:
             import matplotlib.patches as patches
             import matplotlib.pyplot as plt
@@ -1955,6 +1979,49 @@ class AutoPicasso(util.AbstractModuleCollection):
                         edgecolor="none",
                     ),
                 )
+        elif parameters.get("ctrmass_fov_nm"):
+            # Draw standard Zoom-In outline on overview image
+            import matplotlib.patches as patches
+            import matplotlib.pyplot as plt
+
+            fov_half = parameters.get("ctrmass_fov_nm") / 2
+            x_min_zoom = x_mean_clipped - fov_half / pixelsize
+            x_max_zoom = x_mean_clipped + fov_half / pixelsize
+            y_min_zoom = y_mean_clipped - fov_half / pixelsize
+            y_max_zoom = y_mean_clipped + fov_half / pixelsize
+
+            x_min_um = (x_min_zoom * pixelsize) / 1000.0
+            x_max_um = (x_max_zoom * pixelsize) / 1000.0
+            y_min_um = (y_min_zoom * pixelsize) / 1000.0
+            y_max_um = (y_max_zoom * pixelsize) / 1000.0
+
+            width_um = x_max_um - x_min_um
+            height_um = y_max_um - y_min_um
+
+            rect = patches.Rectangle(
+                (x_min_um, y_min_um),
+                width_um,
+                height_um,
+                linewidth=1.5,
+                edgecolor="red",
+                facecolor="none",
+            )
+            ax_overview.add_patch(rect)
+
+            ax_overview.text(
+                x_min_um + 0.03 * width_um,
+                y_min_um + 0.12 * height_um,
+                "Zoom-In",
+                color="red",
+                fontsize=10,
+                fontweight="bold",
+                bbox=dict(
+                    facecolor="black",
+                    alpha=0.6,
+                    boxstyle="round,pad=0.2",
+                    edgecolor="none",
+                ),
+            )
 
         import matplotlib.pyplot as plt
 
@@ -1967,10 +2034,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         if parameters.get("ctrmass_fov_nm"):
             ctrmass_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
             fov_half = parameters.get("ctrmass_fov_nm") / 2
-            x_min_zoom = x_mean - fov_half / pixelsize
-            x_max_zoom = x_mean + fov_half / pixelsize
-            y_min_zoom = y_mean - fov_half / pixelsize
-            y_max_zoom = y_mean + fov_half / pixelsize
+            x_min_zoom = x_mean_clipped - fov_half / pixelsize
+            x_max_zoom = x_mean_clipped + fov_half / pixelsize
+            y_min_zoom = y_mean_clipped - fov_half / pixelsize
+            y_max_zoom = y_mean_clipped + fov_half / pixelsize
 
             render_kwargs = {
                 "oversampling": pixelsize / ctrmass_pixelsize,
