@@ -8412,13 +8412,30 @@ class Window(QtWidgets.QMainWindow):
         self.tabs.setTabToolTip(3, "Not Implemented yet")
 
         # select files to process
+        # Toggle: explicitly list files vs. auto-detect from results folder
+        # (Single Workflow only - find_dnapaint_raw yields a flat dict)
+        self.autodetect_datasets_checkbox = QtWidgets.QCheckBox(
+            "Auto-detect datasets from results folder"
+        )
+        self.autodetect_datasets_checkbox.setToolTip(
+            "When enabled, the generated workflow script scans the results "
+            "folder (and subfolders) for DNA-PAINT raw files at run time, "
+            "instead of using the explicit file list below."
+        )
+        self.autodetect_datasets_checkbox.stateChanged.connect(
+            self._on_autodetect_toggled
+        )
+        self.files_box.addWidget(
+            self.autodetect_datasets_checkbox, 0, 0, 1, 3
+        )
+
         # Create button container for dynamic button layout
         self.file_buttons_widget = QtWidgets.QWidget()
         self.file_buttons_layout = QtWidgets.QHBoxLayout(
             self.file_buttons_widget
         )
         self.file_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        self.files_box.addWidget(self.file_buttons_widget, 0, 0, 1, 3)
+        self.files_box.addWidget(self.file_buttons_widget, 1, 0, 1, 3)
 
         # Initial buttons for Single Workflow (will be managed by _update_file_buttons)
         self.add_files_button = QtWidgets.QPushButton("Add files")
@@ -8448,7 +8465,7 @@ class Window(QtWidgets.QMainWindow):
 
         # Create QStackedWidget to hold all file selection widgets
         self.files_stack = QtWidgets.QStackedWidget()
-        self.files_box.addWidget(self.files_stack, 1, 0, 1, 3)
+        self.files_box.addWidget(self.files_stack, 2, 0, 1, 3)
 
         # Add existing table to stack (index 0 - Single Workflow)
         self.files_stack.addWidget(self.files_table)
@@ -9216,6 +9233,47 @@ class Window(QtWidgets.QMainWindow):
 
         return errors
 
+    def _on_autodetect_toggled(self, _state):
+        """Handle the auto-detect datasets checkbox being toggled."""
+        self._apply_autodetect_state()
+
+    def _apply_autodetect_state(self):
+        """Disable the explicit file table/buttons when auto-detect is on.
+
+        Only relevant for Single Workflow - the checkbox is hidden for the
+        tree-based workflow types.
+        """
+        if self.workflow_type.currentIndex() != 0:
+            return
+        auto = self.autodetect_datasets_checkbox.isChecked()
+        self.files_table.setEnabled(not auto)
+        for name in (
+            "add_files_button",
+            "remove_files_button",
+            "clear_files_button",
+        ):
+            btn = getattr(self, name, None)
+            if btn is not None:
+                try:
+                    btn.setEnabled(not auto)
+                except RuntimeError:
+                    pass
+
+    def _apply_autodetect_from_source(self, source_text):
+        """Restore the auto-detect toggle from a loaded workflow script.
+
+        A generated auto-detect script calls find_dnapaint_raw at run time
+        instead of carrying an explicit datasets dict. find_dnapaint_raw is
+        only ever used with SingleWorkflowCoordinator, so its presence also
+        pins the workflow type to Single Workflow. Must be called after the
+        workflow type has been set by the loader.
+        """
+        is_autodetect = "find_dnapaint_raw" in source_text
+        if is_autodetect and self.workflow_type.currentIndex() != 0:
+            self.workflow_type.setCurrentIndex(0)
+        self.autodetect_datasets_checkbox.setChecked(is_autodetect)
+        self._apply_autodetect_state()
+
     def _update_file_buttons(self, workflow_type_index):
         """Update button layout based on workflow type."""
         # Clear existing buttons
@@ -9237,6 +9295,9 @@ class Window(QtWidgets.QMainWindow):
             self.file_buttons_layout.addWidget(self.add_files_button)
             self.file_buttons_layout.addWidget(self.remove_files_button)
             self.file_buttons_layout.addWidget(self.clear_files_button)
+
+            # Buttons were just recreated - re-apply the auto-detect state
+            self._apply_autodetect_state()
 
         else:  # Aggregation or Investigation
             self.add_dataset_button = QtWidgets.QPushButton("Add Dataset")
@@ -9274,6 +9335,7 @@ class Window(QtWidgets.QMainWindow):
         """Enable or disable file and module widgets based on results folder selection."""
         self.workflow_type.setEnabled(enabled)
         # Files box widgets
+        self.autodetect_datasets_checkbox.setEnabled(enabled)
         try:
             self.add_files_button.setEnabled(enabled)
             self.remove_files_button.setEnabled(enabled)
@@ -9290,6 +9352,10 @@ class Window(QtWidgets.QMainWindow):
 
         # runing config
         self.run_tabs.setEnabled(enabled)
+
+        # Keep the explicit file table disabled if auto-detect is on
+        if enabled:
+            self._apply_autodetect_state()
 
     def add_files(self):
         """Add a new row to the table below the selected row or at the end."""
@@ -9877,6 +9943,11 @@ class Window(QtWidgets.QMainWindow):
             return
 
         try:
+            # Read raw source to detect run-time options that are not
+            # exposed as module-level variables (e.g. find_dnapaint_raw).
+            with open(workflow_file, "r") as f:
+                source_text = f.read()
+
             # Dynamically load the Python file
             spec = importlib.util.spec_from_file_location(
                 "start_workflow", workflow_file
@@ -9930,6 +10001,7 @@ class Window(QtWidgets.QMainWindow):
                     "No workflow modules found at module level, trying alternative loader"
                 )
                 self._load_workflow_definition_alt(folder)
+                self._apply_autodetect_from_source(source_text)
                 return
 
             # Load single dataset workflow if present
@@ -9973,6 +10045,9 @@ class Window(QtWidgets.QMainWindow):
                 )
                 # Set workflow type to "Single Dataset Workflow"
                 self.workflow_type.setCurrentIndex(0)
+
+            # Restore the explicit vs. auto-detect datasets toggle
+            self._apply_autodetect_from_source(source_text)
 
         except Exception as e:
             logger.error(f"Error loading start_workflow.py: {e}")
@@ -10267,8 +10342,14 @@ class Window(QtWidgets.QMainWindow):
         # Switch visible widget
         self.files_stack.setCurrentIndex(type_index)
 
+        # Auto-detect is only meaningful for Single Workflow
+        self.autodetect_datasets_checkbox.setVisible(type_index == 0)
+
         # Update buttons
         self._update_file_buttons(type_index)
+
+        # Re-apply the auto-detect state for the (now current) workflow type
+        self._apply_autodetect_state()
 
         # Tab indices:
         # 0 = Single Dataset Workflow
@@ -10439,6 +10520,14 @@ class Window(QtWidgets.QMainWindow):
             else "Unknown"
         )
 
+        # Auto-detect datasets: the script parses the results folder for
+        # DNA-PAINT raw files at run time instead of using an explicit list.
+        # Only supported for Single Workflow.
+        use_autodetect = (
+            workflow_type_index == 0
+            and self.autodetect_datasets_checkbox.isChecked()
+        )
+
         # Validate tree data for Aggregation/Investigation workflows
         if workflow_type_index > 0:  # Tree-based workflows
             errors = self._validate_tree_data()
@@ -10453,7 +10542,12 @@ class Window(QtWidgets.QMainWindow):
         # Build datasets dict based on workflow type
         datasets = {}
 
-        if workflow_type_index == 0:  # Single Workflow
+        if workflow_type_index == 0 and use_autodetect:
+            # Datasets are discovered at run time by find_dnapaint_raw -
+            # no explicit dataset dict is baked into the script.
+            pass
+
+        elif workflow_type_index == 0:  # Single Workflow
             # Use simple table format
             for row in range(self.files_table.rowCount()):
                 name_item = self.files_table.item(row, 0)
@@ -10615,14 +10709,23 @@ class Window(QtWidgets.QMainWindow):
             f"Workflow type: {workflow_type_name}",
             '"""',
             "import os",
-            "from picasso import io",
         ]
+        if not use_autodetect:
+            # io.save_info writes src_loc.yaml from the explicit datasets
+            # dict; in auto-detect mode find_dnapaint_raw handles that itself.
+            script_lines.append("from picasso import io")
 
         # Add appropriate import based on workflow type
         if workflow_type_index == 0:  # Single Workflow
-            script_lines.append(
-                "from picasso_workflow.metaworkflow import SingleWorkflowCoordinator"
-            )
+            if use_autodetect:
+                script_lines.append(
+                    "from picasso_workflow.metaworkflow import "
+                    "find_dnapaint_raw, SingleWorkflowCoordinator"
+                )
+            else:
+                script_lines.append(
+                    "from picasso_workflow.metaworkflow import SingleWorkflowCoordinator"
+                )
         elif workflow_type_index == 1:  # Aggregation Workflow
             script_lines.append(
                 "from picasso_workflow.metaworkflow import AggregationWorkflowCoordinator"
@@ -10668,25 +10771,32 @@ class Window(QtWidgets.QMainWindow):
                 f"confluence_space = {cf_space}",
                 f"confluence_username = {cf_username}",
                 f"base_page = {cf_ppage}",
-                "",
-                "",
-                "# Dataset configuration",
-                "datasets = {",
             ]
         )
 
-        # Add datasets
-        for key, values in datasets.items():
-            if isinstance(values, list) and len(values) == 1:
-                formatted = format_value(values[0])
-                script_lines.append(f"    {repr(key)}: {formatted},")
-            else:
-                script_lines.append(f"    {repr(key)}: [")
-                for value in values:
-                    formatted = format_value(value)
-                    script_lines.append(f"        {formatted},")
-                script_lines.append("    ],")
-        script_lines.append("}")
+        if not use_autodetect:
+            # Explicit dataset configuration. In auto-detect mode the
+            # datasets dict is built at run time by find_dnapaint_raw.
+            script_lines.extend(
+                [
+                    "",
+                    "",
+                    "# Dataset configuration",
+                    "datasets = {",
+                ]
+            )
+            # Add datasets
+            for key, values in datasets.items():
+                if isinstance(values, list) and len(values) == 1:
+                    formatted = format_value(values[0])
+                    script_lines.append(f"    {repr(key)}: {formatted},")
+                else:
+                    script_lines.append(f"    {repr(key)}: [")
+                    for value in values:
+                        formatted = format_value(value)
+                        script_lines.append(f"        {formatted},")
+                    script_lines.append("    ],")
+            script_lines.append("}")
 
         script_lines.extend(
             [
@@ -10712,16 +10822,32 @@ class Window(QtWidgets.QMainWindow):
             + format_modules(self.aggregation_workflow_modules)
         )
 
-        script_lines.extend(
+        main_lines = [
+            "",
+            "",
+            'if __name__ == "__main__":',
+            "    # Get working directory",
+            "    # working_folder = os.path.dirname(os.path.abspath(__file__))",
+            "    working_folder = os.environ.get('PWD', os.getcwd())",
+        ]
+        if use_autodetect:
+            main_lines.extend(
+                [
+                    "    # parse the working folder for DNA-PAINT raw"
+                    " datasets to analyse",
+                    "    datasets, src_loc_file = "
+                    "find_dnapaint_raw(working_folder)",
+                ]
+            )
+        else:
+            main_lines.extend(
+                [
+                    "    src_loc_file = os.path.join(working_folder, 'src_loc.yaml')",
+                    "    io.save_info(src_loc_file, [datasets])",
+                ]
+            )
+        main_lines.extend(
             [
-                "",
-                "",
-                'if __name__ == "__main__":',
-                "    # Get working directory",
-                "    # working_folder = os.path.dirname(os.path.abspath(__file__))",
-                "    working_folder = os.environ.get('PWD', os.getcwd())",
-                "    src_loc_file = os.path.join(working_folder, 'src_loc.yaml')",
-                "    io.save_info(src_loc_file, [datasets])",
                 "",
                 "    print('datasets', datasets)",
                 "    print('src_loc', src_loc_file)",
@@ -10729,6 +10855,7 @@ class Window(QtWidgets.QMainWindow):
                 "",
             ]
         )
+        script_lines.extend(main_lines)
 
         # Add coordinator creation based on workflow type
         always_save = self.always_save.isChecked()
