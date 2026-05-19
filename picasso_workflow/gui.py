@@ -1346,6 +1346,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 3,
                 "required": False,
             },
+            "colormap": {
+                "type": "str",
+                "description": "Colormap of the generated images",
+                "options": ["magma", "hot", "inferno", "viridis", "gray"],
+                "default": "magma",
+                "required": False,
+            },
         }
 
         results_spec = {
