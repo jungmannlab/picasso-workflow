@@ -9282,6 +9282,10 @@ class Window(QtWidgets.QMainWindow):
             if item.widget():
                 item.widget().deleteLater()
 
+        self.find_files_button = QtWidgets.QPushButton("Find in folder")
+        self.find_files_button.clicked.connect(self.find_dataset_files)
+        self.file_buttons_layout.addWidget(self.find_files_button)
+
         if workflow_type_index == 0:  # Single Workflow
             self.add_files_button = QtWidgets.QPushButton("Add files")
             self.add_files_button.clicked.connect(self.add_files)
@@ -9330,6 +9334,93 @@ class Window(QtWidgets.QMainWindow):
             self.file_buttons_layout.addWidget(self.remove_channel_button)
             self.file_buttons_layout.addWidget(self.remove_dataset_button)
             self.file_buttons_layout.addWidget(self.clear_tree_button)
+
+    def find_dataset_files(self):
+        """Find dataset files (.tif, .ome.tif, .nd2) in a selected folder."""
+        folder = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            "Select Data Folder",
+            "",
+        )
+        if folder:
+            from picasso_workflow.metaworkflow import find_dnapaint_raw
+
+            datasets, _ = find_dnapaint_raw(folder)
+            if datasets:
+                workflow_type_index = self.workflow_type.currentIndex()
+                if workflow_type_index == 0:
+                    # Single workflow
+                    for key, paths in datasets.items():
+                        row = self.files_table.rowCount()
+                        self.files_table.insertRow(row)
+                        self.files_table.setItem(
+                            row, 0, QtWidgets.QTableWidgetItem(key)
+                        )
+                        if isinstance(paths, list):
+                            if len(paths) == 1:
+                                self.files_table.setItem(
+                                    row,
+                                    1,
+                                    QtWidgets.QTableWidgetItem(paths[0]),
+                                )
+                            else:
+                                self.files_table.setItem(
+                                    row,
+                                    1,
+                                    QtWidgets.QTableWidgetItem(repr(paths)),
+                                )
+                        else:
+                            self.files_table.setItem(
+                                row, 1, QtWidgets.QTableWidgetItem(paths)
+                            )
+                else:
+                    # Aggregation / Investigation workflow
+                    if not self.tree_data.get("channels"):
+                        self.tree_data["channels"] = ["ch1"]
+
+                    for key, paths in datasets.items():
+                        # Ensure unique key
+                        unique_key = key
+                        counter = 1
+                        while unique_key in self.tree_data.get("datasets", []):
+                            unique_key = f"{key}_{counter}"
+                            counter += 1
+
+                        if "datasets" not in self.tree_data:
+                            self.tree_data["datasets"] = []
+                        if "conditions" not in self.tree_data:
+                            self.tree_data["conditions"] = {}
+                        if "file_paths" not in self.tree_data:
+                            self.tree_data["file_paths"] = {}
+
+                        self.tree_data["datasets"].append(unique_key)
+                        self.tree_data["conditions"][unique_key] = ""
+                        self.tree_data["file_paths"][unique_key] = {}
+
+                        # Assign to the first channel
+                        target_channel = self.tree_data["channels"][0]
+
+                        if isinstance(paths, list):
+                            if len(paths) == 1:
+                                self.tree_data["file_paths"][unique_key][
+                                    target_channel
+                                ] = paths[0]
+                            else:
+                                self.tree_data["file_paths"][unique_key][
+                                    target_channel
+                                ] = repr(paths)
+                        else:
+                            self.tree_data["file_paths"][unique_key][
+                                target_channel
+                            ] = paths
+
+                    self._populate_tree_from_data()
+            else:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "No files found",
+                    f"Could not find any supported dataset files in {folder}",
+                )
 
     def _set_widgets_enabled(self, enabled):
         """Enable or disable file and module widgets based on results folder selection."""
@@ -9446,13 +9537,17 @@ class Window(QtWidgets.QMainWindow):
     def on_template_changed(self, template_name):
         """Load a template"""
         try:
-            template_folder = CONFIG["Templates"][template_name]
-            if template_folder[:2] == 'r"' or template_folder[:2] == "r'":
-                template_folder = template_folder[2:-1]
+            template_path = CONFIG["Templates"][template_name]
+            if template_path[:2] == 'r"' or template_path[:2] == "r'":
+                template_path = template_path[2:-1]
+
+            # If path points to a file, use its directory
+            if template_path.endswith(".py"):
+                template_folder = os.path.dirname(template_path)
+            else:
+                template_folder = template_path
         except KeyError:
             return
-        # # Enable widgets when a folder is selected
-        # self._set_widgets_enabled(True)
 
         # Search for YAML files and load file list
         self._load_yaml_file_list(template_folder)
