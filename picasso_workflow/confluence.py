@@ -31,6 +31,7 @@ def module_decorator(method):
             <ac:rich-text-body>
             <ul>
             """
+
         def _format_val(v):
             if type(v).__module__ == "numpy" and hasattr(v, "item"):
                 try:
@@ -40,9 +41,7 @@ def module_decorator(method):
             return str(v)
 
         for k, v in parameters.items():
-            parameter_text += (
-                f"<li>{html.escape(str(k))}: {html.escape(_format_val(v))}</li>"
-            )
+            parameter_text += f"<li>{html.escape(str(k))}: {html.escape(_format_val(v))}</li>"
 
         parameter_text += """
         </ul>
@@ -57,9 +56,7 @@ def module_decorator(method):
             <ul>
             """
         for k, v in results.items():
-            result_text += (
-                f"<li>{html.escape(str(k))}: {html.escape(_format_val(v))}</li>"
-            )
+            result_text += f"<li>{html.escape(str(k))}: {html.escape(_format_val(v))}</li>"
 
         result_text += """
         </ul>
@@ -654,7 +651,10 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def identify(
-        self, i, parameters, results,
+        self,
+        i,
+        parameters,
+        results,
         parameter_text,
         result_text,
         postpone_report=False,
@@ -1126,42 +1126,58 @@ class ConfluenceReporter(AbstractModuleCollection):
         {parameter_text}
         {result_text}
         """
-        
+
+        generate_active_rois = parameters.get("generate_active_rois", True)
         rois = results.get("fp_scene_rois", [])
-        tiles = results.get("fp_scene_tiles", [])
-        if rois:
-            text += "<table><tr>"
-            
-            # Left column: Overview and Zoom-In
-            text += "<td style='vertical-align: top; padding-right: 20px;'>"
-            if fp_fullfov := results.get("fp_scene_fullfov"):
+
+        text += "<table><tr>"
+
+        # Left column: Field of View Overviews
+        text += "<td style='vertical-align: top; padding-right: 20px;'>"
+        if fp_fullfov := results.get("fp_scene_fullfov"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fullfov)
+            except ConfluenceInterfaceError:
+                pass
+            fn_fullfov = os.path.split(fp_fullfov)[1]
+
+            fp_unmarked = results.get("fp_scene_fullfov_unmarked")
+            if fp_unmarked:
                 try:
-                    self.ci.upload_attachment(self.report_page_id, fp_fullfov)
+                    self.ci.upload_attachment(self.report_page_id, fp_unmarked)
                 except ConfluenceInterfaceError:
                     pass
-                fn_fullfov = os.path.split(fp_fullfov)[1]
+                fn_unmarked = os.path.split(fp_unmarked)[1]
+
                 text += f"""
-                    <p><b>Overview with Density-driven ROIs</b></p>
+                    <p><b>Field of View Overviews (Left: Clean / Right: with ROIs)</b></p>
+                    <table style='border-collapse: collapse; border: none;'>
+                    <tr>
+                        <td style='border: none; padding-right: 10px;'>
+                            <ac:image ac:height="350">
+                                <ri:attachment ri:filename="{fn_unmarked}" />
+                            </ac:image>
+                        </td>
+                        <td style='border: none;'>
+                            <ac:image ac:height="350">
+                                <ri:attachment ri:filename="{fn_fullfov}" />
+                            </ac:image>
+                        </td>
+                    </tr>
+                    </table>
+                """
+            else:
+                text += f"""
+                    <p><b>Field of View Overview</b></p>
                     <ac:image ac:height="350">
                         <ri:attachment ri:filename="{fn_fullfov}" />
                     </ac:image>
                 """
-            if fp_ctrmass := results.get("fp_scene_ctrmass"):
-                try:
-                    self.ci.upload_attachment(self.report_page_id, fp_ctrmass)
-                except ConfluenceInterfaceError:
-                    pass
-                fn_ctrmass = os.path.split(fp_ctrmass)[1]
-                text += f"""
-                    <p><b>Localizations in Zoom-In</b></p>
-                    <ac:image ac:height="350">
-                        <ri:attachment ri:filename="{fn_ctrmass}" />
-                    </ac:image>
-                """
-            text += "</td>"
-            
-            # Right column: Active Sites ROIs layout in a 2-column grid
-            text += "<td style='vertical-align: top;'>"
+        text += "</td>"
+
+        # Right column: Either active site images OR the Zoom-in image depending on selection
+        text += "<td style='vertical-align: top;'>"
+        if generate_active_rois and rois:
             text += "<p><b>Density-driven Active Sites</b></p>"
             text += "<table style='border-collapse: collapse; border: none;'>"
             for idx in range(0, len(rois), 2):
@@ -1185,43 +1201,22 @@ class ConfluenceReporter(AbstractModuleCollection):
                     text += "<td style='border: none;'></td>"
                 text += "</tr>"
             text += "</table>"
-            text += "</td>"
-            text += "</tr></table>"
-
         else:
-            # Fallback to standard layout
-            fig_fps = []
-            titles_list = []
-            if fp_fig := results.get("fp_scene_fullfov"):
-                fig_fps.append(fp_fig)
-                titles_list.append("Localizations in whole Field of View")
-            if fp_fig := results.get("fp_scene_ctrmass"):
-                fig_fps.append(fp_fig)
-                titles_list.append("Localizations in Zoom-In")
+            if fp_ctrmass := results.get("fp_scene_ctrmass"):
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp_ctrmass)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_ctrmass = os.path.split(fp_ctrmass)[1]
+                text += f"""
+                    <p><b>Zoom-In</b></p>
+                    <ac:image ac:height="350">
+                        <ri:attachment ri:filename="{fn_ctrmass}" />
+                    </ac:image>
+                """
+        text += "</td>"
 
-            if len(fig_fps) >= 1:
-                fn_figs = []
-                for fp in fig_fps:
-                    try:
-                        self.ci.upload_attachment(self.report_page_id, fp)
-                    except ConfluenceInterfaceError:
-                        pass
-                    fn_figs.append(os.path.split(fp)[1])
-
-                text += "<table><tr>"
-                for tit in titles_list:
-                    text += f"<td><b>{tit}</b></td>"
-                text += "</tr>"
-                text += "<tr>"
-                for fn in fn_figs:
-                    text += f"""
-                        <td>
-                              <ac:image ac:height="350">
-                              <ri:attachment ri:filename="{fn}" />
-                              </ac:image>
-                        </td>"""
-                text += "</tr>"
-                text += "</table>"
+        text += "</tr></table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
