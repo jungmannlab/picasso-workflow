@@ -389,7 +389,8 @@ class AbstractWorkflowCoordinator(abc.ABC):
         confluence_url,
         confluence_space,
         confluence_token,
-        base_page,
+        confluence_username=None,
+        base_page="base_page",
         investigation_description="",
         dest_machine=None,
         always_save=False,
@@ -404,6 +405,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
         self.confluence_url = confluence_url
         self.confluence_space = confluence_space
         self.confluence_token = confluence_token
+        self.confluence_username = confluence_username
 
         self.always_save = always_save
 
@@ -413,17 +415,22 @@ class AbstractWorkflowCoordinator(abc.ABC):
             # self.size = comm.Get_size()  # Get the total number of processes
             self.rank = int(os.getenv("SLURM_PROCID"))
             self.size = int(os.getenv("SLURM_NTASKS"))
-            logger.debug(f"Assigned this node rank {self.rank}, size {self.size}.")
+            logger.debug(
+                f"Assigned this node rank {self.rank}, size {self.size}."
+            )
         else:
             self.rank = 0
             self.size = 1
-            logger.debug(f"No SLRUM env vars found. Assigned this node rank {self.rank}, size {self.size}.")
+            logger.debug(
+                f"No SLRUM env vars found. Assigned this node rank {self.rank}, size {self.size}."
+            )
 
         if self.rank == 0:
             ci = confluence.ConfluenceInterface(
                 self.confluence_url,
                 self.confluence_space,
                 base_page,
+                username=self.confluence_username,
                 token=self.confluence_token,
             )
             try:
@@ -444,6 +451,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
             self.confluence_url,
             self.confluence_space,
             self.root_page,
+            self.confluence_username,
             token=self.confluence_token,
         )
 
@@ -452,6 +460,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
                 self.confluence_url,
                 profile_space,
                 profile_basepage,
+                self.confluence_username,
                 self.confluence_token,
             )
             self.profiler.init_profile_page()
@@ -493,6 +502,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
                 "base_url": self.confluence_url,
                 "space_key": self.confluence_space,
                 "parent_page_title": report_name,
+                "username": self.confluence_username,
                 "token": self.confluence_token,
             },
         }
@@ -527,7 +537,8 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         confluence_url,
         confluence_space,
         confluence_token,
-        base_page,
+        confluence_username=None,
+        base_page="base_page",
         dest_machine=None,
         always_save=False,
         profile_space=None,
@@ -547,13 +558,16 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             confluence_space,
             confluence_token,
             base_page,
+            confluence_username,
             dest_machine,
             always_save,
             profile_space,
             profile_basepage,
         )
 
-    def prepare_analysis(self, workflow_modules, continue_previous_runners=False):
+    def prepare_analysis(
+        self, workflow_modules, continue_previous_runners=False
+    ):
         """
         Args:
             workflow_modules:
@@ -610,7 +624,9 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         return run_wr_kwargs
 
     def run_analysis(self, workflow_modules, continue_previous_runners=False):
-        run_wr_kwargs = self.prepare_analysis(workflow_modules, continue_previous_runners)
+        run_wr_kwargs = self.prepare_analysis(
+            workflow_modules, continue_previous_runners
+        )
 
         # print(f'rank {self.rank}, size {self.size}: running {run_awr_kwargs}')
 
@@ -645,7 +661,8 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         confluence_url,
         confluence_space,
         confluence_token,
-        base_page,
+        confluence_username=None,
+        base_page="base_page",
         dest_machine="hpcl8001",
         investigation_description="",
         always_save=False,
@@ -671,6 +688,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             confluence_url,
             confluence_space,
             confluence_token,
+            confluence_username,
             base_page,
             dest_machine,
             always_save,
@@ -678,7 +696,12 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             profile_basepage,
         )
 
-    def prepare_analysis(self, workflow_modules_sgl, workflow_modules_agg, continue_previous_runners=False):
+    def prepare_analysis(
+        self,
+        workflow_modules_sgl,
+        workflow_modules_agg,
+        continue_previous_runners=False,
+    ):
         """
         Args:
             workflow_modules_multi : dict of
@@ -713,6 +736,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                         self.confluence_url,
                         self.confluence_space,
                         self.root_page,
+                        username=self.confluence_username,
                         token=self.confluence_token,
                     )
                     ci.create_page(report_name, "")
@@ -747,9 +771,16 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             )
         return run_awr_kwargs
 
-    def run_analysis(self, workflow_modules_sgl, workflow_modules_agg, continue_previous_runners=False):
+    def run_analysis(
+        self,
+        workflow_modules_sgl,
+        workflow_modules_agg,
+        continue_previous_runners=False,
+    ):
         run_awr_kwargs = self.prepare_analysis(
-            workflow_modules_sgl, workflow_modules_agg, continue_previous_runners
+            workflow_modules_sgl,
+            workflow_modules_agg,
+            continue_previous_runners,
         )
 
         print(f"rank {self.rank}, size {self.size}: running {run_awr_kwargs}")
@@ -781,7 +812,8 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         confluence_url,
         confluence_space,
         confluence_token,
-        base_page,
+        confluence_username=None,
+        base_page="base_page",
         dest_machine="hpcl8",
         investigation_description="",
         always_save=False,
@@ -818,6 +850,7 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             confluence_space,
             confluence_token,
             base_page,
+            confluence_username,
             investigation_description,
             dest_machine,
             always_save,
@@ -1269,12 +1302,18 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
 
 class PerformanceProfiler:
     def __init__(
-        self, confluence_url, confluence_space, base_page, confluence_token
+        self,
+        confluence_url,
+        confluence_space,
+        base_page,
+        confluence_username,
+        confluence_token,
     ):
         self.ci = confluence.ConfluenceInterface(
             confluence_url,
             confluence_space,
             base_page,
+            username=confluence_username,
             token=confluence_token,
         )
 
