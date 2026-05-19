@@ -212,6 +212,21 @@ class TestUtil(unittest.TestCase):
         logger.debug(f"tags out: {tags}")
         assert tags == ["RESI-1", "RESI-2"]
 
+    def test_05_ParameterTiler_tags_only(self):
+        """With only a '#tags' entry (no mapped files), the tiler must
+        produce exactly one workflow set - this is what the single
+        workflow 'no input files' mode relies on."""
+        tile_entries = {"#tags": ["myrun"]}
+        tiler = util.ParameterTiler(self, tile_entries)
+        di = [
+            ("analysis_documentation", {}),
+            ("spinna_batch", {"fp_spinna_batch_config": "cfg.csv"}),
+        ]
+        res_out, tags = tiler.run(di)
+        assert len(res_out) == 1
+        assert res_out[0] == di
+        assert tags == ["myrun"]
+
     def test_06_valid_expression(self):
         expression = "* 3.1415"
         val = util.is_valid_expression(expression)

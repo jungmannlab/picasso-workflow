@@ -564,11 +564,19 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         profile_space=None,
         profile_basepage=None,
     ):
-        self.dataset_filepaths = io.load_info(src_loc_file)[0]
-        self.tile_entries = {
-            "filepath": list(self.dataset_filepaths.values()),
-            "#tags": list(self.dataset_filepaths.keys()),
-        }
+        if src_loc_file is None:
+            # "no input files" mode: run the workflow exactly once, with
+            # no dataset filepath mapping. Useful for workflows whose
+            # modules load data themselves (e.g. spinna_batch reads its
+            # source files from a config csv).
+            self.dataset_filepaths = {}
+            self.tile_entries = {"#tags": [analysis_name]}
+        else:
+            self.dataset_filepaths = io.load_info(src_loc_file)[0]
+            self.tile_entries = {
+                "filepath": list(self.dataset_filepaths.values()),
+                "#tags": list(self.dataset_filepaths.keys()),
+            }
         self.analysis_name = os.path.split(working_folder)[-1]
 
         super().__init__(

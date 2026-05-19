@@ -3335,6 +3335,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     fp_spinna_batch_config : str
                         path to the user-prepared spinna batch
                         analysis config csv file.
+                    use_workflow_locs : bool
+                        whether to use the locs previously processed in
+                        this workflow, otherwise those specified in the
+                        csv. Default: False
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -3344,6 +3348,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "path",
                 "description": "Path to the spinna batch analysis config file.",
                 "required": True,
+            },
+            "use_workflow_locs": {
+                "type": "bool",
+                "description": "Use locs from workflow, otherwise as specified in csv.",
+                "required": True,
+                "default": False,
             },
         }
 
@@ -8492,22 +8502,31 @@ class Window(QtWidgets.QMainWindow):
         self.tabs.setTabToolTip(3, "Not Implemented yet")
 
         # select files to process
-        # Toggle: explicitly list files vs. auto-detect from results folder
-        # (Single Workflow only - find_dnapaint_raw yields a flat dict)
-        self.autodetect_datasets_checkbox = QtWidgets.QCheckBox(
-            "Auto-detect datasets from results folder"
+        # Single Workflow only: choose how input data is provided - an
+        # explicit file list, auto-detection from the results folder, or
+        # no input files at all (the workflow runs once and its modules
+        # load any data themselves).
+        self.files_mode_label = QtWidgets.QLabel("Input files:")
+        self.files_mode_combo = QtWidgets.QComboBox()
+        self.files_mode_combo.addItems(
+            [
+                "Specify input files",
+                "Auto-detect input files",
+                "No input files (run once)",
+            ]
         )
-        self.autodetect_datasets_checkbox.setToolTip(
-            "When enabled, the generated workflow script scans the results "
-            "folder (and subfolders) for DNA-PAINT raw files at run time, "
-            "instead of using the explicit file list below."
+        self.files_mode_combo.setToolTip(
+            "Specify input files: use the explicit file list below.\n"
+            "Auto-detect input files: the generated script scans the "
+            "results folder for DNA-PAINT raw files at run time.\n"
+            "No input files: run the workflow exactly once with no "
+            "dataset, for workflows whose modules load data themselves."
         )
-        self.autodetect_datasets_checkbox.stateChanged.connect(
-            self._on_autodetect_toggled
+        self.files_mode_combo.currentIndexChanged.connect(
+            self._on_files_mode_changed
         )
-        self.files_box.addWidget(
-            self.autodetect_datasets_checkbox, 0, 0, 1, 3
-        )
+        self.files_box.addWidget(self.files_mode_label, 0, 0)
+        self.files_box.addWidget(self.files_mode_combo, 0, 1, 1, 2)
 
         # Create button container for dynamic button layout
         self.file_buttons_widget = QtWidgets.QWidget()
@@ -9313,20 +9332,25 @@ class Window(QtWidgets.QMainWindow):
 
         return errors
 
-    def _on_autodetect_toggled(self, _state):
-        """Handle the auto-detect datasets checkbox being toggled."""
-        self._apply_autodetect_state()
+    # marker comment emitted into a generated "no input files" workflow
+    # script, used to restore the combo box when the script is loaded.
+    _NOFILES_MARKER = "# run workflow once without input files"
 
-    def _apply_autodetect_state(self):
-        """Disable the explicit file table/buttons when auto-detect is on.
+    def _on_files_mode_changed(self, _index):
+        """Handle the input-files mode combo box being changed."""
+        self._apply_files_mode_state()
 
-        Only relevant for Single Workflow - the checkbox is hidden for the
-        tree-based workflow types.
+    def _apply_files_mode_state(self):
+        """Enable the explicit file table/buttons only in 'Specify input
+        files' mode (combo index 0).
+
+        Only relevant for Single Workflow - the combo box is hidden for
+        the tree-based workflow types.
         """
         if self.workflow_type.currentIndex() != 0:
             return
-        auto = self.autodetect_datasets_checkbox.isChecked()
-        self.files_table.setEnabled(not auto)
+        explicit = self.files_mode_combo.currentIndex() == 0
+        self.files_table.setEnabled(explicit)
         for name in (
             "add_files_button",
             "remove_files_button",
@@ -9335,24 +9359,30 @@ class Window(QtWidgets.QMainWindow):
             btn = getattr(self, name, None)
             if btn is not None:
                 try:
-                    btn.setEnabled(not auto)
+                    btn.setEnabled(explicit)
                 except RuntimeError:
                     pass
 
-    def _apply_autodetect_from_source(self, source_text):
-        """Restore the auto-detect toggle from a loaded workflow script.
+    def _apply_files_mode_from_source(self, source_text):
+        """Restore the input-files mode combo box from a loaded workflow
+        script.
 
-        A generated auto-detect script calls find_dnapaint_raw at run time
-        instead of carrying an explicit datasets dict. find_dnapaint_raw is
-        only ever used with SingleWorkflowCoordinator, so its presence also
-        pins the workflow type to Single Workflow. Must be called after the
+        An auto-detect script calls find_dnapaint_raw at run time; a
+        no-files script carries the _NOFILES_MARKER comment. Both modes
+        are Single-Workflow only, so their presence also pins the
+        workflow type to Single Workflow. Must be called after the
         workflow type has been set by the loader.
         """
-        is_autodetect = "find_dnapaint_raw" in source_text
-        if is_autodetect and self.workflow_type.currentIndex() != 0:
+        if "find_dnapaint_raw" in source_text:
+            mode = 1  # Auto-detect input files
+        elif self._NOFILES_MARKER in source_text:
+            mode = 2  # No input files
+        else:
+            mode = 0  # Specify input files
+        if mode != 0 and self.workflow_type.currentIndex() != 0:
             self.workflow_type.setCurrentIndex(0)
-        self.autodetect_datasets_checkbox.setChecked(is_autodetect)
-        self._apply_autodetect_state()
+        self.files_mode_combo.setCurrentIndex(mode)
+        self._apply_files_mode_state()
 
     def _update_file_buttons(self, workflow_type_index):
         """Update button layout based on workflow type."""
@@ -9376,8 +9406,8 @@ class Window(QtWidgets.QMainWindow):
             self.file_buttons_layout.addWidget(self.remove_files_button)
             self.file_buttons_layout.addWidget(self.clear_files_button)
 
-            # Buttons were just recreated - re-apply the auto-detect state
-            self._apply_autodetect_state()
+            # Buttons were just recreated - re-apply the files-mode state
+            self._apply_files_mode_state()
 
         else:  # Aggregation or Investigation
             self.add_dataset_button = QtWidgets.QPushButton("Add Dataset")
@@ -9415,7 +9445,7 @@ class Window(QtWidgets.QMainWindow):
         """Enable or disable file and module widgets based on results folder selection."""
         self.workflow_type.setEnabled(enabled)
         # Files box widgets
-        self.autodetect_datasets_checkbox.setEnabled(enabled)
+        self.files_mode_combo.setEnabled(enabled)
         try:
             self.add_files_button.setEnabled(enabled)
             self.remove_files_button.setEnabled(enabled)
@@ -9433,9 +9463,9 @@ class Window(QtWidgets.QMainWindow):
         # runing config
         self.run_tabs.setEnabled(enabled)
 
-        # Keep the explicit file table disabled if auto-detect is on
+        # Keep the explicit file table disabled in non-explicit modes
         if enabled:
-            self._apply_autodetect_state()
+            self._apply_files_mode_state()
 
     def add_files(self):
         """Add a new row to the table below the selected row or at the end."""
@@ -10081,7 +10111,7 @@ class Window(QtWidgets.QMainWindow):
                     "No workflow modules found at module level, trying alternative loader"
                 )
                 self._load_workflow_definition_alt(folder)
-                self._apply_autodetect_from_source(source_text)
+                self._apply_files_mode_from_source(source_text)
                 return
 
             # Load single dataset workflow if present
@@ -10126,8 +10156,8 @@ class Window(QtWidgets.QMainWindow):
                 # Set workflow type to "Single Dataset Workflow"
                 self.workflow_type.setCurrentIndex(0)
 
-            # Restore the explicit vs. auto-detect datasets toggle
-            self._apply_autodetect_from_source(source_text)
+            # Restore the input-files mode (explicit / auto-detect / none)
+            self._apply_files_mode_from_source(source_text)
 
         except Exception as e:
             logger.error(f"Error loading start_workflow.py: {e}")
@@ -10422,14 +10452,16 @@ class Window(QtWidgets.QMainWindow):
         # Switch visible widget
         self.files_stack.setCurrentIndex(type_index)
 
-        # Auto-detect is only meaningful for Single Workflow
-        self.autodetect_datasets_checkbox.setVisible(type_index == 0)
+        # The input-files mode selector is only meaningful for Single
+        # Workflow
+        self.files_mode_label.setVisible(type_index == 0)
+        self.files_mode_combo.setVisible(type_index == 0)
 
         # Update buttons
         self._update_file_buttons(type_index)
 
-        # Re-apply the auto-detect state for the (now current) workflow type
-        self._apply_autodetect_state()
+        # Re-apply the files-mode state for the (now current) workflow type
+        self._apply_files_mode_state()
 
         # Tab indices:
         # 0 = Single Dataset Workflow
@@ -10600,13 +10632,17 @@ class Window(QtWidgets.QMainWindow):
             else "Unknown"
         )
 
-        # Auto-detect datasets: the script parses the results folder for
-        # DNA-PAINT raw files at run time instead of using an explicit list.
-        # Only supported for Single Workflow.
-        use_autodetect = (
-            workflow_type_index == 0
-            and self.autodetect_datasets_checkbox.isChecked()
+        # Single Workflow input-files mode (combo index): 0 = explicit
+        # file list, 1 = auto-detect raw files in the results folder at
+        # run time, 2 = no input files (run the workflow exactly once).
+        # The mode is only meaningful for Single Workflow.
+        files_mode = (
+            self.files_mode_combo.currentIndex()
+            if workflow_type_index == 0
+            else 0
         )
+        use_autodetect = files_mode == 1
+        no_input_files = files_mode == 2
 
         # Validate tree data for Aggregation/Investigation workflows
         if workflow_type_index > 0:  # Tree-based workflows
@@ -10622,9 +10658,10 @@ class Window(QtWidgets.QMainWindow):
         # Build datasets dict based on workflow type
         datasets = {}
 
-        if workflow_type_index == 0 and use_autodetect:
-            # Datasets are discovered at run time by find_dnapaint_raw -
-            # no explicit dataset dict is baked into the script.
+        if workflow_type_index == 0 and (use_autodetect or no_input_files):
+            # Auto-detect: datasets are discovered at run time by
+            # find_dnapaint_raw. No input files: the workflow runs once
+            # with no datasets. Either way, no dict is baked in.
             pass
 
         elif workflow_type_index == 0:  # Single Workflow
@@ -10790,9 +10827,10 @@ class Window(QtWidgets.QMainWindow):
             '"""',
             "import os",
         ]
-        if not use_autodetect:
+        if not use_autodetect and not no_input_files:
             # io.save_info writes src_loc.yaml from the explicit datasets
-            # dict; in auto-detect mode find_dnapaint_raw handles that itself.
+            # dict. In auto-detect mode find_dnapaint_raw handles that
+            # itself; in no-input-files mode there is no src_loc.yaml.
             script_lines.append("from picasso import io")
 
         # Add appropriate import based on workflow type
@@ -10854,9 +10892,10 @@ class Window(QtWidgets.QMainWindow):
             ]
         )
 
-        if not use_autodetect:
+        if not use_autodetect and not no_input_files:
             # Explicit dataset configuration. In auto-detect mode the
-            # datasets dict is built at run time by find_dnapaint_raw.
+            # datasets dict is built at run time by find_dnapaint_raw; in
+            # no-input-files mode there is no datasets dict at all.
             script_lines.extend(
                 [
                     "",
@@ -10919,18 +10958,23 @@ class Window(QtWidgets.QMainWindow):
                     "find_dnapaint_raw(working_folder)",
                 ]
             )
-        else:
+        elif not no_input_files:
             main_lines.extend(
                 [
                     "    src_loc_file = os.path.join(working_folder, 'src_loc.yaml')",
                     "    io.save_info(src_loc_file, [datasets])",
                 ]
             )
+        if not no_input_files:
+            main_lines.extend(
+                [
+                    "",
+                    "    print('datasets', datasets)",
+                    "    print('src_loc', src_loc_file)",
+                ]
+            )
         main_lines.extend(
             [
-                "",
-                "    print('datasets', datasets)",
-                "    print('src_loc', src_loc_file)",
                 "    analysis_name = os.path.split(working_folder)[-1]",
                 "",
             ]
@@ -10955,11 +10999,20 @@ class Window(QtWidgets.QMainWindow):
             #     "    # Run workflow",
             #     "    runner.run_workflow(workflow_modules_sgl)",
             # ])
+            if no_input_files:
+                # run the workflow exactly once with no dataset; the
+                # marker comment lets the GUI restore the mode on load.
+                src_loc_arg_line = (
+                    f"        None,  {self._NOFILES_MARKER}"
+                )
+            else:
+                src_loc_arg_line = "        src_loc_file,"
             script_lines.extend(
                 [
                     "    # Create single workflow coordinator",
                     "    coordinator = SingleWorkflowCoordinator(",
-                    "        src_loc_file, analysis_name, working_folder,",
+                    src_loc_arg_line,
+                    "        analysis_name, working_folder,",
                     "        confluence_url, confluence_space, confluence_token,",
                     "        confluence_username=confluence_username,",
                     "        base_page=base_page,",
