@@ -1824,7 +1824,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             candidates.sort(key=lambda item: item[0], reverse=True)
             n_rois = parameters.get("n_active_rois")
             if n_rois is None:
-                n_rois = 3
+                n_rois = 4
             roi_centers = []
             min_distance = roi_size  # non-overlapping
 
