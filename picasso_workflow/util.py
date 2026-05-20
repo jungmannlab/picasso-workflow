@@ -1321,12 +1321,6 @@ class AbstractModuleCollection(abc.ABC):
     def spinna_batch(self):
         """Run a SPINNA batch analysis from a pre-existing config file.
 
-        The current locs file(s) are saved as .hdf5 into the module's
-        results folder. Their filepaths are written into the SPINNA
-        batch config csv (given via ``fp_spinna_batch_config``) as one
-        ``exp_data_<tag>`` column per channel, so the batch analysis
-        runs on the locs produced by this workflow.
-
         File-path columns of the config csv (``structures_filename``,
         ``exp_data_*`` and ``mask_filename_*``) are converted to the
         current machine using the Drivepaths config. The modified
@@ -1334,8 +1328,14 @@ class AbstractModuleCollection(abc.ABC):
         -- the user's original csv is not changed -- and that copy is
         passed on to picasso's batch analysis.
 
-        The config csv must already be prepared by the user; only the
-        ``exp_data_*`` columns are filled in here. See
+        If ``use_workflow_locs`` is True, the current locs file(s) are
+        additionally saved as .hdf5 into the module's results folder
+        and their filepaths are written into the SPINNA batch config
+        csv as one ``exp_data_<tag>`` column per channel. When False
+        (the default) the ``exp_data_*`` columns from the user-provided
+        csv are used as-is (after path conversion).
+
+        The config csv must already be prepared by the user. See
         ``picasso.__main__._spinna_batch_analysis`` for the columns
         expected in the config file.
 
@@ -1347,6 +1347,11 @@ class AbstractModuleCollection(abc.ABC):
                     fp_spinna_batch_config : str
                         path to the user-prepared spinna batch
                         analysis config csv file.
+                with optional keys:
+                    use_workflow_locs : bool
+                        if True, save this workflow's current locs and
+                        inject their paths into the batch config.
+                        Default: False.
         """
         pass
 

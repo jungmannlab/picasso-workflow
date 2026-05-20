@@ -735,7 +735,10 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_info = [info]
         self.ap.channel_tags = ["CD86"]
 
-        parameters = {"fp_spinna_batch_config": cfg_fp}
+        parameters = {
+            "fp_spinna_batch_config": cfg_fp,
+            "use_workflow_locs": True,
+        }
         parameters, results = self.ap.spinna_batch(0, parameters)
 
         # the modified config is written to a copy in the results
@@ -797,7 +800,10 @@ class TestAnalyseModules(unittest.TestCase):
         )
         self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
 
-        parameters = {"fp_spinna_batch_config": cfg_fp}
+        parameters = {
+            "fp_spinna_batch_config": cfg_fp,
+            "use_workflow_locs": True,
+        }
         parameters, results = self.ap.spinna_batch(0, parameters)
 
         assert results["success"] is True
@@ -859,7 +865,10 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_info = [info]
         self.ap.channel_tags = ["CD86"]
 
-        parameters = {"fp_spinna_batch_config": cfg_fp}
+        parameters = {
+            "fp_spinna_batch_config": cfg_fp,
+            "use_workflow_locs": True,
+        }
         parameters, results = self.ap.spinna_batch(0, parameters)
 
         written_cfg = pd.read_csv(results["fp_spinna_batch_config"])
