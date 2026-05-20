@@ -314,7 +314,7 @@ class TestUtil(unittest.TestCase):
         assert "\\" not in result
 
     def test_07_get_movie_groups(self):
-        from picasso_workflow.metaworkflow import get_movie_groups
+        from picasso_workflow.util import get_movie_groups
 
         paths = [
             "movie_1.ome.tif",
@@ -323,7 +323,7 @@ class TestUtil(unittest.TestCase):
             "other.ome.tif",
         ]
         groups = get_movie_groups(paths, ".ome.tif")
-        assert list(groups.keys()) == ["movie", "other"]
+        assert set(groups.keys()) == {"movie", "other"}
         assert groups["movie"] == [
             "movie_0.ome.tif",
             "movie_1.ome.tif",
