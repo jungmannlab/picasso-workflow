@@ -1961,7 +1961,7 @@ def _plot_shift_trajectory_2d(
     """
     import matplotlib.pyplot as plt
     from matplotlib.collections import LineCollection
-    from matplotlib import cm
+    from matplotlib import colormaps
     import matplotlib.colors as mcolors
 
     n_iterations = len(iteration_history)
@@ -2010,7 +2010,7 @@ def _plot_shift_trajectory_2d(
                   mincnt=1, linewidths=0.2, zorder=1)
 
     # Color map for iteration progression
-    cmap = cm.get_cmap('RdYlGn_r')  # Red (start) -> Yellow -> Green (end)
+    cmap = colormaps['RdYlGn_r']  # Red (start) -> Yellow -> Green (end)
 
     # Plot sample frame trajectories with color gradient
     for idx in sample_indices:
