@@ -1133,7 +1133,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += "<table><tr>"
 
         # Left column: Field of View Overviews
-        text += "<td style='vertical-align: top; padding-right: 20px;'>"
+        text += "<td style='vertical-align: middle; text-align: center; padding-right: 20px;'>"
         if fp_fullfov := results.get("fp_scene_fullfov"):
             try:
                 self.ci.upload_attachment(self.report_page_id, fp_fullfov)
@@ -1150,36 +1150,31 @@ class ConfluenceReporter(AbstractModuleCollection):
                 fn_unmarked = os.path.split(fp_unmarked)[1]
 
                 text += f"""
-                    <p><b>Field of View Overviews (Left: Clean / Right: with ROIs)</b></p>
-                    <table style='border-collapse: collapse; border: none;'>
-                    <tr>
-                        <td style='border: none; padding-right: 10px;'>
-                            <ac:image ac:height="350">
-                                <ri:attachment ri:filename="{fn_unmarked}" />
-                            </ac:image>
-                        </td>
-                        <td style='border: none;'>
-                            <ac:image ac:height="350">
-                                <ri:attachment ri:filename="{fn_fullfov}" />
-                            </ac:image>
-                        </td>
-                    </tr>
-                    </table>
+                    <p><b>Overview Images</b></p>
+                    <p>
+                        <ac:image ac:height="450">
+                            <ri:attachment ri:filename="{fn_unmarked}" />
+                        </ac:image>
+                        &nbsp;&nbsp;
+                        <ac:image ac:height="450">
+                            <ri:attachment ri:filename="{fn_fullfov}" />
+                        </ac:image>
+                    </p>
                 """
             else:
                 text += f"""
-                    <p><b>Field of View Overview</b></p>
-                    <ac:image ac:height="350">
+                    <p><b>Overview Image</b></p>
+                    <ac:image ac:height="450">
                         <ri:attachment ri:filename="{fn_fullfov}" />
                     </ac:image>
                 """
         text += "</td>"
 
         # Right column: Either active site images OR the Zoom-in image depending on selection
-        text += "<td style='vertical-align: top;'>"
+        text += "<td style='vertical-align: middle; text-align: center;'>"
         if generate_active_rois and rois:
-            text += "<p><b>Density-driven Active Sites</b></p>"
-            text += "<table style='border-collapse: collapse; border: none;'>"
+            text += "<p><b>Zoom-In Images (Density-Driven)</b></p>"
+            text += "<table style='border-collapse: collapse; border: none; margin-left: auto; margin-right: auto;'>"
             for idx in range(0, len(rois), 2):
                 text += "<tr>"
                 for sub_idx in range(idx, min(idx + 2, len(rois))):
@@ -1191,7 +1186,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                     fn_roi = os.path.split(fp_roi)[1]
                     text += f"""
                         <td style='border: 1px solid #ddd; padding: 6px; text-align: center;'>
-                            <ac:image ac:height="150">
+                            <ac:image ac:height="200">
                                 <ri:attachment ri:filename="{fn_roi}" />
                             </ac:image>
                             <br/><b>Site {sub_idx + 1}</b>
@@ -1209,8 +1204,8 @@ class ConfluenceReporter(AbstractModuleCollection):
                     pass
                 fn_ctrmass = os.path.split(fp_ctrmass)[1]
                 text += f"""
-                    <p><b>Zoom-In</b></p>
-                    <ac:image ac:height="350">
+                    <p><b>Zoom-In Image</b></p>
+                    <ac:image ac:height="450">
                         <ri:attachment ri:filename="{fn_ctrmass}" />
                     </ac:image>
                 """

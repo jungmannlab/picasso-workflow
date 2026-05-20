@@ -1352,7 +1352,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Number of high-density active sites (ROIs) to generate",
                 "min": 1,
                 "max": 25,
-                "default": 3,
+                "default": 4,
                 "required": False,
             },
             "colormap": {
