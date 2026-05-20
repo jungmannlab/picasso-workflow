@@ -25,10 +25,15 @@ def config_logger():
     # formatter = logging.Formatter(
     #     "%(asctime)s | %(name)s | %(funcName)s | %(levelname)s -> %(message)s"
     # )
-    os.makedirs("logs", exist_ok=True)
     job_id = os.getenv("SLURM_JOB_ID")  # Get the job ID from the environment
     rank_id = os.getenv("SLURM_PROCID")
-    logfile = f"logs/picasso-workflow-job{job_id}-rank{rank_id}.log"
+    # Anchor logs under the user's home so GUI launches (where cwd is
+    # unpredictable — Windows shortcut, macOS .app, etc.) write to a
+    # discoverable path. SLURM jobs override via SLURM_SUBMIT_DIR-aware
+    # tooling if they want job-local logs; here we still tag by job/rank.
+    log_dir = Path.home() / ".picasso_workflow" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logfile = str(log_dir / f"picasso-workflow-job{job_id}-rank{rank_id}.log")
     # file_handler = handlers.RotatingFileHandler(
     #     logfile,
     #     maxBytes=1e6,
@@ -56,6 +61,7 @@ def config_logger():
         format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {name} | {function} | {level} -> {message}",
         level="ERROR",
     )
+    logger.info(f"picasso-workflow log file: {logfile}")
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
