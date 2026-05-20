@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 import psutil
 import yaml
-from matplotlib import cm
+from matplotlib import cm, colormaps
 from memory_profiler import memory_usage
 from picasso import CONFIG as pCONFIG
 from picasso import __version__ as picassoversion
@@ -6984,7 +6984,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             density_results.append(density)
 
             # plot results
-            colors = cm.get_cmap("viridis", nneighbors.shape[1]).colors
+            colors = colormaps["viridis"].resampled(nneighbors.shape[1]).colors
             bins = np.arange(0, rmax_NN, step=deltar)
             nnhist_obs = np.zeros((len(bins), nneighbors.shape[1]))
             for i in range(nnhist_obs.shape[1]):
@@ -7307,7 +7307,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             # plot results
             fig, ax = plt.subplots()
-            colors = cm.get_cmap("viridis", k_max).colors
+            colors = colormaps["viridis"].resampled(k_max).colors
             bin_max = np.quantile(nneighbors[:, -1], 0.95)
             median_1stNN = np.median(nneighbors[:, 0])
             # sample bins such that there are 5 bins from 0 to middle of 1stNN
