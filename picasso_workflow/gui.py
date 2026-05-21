@@ -7,7 +7,7 @@ Description: GUI descriptor module for picasso-workflow
 """
 
 from picasso_workflow import util, CONFIG
-import logging
+from loguru import logger
 import subprocess
 import os
 import sys
@@ -26,11 +26,20 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import Qt, QEvent
 
 
-logger = logging.getLogger(__name__)
 try:
     from picasso_workflow._version import __version__ as __GUIVERSION__
 except ImportError:
     __GUIVERSION__ = "unknown"
+
+
+def _read_text_safe(path):
+    """Read a text file for logging. Returns a sentinel on any failure
+    so a logging side-effect can never raise into the caller."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"(could not read {path!r}: {exc!r})"
 
 
 class ModuleDescriptor(util.AbstractModuleCollection):
@@ -7185,6 +7194,7 @@ class SlurmCommunicator:
 
         sbatch_cmd += f" {script_path}"
 
+        logger.info(f"Submitting job via SSH: {sbatch_cmd}")
         result = self.execute_ssh_command(sbatch_cmd)
 
         # Parse job ID from output
@@ -8789,6 +8799,9 @@ class Window(QtWidgets.QMainWindow):
 
         # Add to tree
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.add_dataset", dataset=dataset_name
+        )
 
     def add_channel(self):
         """Add new channel to ALL datasets."""
@@ -8827,6 +8840,9 @@ class Window(QtWidgets.QMainWindow):
 
         # Refresh tree
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.add_channel", channel=channel_name
+        )
 
     def remove_channel(self):
         """Remove selected channel from ALL datasets."""
@@ -8877,6 +8893,9 @@ class Window(QtWidgets.QMainWindow):
 
         # Refresh tree
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.remove_channel", channel=channel_name
+        )
 
     def rename_dataset(self):
         """Rename selected dataset with validation (no underscores)."""
@@ -8952,6 +8971,9 @@ class Window(QtWidgets.QMainWindow):
 
         # Refresh tree
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.rename_dataset", old=old_name, new=new_name
+        )
 
     def rename_channel(self):
         """Rename selected channel in ALL datasets with validation (no underscores)."""
@@ -9023,6 +9045,9 @@ class Window(QtWidgets.QMainWindow):
 
         # Refresh tree
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.rename_channel", old=old_name, new=new_name
+        )
 
     def remove_tree_items(self):
         """Remove selected datasets or channels."""
@@ -9059,6 +9084,9 @@ class Window(QtWidgets.QMainWindow):
                 del self.tree_data["conditions"][dataset_name]
 
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.remove_datasets", datasets=datasets_to_remove
+        )
 
     def clear_tree(self):
         """Clear all items from the tree."""
@@ -9086,6 +9114,7 @@ class Window(QtWidgets.QMainWindow):
             "file_paths": {},
             "conditions": {},
         }
+        self._log_workflow_config_event("tree.clear")
 
     def _get_current_tree_widget(self):
         """Get currently visible tree widget based on workflow type."""
@@ -9154,9 +9183,20 @@ class Window(QtWidgets.QMainWindow):
             self.tree_data["file_paths"][dataset_name][
                 channel_name
             ] = file_path
+            self._log_workflow_config_event(
+                "tree.set_file_path",
+                dataset=dataset_name,
+                channel=channel_name,
+                path=file_path,
+            )
         elif column == 3:  # Condition (Investigation only)
             condition = item.text(3)
             self.tree_data["conditions"][dataset_name] = condition
+            self._log_workflow_config_event(
+                "tree.set_condition",
+                dataset=dataset_name,
+                condition=condition,
+            )
 
         self._update_validation_display()
 
@@ -9169,6 +9209,9 @@ class Window(QtWidgets.QMainWindow):
             name = os.path.basename(path)
             self.files_table.setItem(row, 0, QtWidgets.QTableWidgetItem(name))
             self.files_table.setItem(row, 1, QtWidgets.QTableWidgetItem(path))
+        self._log_workflow_config_event(
+            "files_table.drop", n_added=len(file_paths), paths=list(file_paths)
+        )
 
     def _on_files_dropped_tree(self, file_paths, target_item):
         """Handle files dropped onto the Aggregation/Investigation tree."""
@@ -9206,6 +9249,9 @@ class Window(QtWidgets.QMainWindow):
                     self.tree_data["file_paths"][dataset_name][channel] = path
 
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.drop", n_added=len(file_paths), paths=list(file_paths)
+        )
 
     def _on_file_moved_tree(self, source_item, target_item):
         """Handle file moved between channels within the tree."""
@@ -9232,6 +9278,12 @@ class Window(QtWidgets.QMainWindow):
                 target_channel
             ] = source_path
             self._populate_tree_from_data()
+            self._log_workflow_config_event(
+                "tree.move_file",
+                source=(source_dataset, source_channel),
+                target=(target_dataset, target_channel),
+                path=source_path,
+            )
 
     def _update_validation_display(self):
         """Update visual indicators for missing file paths."""
@@ -9468,6 +9520,158 @@ class Window(QtWidgets.QMainWindow):
         if enabled:
             self._apply_files_mode_state()
 
+    # ------------------------------------------------------------------
+    # Workflow-configuration logging helpers
+    # ------------------------------------------------------------------
+    # These produce a compact, structured snapshot of the parts of the GUI
+    # state that get baked into the generated start_workflow.py script:
+    # the input-files configuration (explicit table or tree, depending on
+    # workflow type) and the module list with their parameter dicts.
+    # Every user-driven mutation of either side calls
+    # ``_log_workflow_config_event`` so the logfile holds an audit trail of
+    # how the configuration evolved before submission.
+    def _files_config_snapshot(self):
+        """Return a dict describing the current input-files configuration.
+
+        Schema:
+            workflow_type: "Single" | "Aggregation" | "Investigation"
+            files_mode:    "explicit" | "auto_detect" | "no_input_files"
+                           (only meaningful for Single Workflow)
+            files:         list[{name, path}]                (Single)
+                           list[{dataset, channel, path, condition?}] (Tree)
+        """
+        try:
+            workflow_type_index = self.workflow_type.currentIndex()
+        except AttributeError:
+            # Called before UI fully constructed; just return what we can.
+            workflow_type_index = 0
+        type_name = {0: "Single", 1: "Aggregation", 2: "Investigation"}.get(
+            workflow_type_index, f"unknown({workflow_type_index})"
+        )
+
+        snapshot = {"workflow_type": type_name}
+
+        if workflow_type_index == 0:
+            try:
+                mode_index = self.files_mode_combo.currentIndex()
+            except AttributeError:
+                mode_index = 0
+            snapshot["files_mode"] = {
+                0: "explicit",
+                1: "auto_detect",
+                2: "no_input_files",
+            }.get(mode_index, f"unknown({mode_index})")
+            files = []
+            if hasattr(self, "files_table"):
+                for row in range(self.files_table.rowCount()):
+                    name_item = self.files_table.item(row, 0)
+                    path_item = self.files_table.item(row, 1)
+                    files.append(
+                        {
+                            "name": name_item.text() if name_item else "",
+                            "path": path_item.text() if path_item else "",
+                        }
+                    )
+            snapshot["files"] = files
+        else:
+            tree = getattr(self, "tree_data", None) or {}
+            datasets = list(tree.get("datasets", []))
+            channels = list(tree.get("channels", []))
+            file_paths = tree.get("file_paths", {}) or {}
+            conditions = tree.get("conditions", {}) or {}
+            entries = []
+            for ds in datasets:
+                for ch in channels:
+                    entry = {
+                        "dataset": ds,
+                        "channel": ch,
+                        "path": file_paths.get(ds, {}).get(ch, ""),
+                    }
+                    if workflow_type_index == 2:
+                        entry["condition"] = conditions.get(ds, "")
+                    entries.append(entry)
+            snapshot["datasets"] = datasets
+            snapshot["channels"] = channels
+            snapshot["files"] = entries
+        return snapshot
+
+    @staticmethod
+    def _yaml_safe(value):
+        """Recursively convert tuples to lists so the structure can be
+        serialized with yaml.safe_dump (which has no Python-tuple
+        representer). Module parameters often hold command tuples like
+        ``('$map', 'filepath')`` that would otherwise raise."""
+        if isinstance(value, dict):
+            return {k: Window._yaml_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [Window._yaml_safe(v) for v in value]
+        return value
+
+    def _modules_config_snapshot(self):
+        """Return a dict with the current single and aggregation modules.
+
+        Module entries are ``[name, params_dict]`` so the logged output
+        stays a single line per module after yaml.safe_dump.
+        """
+        return {
+            "single_workflow_modules": [
+                [name, Window._yaml_safe(params)]
+                for name, params in getattr(
+                    self, "single_workflow_modules", []
+                )
+            ],
+            "aggregation_workflow_modules": [
+                [name, Window._yaml_safe(params)]
+                for name, params in getattr(
+                    self, "aggregation_workflow_modules", []
+                )
+            ],
+        }
+
+    def _log_workflow_config_event(self, event, **details):
+        """Log a workflow-configuration mutation.
+
+        The one-line INFO message names the event and includes a few
+        compact stats; the DEBUG follow-ups dump the full files + modules
+        snapshots so the logfile can be replayed to reconstruct any state.
+        """
+        try:
+            files_snapshot = self._files_config_snapshot()
+        except Exception as exc:  # pragma: no cover - defensive
+            files_snapshot = {"error": repr(exc)}
+        try:
+            modules_snapshot = self._modules_config_snapshot()
+        except Exception as exc:  # pragma: no cover - defensive
+            modules_snapshot = {"error": repr(exc)}
+
+        n_files = (
+            len(files_snapshot.get("files", []))
+            if isinstance(files_snapshot, dict)
+            else "?"
+        )
+        n_sgl = len(modules_snapshot.get("single_workflow_modules", []))
+        n_agg = len(modules_snapshot.get("aggregation_workflow_modules", []))
+        detail_str = (
+            " | " + ", ".join(f"{k}={v!r}" for k, v in details.items())
+            if details
+            else ""
+        )
+        logger.info(
+            f"workflow-config: {event} "
+            f"[type={files_snapshot.get('workflow_type', '?')}, "
+            f"files={n_files}, sgl_modules={n_sgl}, "
+            f"agg_modules={n_agg}]"
+            f"{detail_str}"
+        )
+        logger.debug(
+            "workflow-config files snapshot:\n"
+            + yaml.safe_dump(files_snapshot, sort_keys=False)
+        )
+        logger.debug(
+            "workflow-config modules snapshot:\n"
+            + yaml.safe_dump(modules_snapshot, sort_keys=False)
+        )
+
     def add_files(self):
         """Add a new row to the table below the selected row or at the end."""
         # Determine insertion position
@@ -9490,6 +9694,9 @@ class Window(QtWidgets.QMainWindow):
         self.files_table.setItem(
             insert_position, 1, QtWidgets.QTableWidgetItem("")
         )
+        self._log_workflow_config_event(
+            "files_table.add_row", row=insert_position
+        )
 
     def remove_selected_files(self):
         """Remove the selected row(s) from the table based on any selected cells."""
@@ -9503,12 +9710,16 @@ class Window(QtWidgets.QMainWindow):
         # Remove rows in reverse order to avoid index shifting issues
         for row in selected_row_numbers:
             self.files_table.removeRow(row)
+        self._log_workflow_config_event(
+            "files_table.remove_rows", removed_rows=selected_row_numbers
+        )
 
     def clear_file_list(self):
         """Clear all rows from the table."""
         if self.files_table.rowCount() == 0:
             return
         self.files_table.setRowCount(0)
+        self._log_workflow_config_event("files_table.clear")
 
     def select_results_folder(self):
         """Open a folder selection dialog and display the selected folder."""
@@ -9564,12 +9775,21 @@ class Window(QtWidgets.QMainWindow):
             return
         # # Enable widgets when a folder is selected
         # self._set_widgets_enabled(True)
+        logger.info(
+            f"workflow-config: loading template '{template_name}' "
+            f"from {template_folder}"
+        )
 
         # Search for YAML files and load file list
         self._load_yaml_file_list(template_folder)
 
         # Search for workflow definition and load it
         self._load_workflow_definition(template_folder)
+        self._log_workflow_config_event(
+            "template.loaded",
+            template=template_name,
+            source=template_folder,
+        )
 
     def _load_yaml_file_list(self, folder):
         """Search for YAML files in folder and load file list if found.
@@ -9612,6 +9832,10 @@ class Window(QtWidgets.QMainWindow):
                         dict_to_table(file_dict, self.files_table)
 
                         logger.debug(f"Loaded file list from {yaml_file}")
+                        self._log_workflow_config_event(
+                            "files_table.load_yaml",
+                            source=yaml_path,
+                        )
                         return  # Stop after loading first matching file
                     else:
                         logger.warning(
@@ -10160,6 +10384,10 @@ class Window(QtWidgets.QMainWindow):
             # Restore the input-files mode (explicit / auto-detect / none)
             self._apply_files_mode_from_source(source_text)
 
+            self._log_workflow_config_event(
+                "modules.load_definition", source=workflow_file
+            )
+
         except Exception as e:
             logger.error(f"Error loading start_workflow.py: {e}")
             QtWidgets.QMessageBox.warning(
@@ -10271,6 +10499,13 @@ class Window(QtWidgets.QMainWindow):
             self.single_workflow_modules.append((module_name, param_values))
             index = len(self.single_workflow_modules) - 1
             self.single_workflow_list.addItem(f"{index:02d}: {module_name}")
+            self._log_workflow_config_event(
+                "modules.add",
+                tab="single",
+                index=index,
+                module=module_name,
+                params=param_values,
+            )
         elif current_tab_index == 1:  # Aggregation Workflow
             self.aggregation_workflow_modules.append(
                 (module_name, param_values)
@@ -10278,6 +10513,13 @@ class Window(QtWidgets.QMainWindow):
             index = len(self.aggregation_workflow_modules) - 1
             self.aggregation_workflow_list.addItem(
                 f"{index:02d}: {module_name}"
+            )
+            self._log_workflow_config_event(
+                "modules.add",
+                tab="aggregation",
+                index=index,
+                module=module_name,
+                params=param_values,
             )
 
     def _renumber_workflow_items(self, list_widget, modules):
@@ -10516,19 +10758,33 @@ class Window(QtWidgets.QMainWindow):
         if current_tab_index == 0:  # Single Dataset Workflow
             current_row = self.single_workflow_list.currentRow()
             if current_row >= 0:
+                removed = self.single_workflow_modules[current_row][0]
                 self.single_workflow_list.takeItem(current_row)
                 del self.single_workflow_modules[current_row]
                 self._renumber_workflow_items(
                     self.single_workflow_list, self.single_workflow_modules
                 )
+                self._log_workflow_config_event(
+                    "modules.remove",
+                    tab="single",
+                    index=current_row,
+                    module=removed,
+                )
         elif current_tab_index == 1:  # Aggregation Workflow
             current_row = self.aggregation_workflow_list.currentRow()
             if current_row >= 0:
+                removed = self.aggregation_workflow_modules[current_row][0]
                 self.aggregation_workflow_list.takeItem(current_row)
                 del self.aggregation_workflow_modules[current_row]
                 self._renumber_workflow_items(
                     self.aggregation_workflow_list,
                     self.aggregation_workflow_modules,
+                )
+                self._log_workflow_config_event(
+                    "modules.remove",
+                    tab="aggregation",
+                    index=current_row,
+                    module=removed,
                 )
 
     def move_up(self):
@@ -10551,6 +10807,12 @@ class Window(QtWidgets.QMainWindow):
                     self.single_workflow_list, self.single_workflow_modules
                 )
                 self.single_workflow_list.setCurrentRow(current_row - 1)
+                self._log_workflow_config_event(
+                    "modules.move_up",
+                    tab="single",
+                    from_index=current_row,
+                    to_index=current_row - 1,
+                )
         elif current_tab_index == 1:  # Aggregation Workflow
             current_row = self.aggregation_workflow_list.currentRow()
             if current_row > 0:  # Can't move first item up
@@ -10568,6 +10830,12 @@ class Window(QtWidgets.QMainWindow):
                     self.aggregation_workflow_modules,
                 )
                 self.aggregation_workflow_list.setCurrentRow(current_row - 1)
+                self._log_workflow_config_event(
+                    "modules.move_up",
+                    tab="aggregation",
+                    from_index=current_row,
+                    to_index=current_row - 1,
+                )
 
     def move_down(self):
         """Move the selected module down in the workflow order."""
@@ -10590,6 +10858,12 @@ class Window(QtWidgets.QMainWindow):
                     self.single_workflow_list, self.single_workflow_modules
                 )
                 self.single_workflow_list.setCurrentRow(current_row + 1)
+                self._log_workflow_config_event(
+                    "modules.move_down",
+                    tab="single",
+                    from_index=current_row,
+                    to_index=current_row + 1,
+                )
         elif current_tab_index == 1:  # Aggregation Workflow
             current_row = self.aggregation_workflow_list.currentRow()
             max_row = len(self.aggregation_workflow_modules) - 1
@@ -10608,6 +10882,12 @@ class Window(QtWidgets.QMainWindow):
                     self.aggregation_workflow_modules,
                 )
                 self.aggregation_workflow_list.setCurrentRow(current_row + 1)
+                self._log_workflow_config_event(
+                    "modules.move_down",
+                    tab="aggregation",
+                    from_index=current_row,
+                    to_index=current_row + 1,
+                )
 
     def create_python_script(
         self, host_cluster, login_node, filename="start_workflow.py"
@@ -11132,7 +11412,9 @@ class Window(QtWidgets.QMainWindow):
         self.slurm_communicator.test_connection()
 
         scriptname = "start_workflow.py"
-        self.create_python_script(host_cluster, login_node, scriptname)
+        python_script_path = self.create_python_script(
+            host_cluster, login_node, scriptname
+        )
 
         job_name = "mypwjob"
         slurm_options = {
@@ -11166,13 +11448,84 @@ class Window(QtWidgets.QMainWindow):
         script_path = self.slurm_communicator.write_slurm_script(
             script_content, results_folder_local
         )
+
+        # Persist the exact configuration that is about to be submitted to
+        # the cluster. We log it twice: once via the logger (the same file
+        # all the workflow-config edits land in) and once as a sibling
+        # YAML next to the generated scripts so the run folder is
+        # self-describing if the logfile is later rotated/lost.
+        submission_summary = {
+            "host_cluster": host_cluster,
+            "login_node": login_node,
+            "username": username,
+            "ssh_key_path": ssh_key_path,
+            "results_folder_local": results_folder_local,
+            "results_folder_host": results_folder_host,
+            "job_name": job_name,
+            "slurm_options": slurm_options,
+            "scriptname": scriptname,
+            "python_script_path": python_script_path,
+            "slurm_script_path": (
+                script_path
+                if isinstance(script_path, str)
+                else str(script_path)
+            ),
+            "workflow_config": {
+                "files": self._files_config_snapshot(),
+                "modules": self._modules_config_snapshot(),
+            },
+        }
+        logger.info(
+            f"SLURM submission prepared: host={host_cluster} "
+            f"login={login_node} user={username} "
+            f"job={job_name} "
+            f"results_folder={results_folder_local} "
+            f"slurm_options={slurm_options}"
+        )
+        logger.info(
+            "SLURM submission configuration:\n"
+            + yaml.safe_dump(submission_summary, sort_keys=False)
+        )
+        logger.debug(
+            "Generated start_workflow.py content:\n" + _read_text_safe(
+                python_script_path
+            )
+        )
+        logger.debug(
+            "Generated SLURM script content:\n" + script_content
+        )
+        # Sidecar file inside the run folder. Best-effort: if the disk
+        # write fails we have already logged the same info above.
+        try:
+            sidecar = os.path.join(
+                results_folder_local, "slurm_submission_config.yaml"
+            )
+            with open(sidecar, "w", newline="\n") as f:
+                yaml.safe_dump(submission_summary, f, sort_keys=False)
+            logger.info(f"Wrote SLURM submission config to {sidecar}")
+        except OSError as exc:
+            logger.warning(
+                f"Could not write slurm_submission_config.yaml: {exc}"
+            )
+
         return host_cluster, script_path
 
     def start_slurm(self):
         """"""
+        logger.info("start_slurm: assembling SLURM scripts")
         host_cluster, script_path = self.assemble_slurm_scripts()
+        logger.info(
+            f"start_slurm: submitting job to {host_cluster} "
+            f"using script {script_path}"
+        )
         result = self.slurm_communicator.submit_job(
             script_path, host_cluster, additional_options=None
+        )
+        logger.info(
+            f"start_slurm: submission result success={result['success']} "
+            f"job_id={result.get('job_id')} "
+            f"stdout={result.get('stdout', '').strip()!r} "
+            f"stderr={result.get('stderr', '').strip()!r}"
         )
 
         # Store and display job ID
@@ -11953,25 +12306,43 @@ class Window(QtWidgets.QMainWindow):
         # Update the appropriate workflow list
         if self.editing_workflow_tab == 0:  # Single Dataset Workflow
             if self.editing_workflow_index < len(self.single_workflow_modules):
-                module_name = self.single_workflow_modules[
+                module_name, old_params = self.single_workflow_modules[
                     self.editing_workflow_index
-                ][0]
-                # Update parameters while keeping module name
-                self.single_workflow_modules[self.editing_workflow_index] = (
-                    module_name,
-                    param_values,
-                )
+                ]
+                if old_params != param_values:
+                    # Update parameters while keeping module name
+                    self.single_workflow_modules[
+                        self.editing_workflow_index
+                    ] = (
+                        module_name,
+                        param_values,
+                    )
+                    self._log_workflow_config_event(
+                        "modules.params_changed",
+                        tab="single",
+                        index=self.editing_workflow_index,
+                        module=module_name,
+                        params=param_values,
+                    )
         elif self.editing_workflow_tab == 1:  # Aggregation Workflow
             if self.editing_workflow_index < len(
                 self.aggregation_workflow_modules
             ):
-                module_name = self.aggregation_workflow_modules[
+                module_name, old_params = self.aggregation_workflow_modules[
                     self.editing_workflow_index
-                ][0]
-                # Update parameters while keeping module name
-                self.aggregation_workflow_modules[
-                    self.editing_workflow_index
-                ] = (module_name, param_values)
+                ]
+                if old_params != param_values:
+                    # Update parameters while keeping module name
+                    self.aggregation_workflow_modules[
+                        self.editing_workflow_index
+                    ] = (module_name, param_values)
+                    self._log_workflow_config_event(
+                        "modules.params_changed",
+                        tab="aggregation",
+                        index=self.editing_workflow_index,
+                        module=module_name,
+                        params=param_values,
+                    )
 
     def _on_parameter_changed(self):
         """Called when a parameter textbox loses focus (editingFinished signal)."""
