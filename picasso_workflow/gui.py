@@ -9737,12 +9737,18 @@ class Window(QtWidgets.QMainWindow):
             self.results_folder_display.setText(os.path.normpath(folder))
             # Enable widgets when a folder is selected
             self._set_widgets_enabled(True)
+            logger.info(
+                f"workflow-config: loading results folder {folder}"
+            )
 
             # Search for YAML files and load file list
             self._load_yaml_file_list(folder)
 
             # Search for workflow definition and load it
             self._load_workflow_definition(folder)
+            self._log_workflow_config_event(
+                "results_folder.loaded", source=folder
+            )
         else:
             # If dialog was cancelled and no folder is selected, disable widgets
             if not self.results_folder_display.text():
@@ -9762,8 +9768,14 @@ class Window(QtWidgets.QMainWindow):
         if not folder or not os.path.isdir(folder):
             return
         self._set_widgets_enabled(True)
+        logger.info(
+            f"workflow-config: results folder dropped: {folder}"
+        )
         self._load_yaml_file_list(folder)
         self._load_workflow_definition(folder)
+        self._log_workflow_config_event(
+            "results_folder.dropped", source=folder
+        )
 
     def on_template_changed(self, template_name):
         """Load a template"""
@@ -10384,10 +10396,6 @@ class Window(QtWidgets.QMainWindow):
             # Restore the input-files mode (explicit / auto-detect / none)
             self._apply_files_mode_from_source(source_text)
 
-            self._log_workflow_config_event(
-                "modules.load_definition", source=workflow_file
-            )
-
         except Exception as e:
             logger.error(f"Error loading start_workflow.py: {e}")
             QtWidgets.QMessageBox.warning(
@@ -10417,6 +10425,19 @@ class Window(QtWidgets.QMainWindow):
             workflow_list.append((module_name, params))
             index = len(workflow_list) - 1
             list_widget.addItem(f"{index:02d}: {module_name}")
+
+        # Per-list audit event. Both _load_workflow_definition and the
+        # alt loader funnel through here, so this also covers the early
+        # return path where the alt loader is invoked.
+        self._log_workflow_config_event(
+            "modules.populate_from_definition",
+            workflow=workflow_name,
+            n_modules=len(workflow_def),
+            modules=[
+                [name, Window._yaml_safe(params)]
+                for name, params in workflow_def
+            ],
+        )
 
     def _convert_param_to_gui_format(self, param_value):
         """Convert parameter value from workflow definition to GUI format.
