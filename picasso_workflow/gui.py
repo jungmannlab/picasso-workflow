@@ -8975,44 +8975,41 @@ class Window(QtWidgets.QMainWindow):
             "tree.rename_dataset", old=old_name, new=new_name
         )
 
-    def rename_channel(self):
-        """Rename selected channel in ALL datasets with validation (no underscores)."""
-        current_tree = self._get_current_tree_widget()
-        if not current_tree:
-            return
+    def _channel_name_from_item(self, item):
+        """Return the channel name a tree item represents, by position.
 
-        selected = current_tree.selectedItems()
+        ``_populate_tree_from_data`` creates one child per entry in
+        ``tree_data["channels"]`` in that exact order, so a channel item's
+        index under its dataset parent is its index into the channels list.
+        Using the position (rather than ``item.text(1)``) is authoritative:
+        it is correct even when the cell was just edited inline and column 1
+        already holds the new, not-yet-committed name.
 
-        if not selected:
-            QtWidgets.QMessageBox.information(
-                self, "No Selection", "Please select a channel to rename."
-            )
-            return
+        Returns None if the item is not a channel row or is out of range.
+        """
+        dataset_item = item.parent()
+        if dataset_item is None:
+            return None
+        child_index = dataset_item.indexOfChild(item)
+        channels = self.tree_data["channels"]
+        if 0 <= child_index < len(channels):
+            return channels[child_index]
+        return None
 
-        # Get channel item (must have parent)
-        item = selected[0]
-        if item.parent() is None:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Invalid Selection",
-                "Please select a channel (not a dataset) to rename.",
-            )
-            return
+    def _rename_channel(self, old_name, new_name):
+        """Rename a channel across ALL datasets, with validation.
 
-        old_name = item.text(1)
+        Shared by the "Rename Channel" button and inline (double-click)
+        editing so both go through identical logic. On any validation
+        failure the tree is repopulated from ``tree_data`` (reverting an
+        inline edit) and False is returned. Returns True on success.
+        """
+        new_name = (new_name or "").strip()
 
-        # Prompt for new name
-        new_name, ok = QtWidgets.QInputDialog.getText(
-            self,
-            "Rename Channel",
-            f"Enter new name for channel '{old_name}':",
-            text=old_name,
-        )
-
-        if not ok or not new_name.strip():
-            return
-
-        new_name = new_name.strip()
+        # No-op / empty: just resync the view (reverts a blanked inline edit).
+        if not new_name or new_name == old_name:
+            self._populate_tree_from_data()
+            return False
 
         # Validate no underscores
         if "_" in new_name:
@@ -9023,14 +9020,24 @@ class Window(QtWidgets.QMainWindow):
                 "Underscores are used to separate dataset and channel names "
                 "in the {dataset}_{channel} format.",
             )
-            return
+            self._populate_tree_from_data()
+            return False
 
         # Check if already exists
-        if new_name in self.tree_data["channels"] and new_name != old_name:
+        if new_name in self.tree_data["channels"]:
             QtWidgets.QMessageBox.warning(
                 self, "Duplicate", f"Channel '{new_name}' already exists."
             )
-            return
+            self._populate_tree_from_data()
+            return False
+
+        if old_name not in self.tree_data["channels"]:
+            logger.warning(
+                f"Cannot rename channel: '{old_name}' not found in "
+                f"tree_data channels {self.tree_data['channels']}"
+            )
+            self._populate_tree_from_data()
+            return False
 
         # Update channels list
         idx = self.tree_data["channels"].index(old_name)
@@ -9048,6 +9055,53 @@ class Window(QtWidgets.QMainWindow):
         self._log_workflow_config_event(
             "tree.rename_channel", old=old_name, new=new_name
         )
+        return True
+
+    def rename_channel(self):
+        """Rename selected channel in ALL datasets with validation (no underscores)."""
+        current_tree = self._get_current_tree_widget()
+        if not current_tree:
+            return
+
+        # Use the focused item, not selectedItems()[0]: with
+        # ExtendedSelection the latter returns items in tree order, so a
+        # lingering selection on the first channel would always win.
+        item = current_tree.currentItem()
+        if item is None:
+            selected = current_tree.selectedItems()
+            item = selected[0] if selected else None
+
+        if item is None:
+            QtWidgets.QMessageBox.information(
+                self, "No Selection", "Please select a channel to rename."
+            )
+            return
+
+        # Get channel item (must have parent)
+        if item.parent() is None:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Invalid Selection",
+                "Please select a channel (not a dataset) to rename.",
+            )
+            return
+
+        old_name = self._channel_name_from_item(item)
+        if old_name is None:
+            return
+
+        # Prompt for new name
+        new_name, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Rename Channel",
+            f"Enter new name for channel '{old_name}':",
+            text=old_name,
+        )
+
+        if not ok or not new_name.strip():
+            return
+
+        self._rename_channel(old_name, new_name)
 
     def remove_tree_items(self):
         """Remove selected datasets or channels."""
@@ -9178,6 +9232,20 @@ class Window(QtWidgets.QMainWindow):
         channel_name = item.text(1)
 
         # Update data structure
+        if column == 1:  # Channel renamed inline (double-click edit)
+            # Resolve the pre-edit name by position (column 1 already holds
+            # the new text), then funnel through the same core as the
+            # "Rename Channel" button so behaviour is identical.
+            old_name = self._channel_name_from_item(item)
+            new_name = item.text(1)
+            if old_name is not None:
+                self._rename_channel(old_name, new_name)
+            else:
+                logger.debug(
+                    "Could not resolve channel for inline rename to "
+                    f"'{new_name}'"
+                )
+            return
         if column == 2:  # File Path
             file_path = item.text(2)
             self.tree_data["file_paths"][dataset_name][
