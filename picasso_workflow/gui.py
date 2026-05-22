@@ -9359,24 +9359,32 @@ class Window(QtWidgets.QMainWindow):
         if not current_tree:
             return
 
-        root = current_tree.invisibleRootItem()
+        # setForeground emits itemChanged. Without blocking, these purely
+        # cosmetic colour updates re-enter _on_tree_item_changed (e.g. the
+        # column-1 path calls _rename_channel -> _populate_tree_from_data ->
+        # clear()), deleting the items this loop is still iterating over.
+        current_tree.blockSignals(True)
+        try:
+            root = current_tree.invisibleRootItem()
 
-        for dataset_idx in range(root.childCount()):
-            dataset_item = root.child(dataset_idx)
+            for dataset_idx in range(root.childCount()):
+                dataset_item = root.child(dataset_idx)
 
-            for channel_idx in range(dataset_item.childCount()):
-                channel_item = dataset_item.child(channel_idx)
-                file_path = channel_item.text(2)
+                for channel_idx in range(dataset_item.childCount()):
+                    channel_item = dataset_item.child(channel_idx)
+                    file_path = channel_item.text(2)
 
-                # Red text if empty, black otherwise
-                color = (
-                    QtGui.QColor("red")
-                    if not file_path.strip()
-                    else QtGui.QColor("black")
-                )
+                    # Red text if empty, black otherwise
+                    color = (
+                        QtGui.QColor("red")
+                        if not file_path.strip()
+                        else QtGui.QColor("black")
+                    )
 
-                for col in range(channel_item.columnCount()):
-                    channel_item.setForeground(col, color)
+                    for col in range(channel_item.columnCount()):
+                        channel_item.setForeground(col, color)
+        finally:
+            current_tree.blockSignals(False)
 
     def _simple_to_tree(self):
         """Convert simple table to tree format using {dataset}_{channel} naming."""
