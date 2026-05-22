@@ -23,12 +23,18 @@
 set -uo pipefail
 
 cd "${PW_PROJECT_DIR:?PW_PROJECT_DIR must be set — use submit_all.sh or pass --export=ALL,PW_PROJECT_DIR=...}"
-mkdir -p test-results
+
+# When launched via submit_all.sh, PW_RUN_DIR is the shared per-run directory
+# that also holds the SLURM .log files. Fall back to test-results/ for direct
+# sbatch invocation.
+RUN_DIR="${PW_RUN_DIR:-test-results}"
+mkdir -p "$RUN_DIR"
 
 echo "Job started at: $(date)"
 echo "Running on:     $(hostname)"
 echo "Job ID:         ${SLURM_JOB_ID}"
 echo "Project dir:    $(pwd)"
+echo "Results dir:    $RUN_DIR"
 echo ""
 
 module load anaconda/3/2023.03
@@ -37,7 +43,7 @@ conda activate picasso-workflow
 
 python -m pytest \
     -m "integration and not real_data" \
-    --junit-xml="test-results/tier3_${SLURM_JOB_ID}.xml" \
+    --junit-xml="$RUN_DIR/tier3_${SLURM_JOB_ID}.xml" \
     -v
 
 echo ""
