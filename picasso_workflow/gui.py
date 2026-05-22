@@ -4335,8 +4335,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "nth_largest_cell": {
                 "type": "int",
                 "description": "If select_cell is True: Select the nth \
-                    largest cell.",
+                    largest cell by area (1 = largest, 2 = second \
+                    largest, ...).",
                 "default": 1,
+                "min": 1,
                 "required": True,
             },
             "fill_holes": {
@@ -4492,10 +4494,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "nth_largest": {
                 "type": "int",
                 "description": "Select the nth largest contiguous area in density "
-                "range. Set 0 for largest.",
+                "range (1 = largest, 2 = second largest, ...).",
                 "required": False,
-                "min": 0,
-                "default": 0,
+                "min": 1,
+                "default": 1,
             },
             "apply_to_locs": {
                 "type": "bool",

@@ -9744,8 +9744,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             kwargs = {}
             if fill_holes := parameters.get("fill_holes"):
                 kwargs["fill_holes"] = fill_holes
-            if fill_holes := parameters.get("nth_largest_cell"):
-                kwargs["nth_largest"] = fill_holes
+            if (nth := parameters.get("nth_largest_cell")) is not None:
+                # nth_largest_cell is 1-based (1 = largest); filter_mask
+                # uses a 0-based rank internally.
+                kwargs["nth_largest"] = nth - 1
             cell_mask.filter_mask(**kwargs)
         if dilate_nm := parameters.get("dilate_nm"):
             cell_mask.dilate(dilate_nm)
@@ -9848,7 +9850,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         pixelsize = self.pixelsize
-        nth_largest = parameters.get("nth_largest", 0)
+        # nth_largest is 1-based (1 = largest); converted to a 0-based
+        # rank at the component-selection step below.
+        nth_largest = parameters.get("nth_largest", 1)
         mask = outpost_modules.mask.CellMask.load(parameters["fp_mask"])
         mask_pixel_area = mask._upsample**2
         densities = mask.densities
@@ -9922,12 +9926,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         # select requested densities
         densities[(densities < min_density) | (densities > max_density)] = 0
         assert densities.shape != (0,)
-        # select nth largest connected area
+        # select nth largest connected area by area (1 = largest); mirror
+        # CellMask.filter_mask, which ranks components by pixel count.
+        # label() assigns ids in scan order, not by size, so we must sort
+        # on the counts rather than offsetting the largest label id.
         labeled_array, num_features = label(densities > 0)
-        sizes = np.bincount(labeled_array.ravel())
+        labeled_nobkg = labeled_array.ravel()
+        labeled_nobkg = labeled_nobkg[labeled_nobkg > 0]
+        feature, counts = np.unique(labeled_nobkg, return_counts=True)
         try:
-            component_index = sizes[1:].argmax() + 1 - nth_largest
-        except ValueError:
+            component_index = feature[counts.argsort()[-nth_largest]]
+        except (ValueError, IndexError):
             component_index = 1
         component_mask = (labeled_array == component_index).astype(np.int8)
         mask._binary_mask = component_mask.astype(np.bool_)
