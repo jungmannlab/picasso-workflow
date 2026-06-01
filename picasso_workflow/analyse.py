@@ -7,6 +7,7 @@ Description: This is the picasso interface of picasso-workflow
 """
 from picasso import lib, io, localize, gausslq, postprocess, clusterer
 from picasso import aim, spinna
+
 # from picasso_workflow.outpost_modules import g5m
 from picasso import g5m
 from picasso import __version__ as picassoversion
@@ -50,6 +51,7 @@ from picasso import (
     postprocess,
     spinna,
 )
+
 # from picasso_workflow.outpost_modules import g5m
 from scipy.ndimage import label
 from scipy.spatial import KDTree, distance
@@ -414,14 +416,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                             "Micro-Manager Metadata"
                         ].get(f"{cam_name}-{category}")
                         cat_vals += f"{category}: {category_value}; "
-                        
+
                         if category_value in sensitivity:
                             sensitivity = sensitivity[category_value]
                         elif str(category_value) in sensitivity:
                             sensitivity = sensitivity[str(category_value)]
                         else:
                             try:
-                                sensitivity = sensitivity.get(int(category_value), {})
+                                sensitivity = sensitivity.get(
+                                    int(category_value), {}
+                                )
                             except (ValueError, TypeError):
                                 sensitivity = {}
                     if isinstance(sensitivity, dict):
@@ -440,8 +444,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 }
                 for category in cam_config.get("Sensitivity Categories"):
                     category_key = f"{cam_name}-{category}"
-                    
-                    
+
                     category_value = self.info[0].get(category_key)
                 self.analysis_config["camera_info"] = camera_info
                 return camera_info
@@ -860,18 +863,27 @@ class AutoPicasso(util.AbstractModuleCollection):
                     # sensitivity starts being a dict, and ends as a value
                     cat_vals = ""
                     for category in cam_config.get("Sensitivity Categories"):
-                        category_value = self.info[0].get(f"{cam_name}-{category}")
-                        if category_value is None and "Micro-Manager Metadata" in self.info[0]:
-                            category_value = self.info[0]["Micro-Manager Metadata"].get(f"{cam_name}-{category}")
+                        category_value = self.info[0].get(
+                            f"{cam_name}-{category}"
+                        )
+                        if (
+                            category_value is None
+                            and "Micro-Manager Metadata" in self.info[0]
+                        ):
+                            category_value = self.info[0][
+                                "Micro-Manager Metadata"
+                            ].get(f"{cam_name}-{category}")
                         cat_vals += f"{category}: {category_value}; "
-                        
+
                         if category_value in sensitivity:
                             sensitivity = sensitivity[category_value]
                         elif str(category_value) in sensitivity:
                             sensitivity = sensitivity[str(category_value)]
                         else:
                             try:
-                                sensitivity = sensitivity.get(int(category_value), {})
+                                sensitivity = sensitivity.get(
+                                    int(category_value), {}
+                                )
                             except (ValueError, TypeError):
                                 sensitivity = {}
                     if isinstance(sensitivity, dict):
@@ -1272,13 +1284,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         # auto-detect net grad if required:
         if (autograd_pars := parameters.get("auto_netgrad")) is not None:
-            if "filename" in autograd_pars.keys() and autograd_pars["filename"]:
+            if (
+                "filename" in autograd_pars.keys()
+                and autograd_pars["filename"]
+            ):
                 autograd_pars["filename"] = os.path.join(
                     results["folder"], autograd_pars["filename"]
                 )
             else:
                 autograd_pars["filename"] = os.path.join(
-                    results["folder"], "auto_identification.png")
+                    results["folder"], "auto_identification.png"
+                )
 
             potential_pars = [
                 "box_size",
@@ -4441,7 +4457,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         min_locs = parameters["min_locs"]
         # label locs according to clusters
         self.locs = clusterer.dbscan(
-            self.locs, radius, min_samples, min_locs, pixelsize)
+            self.locs, radius, min_samples, min_locs, pixelsize
+        )
         dbscan_info = {
             "Generated by": "Picasso DBSCAN",
             "Radius": radius,
@@ -6555,8 +6572,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["folder"], "subcluster_test.png"
         )
         # g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
-        clustered_nevents, sparse_nevents = clusterer.test_subclustering(center_locs, self.info)
-        lib.plot_subclustering_check(clustered_nevents, sparse_nevents, results["fp_fig_subclustering"])
+        clustered_nevents, sparse_nevents = clusterer.test_subclustering(
+            center_locs, self.info
+        )
+        lib.plot_subclustering_check(
+            clustered_nevents, sparse_nevents, results["fp_fig_subclustering"]
+        )
 
         results["n_locs_in"] = len(self.locs)
         results["n_locs_clustered"] = len(clustered_locs)
@@ -7996,9 +8017,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # write the modified config to a copy in the results folder, so
         # the user's input is untouched and picasso's *_fitting_results
         # directory lands inside the module folder.
-        cfg_fp_used = os.path.join(
-            results["folder"], os.path.basename(cfg_fp)
-        )
+        cfg_fp_used = os.path.join(results["folder"], os.path.basename(cfg_fp))
         spinna_config.to_csv(cfg_fp_used, index=False)
         result_dir, fp_summary, fp_figs = picasso_outpost.spinna_batch(
             cfg_fp_used
@@ -9831,13 +9850,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                     fp_mask : str
                         the file path to the mask
                     min_density, max_density : float
-                        the density range to select
+                        the density range to select, in µm^(-2)
                 and optional keys:
                     nbins : int
                         the number of bins for plotting
                     nth_largest : int
                         select the nth largest area in density range.
-                        set 0 for largest.
+                        1-based: set 1 for largest.
                     apply_to_locs : bool
                         whether to apply the created mask to the locs
                     smoothe_nm : float
@@ -9867,8 +9886,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             and "max_density" in parameters.keys()
             and parameters["max_density"] > 0
         ):
-            min_density = parameters["min_density"]
-            max_density = parameters["max_density"]
+            # Parameters are given in µm^(-2) (matching the histogram
+            # axis); mask.densities is in nm^(-2), so convert (1 µm^2 =
+            # 1e6 nm^2) before comparing.
+            min_density = parameters["min_density"] * 1e-6
+            max_density = parameters["max_density"] * 1e-6
         elif std_cutoff := parameters["density_std_cutoff"]:
             median_nlocs = np.median(densities_to_plot) * mask_pixel_area
             min_nlocs = median_nlocs - std_cutoff * np.sqrt(median_nlocs)

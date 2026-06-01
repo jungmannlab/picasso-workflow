@@ -641,7 +641,10 @@ class ConfluenceReporter(AbstractModuleCollection):
 
     @module_decorator
     def identify(
-        self, i, parameters, results,
+        self,
+        i,
+        parameters,
+        results,
         parameter_text,
         result_text,
         postpone_report=False,
@@ -3695,7 +3698,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                         the number of bins for plotting
                     nth_largest : int
                         select the nth largest area in density range.
-                        set 0 for largest.
+                        1-based: set 1 for largest.
                     apply_to_locs : bool
                         whether to apply the created mask to the locs
                     smoothe_nm : float

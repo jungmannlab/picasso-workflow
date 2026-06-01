@@ -4430,7 +4430,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         the number of bins for plotting
                     nth_largest : int
                         select the nth largest area in density range.
-                        set 0 for largest.
+                        1-based: set 1 for largest.
                     apply_to_locs : bool
                         whether to apply the created mask to the locs
                     smoothe_nm : float
@@ -4459,8 +4459,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             # },
             "fp_mask": {
                 "type": "path",
-                "description": "The file path to the mask min_density, \
-                    max_density : float the density range to select",
+                "description": "The file path to the mask to refine.",
                 "required": True,
             },
             "density_std_cutoff": {
@@ -4468,22 +4467,23 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Density range in units of std/median, "
                 "symmetric around median. Alternative to max/min",
                 "min": 0,
-                "max": 1,
                 "default": 0,
                 "required": False,
             },
-            "density_min": {
+            "min_density": {
                 "type": "float",
-                "description": "Lower density cutoff."
+                "description": "Lower density cutoff in µm^(-2). "
                 "Alternative to density_std_cutoff",
                 "default": 0,
+                "min": 0,
                 "required": False,
             },
-            "density_max": {
+            "max_density": {
                 "type": "float",
-                "description": "Higher density cutoff."
+                "description": "Higher density cutoff in µm^(-2). "
                 "Alternative to density_std_cutoff",
                 "default": 0,
+                "min": 0,
                 "required": False,
             },
             "nbins": {
@@ -9815,9 +9815,7 @@ class Window(QtWidgets.QMainWindow):
             self.results_folder_display.setText(os.path.normpath(folder))
             # Enable widgets when a folder is selected
             self._set_widgets_enabled(True)
-            logger.info(
-                f"workflow-config: loading results folder {folder}"
-            )
+            logger.info(f"workflow-config: loading results folder {folder}")
 
             # Search for YAML files and load file list
             self._load_yaml_file_list(folder)
@@ -9846,9 +9844,7 @@ class Window(QtWidgets.QMainWindow):
         if not folder or not os.path.isdir(folder):
             return
         self._set_widgets_enabled(True)
-        logger.info(
-            f"workflow-config: results folder dropped: {folder}"
-        )
+        logger.info(f"workflow-config: results folder dropped: {folder}")
         self._load_yaml_file_list(folder)
         self._load_workflow_definition(folder)
         self._log_workflow_config_event(
@@ -11382,9 +11378,7 @@ class Window(QtWidgets.QMainWindow):
             if no_input_files:
                 # run the workflow exactly once with no dataset; the
                 # marker comment lets the GUI restore the mode on load.
-                src_loc_arg_line = (
-                    f"        None,  {self._NOFILES_MARKER}"
-                )
+                src_loc_arg_line = f"        None,  {self._NOFILES_MARKER}"
             else:
                 src_loc_arg_line = "        src_loc_file,"
             script_lines.extend(
@@ -11586,13 +11580,10 @@ class Window(QtWidgets.QMainWindow):
             + yaml.safe_dump(submission_summary, sort_keys=False)
         )
         logger.debug(
-            "Generated start_workflow.py content:\n" + _read_text_safe(
-                python_script_path
-            )
+            "Generated start_workflow.py content:\n"
+            + _read_text_safe(python_script_path)
         )
-        logger.debug(
-            "Generated SLURM script content:\n" + script_content
-        )
+        logger.debug("Generated SLURM script content:\n" + script_content)
         # Sidecar file inside the run folder. Best-effort: if the disk
         # write fails we have already logged the same info above.
         try:
