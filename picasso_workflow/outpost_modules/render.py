@@ -272,10 +272,27 @@ def get_group_color(locs, n_group_colors):
 
 
 def get_default_render_kwargs(channel_locs, image_px_size, cam_px_size):
-    x_min = min([locs["x"].min() for locs in channel_locs])
-    x_max = max([locs["x"].max() for locs in channel_locs])
-    y_min = min([locs["y"].min() for locs in channel_locs])
-    y_max = max([locs["y"].max() for locs in channel_locs])
+    # Compute the viewport over all channels, ignoring empty channels and
+    # non-finite coordinates. Raise ValueError if nothing renderable
+    # remains (e.g. a mask that excludes all localizations) so the caller
+    # can handle it gracefully instead of producing a NaN viewport.
+    x_mins, x_maxs, y_mins, y_maxs = [], [], [], []
+    for locs in channel_locs:
+        if len(locs) == 0:
+            continue
+        finite = np.isfinite(locs["x"]) & np.isfinite(locs["y"])
+        if not finite.any():
+            continue
+        x_mins.append(locs["x"][finite].min())
+        x_maxs.append(locs["x"][finite].max())
+        y_mins.append(locs["y"][finite].min())
+        y_maxs.append(locs["y"][finite].max())
+    if not x_mins:
+        raise ValueError(
+            "no localizations with finite coordinates to render"
+        )
+    x_min, x_max = min(x_mins), max(x_maxs)
+    y_min, y_max = min(y_mins), max(y_maxs)
 
     kwargs = {
         "oversampling": cam_px_size / image_px_size,
