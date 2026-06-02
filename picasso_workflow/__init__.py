@@ -27,13 +27,19 @@ def config_logger():
     # )
     job_id = os.getenv("SLURM_JOB_ID")  # Get the job ID from the environment
     rank_id = os.getenv("SLURM_PROCID")
-    # Anchor logs under the user's home so GUI launches (where cwd is
-    # unpredictable — Windows shortcut, macOS .app, etc.) write to a
-    # discoverable path. SLURM jobs override via SLURM_SUBMIT_DIR-aware
-    # tooling if they want job-local logs; here we still tag by job/rank.
-    log_dir = Path.home() / ".picasso_workflow" / "logs"
+    # On SLURM, put the workflow log next to the job's stdout/stderr logs
+    # (cwd/logs) so all artefacts of a run live together. For local/GUI
+    # launches (where cwd is unpredictable — Windows shortcut, macOS .app,
+    # etc.) anchor under the user's home so the log stays discoverable.
+    if job_id is not None:
+        log_dir = Path.cwd() / "logs"
+        logfile = str(log_dir / "picasso-workflow.log")
+    else:
+        log_dir = Path.home() / ".picasso_workflow" / "logs"
+        logfile = str(
+            log_dir / f"picasso-workflow-job{job_id}-rank{rank_id}.log"
+        )
     log_dir.mkdir(parents=True, exist_ok=True)
-    logfile = str(log_dir / f"picasso-workflow-job{job_id}-rank{rank_id}.log")
     # file_handler = handlers.RotatingFileHandler(
     #     logfile,
     #     maxBytes=1e6,
@@ -54,7 +60,7 @@ def config_logger():
         retention=5,
         enqueue=True,
         serialize=False,
-        level="DEBUG"
+        level="DEBUG",
     )
     logger.add(
         sys.stderr,
@@ -160,9 +166,7 @@ def load_config():
         )
         config = _deep_merge(config, site_data)
     else:
-        logger.debug(
-            f"No site-wide config.yaml at {site_config} (skipped)."
-        )
+        logger.debug(f"No site-wide config.yaml at {site_config} (skipped).")
 
     # 3. Per-user config (optional)
     user_config = Path.home() / ".config" / "picasso_workflow" / "config.yaml"
@@ -175,9 +179,7 @@ def load_config():
         )
         config = _deep_merge(config, user_data)
     else:
-        logger.debug(
-            f"No per-user config.yaml at {user_config} (skipped)."
-        )
+        logger.debug(f"No per-user config.yaml at {user_config} (skipped).")
 
     return config
 
