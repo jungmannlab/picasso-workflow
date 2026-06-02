@@ -33,12 +33,12 @@ def config_logger():
     # etc.) anchor under the user's home so the log stays discoverable.
     if job_id is not None:
         log_dir = Path.cwd() / "logs"
-        logfile = str(log_dir / "picasso-workflow.log")
-    else:
-        log_dir = Path.home() / ".picasso_workflow" / "logs"
         logfile = str(
             log_dir / f"picasso-workflow-job{job_id}-rank{rank_id}.log"
         )
+    else:
+        log_dir = Path.home() / ".picasso_workflow" / "logs"
+        logfile = str(log_dir / "picasso-workflow.log")
     log_dir.mkdir(parents=True, exist_ok=True)
     # file_handler = handlers.RotatingFileHandler(
     #     logfile,
