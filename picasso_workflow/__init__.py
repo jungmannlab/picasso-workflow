@@ -27,17 +27,27 @@ def config_logger():
     # )
     job_id = os.getenv("SLURM_JOB_ID")  # Get the job ID from the environment
     rank_id = os.getenv("SLURM_PROCID")
-    # On SLURM, put the workflow log next to the job's stdout/stderr logs
-    # (cwd/logs) so all artefacts of a run live together. For local/GUI
-    # launches (where cwd is unpredictable — Windows shortcut, macOS .app,
-    # etc.) anchor under the user's home so the log stays discoverable.
-    if job_id is not None:
+    # Log destination, in priority order:
+    #   1. PW_LOG_DIR, if set — lets the submitting tooling co-locate the
+    #      workflow log with the job's other artefacts (e.g. the SLURM
+    #      stdout/stderr in a shared per-run directory).
+    #   2. On SLURM, cwd/logs — next to the job's stdout/stderr logs.
+    #   3. Local/GUI launches (cwd is unpredictable — Windows shortcut,
+    #      macOS .app, etc.): anchor under the user's home so the log stays
+    #      discoverable.
+    pw_log_dir = os.getenv("PW_LOG_DIR")
+    if pw_log_dir:
+        log_dir = Path(pw_log_dir)
+    elif job_id is not None:
         log_dir = Path.cwd() / "logs"
+    else:
+        log_dir = Path.home() / ".picasso_workflow" / "logs"
+    # Tag the filename by job/rank on SLURM so parallel ranks don't clash.
+    if job_id is not None:
         logfile = str(
             log_dir / f"picasso-workflow-job{job_id}-rank{rank_id}.log"
         )
     else:
-        log_dir = Path.home() / ".picasso_workflow" / "logs"
         logfile = str(log_dir / "picasso-workflow.log")
     log_dir.mkdir(parents=True, exist_ok=True)
     # file_handler = handlers.RotatingFileHandler(

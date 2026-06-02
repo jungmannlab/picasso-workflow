@@ -785,6 +785,15 @@ class WorkflowRunner:
             analyse_error = copy.copy(e)
             self.confluencereporter.report_error(e, fun_name)
             # raise e
+
+        # If the analysis step crashed, self.results[key] was never
+        # written; skip the per-module success-path Confluence reporter
+        # (which would crash with KeyError and mask analyse_error) and
+        # re-raise the real cause. The error has already been posted to
+        # Confluence via report_error(...) above.
+        if analyse_error is not None:
+            raise analyse_error
+
         # logger.debug(f"RESULTS: {self.results[key]}")
         fun_cr = getattr(self.confluencereporter, fun_name)
         try:
@@ -792,8 +801,5 @@ class WorkflowRunner:
         except ConfluenceInterfaceError as e:
             logger.error(e)
             logger.error(traceback.format_exc())
-
-        if analyse_error is not None:
-            raise analyse_error
 
         return self.results[key]["success"]

@@ -312,3 +312,39 @@ class TestUtil(unittest.TestCase):
         )
         assert result == "/dst/pool/users/honsa/data/sub/file.hdf5"
         assert "\\" not in result
+
+    def test_07_get_movie_groups(self):
+        from picasso_workflow.util import get_movie_groups
+
+        paths = [
+            "movie_1.ome.tif",
+            "movie_0.ome.tif",
+            "movie_2.ome.tif",
+            "other.ome.tif",
+        ]
+        groups = get_movie_groups(paths, ".ome.tif")
+        assert set(groups.keys()) == {"movie", "other"}
+        assert groups["movie"] == [
+            "movie_0.ome.tif",
+            "movie_1.ome.tif",
+            "movie_2.ome.tif",
+        ]
+        assert groups["other"] == ["other.ome.tif"]
+
+    def test_08_find_dnapaint_raw(self):
+        import tempfile
+        from pathlib import Path
+        from picasso_workflow.metaworkflow import find_dnapaint_raw
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            temp_path = Path(tempdir)
+            (temp_path / "cond1" / "pos10").mkdir(parents=True)
+            (temp_path / "cond1" / "pos10" / "movie_0.ome.tif").touch()
+            (temp_path / "cond1" / "pos2").mkdir(parents=True)
+            (temp_path / "cond1" / "pos2" / "movie_0.ome.tif").touch()
+
+            datasets, _ = find_dnapaint_raw(tempdir)
+            keys = list(datasets.keys())
+            assert "pos2" in keys
+            assert "pos10" in keys
+            assert keys.index("pos2") < keys.index("pos10")

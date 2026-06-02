@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 import psutil
 import yaml
-from matplotlib import cm
+from matplotlib import cm, colormaps
 from memory_profiler import memory_usage
 from picasso import CONFIG as pCONFIG
 from picasso import __version__ as picassoversion
@@ -1741,6 +1741,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                         filepath to full FOV rendering
                     fp_scene_ctrmass : str
                         filepath to center of mass zoom rendering (conditional, only if ctrmass_fov_nm provided)
+                    fp_scene_tiles : list of lists of str
+                        filepaths to the 5x5 tiled renderings
         """
         pixelsize = self.pixelsize
         rcode = generate_random_code(6)
@@ -1754,34 +1756,301 @@ class AutoPicasso(util.AbstractModuleCollection):
             x_mean = np.mean(self.locs["x"])
             y_mean = np.mean(self.locs["y"])
 
+        # Check if the dataset is 3D (has a 'z' column) to prevent rotation KeyErrors in 2D
+        def check_has_z(locs):
+            if isinstance(locs, list):
+                if not locs:
+                    return False
+                locs = locs[0]
+            try:
+                return "z" in locs.dtype.names
+            except AttributeError:
+                try:
+                    return "z" in locs.columns
+                except (AttributeError, TypeError):
+                    return False
+
+        has_z = check_has_z(render_locs)
+
+        # Read colormap choice (default to magma)
+        cmap_choice = parameters.get("colormap", "magma")
+
         # render whole field of view
         fullfov_pixelsize = parameters.get("fullfov_pixelsize", pixelsize)
+
+        # Normalize localizations to a list
+        locs_list = (
+            render_locs if isinstance(render_locs, list) else [render_locs]
+        )
+
+        # Calculate full FOV boundaries in camera pixels
+        x_min = min([lcs["x"].min() for lcs in locs_list])
+        x_max = max([lcs["x"].max() for lcs in locs_list])
+        y_min = min([lcs["y"].min() for lcs in locs_list])
+        y_max = max([lcs["y"].max() for lcs in locs_list])
+
+        # Density-driven ROI selection (Alternative A)
+        selected_rois = (
+            []
+        )  # list of (x_ctr, y_ctr, tile_x_min, tile_x_max, tile_y_min, tile_y_max)
+        roi_files = []
+
+        if parameters.get("generate_active_rois", True):
+            all_x = np.concatenate([lcs["x"] for lcs in locs_list])
+            all_y = np.concatenate([lcs["y"] for lcs in locs_list])
+
+            roi_size = parameters.get("ctrmass_fov_nm", 10000.0) / pixelsize
+            if roi_size <= 0:
+                roi_size = 100.0  # fallback
+
+            # Finer grid peak finding (bin size = roi_size / 2)
+            grid_step = roi_size / 2.0
+            bin_edges_x = np.arange(x_min, x_max + grid_step, grid_step)
+            bin_edges_y = np.arange(y_min, y_max + grid_step, grid_step)
+
+            hist, x_edges, y_edges = np.histogram2d(
+                all_x, all_y, bins=[bin_edges_x, bin_edges_y]
+            )
+
+            candidates = []
+            for ix in range(hist.shape[0]):
+                for iy in range(hist.shape[1]):
+                    count = hist[ix, iy]
+                    if count > 0:
+                        center_x = (x_edges[ix] + x_edges[ix + 1]) / 2
+                        center_y = (y_edges[iy] + y_edges[iy + 1]) / 2
+                        candidates.append((count, center_x, center_y))
+
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            n_rois = parameters.get("n_active_rois")
+            if n_rois is None:
+                n_rois = 4
+            roi_centers = []
+            min_distance = roi_size  # non-overlapping
+
+            for count, cx, cy in candidates:
+                if len(roi_centers) >= n_rois:
+                    break
+
+                # Shift ROI center if it would place the ROI viewport boundary outside the image area
+                if (x_max - x_min) >= roi_size:
+                    cx = np.clip(
+                        cx, x_min + roi_size / 2.0, x_max - roi_size / 2.0
+                    )
+                else:
+                    cx = (x_min + x_max) / 2.0
+
+                if (y_max - y_min) >= roi_size:
+                    cy = np.clip(
+                        cy, y_min + roi_size / 2.0, y_max - roi_size / 2.0
+                    )
+                else:
+                    cy = (y_min + y_max) / 2.0
+
+                too_close = False
+                for sx, sy in roi_centers:
+                    dist = np.sqrt((cx - sx) ** 2 + (cy - sy) ** 2)
+                    if dist < min_distance:
+                        too_close = True
+                        break
+                if not too_close:
+                    roi_centers.append((cx, cy))
+
+            # Form ROIs and render them
+            tile_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
+            for idx, (cx, cy) in enumerate(roi_centers):
+                tile_x_min = cx - roi_size / 2
+                tile_x_max = cx + roi_size / 2
+                tile_y_min = cy - roi_size / 2
+                tile_y_max = cy + roi_size / 2
+
+                selected_rois.append(
+                    (cx, cy, tile_x_min, tile_x_max, tile_y_min, tile_y_max)
+                )
+
+                tile_kwargs = {
+                    "oversampling": pixelsize / tile_pixelsize,
+                    "viewport": [
+                        (tile_y_min, tile_x_min),
+                        (tile_y_max, tile_x_max),
+                    ],
+                    "blur_method": parameters.get("ctrmass_blur_method"),
+                    "min_blur_width": parameters.get(
+                        "ctrmass_min_blur_width", 0
+                    ),
+                    "cmap": cmap_choice,
+                }
+                if has_z and parameters.get("ctrmass_ang") is not None:
+                    tile_kwargs["ang"] = parameters.get("ctrmass_ang")
+
+                roi_fp = os.path.join(
+                    results["folder"], f"locs_active_roi_{idx + 1}_{rcode}.png"
+                )
+                render.plot_scene(
+                    render_locs,
+                    tile_pixelsize,
+                    pixelsize,
+                    fp=roi_fp,
+                    render_kwargs=tile_kwargs,
+                )
+                roi_files.append(roi_fp)
+
+        results["fp_scene_rois"] = roi_files
+
+        # Render whole field of view (overview) and draw outlines
         results["fp_scene_fullfov"] = os.path.join(
             results["folder"], f"locs_fullfov_{rcode}.png"
         )
-        render.plot_scene(
+
+        fig_overview, ax_overview = render.plot_scene(
             render_locs,
             fullfov_pixelsize,
             pixelsize,
-            fp=results["fp_scene_fullfov"],
+            fp=None,
+            render_kwargs={"cmap": cmap_choice},
         )
+
+        # Save unmarked copy of the overview image
+        results["fp_scene_fullfov_unmarked"] = os.path.join(
+            results["folder"], f"locs_fullfov_unmarked_{rcode}.png"
+        )
+        fig_overview.savefig(
+            results["fp_scene_fullfov_unmarked"],
+            bbox_inches="tight",
+            pad_inches=0,
+        )
+
+        # Draw outlines of selected ROIs if present, or Zoom-In outline if Zoom-In is displayed
+        x_mean_clipped = x_mean
+        y_mean_clipped = y_mean
+        if parameters.get("ctrmass_fov_nm"):
+            zoom_size = parameters.get("ctrmass_fov_nm") / pixelsize
+            if (x_max - x_min) >= zoom_size:
+                x_mean_clipped = np.clip(
+                    x_mean, x_min + zoom_size / 2.0, x_max - zoom_size / 2.0
+                )
+            else:
+                x_mean_clipped = (x_min + x_max) / 2.0
+
+            if (y_max - y_min) >= zoom_size:
+                y_mean_clipped = np.clip(
+                    y_mean, y_min + zoom_size / 2.0, y_max - zoom_size / 2.0
+                )
+            else:
+                y_mean_clipped = (y_min + y_max) / 2.0
+
+        if selected_rois:
+            import matplotlib.patches as patches
+            import matplotlib.pyplot as plt
+
+            for idx, (_, _, t_xmin, t_xmax, t_ymin, t_ymax) in enumerate(
+                selected_rois
+            ):
+                x_min_um = (t_xmin * pixelsize) / 1000.0
+                x_max_um = (t_xmax * pixelsize) / 1000.0
+                y_min_um = (t_ymin * pixelsize) / 1000.0
+                y_max_um = (t_ymax * pixelsize) / 1000.0
+
+                width_um = x_max_um - x_min_um
+                height_um = y_max_um - y_min_um
+
+                rect = patches.Rectangle(
+                    (x_min_um, y_min_um),
+                    width_um,
+                    height_um,
+                    linewidth=1.5,
+                    edgecolor="red",
+                    facecolor="none",
+                )
+                ax_overview.add_patch(rect)
+
+                # Add text label for each active site
+                ax_overview.text(
+                    x_min_um + 0.03 * width_um,
+                    y_min_um + 0.12 * height_um,
+                    str(idx + 1),
+                    color="red",
+                    fontsize=10,
+                    fontweight="bold",
+                    bbox=dict(
+                        facecolor="black",
+                        alpha=0.6,
+                        boxstyle="round,pad=0.2",
+                        edgecolor="none",
+                    ),
+                )
+        elif parameters.get("ctrmass_fov_nm"):
+            # Draw standard Zoom-In outline on overview image
+            import matplotlib.patches as patches
+            import matplotlib.pyplot as plt
+
+            fov_half = parameters.get("ctrmass_fov_nm") / 2
+            x_min_zoom = x_mean_clipped - fov_half / pixelsize
+            x_max_zoom = x_mean_clipped + fov_half / pixelsize
+            y_min_zoom = y_mean_clipped - fov_half / pixelsize
+            y_max_zoom = y_mean_clipped + fov_half / pixelsize
+
+            x_min_um = (x_min_zoom * pixelsize) / 1000.0
+            x_max_um = (x_max_zoom * pixelsize) / 1000.0
+            y_min_um = (y_min_zoom * pixelsize) / 1000.0
+            y_max_um = (y_max_zoom * pixelsize) / 1000.0
+
+            width_um = x_max_um - x_min_um
+            height_um = y_max_um - y_min_um
+
+            rect = patches.Rectangle(
+                (x_min_um, y_min_um),
+                width_um,
+                height_um,
+                linewidth=1.5,
+                edgecolor="red",
+                facecolor="none",
+            )
+            ax_overview.add_patch(rect)
+
+            ax_overview.text(
+                x_min_um + 0.03 * width_um,
+                y_min_um + 0.12 * height_um,
+                "Zoom-In",
+                color="red",
+                fontsize=10,
+                fontweight="bold",
+                bbox=dict(
+                    facecolor="black",
+                    alpha=0.6,
+                    boxstyle="round,pad=0.2",
+                    edgecolor="none",
+                ),
+            )
+
+        import matplotlib.pyplot as plt
+
+        fig_overview.savefig(
+            results["fp_scene_fullfov"], bbox_inches="tight", pad_inches=0
+        )
+        plt.close(fig_overview)
 
         # render zoom into the center of mass
         if parameters.get("ctrmass_fov_nm"):
             ctrmass_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
             fov_half = parameters.get("ctrmass_fov_nm") / 2
-            x_min = x_mean - fov_half / pixelsize
-            x_max = x_mean + fov_half / pixelsize
-            y_min = y_mean - fov_half / pixelsize
-            y_max = y_mean + fov_half / pixelsize
+            x_min_zoom = x_mean_clipped - fov_half / pixelsize
+            x_max_zoom = x_mean_clipped + fov_half / pixelsize
+            y_min_zoom = y_mean_clipped - fov_half / pixelsize
+            y_max_zoom = y_mean_clipped + fov_half / pixelsize
 
             render_kwargs = {
                 "oversampling": pixelsize / ctrmass_pixelsize,
-                "viewport": [(y_min, x_min), (y_max, x_max)],
+                "viewport": [
+                    (y_min_zoom, x_min_zoom),
+                    (y_max_zoom, x_max_zoom),
+                ],
                 "blur_method": parameters.get("ctrmass_blur_method"),
                 "min_blur_width": parameters.get("ctrmass_min_blur_width", 0),
-                "ang": parameters.get("ctrmass_ang"),
+                "cmap": cmap_choice,
             }
+            if has_z and parameters.get("ctrmass_ang") is not None:
+                render_kwargs["ang"] = parameters.get("ctrmass_ang")
             results["fp_scene_ctrmass"] = os.path.join(
                 results["folder"], f"locs_ctrmass_{rcode}.png"
             )
@@ -1791,9 +2060,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 pixelsize,
                 fp=results["fp_scene_ctrmass"],
                 render_kwargs=render_kwargs,
-                # x_offset=x_min * pixelsize,
-                # y_offset=y_min * pixelsize,
             )
+
         return parameters, results
 
     #    @profile_resource_usage
@@ -6716,7 +6984,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             density_results.append(density)
 
             # plot results
-            colors = cm.get_cmap("viridis", nneighbors.shape[1]).colors
+            colors = colormaps["viridis"].resampled(nneighbors.shape[1]).colors
             bins = np.arange(0, rmax_NN, step=deltar)
             nnhist_obs = np.zeros((len(bins), nneighbors.shape[1]))
             for i in range(nnhist_obs.shape[1]):
@@ -7039,7 +7307,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             # plot results
             fig, ax = plt.subplots()
-            colors = cm.get_cmap("viridis", k_max).colors
+            colors = colormaps["viridis"].resampled(k_max).colors
             bin_max = np.quantile(nneighbors[:, -1], 0.95)
             median_1stNN = np.median(nneighbors[:, 0])
             # sample bins such that there are 5 bins from 0 to middle of 1stNN
@@ -7930,12 +8198,6 @@ class AutoPicasso(util.AbstractModuleCollection):
     def spinna_batch(self, i, parameters, results):
         """Run a SPINNA batch analysis from a pre-existing config file.
 
-        The current locs file(s) are saved as .hdf5 into the module's
-        results folder. Their filepaths are written into the SPINNA
-        batch config csv (given via ``fp_spinna_batch_config``) as one
-        ``exp_data_<tag>`` column per channel, so the batch analysis
-        runs on the locs produced by this workflow.
-
         File-path columns of the config csv (``structures_filename``,
         ``exp_data_*`` and ``mask_filename_*``) may have been written
         on a different machine; they are converted to the current
@@ -7945,8 +8207,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         user's original csv is not changed -- and that copy is passed
         on to picasso's batch analysis.
 
-        The config csv must already be prepared by the user; only the
-        ``exp_data_*`` columns are filled in here. See
+        If ``use_workflow_locs`` is True, the current locs file(s) are
+        additionally saved as .hdf5 into the module's results folder
+        and their filepaths are written into the SPINNA batch config
+        csv as one ``exp_data_<tag>`` column per channel, so the batch
+        analysis runs on the locs produced by this workflow. When
+        False (the default) the ``exp_data_*`` columns from the
+        user-provided csv are used as-is (after path conversion).
+
+        The config csv must already be prepared by the user. See
         ``picasso.__main__._spinna_batch_analysis`` for the columns
         expected in the config file.
 
@@ -7960,9 +8229,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                         analysis config csv file.
                 with optional keys:
                     use_workflow_locs : bool
-                        whether to use the locs previously processed in
-                        this workflow, otherwise those specified in the
-                        csv. Default: False
+                        if True, save this workflow's current locs and
+                        inject their paths into the batch config under
+                        ``exp_data_<channel-tag>``. If False, use the
+                        ``exp_data_*`` paths from the config csv
+                        unchanged. Default: False.
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper. Keys populated here:

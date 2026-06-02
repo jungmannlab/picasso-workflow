@@ -766,12 +766,40 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
     # @unittest.skip("")
     def render(self):
         parameters = {}
-        results = {
-            "start time": "now",
-            "duration": 4.12,
-            "success": True,
-        }
-        self.cr.render(0, parameters, results)
+        import tempfile
+        import shutil
+        import os
+        temp_dir = tempfile.mkdtemp()
+        try:
+            fp_fullfov = os.path.join(temp_dir, "fullfov.png")
+            with open(fp_fullfov, "wb") as f:
+                f.write(b"PNG mock data")
+            
+            fp_ctrmass = os.path.join(temp_dir, "ctrmass.png")
+            with open(fp_ctrmass, "wb") as f:
+                f.write(b"PNG mock data")
+                
+            fp_scene_rois = []
+            for i in range(5):
+                fp_roi = os.path.join(temp_dir, f"roi_{i+1}.png")
+                with open(fp_roi, "wb") as f:
+                    f.write(b"PNG mock data")
+                fp_scene_rois.append(fp_roi)
+                
+            results = {
+                "start time": "now",
+                "duration": 4.12,
+                "success": True,
+                "fp_scene_fullfov": fp_fullfov,
+                "fp_scene_ctrmass": fp_ctrmass,
+                "fp_scene_rois": fp_scene_rois,
+            }
+            self.cr.render(0, parameters, results)
+        finally:
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception:
+                pass
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(

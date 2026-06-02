@@ -282,44 +282,38 @@ def _import_workflow_script(script_path):
     return mod
 
 
-def _has_metaworkflow_params(workflow_modules):
-    """Return True if any module parameter uses '$$' metaworkflow syntax.
+def _extract_workflow_modules(mod):
+    """Return the single-dataset module list from a discovered script.
 
-    Parameters prefixed with '$$' (e.g. ('$$map', 'filepath'),
-    ('$$get_prior_result', ...)) require InvestigationCoordinator to resolve
-    and cannot be run as standalone WorkflowRunner tests.
-    """
-    def _check(v):
-        if isinstance(v, (list, tuple)):
-            if len(v) >= 1 and isinstance(v[0], str) and v[0].startswith("$$"):
-                return True
-            return any(_check(x) for x in v)
-        if isinstance(v, dict):
-            return any(_check(x) for x in v.values())
-        return False
-
-    for _name, params in workflow_modules:
-        if isinstance(params, dict) and any(_check(v) for v in params.values()):
-            return True
-    return False
-
-
-def test_run_discovered_workflow(workflow_script, tmp_path):
-    """Run a start_workflow.py discovered under TestData.directory.
-
-    Each script found by the pytest_generate_tests hook in conftest.py becomes
-    a separate parametrized test case, identified by its parent directory name.
-
-    Module extraction order:
+    Extraction order:
       1. Module-level workflow_modules_sgl / workflow_modules
       2. get_workflow(dummy_datasets)["single_dataset_modules"]
+    Returns the list (or tuple), or None if none could be found.
+    """
+    workflow_modules = getattr(mod, "workflow_modules_sgl", None) or getattr(
+        mod, "workflow_modules", None
+    )
+    if workflow_modules is None:
+        result = _try_call_get_workflow(mod)
+        if isinstance(result, dict):
+            workflow_modules = result.get("single_dataset_modules")
+        elif isinstance(result, list):
+            workflow_modules = result
+    return workflow_modules
 
-    Scripts whose single-dataset modules use '$$' metaworkflow parameters
-    ($$map, $$get_prior_result, $$index) are skipped — those workflows require
-    InvestigationCoordinator and cannot run as standalone tests.
 
-    Confluence reporting is replaced by MagicMock so no credentials or network
-    access are needed.  Results are written to pytest's tmp_path.
+def test_validate_discovered_workflow(workflow_script):
+    """Structurally validate a start_workflow.py discovered under TestData.
+
+    Each script found by the pytest_generate_tests hook in conftest.py
+    becomes a separate parametrized case (id = parent directory name).
+
+    This is a structural check only: it imports the script and confirms it
+    defines a well-formed list of (module_name, parameters) tuples. It does
+    NOT execute the workflow -- real end-to-end runs are launched on the
+    cluster by submitting each template's run_workflow_slurm.sh (see
+    tools/cluster_tests/submit_all.sh), which runs the production workflow
+    via the coordinator in start_workflow.py.
     """
     script_path = Path(workflow_script)
 
@@ -328,50 +322,21 @@ def test_run_discovered_workflow(workflow_script, tmp_path):
     except Exception as exc:
         pytest.skip(f"Could not import {script_path.name}: {exc}")
 
-    # 1. Try module-level variable
-    workflow_modules = getattr(mod, "workflow_modules_sgl", None) or getattr(
-        mod, "workflow_modules", None
-    )
-
-    # 2. Fall back to get_workflow(dummy)
-    if workflow_modules is None:
-        result = _try_call_get_workflow(mod)
-        if isinstance(result, dict):
-            workflow_modules = result.get("single_dataset_modules")
-        elif isinstance(result, list):
-            workflow_modules = result
-
+    name = script_path.parent.name
+    workflow_modules = _extract_workflow_modules(mod)
     if workflow_modules is None:
         pytest.skip(
-            f"{script_path.parent.name}: no workflow_modules_sgl found and "
-            "get_workflow() is absent or raised"
+            f"{name}: no workflow_modules_sgl found and get_workflow() is "
+            "absent or raised"
         )
 
-    # Skip scripts that need metaworkflow ($$) parameter resolution
-    if _has_metaworkflow_params(workflow_modules):
-        pytest.skip(
-            f"{script_path.parent.name}: single-dataset modules use metaworkflow "
-            "parameters ($$map / $$get_prior_result / $$index) — requires "
-            "InvestigationCoordinator, not runnable as a standalone test"
-        )
-
-    result_dir = tmp_path / script_path.parent.name
-    result_dir.mkdir(parents=True, exist_ok=True)
-
-    with patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock), patch(
-        "picasso_workflow.workflow.ConfluenceInterface", MagicMock
-    ):
-        wr = WorkflowRunner.config_from_dicts(
-            _dummy_reporter_config(script_path.parent.name),
-            _analysis_config(str(result_dir)),
-            workflow_modules,
-        )
-        wr.run()
-
-    failed = [
-        k for k, v in wr.results.items()
-        if isinstance(v, dict) and v.get("success") is False
-    ]
-    assert not failed, (
-        f"{script_path.parent.name}: workflow modules reported failure: {failed}"
+    assert isinstance(workflow_modules, (list, tuple)) and workflow_modules, (
+        f"{name}: workflow modules is not a non-empty list"
     )
+    for entry in workflow_modules:
+        assert (
+            isinstance(entry, (list, tuple))
+            and len(entry) == 2
+            and isinstance(entry[0], str)
+            and isinstance(entry[1], dict)
+        ), f"{name}: malformed workflow module entry: {entry!r}"

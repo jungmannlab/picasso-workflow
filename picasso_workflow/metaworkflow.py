@@ -390,19 +390,11 @@ class PathParser:
 
 
 def find_dnapaint_raw(working_folder):
-    datasets = {}
-    for root, dirs, files in os.walk(working_folder):
-        for file in files:
-            match = re.search(r"_MMStack_Pos(\d+).ome.tif", file)
-            if match is not None:
-                key = os.path.split(root)[-1]
-                datasets[key] = os.path.join(root, file)
-                continue
-            match = re.search(r"_NDTiffStack.tif", file)
-            if match is not None:
-                key = os.path.split(root)[-1]
-                datasets[key] = os.path.join(root, file)
-                continue
+    from picasso_workflow import util
+    from picasso import io
+    
+    datasets = util.find_raw_movies(working_folder)
+    
     dest_file = os.path.join(working_folder, "src_loc.yaml")
     io.save_info(dest_file, [datasets])
     return datasets, dest_file
@@ -597,17 +589,17 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         self.analysis_name = os.path.split(working_folder)[-1]
 
         super().__init__(
-            analysis_name,
-            working_folder,
-            confluence_url,
-            confluence_space,
-            confluence_token,
-            confluence_username,
-            base_page,
-            dest_machine,
-            always_save,
-            profile_space,
-            profile_basepage,
+            analysis_name=analysis_name,
+            working_folder=working_folder,
+            confluence_url=confluence_url,
+            confluence_space=confluence_space,
+            confluence_token=confluence_token,
+            confluence_username=confluence_username,
+            base_page=base_page,
+            dest_machine=dest_machine,
+            always_save=always_save,
+            profile_space=profile_space,
+            profile_basepage=profile_basepage,
         )
 
     def prepare_analysis(
@@ -728,17 +720,18 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         self.analysis_name = analysis_name
 
         super().__init__(
-            analysis_name,
-            working_folder,
-            confluence_url,
-            confluence_space,
-            confluence_token,
-            confluence_username,
-            base_page,
-            dest_machine,
-            always_save,
-            profile_space,
-            profile_basepage,
+            analysis_name=analysis_name,
+            working_folder=working_folder,
+            confluence_url=confluence_url,
+            confluence_space=confluence_space,
+            confluence_token=confluence_token,
+            confluence_username=confluence_username,
+            base_page=base_page,
+            investigation_description=investigation_description,
+            dest_machine=dest_machine,
+            always_save=always_save,
+            profile_space=profile_space,
+            profile_basepage=profile_basepage,
         )
 
     def prepare_analysis(
@@ -889,18 +882,18 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         self.analysis_name = analysis_name
 
         super().__init__(
-            analysis_name,
-            working_folder,
-            confluence_url,
-            confluence_space,
-            confluence_token,
-            confluence_username,
-            base_page,
-            investigation_description,
-            dest_machine,
-            always_save,
-            profile_space,
-            profile_basepage,
+            analysis_name=analysis_name,
+            working_folder=working_folder,
+            confluence_url=confluence_url,
+            confluence_space=confluence_space,
+            confluence_token=confluence_token,
+            confluence_username=confluence_username,
+            base_page=base_page,
+            investigation_description=investigation_description,
+            dest_machine=dest_machine,
+            always_save=always_save,
+            profile_space=profile_space,
+            profile_basepage=profile_basepage,
         )
 
     def prepare_sglcell_analysis(self, get_workflow_modules):

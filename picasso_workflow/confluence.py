@@ -31,10 +31,17 @@ def module_decorator(method):
             <ac:rich-text-body>
             <ul>
             """
+
+        def _format_val(v):
+            if type(v).__module__ == "numpy" and hasattr(v, "item"):
+                try:
+                    return str(v.item())
+                except Exception:
+                    pass
+            return str(v)
+
         for k, v in parameters.items():
-            parameter_text += (
-                f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
-            )
+            parameter_text += f"<li>{html.escape(str(k))}: {html.escape(_format_val(v))}</li>"
 
         parameter_text += """
         </ul>
@@ -49,9 +56,7 @@ def module_decorator(method):
             <ul>
             """
         for k, v in results.items():
-            result_text += (
-                f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
-            )
+            result_text += f"<li>{html.escape(str(k))}: {html.escape(_format_val(v))}</li>"
 
         result_text += """
         </ul>
@@ -443,12 +448,17 @@ class ConfluenceReporter(AbstractModuleCollection):
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Analysis Hard- and Software</strong></p>
+        <ac:structured-macro ac:name="expand" ac:schema-version="1">
+        <ac:parameter ac:name="title">Parameters</ac:parameter>
+        <ac:rich-text-body>
         <ul>
         """
         for k, v in results.items():
-            text += f"<li>{k}: {v}</li>"
+            text += f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
         text += """
         </ul>
+        </ac:rich-text-body>
+        </ac:structured-macro>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         self.ci.update_page_content(
@@ -1101,6 +1111,8 @@ class ConfluenceReporter(AbstractModuleCollection):
                         filepath to full FOV rendering
                     fp_scene_ctrmass : str
                         filepath to center of mass zoom rendering (conditional, only if ctrmass_fov_nm provided)
+                    fp_scene_tiles : list of lists of str
+                        filepaths to the 5x5 tiled renderings
         """
         logger.debug("Reporting render.")
         text = f"""
@@ -1114,38 +1126,92 @@ class ConfluenceReporter(AbstractModuleCollection):
         {parameter_text}
         {result_text}
         """
-        fig_fps = []
-        titles = []
-        if fp_fig := results.get("fp_scene_fullfov"):
-            fig_fps.append(fp_fig)
-            titles.append("Localizations in whole Field of View")
-        if fp_fig := results.get("fp_scene_ctrmass"):
-            fig_fps.append(fp_fig)
-            titles.append("Localizations in Zoom-In")
 
-        if len(fig_fps) > 1:
-            fn_figs = []
-            for fp in fig_fps:
+        generate_active_rois = parameters.get("generate_active_rois", True)
+        rois = results.get("fp_scene_rois", [])
+
+        text += "<table><tr>"
+
+        # Left column: Field of View Overviews
+        text += "<td style='vertical-align: middle; text-align: center; padding-right: 20px;'>"
+        if fp_fullfov := results.get("fp_scene_fullfov"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fullfov)
+            except ConfluenceInterfaceError:
+                pass
+            fn_fullfov = os.path.split(fp_fullfov)[1]
+
+            fp_unmarked = results.get("fp_scene_fullfov_unmarked")
+            if fp_unmarked:
                 try:
-                    self.ci.upload_attachment(self.report_page_id, fp)
+                    self.ci.upload_attachment(self.report_page_id, fp_unmarked)
                 except ConfluenceInterfaceError:
                     pass
-                fn_figs.append(os.path.split(fp)[1])
+                fn_unmarked = os.path.split(fp_unmarked)[1]
 
-            text += "<table><tr>"
-            for tit in titles:
-                text += f"<td><b>{tit}</b></td>"
-            text += "</tr>"
-            text += "<tr>"
-            for fn in fn_figs:
                 text += f"""
-                    <td>
-                          <ac:image ac:height="350">
-                          <ri:attachment ri:filename="{fn}" />
-                          </ac:image>
-                    </td>"""
-            text += "</tr>"
+                    <p><b>Overview Images</b></p>
+                    <p>
+                        <ac:image ac:height="450">
+                            <ri:attachment ri:filename="{fn_unmarked}" />
+                        </ac:image>
+                        &nbsp;&nbsp;
+                        <ac:image ac:height="450">
+                            <ri:attachment ri:filename="{fn_fullfov}" />
+                        </ac:image>
+                    </p>
+                """
+            else:
+                text += f"""
+                    <p><b>Overview Image</b></p>
+                    <ac:image ac:height="450">
+                        <ri:attachment ri:filename="{fn_fullfov}" />
+                    </ac:image>
+                """
+        text += "</td>"
+
+        # Right column: Either active site images OR the Zoom-in image depending on selection
+        text += "<td style='vertical-align: middle; text-align: center;'>"
+        if generate_active_rois and rois:
+            text += "<p><b>Zoom-In Images (Density-Driven)</b></p>"
+            text += "<table style='border-collapse: collapse; border: none; margin-left: auto; margin-right: auto;'>"
+            for idx in range(0, len(rois), 2):
+                text += "<tr>"
+                for sub_idx in range(idx, min(idx + 2, len(rois))):
+                    fp_roi = rois[sub_idx]
+                    try:
+                        self.ci.upload_attachment(self.report_page_id, fp_roi)
+                    except ConfluenceInterfaceError:
+                        pass
+                    fn_roi = os.path.split(fp_roi)[1]
+                    text += f"""
+                        <td style='border: 1px solid #ddd; padding: 6px; text-align: center;'>
+                            <ac:image ac:height="200">
+                                <ri:attachment ri:filename="{fn_roi}" />
+                            </ac:image>
+                            <br/><b>Site {sub_idx + 1}</b>
+                        </td>"""
+                # If odd number of ROIs and this is the last row, add an empty cell for layout alignment
+                if len(rois) % 2 != 0 and idx + 1 >= len(rois):
+                    text += "<td style='border: none;'></td>"
+                text += "</tr>"
             text += "</table>"
+        else:
+            if fp_ctrmass := results.get("fp_scene_ctrmass"):
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp_ctrmass)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_ctrmass = os.path.split(fp_ctrmass)[1]
+                text += f"""
+                    <p><b>Zoom-In Image</b></p>
+                    <ac:image ac:height="450">
+                        <ri:attachment ri:filename="{fn_ctrmass}" />
+                    </ac:image>
+                """
+        text += "</td>"
+
+        text += "</tr></table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -4618,7 +4684,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         {result_text}"""
 
         if fp_fig := results.get("fp_fig_before"):
-            text += "<ul><table>"
+            text += "<table>"
             text += "<tr><td><b>Before Filtering</b></td>"
             text += "<td><b>After Filtering</b></td></tr>"
             text += "<tr><td>"
@@ -4642,7 +4708,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 <ac:image ac:width="350"><ri:attachment
                 ri:filename="{fp_fig}" />
                 </ac:image>"""
-            text += "</td></tr></table></ul>"
+            text += "</td></tr></table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -4716,7 +4782,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         """
 
         if fp_fig := results.get("fp_fig_before"):
-            text += "<ul><table>"
+            text += "<table>"
             text += "<tr><td><b>Before Filtering</b></td>"
             text += "<td><b>After Filtering</b></td></tr>"
             text += "<tr><td>"
@@ -4740,7 +4806,7 @@ class ConfluenceReporter(AbstractModuleCollection):
                 <ac:image ac:width="350"><ri:attachment
                 ri:filename="{fp_fig}" />
                 </ac:image>"""
-            text += "</td></tr></table></ul>"
+            text += "</td></tr></table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>

@@ -1321,12 +1321,6 @@ class AbstractModuleCollection(abc.ABC):
     def spinna_batch(self):
         """Run a SPINNA batch analysis from a pre-existing config file.
 
-        The current locs file(s) are saved as .hdf5 into the module's
-        results folder. Their filepaths are written into the SPINNA
-        batch config csv (given via ``fp_spinna_batch_config``) as one
-        ``exp_data_<tag>`` column per channel, so the batch analysis
-        runs on the locs produced by this workflow.
-
         File-path columns of the config csv (``structures_filename``,
         ``exp_data_*`` and ``mask_filename_*``) are converted to the
         current machine using the Drivepaths config. The modified
@@ -1334,8 +1328,14 @@ class AbstractModuleCollection(abc.ABC):
         -- the user's original csv is not changed -- and that copy is
         passed on to picasso's batch analysis.
 
-        The config csv must already be prepared by the user; only the
-        ``exp_data_*`` columns are filled in here. See
+        If ``use_workflow_locs`` is True, the current locs file(s) are
+        additionally saved as .hdf5 into the module's results folder
+        and their filepaths are written into the SPINNA batch config
+        csv as one ``exp_data_<tag>`` column per channel. When False
+        (the default) the ``exp_data_*`` columns from the user-provided
+        csv are used as-is (after path conversion).
+
+        The config csv must already be prepared by the user. See
         ``picasso.__main__._spinna_batch_analysis`` for the columns
         expected in the config file.
 
@@ -1347,6 +1347,11 @@ class AbstractModuleCollection(abc.ABC):
                     fp_spinna_batch_config : str
                         path to the user-prepared spinna batch
                         analysis config csv file.
+                with optional keys:
+                    use_workflow_locs : bool
+                        if True, save this workflow's current locs and
+                        inject their paths into the batch config.
+                        Default: False.
         """
         pass
 
@@ -2795,3 +2800,121 @@ def convert_filepath_for_machine(path, dest_machine=None):
     from picasso_workflow.metaworkflow import PathParser
 
     return PathParser().convert_path(path, dest_machine)
+
+
+def get_movie_groups(paths, extension):
+    """
+    Groups files based on basename and index, supporting variable extensions.
+
+    Args:
+        paths: list of filenames
+        extension: the extension to match (e.g. '.tif' or '.ome.tif')
+    Returns:
+        dict: mapping from base name to list of file paths (sorted by index)
+    """
+    import re
+
+    groups = {}
+    if not paths:
+        return groups
+
+    ext_pattern = re.escape(extension)
+    pattern = re.compile(rf"(.*?)(?:_(\d+))?{ext_pattern}$")
+
+    match_infos = []
+    for path in paths:
+        match = pattern.match(path)
+        if match:
+            base, index = match.groups()
+            match_infos.append(
+                {
+                    "path": path,
+                    "base": base,
+                    "index": int(index) if index else 0,
+                }
+            )
+
+    # Grouping logic
+    basenames = {m["base"] for m in match_infos}
+    for base in basenames:
+        group_items = [m for m in match_infos if m["base"] == base]
+        # Sort by index
+        group_items.sort(key=lambda x: x["index"])
+        groups[base] = [item["path"] for item in group_items]
+
+    return groups
+
+
+def find_raw_movies(working_folder):
+    """
+    Recursively finds raw movie files (.tif, .ome.tif, .nd2) in a folder.
+
+    Args:
+        working_folder: path to search
+    Returns:
+        dict: mapping from dataset name to path or list of paths
+    """
+    import os
+    import fnmatch
+    from pathlib import Path
+
+    datasets = {}
+
+    for root, dirs, files in os.walk(working_folder):
+        p = Path(root)
+
+        # Check what extensions exist here
+        has_nd2 = list(p.glob("*.nd2"))
+        has_ometif = list(p.glob("*.ome.tif"))
+        # .tif check needs to exclude .ome.tif to be accurate
+        has_tif = [
+            f for f in p.glob("*.tif") if not f.name.endswith(".ome.tif")
+        ]
+
+        found_types = []
+        if has_nd2:
+            found_types.append(".nd2")
+        if has_ometif:
+            found_types.append(".ome.tif")
+        if has_tif:
+            found_types.append(".tif")
+
+        if not found_types:
+            continue
+
+        # Priority: .nd2 > .ome.tif > .tif
+        ext = found_types[0]
+
+        if ext == ".nd2":
+            nd2_files = sorted(fnmatch.filter(os.listdir(root), "*.nd2"))
+            for f in nd2_files:
+                stem = Path(f).stem
+                # Use parent folder name as key if unique, otherwise include stem
+                key = p.name if p.name else stem
+                if len(nd2_files) > 1:
+                    key = f"{p.name}_{stem}"
+                datasets[key] = str(p / f)
+        else:
+            # tif or ome.tif
+            tif_files = sorted([f.name for f in p.glob(f"*{ext}")])
+            groups = get_movie_groups(tif_files, ext)
+            for base, group_paths in groups.items():
+                # Use directory name as key if it's the only group, otherwise use base
+                if len(groups) == 1:
+                    key = p.name
+                else:
+                    key = base
+
+                full_paths = [str(p / fname) for fname in group_paths]
+                datasets[key] = full_paths[0]
+
+    # Natural sort the datasets by key
+    import re
+
+    def natsort_key(s):
+        return [
+            int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)
+        ]
+
+    sorted_keys = sorted(datasets.keys(), key=natsort_key)
+    return {k: datasets[k] for k in sorted_keys}

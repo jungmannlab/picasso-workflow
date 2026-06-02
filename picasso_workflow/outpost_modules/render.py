@@ -85,7 +85,11 @@ def render_single_channel(kwargs, locs, n_group_colors=8, cmap="magma"):
         group_colors = get_group_color(locs, n_group_colors)
         locs = [locs[group_colors == _] for _ in range(n_group_colors)]
         return render_multi_channel(kwargs, locs=locs)
-    n_locs, image = render.render(locs, **kwargs)
+
+    render_args = kwargs.copy()
+    render_args.pop("cmap", None)
+    render_args.pop("n_group_colors", None)
+    n_locs, image = render.render(locs, **render_args)
 
     # adjust contrast and convert to 8 bits
     image = scale_contrast([image])[0]
@@ -150,13 +154,16 @@ def render_multi_channel(
         int(np.ceil(kwargs["oversampling"] * (y_max - y_min))),
     )
     # if single channel is rendered
+    render_args = kwargs.copy()
+    render_args.pop("cmap", None)
+    render_args.pop("n_group_colors", None)
     if len(locs) == 1:
-        renderings = [render.render(_, **kwargs) for _ in locs]
+        renderings = [render.render(_, **render_args) for _ in locs]
     else:
         renderings = [
-            render.render(_, **kwargs) for i, _ in enumerate(locs)
+            render.render(_, **render_args) for i, _ in enumerate(locs)
         ]  # renders only channels that are checked in dataset dialog
-    # renderings = [render.render(_, **kwargs) for _ in locs]
+    # renderings = [render.render(_, **render_args) for _ in locs]
     # n_locs = sum([_[0] for _ in renderings])
     image = np.array([_[1] for _ in renderings])
 
@@ -224,7 +231,7 @@ def scale_contrast(images):
                 if _.max() != 0  # the maximum value in image is 0.0
             ]
         )
-        / 4
+        / 40
     )
     # upper = INITIAL_REL_MAXIMUM * max_
 
@@ -354,17 +361,15 @@ def plot_scene(
     ax.imshow(
         bgra,
         aspect="equal",
-        origin="lower",
+        origin="upper",
         extent=[
             x_offset / 1000,
             (bgra.shape[1] * image_px_size + x_offset) / 1000,
-            y_offset / 1000,
             (bgra.shape[0] * image_px_size + y_offset) / 1000,
+            y_offset / 1000,
         ],
     )
-    ax.set_xlabel("x [µm]")
-    ax.set_ylabel("y [µm]")
-    ax.set_title(title)
+    ax.axis("off")
     if fp is not None:
-        fig.savefig(fp)
+        fig.savefig(fp, bbox_inches="tight", pad_inches=0)
     return fig, ax
