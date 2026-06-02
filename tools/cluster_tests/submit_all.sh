@@ -124,6 +124,33 @@ JID3=$(sbatch "${COMMON[@]}" \
     "$SCRIPT_DIR/tier4.sbatch")
 echo "Submitted Tier 4  (real data):          job $JID3  (depends on $JID2)"
 
+# ---------------------------------------------------------------------------
+# Template workflow runs: submit each discovered run_workflow_slurm.sh as a
+# real end-to-end workflow job. These are self-contained SBATCH scripts (one
+# per template folder) that cd into their folder and run the production
+# workflow via start_workflow.py; their stdout/stderr and the picasso-workflow
+# log land in <template>/logs/ (per the script's own #SBATCH --output and the
+# cwd/logs anchoring in config_logger).
+#
+# A template is opted in simply by containing a run_workflow_slurm.sh under
+# PW_TEST_DATA_DIR. Gated on Tier 3 passing, like Tier 4.
+# ---------------------------------------------------------------------------
+TEMPLATE_JOBS=()
+if [[ -n "${PW_TEST_DATA_DIR:-}" && -d "${PW_TEST_DATA_DIR:-}" ]]; then
+    while IFS= read -r _script; do
+        [[ -z "$_script" ]] && continue
+        _tdir="$(cd "$(dirname "$_script")" && pwd)"
+        _jid=$(sbatch --parsable --dependency=afterok:"$JID2" "$_script")
+        TEMPLATE_JOBS+=("${_jid}|${_tdir}")
+        echo "Submitted template run:                 job $_jid  ($_tdir)"
+    done < <(
+        find "$PW_TEST_DATA_DIR" -type f -name run_workflow_slurm.sh | sort
+    )
+fi
+if [[ ${#TEMPLATE_JOBS[@]} -eq 0 ]]; then
+    echo "Template runs:                          none found under PW_TEST_DATA_DIR"
+fi
+
 # Write a manifest so the run directory is self-describing for later analysis.
 {
     echo "run_id:        $RUN_ID"
@@ -136,9 +163,21 @@ echo "Submitted Tier 4  (real data):          job $JID3  (depends on $JID2)"
     echo "tier1_2_job:   $JID1"
     echo "tier3_job:     $JID2"
     echo "tier4_job:     $JID3"
+    if [[ ${#TEMPLATE_JOBS[@]} -gt 0 ]]; then
+        echo "template_jobs:"
+        for _tj in "${TEMPLATE_JOBS[@]}"; do
+            echo "  ${_tj%%|*} -> ${_tj#*|}  (logs in <template>/logs/)"
+        done
+    fi
 } > "$RUN_DIR/run_info.txt"
 
+# Assemble the full job-id list (tiers + template runs) for monitoring.
+ALL_JIDS="$JID1,$JID2,$JID3"
+for _tj in ${TEMPLATE_JOBS[@]+"${TEMPLATE_JOBS[@]}"}; do
+    ALL_JIDS+=",${_tj%%|*}"
+done
+
 echo ""
-echo "Monitor:  squeue -j $JID1,$JID2,$JID3"
+echo "Monitor:  squeue -j $ALL_JIDS"
 echo "Tail log: tail -f $RUN_DIR/tier1_2_${JID1}.log"
 echo "Results:  $RUN_DIR  (or test-results/latest)"
