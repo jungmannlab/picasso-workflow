@@ -286,8 +286,10 @@ def _has_metaworkflow_params(workflow_modules):
     """Return True if any module parameter uses '$$' metaworkflow syntax.
 
     Parameters prefixed with '$$' (e.g. ('$$map', 'filepath'),
-    ('$$get_prior_result', ...)) require InvestigationCoordinator to resolve
-    and cannot be run as standalone WorkflowRunner tests.
+    ('$$get_prior_result', ...)) are resolved at the aggregation level by
+    ParameterTiler, which tiles the single-dataset modules across a datasets
+    dict.  Such workflows are run through their production coordinator (see
+    _run_via_coordinator), not a plain WorkflowRunner.
     """
     def _check(v):
         if isinstance(v, (list, tuple)):
@@ -304,7 +306,180 @@ def _has_metaworkflow_params(workflow_modules):
     return False
 
 
-def test_run_discovered_workflow(workflow_script, tmp_path):
+def _is_aggregation_workflow(mod):
+    """Return True if the template is a multi-target aggregation workflow.
+
+    Detected by get_workflow(dummy) returning a dict with a non-empty
+    ``aggregation_modules`` list. Single-target templates expose only
+    module-level single-dataset modules and have no aggregation stage.
+    """
+    result = _try_call_get_workflow(mod)
+    return isinstance(result, dict) and bool(result.get("aggregation_modules"))
+
+
+def _resolve_src_loc(mod, template_dir):
+    """Return the absolute path to the template's src_loc sidecar, or None.
+
+    The script's module-level ``src_loc`` (e.g. ``"raw_locs_list.yaml"``)
+    is resolved relative to the template directory inside PW_TEST_DATA_DIR.
+    """
+    src_loc = getattr(mod, "src_loc", None)
+    if isinstance(src_loc, str) and src_loc:
+        p = Path(src_loc)
+        if not p.is_absolute():
+            p = template_dir / p
+        if p.is_file():
+            return p
+    return None
+
+
+def _collect_failed_modules(runners, is_aggregation):
+    """Return module keys that reported success is False across runners.
+
+    Single-workflow runners expose ``results`` (one dict of modules);
+    aggregation runners expose ``all_results`` with the shape
+    ``{"single_dataset": [ {mod: res}, ... ], "aggregation": {...}}``.
+    """
+    def _scan(results, prefix, out):
+        if not isinstance(results, dict):
+            return
+        for k, v in results.items():
+            if isinstance(v, dict) and v.get("success") is False:
+                out.append(f"{prefix}{k}")
+
+    failed = []
+    for idx, runner in enumerate(runners):
+        if is_aggregation:
+            all_results = getattr(runner, "all_results", {}) or {}
+            for i, tile in enumerate(all_results.get("single_dataset") or []):
+                _scan(tile, f"awr[{idx}].single_dataset[{i}].", failed)
+            _scan(all_results.get("aggregation"), f"awr[{idx}].agg.", failed)
+        else:
+            _scan(getattr(runner, "results", {}), f"wr[{idx}].", failed)
+    return failed
+
+
+def _run_via_coordinator(script_path, mod, workflow_modules, tmp_path,
+                         monkeypatch):
+    """Run a '$$'-using template through its production coordinator.
+
+    Single-target templates are driven by SingleWorkflowCoordinator and
+    aggregation templates by AggregationWorkflowCoordinator — the same
+    entry points production uses, so the real discovery → tiling → run
+    path is exercised and the $$ commands are resolved by the runner.
+
+    Test-only adaptations:
+      * outputs go to tmp_path (working_folder), keeping PW_TEST_DATA_DIR
+        clean; datasets are still read from the template directory;
+      * Confluence is mocked (no credentials / network);
+      * ON_CLUSTER is forced False so the coordinator uses rank 0 / size 1
+        instead of reading SLURM_PROCID/NTASKS (unset when pytest runs in
+        a batch job without srun);
+      * the coordinator's run_wr / run_awr are wrapped to capture the
+        runners so per-module success can be asserted.
+
+    Returns (captured_runners, is_aggregation).
+    """
+    from picasso import io as picasso_io
+    from picasso_workflow import metaworkflow
+    from picasso_workflow.metaworkflow import (
+        SingleWorkflowCoordinator,
+        AggregationWorkflowCoordinator,
+    )
+    from picasso_workflow.util import find_raw_movies
+
+    name = script_path.parent.name
+    template_dir = Path(script_path).parent
+    working_folder = tmp_path / name
+    working_folder.mkdir(parents=True, exist_ok=True)
+
+    # Force single-process mode (see docstring).
+    monkeypatch.setattr(metaworkflow, "ON_CLUSTER", False, raising=False)
+
+    captured = []
+    conf = dict(
+        confluence_url="http://mock-confluence",
+        confluence_space="MOCK",
+        confluence_token="mock-token",
+        base_page="mock-base",
+    )
+    is_aggregation = _is_aggregation_workflow(mod)
+
+    with patch(
+        "picasso_workflow.confluence.ConfluenceInterface", MagicMock
+    ), patch(
+        "picasso_workflow.workflow.ConfluenceReporter", MagicMock
+    ), patch(
+        "picasso_workflow.workflow.ConfluenceInterface", MagicMock
+    ):
+        if is_aggregation:
+            src_loc_file = _resolve_src_loc(mod, template_dir)
+            if src_loc_file is None:
+                pytest.skip(
+                    f"{name}: aggregation template but no src_loc sidecar "
+                    "found in the template directory"
+                )
+            # Generate the module lists from the first dataset unit. The
+            # coordinator itself tiles over every unit in the sidecar.
+            units = picasso_io.load_info(str(src_loc_file))
+            unit0 = units[0]
+            if "#tags" in unit0:
+                datasets = unit0
+            else:
+                datasets = {
+                    "filepath": list(unit0.values()),
+                    "#tags": list(unit0.keys()),
+                }
+            awf = mod.get_workflow(datasets)
+
+            orig_run_awr = AggregationWorkflowCoordinator.run_awr
+
+            def _cap_run_awr(self, awr, report_name):
+                captured.append(awr)
+                return orig_run_awr(self, awr, report_name)
+
+            monkeypatch.setattr(
+                AggregationWorkflowCoordinator, "run_awr", _cap_run_awr
+            )
+            coord = AggregationWorkflowCoordinator(
+                str(src_loc_file), name, str(working_folder), **conf
+            )
+            coord.run_analysis(
+                awf["single_dataset_modules"], awf["aggregation_modules"]
+            )
+        else:
+            src_loc_file = _resolve_src_loc(mod, template_dir)
+            if src_loc_file is None:
+                # SglWfl-style: discover raw movies under the template dir
+                # and write a src_loc yaml into tmp_path (not the data dir).
+                found = find_raw_movies(str(template_dir))
+                if not found:
+                    pytest.skip(
+                        f"{name}: single-workflow template but no src_loc "
+                        "sidecar and no raw movies found under the template "
+                        "directory"
+                    )
+                src_loc_file = working_folder / "src_loc.yaml"
+                picasso_io.save_info(str(src_loc_file), [found])
+
+            orig_run_wr = SingleWorkflowCoordinator.run_wr
+
+            def _cap_run_wr(self, wr, dataset_name):
+                captured.append(wr)
+                return orig_run_wr(self, wr, dataset_name)
+
+            monkeypatch.setattr(
+                SingleWorkflowCoordinator, "run_wr", _cap_run_wr
+            )
+            coord = SingleWorkflowCoordinator(
+                str(src_loc_file), name, str(working_folder), **conf
+            )
+            coord.run_analysis(workflow_modules)
+
+    return captured, is_aggregation
+
+
+def test_run_discovered_workflow(workflow_script, tmp_path, monkeypatch):
     """Run a start_workflow.py discovered under TestData.directory.
 
     Each script found by the pytest_generate_tests hook in conftest.py becomes
@@ -315,8 +490,12 @@ def test_run_discovered_workflow(workflow_script, tmp_path):
       2. get_workflow(dummy_datasets)["single_dataset_modules"]
 
     Scripts whose single-dataset modules use '$$' metaworkflow parameters
-    ($$map, $$get_prior_result, $$index) are skipped — those workflows require
-    InvestigationCoordinator and cannot run as standalone tests.
+    ($$map, $$get_prior_result, $$index) are run through their production
+    coordinator (SingleWorkflowCoordinator for single-target templates,
+    AggregationWorkflowCoordinator for aggregation templates), which sources
+    datasets from the template's sidecar and resolves the $$ commands (see
+    _run_via_coordinator). They are skipped only when no dataset source can
+    be located.
 
     Confluence reporting is replaced by MagicMock so no credentials or network
     access are needed.  Results are written to pytest's tmp_path.
@@ -347,16 +526,22 @@ def test_run_discovered_workflow(workflow_script, tmp_path):
             "get_workflow() is absent or raised"
         )
 
-    # Skip scripts that need metaworkflow ($$) parameter resolution
-    if _has_metaworkflow_params(workflow_modules):
-        pytest.skip(
-            f"{script_path.parent.name}: single-dataset modules use metaworkflow "
-            "parameters ($$map / $$get_prior_result / $$index) — requires "
-            "InvestigationCoordinator, not runnable as a standalone test"
-        )
-
     result_dir = tmp_path / script_path.parent.name
     result_dir.mkdir(parents=True, exist_ok=True)
+
+    # Scripts that use metaworkflow ($$) parameters are run through their
+    # production coordinator, which tiles the single-dataset modules across
+    # the discovered datasets and resolves the $$ commands.
+    if _has_metaworkflow_params(workflow_modules):
+        runners, is_aggregation = _run_via_coordinator(
+            script_path, mod, workflow_modules, tmp_path, monkeypatch
+        )
+        failed = _collect_failed_modules(runners, is_aggregation)
+        assert not failed, (
+            f"{script_path.parent.name}: workflow modules reported "
+            f"failure: {failed}"
+        )
+        return
 
     with patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock), patch(
         "picasso_workflow.workflow.ConfluenceInterface", MagicMock
