@@ -24,9 +24,9 @@ set -uo pipefail
 
 cd "${PW_PROJECT_DIR:?PW_PROJECT_DIR must be set — use submit_all.sh or pass --export=ALL,PW_PROJECT_DIR=...}"
 
-# When launched via submit_all.sh, PW_RUN_DIR is the shared per-run directory
-# that also holds the SLURM .log files. Fall back to test-results/ for direct
-# sbatch invocation.
+# When launched via submit_all.sh, PW_RUN_DIR is the shared per-run
+# directory that also holds the SLURM .log files and the workflow loguru
+# log. Fall back to test-results/ for direct sbatch invocation.
 RUN_DIR="${PW_RUN_DIR:-test-results}"
 mkdir -p "$RUN_DIR"
 

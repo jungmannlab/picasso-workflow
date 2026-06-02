@@ -14,13 +14,15 @@
 # The project directory is inferred automatically from the location of this
 # script, so the script can be called from any directory.
 #
-# All artefacts from a single invocation land together in one per-run
+# All artefacts of a single invocation are gathered in one per-run
 # directory:
 #
 #   <project>/test-results/<timestamp>_<branch>_<sha>/
-#       run_info.txt          run metadata (branch, sha, job IDs, data dir)
-#       tier<N>_<jobid>.log   plain SLURM log (stdout+stderr) per tier
-#       tier<N>_<jobid>.xml   JUnit XML report per tier
+#       run_info.txt                       run metadata
+#       tier<N>_<jobid>.log                SLURM stdout+stderr per tier
+#       tier<N>_<jobid>.xml                JUnit XML report per tier
+#       picasso-workflow-job<jobid>-rank<rank>.log
+#                                          the picasso-workflow loguru log
 #
 # A <project>/test-results/latest symlink always points at the most recent
 # run directory, so downstream analysis can just read test-results/latest/.
@@ -80,12 +82,14 @@ fi
 echo ""
 
 # Common sbatch flags passed to every job. PW_RUN_DIR tells each sbatch
-# script where to write its JUnit XML; the per-tier --output/--error flags
-# (added below) place the SLURM logs in the same directory.
+# script where to write its JUnit XML; PW_LOG_DIR redirects the
+# picasso-workflow loguru log into the same per-run directory; and the
+# per-tier --output/--error flags (added below) place the SLURM logs there
+# too. All three therefore land together in $RUN_DIR.
 COMMON=(
     --parsable
     --chdir="$PROJECT_DIR"
-    --export="ALL,PW_PROJECT_DIR=$PROJECT_DIR,PW_RUN_DIR=$RUN_DIR"
+    --export="ALL,PW_PROJECT_DIR=$PROJECT_DIR,PW_RUN_DIR=$RUN_DIR,PW_LOG_DIR=$RUN_DIR"
 )
 
 # ---------------------------------------------------------------------------
