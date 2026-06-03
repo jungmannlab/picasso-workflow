@@ -12232,9 +12232,16 @@ class AutoPicasso(util.AbstractModuleCollection):
             if isinstance(pair_distance, list)
             else [pair_distance]
         )
+        # Only the two fitted species (target, reference) may appear in
+        # label_unc: fit_le passes the whole dict through to StructureMixer,
+        # and any extra channel key keeps its list value (a search-space
+        # list) which StructureMixer rejects ("must be positive numbers").
+        # Values are wrapped in lists (per-target label-uncertainty search
+        # space expected by fit_le / compare_models).
+        lu = parameters["labeling_uncertainty"]
         label_unc = {
-            k: (v if isinstance(v, list) else [v])
-            for k, v in parameters["labeling_uncertainty"].items()
+            tag: (lu[tag] if isinstance(lu[tag], list) else [lu[tag]])
+            for tag in (target, reference)
         }
 
         # spinna.fit_le builds the monomer/heterodimer structures, forces
