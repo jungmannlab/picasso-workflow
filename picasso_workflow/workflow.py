@@ -7,6 +7,7 @@ Description: This module implements the class ReportingAnalyzer,
     which orchestrates picasso analysis and confluence reporting
 """
 import os
+import platform
 from datetime import datetime
 # import logging
 from loguru import logger
@@ -179,9 +180,19 @@ class AggregationWorkflowRunner:
             )
         else:
             report_name = reporter_config["report_name"]
+        # analysis result directory; computed before the Confluence page so
+        # its location can be documented on the overview page.
+        instance.result_folder = os.path.join(
+            analysis_config["result_location"], report_name
+        )
         if confluence_config := reporter_config.get("ConfluenceReporter"):
             instance._initialize_confluence_interface(**confluence_config)
-            body_text = """<b>Aggregation analysis reslts</b>"""
+            body_text = instance._aggregation_overview_body(
+                report_name,
+                instance.result_folder,
+                instance.parameter_tiler.ntiles,
+                aggregation_workflow,
+            )
             try:
                 instance.ci.create_page(report_name, body_text)
             except ConfluenceInterfaceError:
@@ -197,9 +208,6 @@ class AggregationWorkflowRunner:
         instance.analysis_config = analysis_config
         # reporter_config['report_name'] = report_name
         # create analysis result directory
-        instance.result_folder = os.path.join(
-            analysis_config["result_location"], report_name
-        )
         try:
             os.mkdir(instance.result_folder)
         except FileExistsError:
@@ -207,6 +215,153 @@ class AggregationWorkflowRunner:
 
         instance.aggregation_workflow = aggregation_workflow
         return instance
+
+    @staticmethod
+    def _yaml_safe(value):
+        """Recursively convert tuples to lists so the structure can be
+        serialized with yaml.safe_dump (which has no Python-tuple
+        representer). Module parameters often hold command tuples like
+        ``('$map', 'filepath')`` that would otherwise raise.
+        """
+        if isinstance(value, dict):
+            return {
+                k: AggregationWorkflowRunner._yaml_safe(v)
+                for k, v in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [AggregationWorkflowRunner._yaml_safe(v) for v in value]
+        return value
+
+    @staticmethod
+    def _config_snapshot_macro(aggregation_workflow):
+        """Build a collapsible Confluence 'expand' macro containing the
+        full workflow configuration (tile parameters + single-dataset and
+        aggregation modules) as a YAML code block, for reproducibility.
+
+        Returns an empty string if the config cannot be serialized, so a
+        snapshot problem never prevents the overview page from being made.
+        """
+        try:
+            yaml_text = yaml.safe_dump(
+                AggregationWorkflowRunner._yaml_safe(aggregation_workflow),
+                sort_keys=False,
+                default_flow_style=False,
+                allow_unicode=True,
+            )
+        except Exception as e:  # never block page creation on a dump issue
+            logger.debug(f"Could not serialize workflow config: {e}")
+            return ""
+        # CDATA cannot contain the literal "]]>"; split it if present.
+        yaml_text = yaml_text.replace("]]>", "]]]]><![CDATA[>")
+        return (
+            '<ac:structured-macro ac:name="expand" ac:schema-version="1">'
+            '<ac:parameter ac:name="title">'
+            "Workflow configuration (YAML snapshot)"
+            "</ac:parameter>"
+            "<ac:rich-text-body>"
+            '<ac:structured-macro ac:name="code" ac:schema-version="1">'
+            '<ac:parameter ac:name="language">yaml</ac:parameter>'
+            "<ac:plain-text-body>"
+            f"<![CDATA[{yaml_text}]]>"
+            "</ac:plain-text-body>"
+            "</ac:structured-macro>"
+            "</ac:rich-text-body>"
+            "</ac:structured-macro>"
+        )
+
+    @staticmethod
+    def _aggregation_overview_body(
+        report_name, result_folder, ntiles, aggregation_workflow=None
+    ):
+        """Build the HTML body for the aggregation overview (root) page.
+
+        Documents where the run lives (results/script folder and log
+        folder), the SLURM job it ran under, software versions and basic
+        run metadata, plus a collapsible YAML snapshot of the full workflow
+        configuration, so the Confluence page is self-describing. The child
+        pages (one per single dataset, plus the aggregation) appear in the
+        page tree below this one.
+
+        Args:
+            report_name : str
+                the (postfixed) report / page title
+            result_folder : str
+                full path to the run's results & script folder
+            ntiles : int
+                number of single datasets aggregated
+            aggregation_workflow : dict, optional
+                the full workflow definition (tile parameters + modules);
+                rendered as a collapsible YAML snapshot when provided
+        Returns:
+            str : Confluence storage-format HTML body
+        """
+        env = os.environ
+
+        def esc(s):
+            return (
+                str(s)
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            )
+
+        try:
+            from picasso_workflow import __version__ as pw_version
+        except Exception:
+            pw_version = "unknown"
+        try:
+            from picasso import __version__ as picasso_version
+        except Exception:
+            picasso_version = "unknown"
+
+        gpus = (
+            env.get("SLURM_GPUS_ON_NODE")
+            or env.get("SLURM_JOB_GPUS")
+            or env.get("CUDA_VISIBLE_DEVICES")
+            or "none"
+        )
+        rows = [
+            ("Run timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            ("# single datasets aggregated", ntiles),
+            ("Results / script folder", result_folder),
+            ("SLURM log folder", os.path.join(result_folder, "logs")),
+            ("SLURM job ID", env.get("SLURM_JOB_ID", "N/A (not a SLURM job)")),
+            ("SLURM job name", env.get("SLURM_JOB_NAME", "N/A")),
+            ("SLURM partition", env.get("SLURM_JOB_PARTITION", "N/A")),
+            (
+                "SLURM node(s)",
+                env.get(
+                    "SLURM_JOB_NODELIST",
+                    env.get("SLURMD_NODENAME", "N/A"),
+                ),
+            ),
+            ("SLURM submit dir", env.get("SLURM_SUBMIT_DIR", "N/A")),
+            ("CPUs per task", env.get("SLURM_CPUS_PER_TASK", "N/A")),
+            ("GPUs", gpus),
+            ("Host", platform.node()),
+            ("picasso-workflow version", pw_version),
+            ("picasso version", picasso_version),
+        ]
+        table_rows = "".join(
+            f"<tr><th>{esc(k)}</th><td>{esc(v)}</td></tr>" for k, v in rows
+        )
+        config_snapshot = ""
+        if aggregation_workflow is not None:
+            config_snapshot = (
+                AggregationWorkflowRunner._config_snapshot_macro(
+                    aggregation_workflow
+                )
+            )
+        body = (
+            "<h1>Aggregation analysis results</h1>"
+            f"<p><strong>{esc(report_name)}</strong></p>"
+            "<p>Overview page of an aggregation run. The child pages below "
+            "contain the individual single-dataset workflows and their "
+            "aggregation.</p>"
+            f"<table><tbody>{table_rows}</tbody></table>"
+            f"{config_snapshot}"
+        )
+        return body
 
     @classmethod
     def _check_previous_runner(cls, folder, report_name):
