@@ -1986,6 +1986,72 @@ def single_spinna_run(
     # print(f"Results saved to {save_filename}_fit_summary.txt")
 
     # plot and save the NND plots
+    fp_fig = plot_spinna_nnd(
+        mixer=mixer,
+        targets=targets,
+        exp_data=exp_data,
+        opt_props=opt_props,
+        n_simulated=n_simulated,
+        sim_repeats=sim_repeats,
+        NND_bin=NND_bin,
+        NND_maxdist=NND_maxdist,
+        nn_plotted=nn_plotted,
+        save_filename=save_filename,
+        result_dir=result_dir,
+    )
+
+    return results, fp_fig
+
+
+def plot_spinna_nnd(
+    mixer,
+    targets,
+    exp_data,
+    opt_props,
+    n_simulated,
+    sim_repeats,
+    NND_bin,
+    NND_maxdist,
+    nn_plotted,
+    save_filename,
+    result_dir,
+):
+    """Plot and save the simulated-vs-experimental nearest-neighbor-distance
+    (NND) histograms for a fitted SPINNA mixer.
+
+    Extracted from single_spinna_run so it can be reused directly with the
+    StructureMixer and proportions returned by spinna.fit_le.
+
+    Args:
+        mixer : spinna.StructureMixer
+            the fitted mixer
+        targets : list of str
+            molecular target names; figures are produced for each target
+            pair (duplicated), in the order given by
+            mixer.get_neighbor_idx(duplicate=True)
+        exp_data : dict
+            experimental coordinates per target
+        opt_props : np.ndarray or tuple
+            fitted structure proportions (tuple if bootstrapped; mean used)
+        n_simulated : dict
+            number of simulated molecules per target
+        sim_repeats : int
+            number of simulation repeats
+        NND_bin : float
+            histogram bin size (nm)
+        NND_maxdist : float
+            maximum distance shown (nm)
+        nn_plotted : int
+            number of nearest neighbors to plot
+        save_filename : str
+            base filename (without extension) for saved figures
+        result_dir : str
+            directory the returned figure paths are anchored to
+
+    Returns:
+        fp_fig : list of str
+            filepaths of the saved NND .png figures
+    """
     nn_counts = {}
     for i, t1 in enumerate(targets):
         for t2 in targets[i:]:
@@ -2044,7 +2110,7 @@ def single_spinna_run(
             os.path.join(result_dir, f"{save_filename}_NND_{t1}_{t2}.png")
         )
 
-    return results, fp_fig
+    return fp_fig
 
 
 def load_structures_from_dict(structure_dict):

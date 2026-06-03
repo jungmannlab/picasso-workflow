@@ -60,7 +60,7 @@ def main() -> None:
 
         # Best-effort Qt dialog so the user sees something on screen.
         try:
-            from PyQt5 import QtWidgets
+            from PyQt6 import QtWidgets
 
             _app = QtWidgets.QApplication.instance()
             if _app is None:

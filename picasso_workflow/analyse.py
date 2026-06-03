@@ -12036,29 +12036,6 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    def create_le_structures(self, target, reference, pair_distance):
-        # target monomer
-        structures = self._create_spinna_structure(
-            [target], [[1]], pair_distance
-        )
-        # reference monomer
-        structures += self._create_spinna_structure(
-            [reference], [[1]], pair_distance
-        )
-        # heterodimer
-        struct = {
-            "Molecular targets": [target, reference],
-            "Structure title": f"{target}-{reference}-heterodimer",
-            f"{target}_x": [-pair_distance / 2],
-            f"{target}_y": [0],
-            f"{target}_z": [0],
-            f"{reference}_x": [pair_distance / 2],
-            f"{reference}_y": [0],
-            f"{reference}_z": [0],
-        }
-        structures.append(struct)
-        return structures
-
     #    @profile_resource_usage
     @module_decorator
     def labeling_efficiency_analysis(self, i, parameters, results):
@@ -12156,10 +12133,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters["nn_nth"] = 2
         target = parameters["target_name"]
         reference = parameters["reference_name"]
-        labeling_efficiency = {
-            target: float(1.0),
-            reference: float(1.0),
-        }
+        # spinna.fit_le forces LE=100% internally during the fit, so we no
+        # longer pass an explicit labeling_efficiency dict here.
 
         pair_distance = parameters["pair_distance"]
 
@@ -12171,18 +12146,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         # props = {}
         dimensionality = 2
         pixelsize = self.pixelsize
-        width = max([locs["x"].max() for locs in self.channel_locs]) - min(
-            [locs["x"].min() for locs in self.channel_locs]
-        )
-        height = max([locs["y"].max() for locs in self.channel_locs]) - min(
-            [locs["y"].min() for locs in self.channel_locs]
-        )
-        try:
-            depth = max([locs["z"].max() for locs in self.channel_locs]) - min(
-                [locs["z"].min() for locs in self.channel_locs]
-            )
-        except (ValueError, KeyError):
-            depth = None
 
         if isinstance(parameters["density"], list):
             density = {
@@ -12232,73 +12195,48 @@ class AutoPicasso(util.AbstractModuleCollection):
             for tag in [target, reference]
         }
 
-        if isinstance(pair_distance, list):
-            all_test_structures = []
-            for test_distance in pair_distance:
-                structures = self.create_le_structures(
-                    target, reference, test_distance
-                )
-                (
-                    structures,
-                    targets,
-                ) = picasso_outpost.load_structures_from_dict(structures)
-                all_test_structures.append(structures)
-                logger.debug(f"pair distance: {test_distance}")
-                tgts = []
-                for structure in structures:
-                    for tgt in structure.targets:
-                        if tgt not in tgts:
-                            tgts.append(tgt)
+        # simulation ROI (area-based, as in the prior single_spinna_run
+        # call): a square box matching the requested number of simulated
+        # molecules at the given density.
+        sim_width = np.sqrt(area * 1e6)  # in nm
 
-                # number of molecular targets in each structure; each
-                # row gives one target species and each column gives one
-                # structure
-                n_t = len(tgts)
-                n_s = len(structures)
-                logger.debug(f"{n_s} structures: {str(structures)}")
-                logger.debug(f"{n_t} targets: {str(tgts)}")
-
-            logger.debug(str(all_test_structures))
-            label_unc = {
-                k: v if isinstance(v, list) else [v]
-                for k, v in parameters["labeling_uncertainty"].items()
-            }
-            (
-                best_score,
-                best_idx,
-                label_unc,
-                best_mixer,
-                best_props,
-            ) = spinna.compare_models(
-                models=all_test_structures,
-                exp_data=exp_data,
-                granularity=parameters["granularity"],
-                label_unc=parameters["labeling_uncertainty"],
-                le=labeling_efficiency,
-                width=width,
-                height=height,
-                depth=depth,
-            )
-            pair_distance = pair_distance[best_idx]
-            structures = all_test_structures[best_idx]
-            labeling_uncertainty = label_unc
-            results["best_pair_distance"] = pair_distance
-        else:
-            structures = self.create_le_structures(
-                target, reference, pair_distance
-            )
-            labeling_uncertainty = {
-                k: v[0] if isinstance(v, list) else v
-                for k, v in parameters["labeling_uncertainty"].items()
-            }
-
-            structures, targets = picasso_outpost.load_structures_from_dict(
-                structures
-            )
-
-        N_structures = picasso_outpost.generate_N_structures(
-            structures, n_sim_targets, parameters["granularity"]
+        distances = (
+            pair_distance
+            if isinstance(pair_distance, list)
+            else [pair_distance]
         )
+        label_unc = {
+            k: (v if isinstance(v, list) else [v])
+            for k, v in parameters["labeling_uncertainty"].items()
+        }
+
+        # spinna.fit_le builds the monomer/heterodimer structures, forces
+        # LE=100%, fits label uncertainty + the best heterodimer distance
+        # via compare_models, and converts the fitted proportions to LE.
+        (
+            le_values,
+            _fitted_label_unc,
+            best_distance,
+            _best_score,
+            best_props,
+            best_mixer,
+        ) = spinna.fit_le(
+            target_a=target,
+            target_b=reference,
+            exp_data=exp_data,
+            granularity=parameters["granularity"],
+            label_unc=label_unc,
+            distances=distances,
+            N_sim=parameters["sim_repeats"],
+            width=sim_width,
+            height=sim_width,
+            depth=None,
+            random_rot_mode="2D",
+            asynch=True,
+            savedir=results["folder"],
+            fitting_mode="coarse-to-fine",
+        )
+        results["best_pair_distance"] = best_distance
 
         # bin size: more than Nyquist subsampling
         expected_1stNN_peak = (
@@ -12306,41 +12244,28 @@ class AutoPicasso(util.AbstractModuleCollection):
         ) ** (1 / dimensionality)
         fit_NND_bin = parameters.get("NND_bin")
         if not fit_NND_bin:
-            fit_NND_bin = pair_distance / 3
+            fit_NND_bin = best_distance / 3
         # max dist: a few times the first NN distance peak
         fit_NND_maxdist = parameters.get("NND_maxdist")
         if not fit_NND_maxdist:
             fit_NND_maxdist = 4 * parameters["nn_nth"] * expected_1stNN_peak
 
-        spinna_parameters = {
-            "structures": structures,
-            "label_unc": labeling_uncertainty,
-            "le": labeling_efficiency,
-            "mask_dict": None,
-            "width": np.sqrt(area * 1e6),  # in nm
-            "height": np.sqrt(area * 1e6),  # in nm
-            "depth": None,
-            "random_rot_mode": "2D",
-            "exp_data": exp_data,
-            "sim_repeats": parameters["sim_repeats"],
-            "NND_bin": fit_NND_bin,
-            "NND_maxdist": fit_NND_maxdist,
-            "N_structures": N_structures,
-            "save_filename": os.path.join(
+        # NND figures (simulated vs experimental) for the fitted model
+        fp_fig = picasso_outpost.plot_spinna_nnd(
+            mixer=best_mixer,
+            targets=[target, reference],
+            exp_data=exp_data,
+            opt_props=best_props,
+            n_simulated=n_sim_targets,
+            sim_repeats=parameters["sim_repeats"],
+            NND_bin=fit_NND_bin,
+            NND_maxdist=fit_NND_maxdist,
+            nn_plotted=parameters["nn_nth"],
+            save_filename=os.path.join(
                 results["folder"], f"interaction-{target}-{reference}"
             ),
-            "asynch": True,
-            "targets": [target, reference],
-            "apply_mask": False,
-            "nn_plotted": parameters["nn_nth"],
-            "result_dir": results["folder"],
-            "n_simulated": n_sim_targets,
-            "bootstrap": parameters.get("bootstrap"),
-        }
-
-        logger.debug(f"Calling single_spinna_run with parameters {spinna_parameters}")
-
-        result, fp_fig = picasso_outpost.single_spinna_run(**spinna_parameters)
+            result_dir=results["folder"],
+        )
         plt.close("all")
 
         # rename figures with random code
@@ -12355,21 +12280,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 pass
             fp_fig_out.append(fp_out)
         results["fp_fig"] = fp_fig_out
-        props = result["props"]  # given in percent
-        prop_t = props[0]
-        prop_r = props[1]
-        prop_tr = props[2]
-        std_t = result["props_std"][0]
-        std_r = result["props_std"][1]
-        std_tr = result["props_std"][2]
-        results["spinna_props_std"] = result["props_std"]
-        results["spinna_props_std"] = result["props_std"]
 
-        # SPINNA outputs proportions in terms of #molecules
-        le_target = prop_tr / (2 * prop_r + prop_tr)
-        le_reference = prop_tr / (2 * prop_t + prop_tr)
+        # fit_le returns LE in percent; store on the 0-1 scale.
+        le_target = le_values[target] / 100
+        le_reference = le_values[reference] / 100
 
-        # error propagation for std
+        # error propagation for std (only meaningful when bootstrapping)
         def le_std(prop_sglo, prop_dbl, std_sglo, std_dbl):
             """Calculate the standard deviation of le,
             by error propagation: sum of derivatives
@@ -12381,8 +12297,41 @@ class AutoPicasso(util.AbstractModuleCollection):
             ) ** 2
             return np.abs(deriv_sglo * std_sglo) + np.abs(deriv_dbl * std_dbl)
 
-        le_target_std = le_std(prop_r, prop_tr, std_r, std_tr)
-        le_reference_std = le_std(prop_t, prop_tr, std_t, std_tr)
+        if parameters.get("bootstrap"):
+            # fit_le does not bootstrap; run one bootstrap stoichiometry fit
+            # on the fitted mixer to recover proportion uncertainties.
+            # best_mixer.structures order is [monomer_A, monomer_B, het].
+            N_structures = picasso_outpost.generate_N_structures(
+                best_mixer.structures,
+                n_sim_targets,
+                parameters["granularity"],
+            )
+            _, props_std = spinna.SPINNA(
+                mixer=best_mixer,
+                gt_coords=exp_data,
+                N_sim=parameters["sim_repeats"],
+            ).fit_stoichiometry(
+                N_structures,
+                save=os.path.join(
+                    results["folder"],
+                    f"interaction-{target}-{reference}_le_fit_scores.csv",
+                ),
+                asynch=True,
+                bootstrap=True,
+            )
+            prop_t, prop_r, prop_tr = (
+                best_props[0],
+                best_props[1],
+                best_props[2],
+            )
+            std_t, std_r, std_tr = props_std[0], props_std[1], props_std[2]
+            le_target_std = le_std(prop_r, prop_tr, std_r, std_tr)
+            le_reference_std = le_std(prop_t, prop_tr, std_t, std_tr)
+        else:
+            props_std = [0, 0, 0]
+            le_target_std = 0.0
+            le_reference_std = 0.0
+        results["spinna_props_std"] = props_std
 
         results["labeling_efficiency"] = {
             parameters["target_name"]: le_target,

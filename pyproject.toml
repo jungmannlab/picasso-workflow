@@ -16,7 +16,9 @@ dependencies = [
     "tables",
     "numba",
     "openpyxl==3.1.2",
-    "picassosr==0.9.10",
+    "picassosr>=0.10.1",
+    # GUI uses PyQt6 directly; keep in sync with picasso's constraint
+    "PyQt6>=6.10.2,<7",
     "moviepy==1.0.3",
     "python-dotenv==1.0.1",
     "pre-commit>=3.5.1",

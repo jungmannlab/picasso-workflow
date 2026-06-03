@@ -22,8 +22,8 @@ import functools
 import inspect
 import textwrap
 from picasso import lib
-from PyQt5 import QtWidgets, QtCore, QtGui
-from PyQt5.QtCore import Qt, QEvent
+from PyQt6 import QtWidgets, QtCore, QtGui
+from PyQt6.QtCore import Qt, QEvent
 
 
 try:
@@ -7439,7 +7439,9 @@ class FilePathEditor(QtWidgets.QWidget):
         # Create line edit and button
         self.lineEdit = QtWidgets.QLineEdit(self)
         self.button = QtWidgets.QPushButton("Browse", self)
-        self.button.setFocusPolicy(QtCore.Qt.NoFocus)  # Prevent focus issues
+        self.button.setFocusPolicy(
+            QtCore.Qt.FocusPolicy.NoFocus
+        )  # Prevent focus issues
 
         # Add widgets to layout
         layout.addWidget(self.lineEdit)
@@ -7615,8 +7617,10 @@ class DroppableTreeWidget(QtWidgets.QTreeWidget):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
-        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDrop)
-        self.setDefaultDropAction(Qt.MoveAction)
+        self.setDragDropMode(
+            QtWidgets.QAbstractItemView.DragDropMode.DragDrop
+        )
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self._drag_source_item = None
 
     def dragEnterEvent(self, event):
@@ -7632,7 +7636,7 @@ class DroppableTreeWidget(QtWidgets.QTreeWidget):
     def dragMoveEvent(self, event):
         if event.mimeData().hasUrls() or event.source() == self:
             # Get item under cursor for visual feedback
-            item = self.itemAt(event.pos())
+            item = self.itemAt(event.position().toPoint())
             if item:
                 event.acceptProposedAction()
             else:
@@ -7655,7 +7659,7 @@ class DroppableTreeWidget(QtWidgets.QTreeWidget):
             self._drag_source_item = None
 
     def dropEvent(self, event):
-        target_item = self.itemAt(event.pos())
+        target_item = self.itemAt(event.position().toPoint())
 
         if event.mimeData().hasUrls():
             # External file drop
@@ -7705,7 +7709,7 @@ class FilePathDelegate(QtWidgets.QStyledItemDelegate):
         super().destroyEditor(editor, index)
 
     def setEditorData(self, editor, index):
-        value = index.model().data(index, QtCore.Qt.EditRole)
+        value = index.model().data(index, QtCore.Qt.ItemDataRole.EditRole)
         if value:
             editor.setText(str(value))
 
@@ -7713,7 +7717,7 @@ class FilePathDelegate(QtWidgets.QStyledItemDelegate):
         # Check if editor is still valid
         try:
             text = editor.text()
-            model.setData(index, text, QtCore.Qt.EditRole)
+            model.setData(index, text, QtCore.Qt.ItemDataRole.EditRole)
         except RuntimeError:
             pass  # Editor was deleted
 
@@ -7733,7 +7737,7 @@ class FilePathDelegate(QtWidgets.QStyledItemDelegate):
     def eventFilter(self, editor, event):
         """Prevent editor from closing when file dialog opens."""
         # Don't let focus out events close the editor if we're browsing
-        if event.type() == QtCore.QEvent.FocusOut:
+        if event.type() == QtCore.QEvent.Type.FocusOut:
             if hasattr(editor, "_browsing") and editor._browsing:
                 return True  # Ignore the event
         return super().eventFilter(editor, event)
@@ -7750,8 +7754,8 @@ def dict_to_table(d, table):
 
 class ToolTipDelegate(QtWidgets.QStyledItemDelegate):
     def helpEvent(self, event, view, option, index):
-        if event.type() == QEvent.ToolTip:
-            tooltip = index.data(Qt.ToolTipRole)
+        if event.type() == QEvent.Type.ToolTip:
+            tooltip = index.data(Qt.ItemDataRole.ToolTipRole)
             if tooltip:
                 QtWidgets.QToolTip.showText(event.globalPos(), tooltip)
                 return True
@@ -7854,10 +7858,10 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             self._on_command_changed
         )
         # self.command_combo.model().setData(
-        #     0, "Map different values onto workers (e.g. files to load)", Qt.ToolTipRole
+        #     0, "Map different values onto workers (e.g. files to load)", Qt.ItemDataRole.ToolTipRole
         # )  # Tooltip
         # self.command_combo.model().setData(
-        #     1, "Load value from a result of a previous module in this or a previous workflow stage", Qt.ToolTipRole
+        #     1, "Load value from a result of a previous module in this or a previous workflow stage", Qt.ItemDataRole.ToolTipRole
         # )  # Tooltip
         layout.addWidget(self.command_combo)
         layout.addSpacing(10)
@@ -7939,7 +7943,8 @@ class ParameterCmdDialog(QtWidgets.QDialog):
 
         # Buttons
         button_box = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
@@ -8267,11 +8272,11 @@ class Window(QtWidgets.QMainWindow):
         # disable Investigation workflow, which is in Development
         index = self.workflow_type.model().index(2, 0)
         self.workflow_type.model().setData(
-            index, 0, Qt.UserRole - 1
+            index, 0, Qt.ItemDataRole.UserRole - 1
         )  # 0 disables the item
         self.workflow_type.setItemDelegate(ToolTipDelegate(self.workflow_type))
         self.workflow_type.model().setData(
-            index, "Not Implemented yet", Qt.ToolTipRole
+            index, "Not Implemented yet", Qt.ItemDataRole.ToolTipRole
         )  # Tooltip
 
         self.workflow_type.currentIndexChanged.connect(
@@ -8353,7 +8358,9 @@ class Window(QtWidgets.QMainWindow):
         self.confluence_token_edit.setPlaceholderText(
             "API token (or set CONFLUENCE_BEARER env var)"
         )
-        self.confluence_token_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.confluence_token_edit.setEchoMode(
+            QtWidgets.QLineEdit.EchoMode.Password
+        )
         self.confluence_token_edit.setToolTip(
             "If empty, host will load from environment variable"
         )
@@ -8619,8 +8626,8 @@ class Window(QtWidgets.QMainWindow):
         self.files_table.setHorizontalHeaderLabels(["Name", "File Path"])
         # Configure column stretching - Name column resizes to contents, File Path column stretches
         header = self.files_table.horizontalHeader()
-        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
         dict_to_table(d, self.files_table)
         # Store delegate as instance variable to prevent garbage collection
         self.file_path_delegate = FilePathDelegate(self)
@@ -8643,19 +8650,19 @@ class Window(QtWidgets.QMainWindow):
         )
         header_agg = self.files_tree_agg.header()
         header_agg.setSectionResizeMode(
-            0, QtWidgets.QHeaderView.ResizeToContents
+            0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
         header_agg.setSectionResizeMode(
-            1, QtWidgets.QHeaderView.ResizeToContents
+            1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
-        header_agg.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        header_agg.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
         self.file_path_delegate_tree_agg = FilePathDelegate(self)
         self.files_tree_agg.setItemDelegateForColumn(
             2, self.file_path_delegate_tree_agg
         )
         self.files_tree_agg.setAlternatingRowColors(True)
         self.files_tree_agg.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
+            QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self.files_stack.addWidget(self.files_tree_agg)
 
@@ -8669,14 +8676,14 @@ class Window(QtWidgets.QMainWindow):
         )
         header_inv = self.files_tree_inv.header()
         header_inv.setSectionResizeMode(
-            0, QtWidgets.QHeaderView.ResizeToContents
+            0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
         header_inv.setSectionResizeMode(
-            1, QtWidgets.QHeaderView.ResizeToContents
+            1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
-        header_inv.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        header_inv.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
         header_inv.setSectionResizeMode(
-            3, QtWidgets.QHeaderView.ResizeToContents
+            3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
         self.file_path_delegate_tree_inv = FilePathDelegate(self)
         self.files_tree_inv.setItemDelegateForColumn(
@@ -8684,7 +8691,7 @@ class Window(QtWidgets.QMainWindow):
         )
         self.files_tree_inv.setAlternatingRowColors(True)
         self.files_tree_inv.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
+            QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self.files_stack.addWidget(self.files_tree_inv)
 
@@ -8727,7 +8734,7 @@ class Window(QtWidgets.QMainWindow):
         parameters_scroll.setWidget(module_parameters)
         parameters_scroll.setWidgetResizable(True)
         parameters_scroll.setHorizontalScrollBarPolicy(
-            QtCore.Qt.ScrollBarAlwaysOff
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         parameters_scroll.setMinimumHeight(100)
         parameters_scroll.setMaximumHeight(300)
@@ -8931,7 +8938,7 @@ class Window(QtWidgets.QMainWindow):
         msg = f"Remove channel '{channel_name}' from all datasets?"
         if (
             QtWidgets.QMessageBox.question(self, "Confirm", msg)
-            != QtWidgets.QMessageBox.Yes
+            != QtWidgets.QMessageBox.StandardButton.Yes
         ):
             return
 
@@ -9180,7 +9187,7 @@ class Window(QtWidgets.QMainWindow):
         msg = f"Remove {len(datasets_to_remove)} dataset(s)?"
         if (
             QtWidgets.QMessageBox.question(self, "Confirm", msg)
-            != QtWidgets.QMessageBox.Yes
+            != QtWidgets.QMessageBox.StandardButton.Yes
         ):
             return
 
@@ -9208,10 +9215,10 @@ class Window(QtWidgets.QMainWindow):
             self,
             "Clear Tree",
             "Clear all datasets and channels?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
         )
 
-        if reply != QtWidgets.QMessageBox.Yes:
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
             return
 
         current_tree.clear()
@@ -9247,7 +9254,7 @@ class Window(QtWidgets.QMainWindow):
                 dataset_item = QtWidgets.QTreeWidgetItem(current_tree)
                 dataset_item.setText(0, dataset)
                 dataset_item.setFlags(
-                    dataset_item.flags() & ~Qt.ItemIsEditable
+                    dataset_item.flags() & ~Qt.ItemFlag.ItemIsEditable
                 )
 
                 for channel in self.tree_data["channels"]:
@@ -9265,7 +9272,7 @@ class Window(QtWidgets.QMainWindow):
                         )
 
                     # Make only File Path (and Condition) editable
-                    flags = channel_item.flags() | Qt.ItemIsEditable
+                    flags = channel_item.flags() | Qt.ItemFlag.ItemIsEditable
                     channel_item.setFlags(flags)
 
                 dataset_item.setExpanded(True)
@@ -12279,7 +12286,7 @@ class Window(QtWidgets.QMainWindow):
         dialog = ParameterCmdDialog(
             workflow_modules, self.module_descriptor, curr_module_index, self
         )
-        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             command_str = dialog.command_result.text()
             # Convert widget to QLineEdit and populate
             self._convert_widget_to_textbox(param_name, command_str)
@@ -12798,7 +12805,7 @@ def main():
         sys.exit(1)
 
     window.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
