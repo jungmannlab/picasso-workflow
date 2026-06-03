@@ -5098,6 +5098,12 @@ class ConfluenceReporter(AbstractModuleCollection):
             return txt_out
 
         logger.debug("Reporting labeling_efficiency_analysis.")
+
+        le_std_txt = ""
+        if lestd := results.get("labeling_efficiency_std", {}):
+            if not all([v == 0 for v in lestd.values()]):
+                le_std_txt = f"<li>Labeling efficiency std: {show_dict_percentages(lestd)}</li>"
+        le_std = ""
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Labeling Efficiency Evaluation</strong></p>
@@ -5108,8 +5114,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s</li>
         <li>Labeling efficiency:
             {show_dict_percentages(results["labeling_efficiency"])}</li>
-        <li>Labeling efficiency std:
-            {show_dict_percentages(results["labeling_efficiency_std"])}</li>
+        {le_std_txt}
         </ul>
         {parameter_text}
         {result_text}
