@@ -14,12 +14,95 @@ import traceback
 
 import numpy as np
 import pandas as pd
+import yaml
 from atlassian import Confluence as con
 from requests.exceptions import ConnectionError, HTTPError
 
 from picasso_workflow.util import AbstractModuleCollection
 
 # logger = logging.getLogger(__name__)
+
+
+def _yaml_safe(value):
+    """Recursively convert tuples to lists so a structure can be serialized
+    with yaml.safe_dump (which has no Python-tuple representer). Module
+    parameters often hold command tuples like ``('$map', 'filepath')`` that
+    would otherwise raise.
+    """
+    if isinstance(value, dict):
+        return {k: _yaml_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_yaml_safe(v) for v in value]
+    return value
+
+
+def config_snapshot_macro(
+    config, title="Workflow configuration (YAML snapshot)"
+):
+    """Build a collapsible Confluence 'expand' macro containing ``config``
+    as a YAML code block, for reproducibility.
+
+    Returns an empty string if the config cannot be serialized, so a
+    snapshot problem never prevents a page from being created.
+    """
+    try:
+        yaml_text = yaml.safe_dump(
+            _yaml_safe(config),
+            sort_keys=False,
+            default_flow_style=False,
+            allow_unicode=True,
+        )
+    except Exception as e:  # never block page creation on a dump issue
+        logger.debug(f"Could not serialize config snapshot: {e}")
+        return ""
+    # CDATA cannot contain the literal "]]>"; split it if present.
+    yaml_text = yaml_text.replace("]]>", "]]]]><![CDATA[>")
+    return (
+        '<ac:structured-macro ac:name="expand" ac:schema-version="1">'
+        f'<ac:parameter ac:name="title">{html.escape(title)}</ac:parameter>'
+        "<ac:rich-text-body>"
+        '<ac:structured-macro ac:name="code" ac:schema-version="1">'
+        '<ac:parameter ac:name="language">yaml</ac:parameter>'
+        "<ac:plain-text-body>"
+        f"<![CDATA[{yaml_text}]]>"
+        "</ac:plain-text-body>"
+        "</ac:structured-macro>"
+        "</ac:rich-text-body>"
+        "</ac:structured-macro>"
+    )
+
+
+def overview_body(title, rows, intro_html="", config=None):
+    """Build a Confluence storage-format overview page body.
+
+    A reusable page body used for run overview pages (e.g. the aggregation
+    main page): a heading, an optional intro paragraph, a metadata table,
+    and an optional collapsible YAML snapshot of the run configuration.
+
+    Args:
+        title : str
+            page heading
+        rows : list of (label, value) tuples
+            metadata rendered as a two-column table
+        intro_html : str, optional
+            intro paragraph(s); must already be valid storage-format HTML
+        config : dict or None, optional
+            run configuration rendered as a collapsible YAML snapshot
+    Returns:
+        str : Confluence storage-format HTML body
+    """
+    table_rows = "".join(
+        f"<tr><th>{html.escape(str(k))}</th>"
+        f"<td>{html.escape(str(v))}</td></tr>"
+        for k, v in rows
+    )
+    snapshot = config_snapshot_macro(config) if config is not None else ""
+    return (
+        f"<h1>{html.escape(title)}</h1>"
+        f"{intro_html}"
+        f"<table><tbody>{table_rows}</tbody></table>"
+        f"{snapshot}"
+    )
 
 
 def module_decorator(method):

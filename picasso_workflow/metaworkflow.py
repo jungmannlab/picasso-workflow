@@ -552,6 +552,80 @@ class AbstractWorkflowCoordinator(abc.ABC):
         }
         return reporter_config, analysis_config
 
+    def build_overview_body(
+        self,
+        title,
+        result_folder,
+        workflow_config=None,
+        ntiles=None,
+        intro_html="",
+    ):
+        """Assemble a run-overview page body (run metadata + an optional
+        collapsible config snapshot) via confluence.overview_body.
+
+        Gathers SLURM job / node, host, software versions and folder
+        locations so the page is self-describing. Shared across coordinators
+        so single and aggregation overview pages stay consistent; the actual
+        storage-format rendering lives in confluence.overview_body.
+
+        Args:
+            title : str
+                page heading
+            result_folder : str
+                full path to the run's results & script folder
+            workflow_config : dict or None
+                workflow definition, rendered as a collapsible YAML snapshot
+            ntiles : int or None
+                number of single datasets (shown only when provided)
+            intro_html : str
+                optional intro paragraph(s), valid storage-format HTML
+        Returns:
+            str : Confluence storage-format HTML body
+        """
+        env = os.environ
+        gpus = (
+            env.get("SLURM_GPUS_ON_NODE")
+            or env.get("SLURM_JOB_GPUS")
+            or env.get("CUDA_VISIBLE_DEVICES")
+            or "none"
+        )
+        try:
+            from picasso_workflow import __version__ as pw_version
+        except Exception:
+            pw_version = "unknown"
+        try:
+            from picasso import __version__ as picasso_version
+        except Exception:
+            picasso_version = "unknown"
+
+        rows = [
+            ("Run timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        ]
+        if ntiles is not None:
+            rows.append(("# single datasets aggregated", ntiles))
+        rows += [
+            ("Results / script folder", result_folder),
+            ("SLURM log folder", os.path.join(result_folder, "logs")),
+            ("SLURM job ID", env.get("SLURM_JOB_ID", "N/A (not a SLURM job)")),
+            ("SLURM job name", env.get("SLURM_JOB_NAME", "N/A")),
+            ("SLURM partition", env.get("SLURM_JOB_PARTITION", "N/A")),
+            (
+                "SLURM node(s)",
+                env.get(
+                    "SLURM_JOB_NODELIST", env.get("SLURMD_NODENAME", "N/A")
+                ),
+            ),
+            ("SLURM submit dir", env.get("SLURM_SUBMIT_DIR", "N/A")),
+            ("CPUs per task", env.get("SLURM_CPUS_PER_TASK", "N/A")),
+            ("GPUs", gpus),
+            ("Host", platform.node()),
+            ("picasso-workflow version", pw_version),
+            ("picasso version", picasso_version),
+        ]
+        return confluence.overview_body(
+            title, rows, intro_html=intro_html, config=workflow_config
+        )
+
 
 class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
     """A class to coordinate the analysis of a single measurement, e.g.
@@ -768,6 +842,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 report_name = (
                     rname + "_" + datetime.now().strftime("%y%m%d-%H%M")
                 )
+                dedicated_page = True
                 # create the corresponding confluence page
                 try:
                     ci = confluence.ConfluenceInterface(
@@ -782,6 +857,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                     pass
             else:
                 report_name = self.analysis_name
+                dedicated_page = False
 
             reporter_config, analysis_config = self.get_configs(
                 report_name, self.root_folder
@@ -801,6 +877,34 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 single_workflow_parallel=False,
                 postfix="",
             )
+
+            # Write the run overview onto the dedicated aggregation page.
+            # (Skipped when the run reuses the root page, i.e. no per-dataset
+            # report_name, to avoid clobbering the investigation page.)
+            if dedicated_page:
+                try:
+                    ntiles = getattr(
+                        getattr(awr, "parameter_tiler", None), "ntiles", None
+                    )
+                    body = self.build_overview_body(
+                        "Aggregation analysis results",
+                        getattr(awr, "result_folder", self.root_folder),
+                        workflow_config=workflow_modules_multi,
+                        ntiles=ntiles,
+                        intro_html=(
+                            "<p>Overview page of an aggregation run. The "
+                            "child pages below contain the individual "
+                            "single-dataset workflows and their "
+                            "aggregation.</p>"
+                        ),
+                    )
+                    pgid, _ = self.ci.get_page_properties(report_name)
+                    self.ci.update_page_content(
+                        report_name, pgid, body, replace=True
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not write aggregation overview: {e}")
+
             run_awr_kwargs.append(
                 {
                     "awr": awr,
