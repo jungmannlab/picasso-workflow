@@ -11726,7 +11726,7 @@ class Window(QtWidgets.QMainWindow):
             # "mail-type": "ALL",
             # "mail-user": f"{username}@biochem.mpg.de",
         }
-        if email := self.slurm_email_edit.text().strip() != "":
+        if (email := self.slurm_email_edit.text().strip()) != "":
             slurm_options["mail-user"] = email
             slurm_options["mail-type"] = "ALL"
 

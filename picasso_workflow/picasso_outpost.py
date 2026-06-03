@@ -4225,7 +4225,10 @@ def _rmsd_at_com(locs_xy):
 
 
 def plot_1dhist(locs, field, fig, ax):
-    data = locs[field]
+    # np.asarray: lib.calculate_optimal_bins (picasso >= 0.10) samples via
+    # positional integer indexing (data[rng.choice(...)]), which fails on a
+    # pandas Series with a non-RangeIndex. Force a numpy array.
+    data = np.asarray(locs[field])
     data = data[np.isfinite(data)]
     bins = lib.calculate_optimal_bins(data, 1000)
     # Prepare the figure
@@ -4236,8 +4239,11 @@ def plot_1dhist(locs, field, fig, ax):
 
 
 def plot_2dhist(locs, field_x, field_y, fig, ax):
-    x = locs[field_x]
-    y = locs[field_y]
+    # np.asarray: see plot_1dhist - lib.calculate_optimal_bins samples by
+    # positional index, which breaks on a pandas Series with a non-default
+    # index. Force numpy arrays.
+    x = np.asarray(locs[field_x])
+    y = np.asarray(locs[field_y])
     valid = np.isfinite(x) & np.isfinite(y)
     x = x[valid]
     y = y[valid]
