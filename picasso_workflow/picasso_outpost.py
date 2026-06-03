@@ -172,21 +172,33 @@ def align_channels(
     )
 
 
+def _has_z(locs):
+    """Check whether a locs object (np.recarray or pd.DataFrame) has a
+    'z' coordinate. Returns False for 2D data missing the z column/field.
+    """
+    if hasattr(locs, "columns"):  # pandas DataFrame
+        return "z" in locs.columns
+    if getattr(locs, "dtype", None) is not None and locs.dtype.names:
+        return "z" in locs.dtype.names  # np.recarray / structured array
+    return hasattr(locs, "z")
+
+
 def align_by_picked(channel_locs, fiducial_locs):
     # find shift between channels
     shift = shift_from_picked(fiducial_locs)
     # print("Shift {}".format(shift))
 
     # align each channel
+    has_z = len(shift) == 3
     for i in range(len(channel_locs)):
         channel_locs[i].y -= shift[0][i]
         channel_locs[i].x -= shift[1][i]
-        if len(shift) == 3:
+        if has_z and _has_z(channel_locs[i]):
             channel_locs[i].z -= shift[2][i]
 
         fiducial_locs[i].y -= shift[0][i]
         fiducial_locs[i].x -= shift[1][i]
-        if len(shift) == 3:
+        if has_z and _has_z(fiducial_locs[i]):
             fiducial_locs[i].z -= shift[2][i]
 
     cumulative_shift = np.array(shift)[..., np.newaxis]
