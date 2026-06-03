@@ -7,6 +7,7 @@ Description: This module implements the class ReportingAnalyzer,
     which orchestrates picasso analysis and confluence reporting
 """
 import os
+import time
 from datetime import datetime
 # import logging
 from loguru import logger
@@ -14,7 +15,6 @@ import inspect
 import yaml
 import copy
 import re
-from concurrent.futures import ProcessPoolExecutor
 import traceback
 
 from picasso_workflow.analyse import AutoPicasso, AutoPicassoError
@@ -69,6 +69,10 @@ class AggregationWorkflowRunner:
         self.single_workflow_parallel = False
         self.sgl_workflow_locations = []
         self.cpage_names = []
+        # SLURM task identity for multi-node parallelism of the single
+        # workflows. Defaults to a single (rank 0) process off-cluster.
+        self.rank = int(os.getenv("SLURM_PROCID") or 0)
+        self.size = int(os.getenv("SLURM_NTASKS") or 1)
 
     @classmethod
     def config_from_dicts(
@@ -79,6 +83,8 @@ class AggregationWorkflowRunner:
         postfix=None,
         continue_previous_runner=False,
         single_workflow_parallel=False,
+        rank=None,
+        size=None,
     ):
         """To keep flexibility for initialization methods, this is not
         done in __init__. This way in the future, we can instantiate
@@ -166,6 +172,13 @@ class AggregationWorkflowRunner:
                 "single_dataset_tileparameters"."""
             )
         instance = cls(postfix)
+        # The coordinator may override the SLURM-derived rank/size to control
+        # how the single workflows are distributed (e.g. run all locally when
+        # whole aggregation groups are already distributed across ranks).
+        if rank is not None:
+            instance.rank = rank
+        if size is not None:
+            instance.size = size
         instance.single_workflow_parallel = single_workflow_parallel
         instance.parameter_tiler = ParameterTiler(instance, sgltilepars)
         instance.all_results = {
@@ -189,12 +202,15 @@ class AggregationWorkflowRunner:
             # The overview content (run metadata + config snapshot) is
             # written by the AggregationWorkflowCoordinator, which has the
             # orchestration context. Here we only ensure the page exists.
-            try:
-                instance.ci.create_page(report_name, "")
-            except ConfluenceInterfaceError:
-                logger.debug(
-                    "Error creating page, it already exists. Continuing"
-                )
+            # On multi-node runs only rank 0 creates it; worker ranks still
+            # set parent_page_title so their child pages nest correctly.
+            if instance.rank == 0:
+                try:
+                    instance.ci.create_page(report_name, "")
+                except ConfluenceInterfaceError:
+                    logger.debug(
+                        "Error creating page, it already exists. Continuing"
+                    )
             reporter_config["ConfluenceReporter"][
                 "parent_page_title"
             ] = report_name
@@ -260,7 +276,10 @@ class AggregationWorkflowRunner:
 
     def run(self):
         """individualize the aggregation workflow and run."""
-        self.save(self.result_folder)
+        # Only rank 0 persists the (shared) aggregation state; worker ranks
+        # would race on the same AggregationWorkflowRunner.yaml.
+        if self.rank == 0:
+            self.save(self.result_folder)
         # First, run the individual analysis
         sgl_ds_workflow_parameters = self.aggregation_workflow[
             "single_dataset_modules"
@@ -272,74 +291,110 @@ class AggregationWorkflowRunner:
         sgl_wkfl_reporter_config = copy.deepcopy(self.reporter_config)
         sgl_wkfl_analysis_config = copy.deepcopy(self.analysis_config)
 
-        sgl_dataset_success = [None] * len(tags)
-        if self.single_workflow_parallel:
-            wrs = []
-            tasks = []
-            futures = []
-            executor = ProcessPoolExecutor()
+        n_sgl = len(tags)
+        sgl_dataset_success = [None] * n_sgl
+        sgl_folders = [None] * n_sgl
+
+        # Multi-node parallelism: distribute the single-dataset workflows
+        # across the SLURM ranks (each rank runs i %% size == rank), writing
+        # results to the shared result folder and a completion marker. Rank 0
+        # then waits for every marker, loads the single results produced by
+        # other ranks from disk, and runs the aggregation. With a single
+        # task (off-cluster) this reduces to the previous sequential run.
+        logger.debug(
+            f"Aggregation runner rank {self.rank}/{self.size} handling "
+            f"single datasets {list(range(self.rank, n_sgl, self.size))} "
+            f"of {n_sgl}."
+        )
+
         for i, (parameter_set, tag) in enumerate(
             zip(individual_parametersets, tags)
         ):
-            sgl_wkfl_reporter_config["report_name"] = (
-                report_name + f"_sgl_{i:02d}"
-            )
+            sgl_name = report_name + f"_sgl_{i:02d}"
             if tag:
-                sgl_wkfl_reporter_config["report_name"] += f"_{tag}"
+                sgl_name += f"_{tag}"
+            sgl_folders[i] = os.path.join(
+                self.result_folder, sgl_name + "_" + self.postfix
+            )
+            if i % self.size != self.rank:
+                continue  # handled by another rank
+
+            sgl_wkfl_reporter_config["report_name"] = sgl_name
             sgl_wkfl_analysis_config["result_location"] = self.result_folder
-            # sgl_wkfl_analysis_config['result_location'] = os.path.join(
-            #     self.result_folder, sgl_wkfl_reporter_config['report_name'])
             if self.continue_workflow:
                 try:
                     logger.debug(
-                        "loading WorkflowRunner from "
-                        + os.path.join(
-                            self.result_folder,
-                            sgl_wkfl_reporter_config["report_name"]
-                            + "_"
-                            + self.postfix,
-                        )
+                        f"loading WorkflowRunner from {sgl_folders[i]}"
                     )
-                    wr = WorkflowRunner.load(
-                        os.path.join(
-                            self.result_folder,
-                            sgl_wkfl_reporter_config["report_name"]
-                            + "_"
-                            + self.postfix,
-                        )
-                    )
+                    wr = WorkflowRunner.load(sgl_folders[i])
                 except Exception:
                     logger.debug("loading did not work. creating from dict.")
                     wr = WorkflowRunner.config_from_dicts(
-                        sgl_wkfl_reporter_config,
-                        sgl_wkfl_analysis_config,
+                        copy.deepcopy(sgl_wkfl_reporter_config),
+                        copy.deepcopy(sgl_wkfl_analysis_config),
                         parameter_set,
                         postfix=self.postfix,
                     )
             else:
-                logger.debug("not dontinuing workflow.starting new.")
+                logger.debug("not continuing workflow. starting new.")
                 wr = WorkflowRunner.config_from_dicts(
-                    sgl_wkfl_reporter_config,
-                    sgl_wkfl_analysis_config,
+                    copy.deepcopy(sgl_wkfl_reporter_config),
+                    copy.deepcopy(sgl_wkfl_analysis_config),
                     parameter_set,
                     postfix=self.postfix,
                 )
             self.cpage_names.append(wr.reporter_config["report_name"])
-            if not self.single_workflow_parallel:
-                sgl_dataset_success[i] = wr.run()
-                self.all_results["single_dataset"][i] = wr.results
-                self.sgl_workflow_locations.append(wr.result_folder)
+            # Never let an unhandled error escape before the completion
+            # marker is written - otherwise rank 0 would wait on the barrier
+            # until timeout. A failed single still marks the run as failed,
+            # which aborts the aggregation below.
+            try:
+                success = wr.run()
+            except Exception as e:
+                logger.error(f"Single dataset {i} ({tag}) failed: {e}")
+                logger.error(traceback.format_exc())
+                success = False
+            sgl_dataset_success[i] = success
+            self.all_results["single_dataset"][i] = getattr(
+                wr, "results", None
+            )
+            if self.rank == 0:
                 self.save(self.result_folder)
-            else:
-                future = executor.submit(wr.run)
-                futures.append(future)
-        if self.single_workflow_parallel:
-            for i, task in enumerate(tasks):
-                sgl_dataset_success[i] = futures[i].result()
-                self.all_results["single_dataset"][i] = wrs[i].results
-                self.sgl_workflow_locations.append(wrs[i].result_folder)
-                self.save(self.result_folder)
-            executor.shutdown()
+            if self.size > 1:
+                self._write_single_marker(sgl_folders[i], success)
+
+        # Worker ranks are done once their share is finished and marked;
+        # the aggregation is performed by rank 0 only.
+        if self.size > 1 and self.rank != 0:
+            owned = [s for s in sgl_dataset_success if s is not None]
+            logger.debug(
+                f"Rank {self.rank} finished its single datasets "
+                f"({sum(bool(s) for s in owned)}/{len(owned)} ok); "
+                "leaving aggregation to rank 0."
+            )
+            return all(owned) if owned else True
+
+        # Rank 0 (or a single-task run): wait for the single datasets handled
+        # by other ranks and load their results from disk.
+        if self.size > 1:
+            self._wait_for_single_markers(sgl_folders)
+            for i in range(n_sgl):
+                if sgl_dataset_success[i] is not None:
+                    continue  # ran on this rank, already in memory
+                status = self._read_single_marker(sgl_folders[i])
+                sgl_dataset_success[i] = status == "success"
+                try:
+                    self.all_results["single_dataset"][i] = (
+                        self._load_single_results(sgl_folders[i])
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Could not load single-dataset results from "
+                        f"{sgl_folders[i]}: {e}"
+                    )
+                    sgl_dataset_success[i] = False
+        self.sgl_workflow_locations = sgl_folders
+        self.save(self.result_folder)
 
         if not all(sgl_dataset_success):
             msg = (
@@ -404,6 +459,74 @@ class AggregationWorkflowRunner:
         wr.run()
         self.all_results["aggregation"] = wr.results
         self.save(self.result_folder)
+
+    @staticmethod
+    def _single_marker_path(folder):
+        return os.path.join(folder, "_pwf_single_done.txt")
+
+    def _write_single_marker(self, folder, success):
+        """Drop a completion marker so rank 0 knows this single dataset is
+        finished (and whether it succeeded). Written atomically via a
+        rank-specific temp file + os.replace."""
+        try:
+            os.makedirs(folder, exist_ok=True)
+            marker = self._single_marker_path(folder)
+            tmp = f"{marker}.{self.rank}.tmp"
+            with open(tmp, "w") as f:
+                f.write("success" if success else "failed")
+            os.replace(tmp, marker)
+        except Exception as e:
+            logger.error(
+                f"Could not write single-dataset marker in {folder}: {e}"
+            )
+
+    def _read_single_marker(self, folder):
+        try:
+            with open(self._single_marker_path(folder)) as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            return None
+
+    def _wait_for_single_markers(
+        self, folders, timeout=7 * 24 * 3600, poll=15
+    ):
+        """Block until every single-dataset folder has a completion marker.
+
+        Used by rank 0 before aggregating, to gather the datasets handled by
+        other ranks via the shared filesystem. SLURM enforces the real wall
+        time; the timeout here is only a safety net against an unrecoverable
+        hang (e.g. a worker that died without writing a marker).
+        """
+        start = time.time()
+        pending = set(range(len(folders)))
+        while pending:
+            pending = {
+                i
+                for i in pending
+                if self._read_single_marker(folders[i]) is None
+            }
+            if not pending:
+                break
+            if time.time() - start > timeout:
+                raise WorkflowError(
+                    "Timed out waiting for single-dataset workflows on "
+                    f"other ranks: {[folders[i] for i in sorted(pending)]}"
+                )
+            logger.debug(
+                f"Rank 0 waiting for {len(pending)} single dataset(s) to "
+                "finish on other ranks."
+            )
+            time.sleep(poll)
+
+    @staticmethod
+    def _load_single_results(folder):
+        """Load just the results dict a single WorkflowRunner saved, without
+        re-initializing its Confluence reporter (which WorkflowRunner.load
+        would do)."""
+        fp = os.path.join(folder, "WorkflowRunner.yaml")
+        with open(fp, "r") as f:
+            data = yaml.safe_load(f)
+        return data["results"]
 
     def save(self, dirn="."):
         """Save the current config and results into

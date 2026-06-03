@@ -509,6 +509,35 @@ class AbstractWorkflowCoordinator(abc.ABC):
         """
         return hashlib.shake_128(s.encode("utf-8")).hexdigest(int(length / 2))
 
+    def _shared_runstamp(self):
+        """Return a run timestamp ("%y%m%d-%H%M") identical across all ranks.
+
+        Multi-node aggregation needs every rank to agree on report names
+        (hence result folders) so they can cooperate on one aggregation.
+        Rank 0 writes the stamp to a shared file in the root folder; worker
+        ranks read it (waiting briefly for it to appear).
+        """
+        stamp_file = os.path.join(self.root_folder, ".pwf_runstamp")
+        if self.rank == 0:
+            stamp = datetime.now().strftime("%y%m%d-%H%M")
+            os.makedirs(self.root_folder, exist_ok=True)
+            with open(stamp_file, "w") as f:
+                f.write(stamp)
+            return stamp
+        # worker ranks: wait for rank 0 to publish the stamp
+        for _ in range(600):
+            try:
+                with open(stamp_file) as f:
+                    stamp = f.read().strip()
+                if stamp:
+                    return stamp
+            except FileNotFoundError:
+                pass
+            time.sleep(1)
+        raise RuntimeError(
+            "Timed out waiting for the shared run timestamp from rank 0."
+        )
+
     def get_configs(
         self,
         report_name,
@@ -832,29 +861,51 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
 
         run_awr_kwargs = []
 
+        # Two-level parallelism across SLURM ranks:
+        #   * When there are at least as many aggregation groups as ranks,
+        #     distribute whole groups across ranks (each rank runs its groups
+        #     end to end; no intra-group split). This avoids idle ranks for
+        #     many-groups/few-singles runs.
+        #   * Otherwise (e.g. a single multicolor aggregation), all ranks
+        #     cooperate on each group and the single workflows within it are
+        #     distributed across ranks inside AggregationWorkflowRunner.run().
+        # A shared timestamp keeps report names (and result folders)
+        # identical across ranks for the cooperative case.
+        runstamp = self._shared_runstamp()
+        n_groups = len(self.dataset_filepaths)
+        distribute_groups = n_groups >= self.size
+
         execution_item = -1
         for datasets in self.dataset_filepaths:
             execution_item += 1
-            if execution_item % self.size != self.rank:
+            if distribute_groups and execution_item % self.size != self.rank:
                 continue
+            # Rank that owns the group's Confluence side effects: the single
+            # owning rank in group-distribution mode, else rank 0.
+            owns_page = distribute_groups or self.rank == 0
+            # rank/size handed to the runner for intra-group single
+            # distribution (disabled when whole groups are distributed).
+            if distribute_groups:
+                runner_rank, runner_size = 0, 1
+            else:
+                runner_rank, runner_size = self.rank, self.size
 
             if rname := datasets.get("report_name"):
-                report_name = (
-                    rname + "_" + datetime.now().strftime("%y%m%d-%H%M")
-                )
+                report_name = rname + "_" + runstamp
                 dedicated_page = True
-                # create the corresponding confluence page
-                try:
-                    ci = confluence.ConfluenceInterface(
-                        self.confluence_url,
-                        self.confluence_space,
-                        self.root_page,
-                        username=self.confluence_username,
-                        token=self.confluence_token,
-                    )
-                    ci.create_page(report_name, "")
-                except Exception:
-                    pass
+                # create the corresponding confluence page (page owner only)
+                if owns_page:
+                    try:
+                        ci = confluence.ConfluenceInterface(
+                            self.confluence_url,
+                            self.confluence_space,
+                            self.root_page,
+                            username=self.confluence_username,
+                            token=self.confluence_token,
+                        )
+                        ci.create_page(report_name, "")
+                    except Exception:
+                        pass
             else:
                 report_name = self.analysis_name
                 dedicated_page = False
@@ -876,12 +927,15 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 continue_previous_runner=continue_previous_runners,
                 single_workflow_parallel=False,
                 postfix="",
+                rank=runner_rank,
+                size=runner_size,
             )
 
-            # Write the run overview onto the dedicated aggregation page.
-            # (Skipped when the run reuses the root page, i.e. no per-dataset
-            # report_name, to avoid clobbering the investigation page.)
-            if dedicated_page:
+            # Write the run overview onto the dedicated aggregation page
+            # (page owner only). Skipped when the run reuses the root page,
+            # i.e. no per-dataset report_name, to avoid clobbering the
+            # investigation page.
+            if dedicated_page and owns_page:
                 try:
                     ntiles = getattr(
                         getattr(awr, "parameter_tiler", None), "ntiles", None

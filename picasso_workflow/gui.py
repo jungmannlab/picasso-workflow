@@ -11727,7 +11727,11 @@ class Window(QtWidgets.QMainWindow):
             job_name = "mypwjob"
         slurm_options = {
             "nodes": self.cluster_nodes_spin.value(),
-            # "ntasks": Number of tasks,
+            # One task (rank) per node, each with cpus-per-task cores. This
+            # makes `srun` launch exactly #nodes ranks, so SLURM_NTASKS equals
+            # the node count and picasso-workflow distributes the single
+            # workflows across the nodes (one rank per node).
+            "ntasks-per-node": 1,
             "cpus-per-task": self.cluster_cores_spin.value(),
             "mem": self.cluster_memory_edit.text(),
             "time": self.cluster_timeout_edit.text(),
