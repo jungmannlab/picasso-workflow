@@ -7917,7 +7917,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         max of histogram
                     n_nearest_neighbors : int
                         number of nearest neighbors to evaluate
-                    granularity : float
+                    granularity : int
                     the spinna granularity
                 optional keys:
                     density_app : list of float

@@ -449,7 +449,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Analysis Hard- and Software</strong></p>
         <ac:structured-macro ac:name="expand" ac:schema-version="1">
-        <ac:parameter ac:name="title">Parameters</ac:parameter>
+        <ac:parameter ac:name="title">Results</ac:parameter>
         <ac:rich-text-body>
         <ul>
         """

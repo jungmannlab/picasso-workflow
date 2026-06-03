@@ -2470,9 +2470,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Output folder for module results",
             },
-            "nneighbor_distances": {
-                "type": "numpy.ndarray",
-                "description": "Nearest neighbor distance matrix",
+            "nneighbor": {
+                "type": "Path",
+                "description": "File path to the nearest neighbor data",
             },
         }
 
@@ -3220,7 +3220,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         max of histogram
                     n_nearest_neighbors : int
                         number of nearest neighbors to evaluate
-                    granularity : float
+                    granularity : int
                     the spinna granularity
                 optional keys:
                     density_app : list of float
@@ -3306,7 +3306,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": True,
             },
             "granularity": {
-                "type": "float",
+                "type": "int",
                 "description": "The spinna granularity",
                 "required": True,
             },
@@ -4428,9 +4428,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Output folder for module results",
             },
-            "mask2": {
-                "type": "numpy.ndarray",
-                "description": "Alternative generated mask",
+            "fp_mask": {
+                "type": "Path",
+                "description": "Path to the saved mask",
+            },
+            "area": {
+                "type": "float",
+                "description": "area in µm^2",
             },
         }
 
