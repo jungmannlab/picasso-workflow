@@ -11006,10 +11006,10 @@ class Window(QtWidgets.QMainWindow):
             current_row = self.single_workflow_list.currentRow()
             if current_row >= 0:
                 removed = self.single_workflow_modules[current_row][0]
-                self.single_workflow_list.takeItem(current_row)
-                del self.single_workflow_modules[current_row]
-                self._renumber_workflow_items(
-                    self.single_workflow_list, self.single_workflow_modules
+                self._remove_module(
+                    self.single_workflow_list,
+                    self.single_workflow_modules,
+                    current_row,
                 )
                 self._log_workflow_config_event(
                     "modules.remove",
@@ -11021,11 +11021,10 @@ class Window(QtWidgets.QMainWindow):
             current_row = self.aggregation_workflow_list.currentRow()
             if current_row >= 0:
                 removed = self.aggregation_workflow_modules[current_row][0]
-                self.aggregation_workflow_list.takeItem(current_row)
-                del self.aggregation_workflow_modules[current_row]
-                self._renumber_workflow_items(
+                self._remove_module(
                     self.aggregation_workflow_list,
                     self.aggregation_workflow_modules,
+                    current_row,
                 )
                 self._log_workflow_config_event(
                     "modules.remove",
@@ -11034,6 +11033,67 @@ class Window(QtWidgets.QMainWindow):
                     module=removed,
                 )
 
+    def _reorder_module(
+        self, list_widget, modules, tab_index, from_row, to_row
+    ):
+        """Move a module from from_row to to_row, keeping its parameters intact.
+
+        Reordering must not corrupt the parameters of the modules involved.
+        Before swapping, any pending widget edits are flushed to the module
+        currently being edited (at its pre-swap index). After swapping, the
+        editing index is repointed to the moved module's new row and the
+        selection is updated with the list-widget signal blocked, so the
+        selection-changed handler does not re-save the editor widgets onto a
+        now-stale index.
+        """
+        # Persist any pending edits to the currently edited item *before*
+        # the swap, while indices still match the editor widgets.
+        self._update_editing_workflow_item()
+
+        # Swap the module tuples (name, params) in the data model.
+        modules[from_row], modules[to_row] = (
+            modules[to_row],
+            modules[from_row],
+        )
+
+        # Refresh the displayed numbering/labels.
+        self._renumber_workflow_items(list_widget, modules)
+
+        # The editor widgets still show the moved module; point the editing
+        # state at its new row and move the selection without triggering a
+        # stale save/reload through currentRowChanged.
+        self.editing_workflow_index = to_row
+        self.editing_workflow_tab = tab_index
+        list_widget.blockSignals(True)
+        list_widget.setCurrentRow(to_row)
+        list_widget.blockSignals(False)
+
+    def _remove_module(self, list_widget, modules, row):
+        """Remove the module at row, keeping remaining parameters intact.
+
+        Clearing the editing state before touching the widget prevents the
+        selection-changed handler (fired by takeItem/setCurrentRow) from
+        flushing the editor widgets onto a now-stale index. The list-widget
+        signal is blocked during the mutation, then a clean selection is
+        restored so the editor reloads the correct module.
+        """
+        # We are deleting the item that may currently be in the editor; drop
+        # the editing state so no stale save happens during the mutation.
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+
+        list_widget.blockSignals(True)
+        list_widget.takeItem(row)
+        list_widget.blockSignals(False)
+        del modules[row]
+        self._renumber_workflow_items(list_widget, modules)
+
+        # Restore a valid selection (and reload the editor) if any modules
+        # remain, clamping to the last row when the tail item was removed.
+        if modules:
+            new_row = min(row, len(modules) - 1)
+            list_widget.setCurrentRow(new_row)
+
     def move_up(self):
         """Move the selected module up in the workflow order."""
         current_tab_index = self.workflow_tabs.currentIndex()
@@ -11041,19 +11101,13 @@ class Window(QtWidgets.QMainWindow):
         if current_tab_index == 0:  # Single Dataset Workflow
             current_row = self.single_workflow_list.currentRow()
             if current_row > 0:  # Can't move first item up
-                # Swap in list
-                (
-                    self.single_workflow_modules[current_row],
-                    self.single_workflow_modules[current_row - 1],
-                ) = (
-                    self.single_workflow_modules[current_row - 1],
-                    self.single_workflow_modules[current_row],
+                self._reorder_module(
+                    self.single_workflow_list,
+                    self.single_workflow_modules,
+                    current_tab_index,
+                    current_row,
+                    current_row - 1,
                 )
-                # Update display and maintain selection
-                self._renumber_workflow_items(
-                    self.single_workflow_list, self.single_workflow_modules
-                )
-                self.single_workflow_list.setCurrentRow(current_row - 1)
                 self._log_workflow_config_event(
                     "modules.move_up",
                     tab="single",
@@ -11063,20 +11117,13 @@ class Window(QtWidgets.QMainWindow):
         elif current_tab_index == 1:  # Aggregation Workflow
             current_row = self.aggregation_workflow_list.currentRow()
             if current_row > 0:  # Can't move first item up
-                # Swap in list
-                (
-                    self.aggregation_workflow_modules[current_row],
-                    self.aggregation_workflow_modules[current_row - 1],
-                ) = (
-                    self.aggregation_workflow_modules[current_row - 1],
-                    self.aggregation_workflow_modules[current_row],
-                )
-                # Update display and maintain selection
-                self._renumber_workflow_items(
+                self._reorder_module(
                     self.aggregation_workflow_list,
                     self.aggregation_workflow_modules,
+                    current_tab_index,
+                    current_row,
+                    current_row - 1,
                 )
-                self.aggregation_workflow_list.setCurrentRow(current_row - 1)
                 self._log_workflow_config_event(
                     "modules.move_up",
                     tab="aggregation",
@@ -11092,19 +11139,13 @@ class Window(QtWidgets.QMainWindow):
             current_row = self.single_workflow_list.currentRow()
             max_row = len(self.single_workflow_modules) - 1
             if 0 <= current_row < max_row:  # Can't move last item down
-                # Swap in list
-                (
-                    self.single_workflow_modules[current_row],
-                    self.single_workflow_modules[current_row + 1],
-                ) = (
-                    self.single_workflow_modules[current_row + 1],
-                    self.single_workflow_modules[current_row],
+                self._reorder_module(
+                    self.single_workflow_list,
+                    self.single_workflow_modules,
+                    current_tab_index,
+                    current_row,
+                    current_row + 1,
                 )
-                # Update display and maintain selection
-                self._renumber_workflow_items(
-                    self.single_workflow_list, self.single_workflow_modules
-                )
-                self.single_workflow_list.setCurrentRow(current_row + 1)
                 self._log_workflow_config_event(
                     "modules.move_down",
                     tab="single",
@@ -11115,20 +11156,13 @@ class Window(QtWidgets.QMainWindow):
             current_row = self.aggregation_workflow_list.currentRow()
             max_row = len(self.aggregation_workflow_modules) - 1
             if 0 <= current_row < max_row:  # Can't move last item down
-                # Swap in list
-                (
-                    self.aggregation_workflow_modules[current_row],
-                    self.aggregation_workflow_modules[current_row + 1],
-                ) = (
-                    self.aggregation_workflow_modules[current_row + 1],
-                    self.aggregation_workflow_modules[current_row],
-                )
-                # Update display and maintain selection
-                self._renumber_workflow_items(
+                self._reorder_module(
                     self.aggregation_workflow_list,
                     self.aggregation_workflow_modules,
+                    current_tab_index,
+                    current_row,
+                    current_row + 1,
                 )
-                self.aggregation_workflow_list.setCurrentRow(current_row + 1)
                 self._log_workflow_config_event(
                     "modules.move_down",
                     tab="aggregation",
