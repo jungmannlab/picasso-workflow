@@ -93,6 +93,7 @@ from picasso_workflow import (
     process_brightfield,
     util,
 )
+from picasso_workflow import __version__ as picassoworkflowversion
 from picasso_workflow.outpost_modules import render
 from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
@@ -728,7 +729,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         GPU memory in GB or 0 if no GPU
         """
         results["picasso version"] = picassoversion
-        results["picasso-workflow version"] = "N/A"
+        results["picasso-workflow version"] = picassoworkflowversion
         results["Architecture"] = platform.machine()
         results["OS"] = platform.system()
         results["host"] = platform.node()
