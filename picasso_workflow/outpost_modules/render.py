@@ -18,6 +18,35 @@ import colorsys
 # logger = logging.getLogger(__name__)
 
 
+def _normalize_ang(ang):
+    """Normalize a rotation-angle spec to what picasso.render.render expects.
+
+    Since picasso 0.10, ``ang`` must be a length-3 sequence (angx, angy,
+    angz) in radians, or None (no rotation) - it is indexed as
+    ``ang[0], ang[1], ang[2]``. The workflow historically passed a single
+    scalar (e.g. ``ctrmass_ang``), which now raises
+    ``TypeError: 'float' object is not subscriptable``.
+
+    Mapping:
+        * None or scalar 0      -> None (no rotation; renders the x-y
+          projection, which is the intended behaviour for 3D data without
+          a tilt)
+        * non-zero scalar a     -> (a, 0.0, 0.0) (tilt around the x axis)
+        * length-3 sequence     -> that sequence as a float tuple
+    """
+    if ang is None:
+        return None
+    if isinstance(ang, (int, float)):
+        return None if float(ang) == 0.0 else (float(ang), 0.0, 0.0)
+    ang = tuple(float(a) for a in ang)
+    if len(ang) != 3:
+        raise ValueError(
+            "render 'ang' must be None, a scalar, or a length-3 sequence "
+            f"(angx, angy, angz); got {len(ang)} values."
+        )
+    return ang
+
+
 def render_scene(kwargs, locs, info, viewport=None):
     """
     Returns QImage with rendered localizations.
@@ -42,6 +71,9 @@ def render_scene(kwargs, locs, info, viewport=None):
 
     if viewport is not None:
         kwargs["viewport"] = viewport
+    # picasso.render.render expects ang as a length-3 sequence or None
+    if "ang" in kwargs:
+        kwargs["ang"] = _normalize_ang(kwargs["ang"])
     n_group_colors = kwargs.get("n_group_colors", 8)
     cmap = kwargs.get("cmap", "magma")
 
