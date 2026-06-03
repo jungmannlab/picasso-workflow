@@ -24,6 +24,7 @@ import pickle
 import platform
 import random
 import string
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -742,17 +743,43 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["Memory available [GB]"] = (
             psutil.virtual_memory().available // (1024**3)
         )
-        try:
-            gpu_info = psutil.virtual_memory().gpu
-        except AttributeError:
-            gpu_info = None
-        if gpu_info:
-            results["GPU"] = gpu_info.name
-            results["GPU memory"] = gpu_info.memory_total // (1024**3)
-        else:
-            results["GPU"] = "N/A"
-            results["GPU memory [GB]"] = 0
+        results["GPU"], results["GPU memory [GB]"] = self._query_gpu_info()
         return parameters, results
+
+    def _query_gpu_info(self):
+        """Query GPU name(s) and total memory via nvidia-smi.
+
+        Returns ("N/A", 0) when no NVIDIA GPU is visible to this process
+        - e.g. no GPU on the node, no driver, or (on SLURM) no GPU was
+        requested via --gres=gpu / --gpus. nvidia-smi reflects the cgroup-
+        allocated devices, so this documents what the job actually got.
+
+        Returns:
+            tuple : (gpu_names : str, total_memory_gib : int)
+        """
+        try:
+            out = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=name,memory.total",
+                    "--format=csv,noheader,nounits",  # memory.total in MiB
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            ).stdout.strip()
+        except (FileNotFoundError, subprocess.SubprocessError):
+            return "N/A", 0
+        if not out:
+            return "N/A", 0
+        names = []
+        total_mib = 0
+        for line in out.splitlines():
+            name, mem = (x.strip() for x in line.split(","))
+            names.append(name)
+            total_mib += int(round(float(mem)))
+        return ", ".join(names), total_mib // 1024  # GiB
 
     #    @profile_resource_usage
     @module_decorator

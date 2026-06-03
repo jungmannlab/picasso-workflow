@@ -8432,6 +8432,20 @@ class Window(QtWidgets.QMainWindow):
         )
         cluster_config_layout.addWidget(self.cluster_cores_spin)
 
+        # Number of GPUs per node (0 = no GPU requested)
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#GPUs/node:"))
+        self.cluster_gpus_spin = QtWidgets.QSpinBox()
+        self.cluster_gpus_spin.setMinimum(0)
+        self.cluster_gpus_spin.setMaximum(64)
+        self.cluster_gpus_spin.setValue(
+            CONFIG["SlurmDefault"].get("gpus", 0)
+        )
+        self.cluster_gpus_spin.setToolTip(
+            "Number of GPUs to request per node via SLURM "
+            "(adds '#SBATCH --gres=gpu:N'). 0 = no GPU."
+        )
+        cluster_config_layout.addWidget(self.cluster_gpus_spin)
+
         # Memory
         cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"))
         self.cluster_memory_edit = QtWidgets.QLineEdit()
@@ -11715,6 +11729,11 @@ class Window(QtWidgets.QMainWindow):
         if email := self.slurm_email_edit.text().strip() != "":
             slurm_options["mail-user"] = email
             slurm_options["mail-type"] = "ALL"
+
+        # Request GPUs only when asked for (--gres=gpu:N)
+        n_gpus = self.cluster_gpus_spin.value()
+        if n_gpus > 0:
+            slurm_options["gres"] = f"gpu:{n_gpus}"
 
         # use_pw_mod = self.cluster_use_module.isChecked()
 
