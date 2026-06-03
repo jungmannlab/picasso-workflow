@@ -725,9 +725,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                     Memory available [GB] : int
                         available system memory in GB
                     GPU : str
-                        GPU name or "N/A"
+                        GPU name(s) or "N/A"
                     GPU memory [GB] : int
-                        GPU memory in GB or 0 if no GPU
+                        total GPU memory in GB or 0 if no GPU
+                    GPU clock [MHz] : int or str
+                        maximum SM (CUDA) clock, or "N/A" if no GPU
+                    GPU cores : int or str
+                        total number of CUDA cores (via NVML), or "N/A"
+                        if no GPU / NVML unavailable
         """
         results["picasso version"] = picassoversion
         results["picasso-workflow version"] = picassoworkflowversion
@@ -743,26 +748,39 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["Memory available [GB]"] = (
             psutil.virtual_memory().available // (1024**3)
         )
-        results["GPU"], results["GPU memory [GB]"] = self._query_gpu_info()
+        results.update(self._query_gpu_info())
         return parameters, results
 
     def _query_gpu_info(self):
-        """Query GPU name(s) and total memory via nvidia-smi.
+        """Query GPU name(s), total memory, max clock and CUDA-core count.
 
-        Returns ("N/A", 0) when no NVIDIA GPU is visible to this process
-        - e.g. no GPU on the node, no driver, or (on SLURM) no GPU was
+        Name, memory and clock come from nvidia-smi. CUDA-core count is not
+        exposed by nvidia-smi, so it is queried via NVML (pynvml) when
+        available and reported as "N/A" otherwise. Across multiple GPUs,
+        memory and cores are summed and the maximum clock is reported.
+
+        All fields degrade to "N/A"/0 when no NVIDIA GPU is visible to this
+        process - e.g. no GPU on the node, no driver, or (on SLURM) no GPU
         requested via --gres=gpu / --gpus. nvidia-smi reflects the cgroup-
         allocated devices, so this documents what the job actually got.
 
         Returns:
-            tuple : (gpu_names : str, total_memory_gib : int)
+            dict : with keys "GPU", "GPU memory [GB]", "GPU clock [MHz]"
+                and "GPU cores"
         """
+        info = {
+            "GPU": "N/A",
+            "GPU memory [GB]": 0,
+            "GPU clock [MHz]": "N/A",
+            "GPU cores": "N/A",
+        }
         try:
             out = subprocess.run(
                 [
                     "nvidia-smi",
-                    "--query-gpu=name,memory.total",
-                    "--format=csv,noheader,nounits",  # memory.total in MiB
+                    # memory.total in MiB, clocks.max.sm in MHz
+                    "--query-gpu=name,memory.total,clocks.max.sm",
+                    "--format=csv,noheader,nounits",
                 ],
                 capture_output=True,
                 text=True,
@@ -770,16 +788,61 @@ class AutoPicasso(util.AbstractModuleCollection):
                 check=True,
             ).stdout.strip()
         except (FileNotFoundError, subprocess.SubprocessError):
-            return "N/A", 0
+            return info
         if not out:
-            return "N/A", 0
+            return info
         names = []
         total_mib = 0
+        clocks = []
         for line in out.splitlines():
-            name, mem = (x.strip() for x in line.split(","))
-            names.append(name)
-            total_mib += int(round(float(mem)))
-        return ", ".join(names), total_mib // 1024  # GiB
+            parts = [x.strip() for x in line.split(",")]
+            names.append(parts[0])
+            total_mib += int(round(float(parts[1])))
+            if len(parts) > 2 and parts[2] not in ("", "[N/A]", "N/A"):
+                try:
+                    clocks.append(int(round(float(parts[2]))))
+                except ValueError:
+                    pass
+        info["GPU"] = ", ".join(names)
+        info["GPU memory [GB]"] = total_mib // 1024  # GiB
+        if clocks:
+            info["GPU clock [MHz]"] = max(clocks)
+        cores = self._query_gpu_cores()
+        if cores is not None:
+            info["GPU cores"] = cores
+        return info
+
+    @staticmethod
+    def _query_gpu_cores():
+        """Total CUDA-core count across visible GPUs via NVML (pynvml).
+
+        nvidia-smi does not expose the CUDA-core count; NVML's
+        nvmlDeviceGetNumGpuCores does (driver/NVML permitting). Returns the
+        summed core count, or None if pynvml/NVML is unavailable or too old
+        (so the caller can report "N/A").
+        """
+        try:
+            import pynvml
+        except ImportError:
+            return None
+        try:
+            pynvml.nvmlInit()
+        except Exception:
+            return None
+        try:
+            total = 0
+            for idx in range(pynvml.nvmlDeviceGetCount()):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(idx)
+                total += pynvml.nvmlDeviceGetNumGpuCores(handle)
+            return total
+        except Exception:
+            # e.g. older NVML without nvmlDeviceGetNumGpuCores
+            return None
+        finally:
+            try:
+                pynvml.nvmlShutdown()
+            except Exception:
+                pass
 
     #    @profile_resource_usage
     @module_decorator

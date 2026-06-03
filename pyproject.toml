@@ -19,6 +19,9 @@ dependencies = [
     "picassosr>=0.10.1",
     # GUI uses PyQt6 directly; keep in sync with picasso's constraint
     "PyQt6>=6.10.2,<7",
+    # NVML bindings for GPU CUDA-core count in analysis_documentation
+    # (nvidia-smi cannot report cores). Harmless without an NVIDIA driver.
+    "nvidia-ml-py>=12.0.0",
     "moviepy==1.0.3",
     "python-dotenv==1.0.1",
     "pre-commit>=3.5.1",
