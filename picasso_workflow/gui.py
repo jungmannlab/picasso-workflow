@@ -6077,6 +6077,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     nn_nth : int
                         number of nearest neighbors to analyse
                         default: 1
+                    NND_bin : int
+                        bin size (nm)
+                        auto-calculated if None or 0
+                    NND_maxdist : int
+                        maximum distance in histogram (nm)
+                        auto-calculated if None or 0
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -6141,6 +6147,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "int",
                 "description": "Neighbor up to which to evaluate",
                 "default": 2,
+                "required": False,
+            },
+            "NND_bin": {
+                "type": "int",
+                "description": "Bin size (nm). Auto-calculated if None or 0",
+                "default": 0,
+                "required": False,
+            },
+            "NND_maxdist": {
+                "type": "int",
+                "description": "Maximum distance in histogram (nm). Auto-calculated if None or 0.",
+                "default": 0,
                 "required": False,
             },
         }

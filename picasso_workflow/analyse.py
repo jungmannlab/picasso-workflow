@@ -12142,6 +12142,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                     nn_nth : int
                         number of nearest neighbors to analyse
                         default: 1
+                    NND_bin : int
+                        bin size (nm)
+                        auto-calculated if None or 0
+                    NND_maxdist : int
+                        maximum distance in histogram (nm)
+                        auto-calculated if None or 0
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -12215,10 +12221,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ).T
                 # dim = 2
 
-        compound_density = density_gt[target] / 1 + density_gt[reference] / 1
+        compound_density = density_gt[target] / 1 + density_gt[reference] / 1  # in nm^-2
         # area = parameters["n_simulate"] / (compound_density / 1e6)
         # area = parameters["n_simulate"] / (compound_density)
-        area = parameters["n_simulate"] / (compound_density * 1e6)
+        area = parameters["n_simulate"] / (compound_density * 1e6)  # in µm^2
         n_sim_targets = {
             tag: int(
                 parameters["n_simulate"] * density_gt[tag] / compound_density
@@ -12298,17 +12304,21 @@ class AutoPicasso(util.AbstractModuleCollection):
         expected_1stNN_peak = (
             2 / (2 * dimensionality * np.pi * (compound_density / 2))
         ) ** (1 / dimensionality)
-        fit_NND_bin = pair_distance / 3
+        fit_NND_bin = parameters.get("NND_bin")
+        if not fit_NND_bin:
+            fit_NND_bin = pair_distance / 3
         # max dist: a few times the first NN distance peak
-        fit_NND_maxdist = 4 * parameters["nn_nth"] * expected_1stNN_peak
+        fit_NND_maxdist = parameters.get("NND_maxdist")
+        if not fit_NND_maxdist:
+            fit_NND_maxdist = 4 * parameters["nn_nth"] * expected_1stNN_peak
 
         spinna_parameters = {
             "structures": structures,
             "label_unc": labeling_uncertainty,
             "le": labeling_efficiency,
             "mask_dict": None,
-            "width": np.sqrt(area * 1e6),
-            "height": np.sqrt(area * 1e6),
+            "width": np.sqrt(area * 1e6),  # in nm
+            "height": np.sqrt(area * 1e6),  # in nm
             "depth": None,
             "random_rot_mode": "2D",
             "exp_data": exp_data,
@@ -12327,6 +12337,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             "n_simulated": n_sim_targets,
             "bootstrap": parameters.get("bootstrap"),
         }
+
+        logger.debug(f"Calling single_spinna_run with parameters {spinna_parameters}")
 
         result, fp_fig = picasso_outpost.single_spinna_run(**spinna_parameters)
         plt.close("all")
