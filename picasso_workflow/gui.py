@@ -10,6 +10,7 @@ from picasso_workflow import util, CONFIG
 from loguru import logger
 import subprocess
 import os
+import re
 import sys
 import yaml
 import importlib.util
@@ -11716,7 +11717,14 @@ class Window(QtWidgets.QMainWindow):
             host_cluster, login_node, scriptname
         )
 
-        job_name = "mypwjob"
+        # Use the results folder's last directory as a meaningful job name
+        # (falls back to "mypwjob" if it cannot be determined). Sanitize to
+        # SLURM-safe characters: keep [A-Za-z0-9._-], collapse any run of
+        # other characters (e.g. whitespace) into a single underscore.
+        job_name = os.path.basename(os.path.normpath(results_folder_local))
+        job_name = re.sub(r"[^A-Za-z0-9._-]+", "_", job_name).strip("_")
+        if job_name in ("", "."):
+            job_name = "mypwjob"
         slurm_options = {
             "nodes": self.cluster_nodes_spin.value(),
             # "ntasks": Number of tasks,
