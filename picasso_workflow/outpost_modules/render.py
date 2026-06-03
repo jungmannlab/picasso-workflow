@@ -18,7 +18,36 @@ import colorsys
 # logger = logging.getLogger(__name__)
 
 
-def render_scene(kwargs, locs, viewport=None):
+def _normalize_ang(ang):
+    """Normalize a rotation-angle spec to what picasso.render.render expects.
+
+    Since picasso 0.10, ``ang`` must be a length-3 sequence (angx, angy,
+    angz) in radians, or None (no rotation) - it is indexed as
+    ``ang[0], ang[1], ang[2]``. The workflow historically passed a single
+    scalar (e.g. ``ctrmass_ang``), which now raises
+    ``TypeError: 'float' object is not subscriptable``.
+
+    Mapping:
+        * None or scalar 0      -> None (no rotation; renders the x-y
+          projection, which is the intended behaviour for 3D data without
+          a tilt)
+        * non-zero scalar a     -> (a, 0.0, 0.0) (tilt around the x axis)
+        * length-3 sequence     -> that sequence as a float tuple
+    """
+    if ang is None:
+        return None
+    if isinstance(ang, (int, float)):
+        return None if float(ang) == 0.0 else (float(ang), 0.0, 0.0)
+    ang = tuple(float(a) for a in ang)
+    if len(ang) != 3:
+        raise ValueError(
+            "render 'ang' must be None, a scalar, or a length-3 sequence "
+            f"(angx, angy, angz); got {len(ang)} values."
+        )
+    return ang
+
+
+def render_scene(kwargs, locs, info, viewport=None):
     """
     Returns QImage with rendered localizations.
 
@@ -28,6 +57,9 @@ def render_scene(kwargs, locs, viewport=None):
         True if optimally adjust contrast
     locs : list of np.rec.array
         the channel locs
+    info : list of dict
+        localization metadata; must contain "Pixelsize" (required by
+        picasso.render.render since picasso 0.10).
     viewport : tuple (default=None)
         Viewport to be rendered. If None, takes current viewport
 
@@ -39,6 +71,9 @@ def render_scene(kwargs, locs, viewport=None):
 
     if viewport is not None:
         kwargs["viewport"] = viewport
+    # picasso.render.render expects ang as a length-3 sequence or None
+    if "ang" in kwargs:
+        kwargs["ang"] = _normalize_ang(kwargs["ang"])
     n_group_colors = kwargs.get("n_group_colors", 8)
     cmap = kwargs.get("cmap", "magma")
 
@@ -46,10 +81,10 @@ def render_scene(kwargs, locs, viewport=None):
     # render single or multi channel data
     if n_channels == 1:
         bgra = render_single_channel(
-            kwargs, locs[0], n_group_colors=n_group_colors, cmap=cmap
+            kwargs, locs[0], info, n_group_colors=n_group_colors, cmap=cmap
         )
     else:
-        bgra = render_multi_channel(kwargs, locs)
+        bgra = render_multi_channel(kwargs, locs, info)
 
     # add alpha channel (no transparency)
     bgra[:, :, 3].fill(255)
@@ -57,7 +92,7 @@ def render_scene(kwargs, locs, viewport=None):
     return bgra
 
 
-def render_single_channel(kwargs, locs, n_group_colors=8, cmap="magma"):
+def render_single_channel(kwargs, locs, info, n_group_colors=8, cmap="magma"):
     """
     Renders single channel localizations.
 
@@ -84,8 +119,12 @@ def render_single_channel(kwargs, locs, n_group_colors=8, cmap="magma"):
     if hasattr(locs, "group") and locs.group.size:
         group_colors = get_group_color(locs, n_group_colors)
         locs = [locs[group_colors == _] for _ in range(n_group_colors)]
-        return render_multi_channel(kwargs, locs=locs)
-    n_locs, image = render.render(locs, **kwargs)
+        return render_multi_channel(kwargs, locs=locs, info=info)
+
+    render_args = kwargs.copy()
+    render_args.pop("cmap", None)
+    render_args.pop("n_group_colors", None)
+    n_locs, image = render.render(locs, info, **render_args)
 
     # adjust contrast and convert to 8 bits
     image = scale_contrast([image])[0]
@@ -108,6 +147,7 @@ def render_single_channel(kwargs, locs, n_group_colors=8, cmap="magma"):
 def render_multi_channel(
     kwargs,
     locs,
+    info,
 ):
     """
     Renders and paints multichannel localizations.
@@ -150,13 +190,16 @@ def render_multi_channel(
         int(np.ceil(kwargs["oversampling"] * (y_max - y_min))),
     )
     # if single channel is rendered
+    render_args = kwargs.copy()
+    render_args.pop("cmap", None)
+    render_args.pop("n_group_colors", None)
     if len(locs) == 1:
-        renderings = [render.render(_, **kwargs) for _ in locs]
+        renderings = [render.render(_, info, **render_args) for _ in locs]
     else:
         renderings = [
-            render.render(_, **kwargs) for i, _ in enumerate(locs)
+            render.render(_, info, **render_args) for i, _ in enumerate(locs)
         ]  # renders only channels that are checked in dataset dialog
-    # renderings = [render.render(_, **kwargs) for _ in locs]
+    # renderings = [render.render(_, **render_args) for _ in locs]
     # n_locs = sum([_[0] for _ in renderings])
     image = np.array([_[1] for _ in renderings])
 
@@ -224,7 +267,7 @@ def scale_contrast(images):
                 if _.max() != 0  # the maximum value in image is 0.0
             ]
         )
-        / 4
+        / 40
     )
     # upper = INITIAL_REL_MAXIMUM * max_
 
@@ -272,10 +315,27 @@ def get_group_color(locs, n_group_colors):
 
 
 def get_default_render_kwargs(channel_locs, image_px_size, cam_px_size):
-    x_min = min([locs["x"].min() for locs in channel_locs])
-    x_max = max([locs["x"].max() for locs in channel_locs])
-    y_min = min([locs["y"].min() for locs in channel_locs])
-    y_max = max([locs["y"].max() for locs in channel_locs])
+    # Compute the viewport over all channels, ignoring empty channels and
+    # non-finite coordinates. Raise ValueError if nothing renderable
+    # remains (e.g. a mask that excludes all localizations) so the caller
+    # can handle it gracefully instead of producing a NaN viewport.
+    x_mins, x_maxs, y_mins, y_maxs = [], [], [], []
+    for locs in channel_locs:
+        if len(locs) == 0:
+            continue
+        finite = np.isfinite(locs["x"]) & np.isfinite(locs["y"])
+        if not finite.any():
+            continue
+        x_mins.append(locs["x"][finite].min())
+        x_maxs.append(locs["x"][finite].max())
+        y_mins.append(locs["y"][finite].min())
+        y_maxs.append(locs["y"][finite].max())
+    if not x_mins:
+        raise ValueError(
+            "no localizations with finite coordinates to render"
+        )
+    x_min, x_max = min(x_mins), max(x_maxs)
+    y_min, y_max = min(y_mins), max(y_maxs)
 
     kwargs = {
         "oversampling": cam_px_size / image_px_size,
@@ -331,23 +391,27 @@ def plot_scene(
     y_offset += kwargs["viewport"][0][0] * image_px_size
     logger.debug(f"rendering locs with offset {(x_offset, y_offset)} nm")
 
-    bgra = render_scene(kwargs, channel_locs)
+    # picasso.render.render (>= 0.10) requires info and reads "Pixelsize"
+    # from it; the camera pixel size is exactly that. oversampling is
+    # derived internally as pixelsize / disp_px_size and cancels with the
+    # "oversampling" we pass, so the rendered result is unchanged.
+    info = [{"Pixelsize": cam_px_size}]
+
+    bgra = render_scene(kwargs, channel_locs, info)
 
     fig, ax = plt.subplots()
     ax.imshow(
         bgra,
         aspect="equal",
-        origin="lower",
+        origin="upper",
         extent=[
             x_offset / 1000,
             (bgra.shape[1] * image_px_size + x_offset) / 1000,
-            y_offset / 1000,
             (bgra.shape[0] * image_px_size + y_offset) / 1000,
+            y_offset / 1000,
         ],
     )
-    ax.set_xlabel("x [µm]")
-    ax.set_ylabel("y [µm]")
-    ax.set_title(title)
+    ax.axis("off")
     if fp is not None:
-        fig.savefig(fp)
+        fig.savefig(fp, bbox_inches="tight", pad_inches=0)
     return fig, ax

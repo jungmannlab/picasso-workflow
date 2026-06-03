@@ -1,4 +1,4 @@
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 try:
     from picasso_workflow._version import __version__
@@ -17,14 +17,6 @@ from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
 from picasso_workflow import standard_singledataset_workflows
 from picasso_workflow import standard_aggregation_workflows
 
-# Load the environment variables from the .env file
-load_dotenv()
-
-if os.getenv("SLURM_JOB_ID") is None:
-    ON_CLUSTER = False
-else:
-    ON_CLUSTER = True
-
 
 # configure logger
 def config_logger():
@@ -33,10 +25,31 @@ def config_logger():
     # formatter = logging.Formatter(
     #     "%(asctime)s | %(name)s | %(funcName)s | %(levelname)s -> %(message)s"
     # )
-    os.makedirs("logs", exist_ok=True)
     job_id = os.getenv("SLURM_JOB_ID")  # Get the job ID from the environment
     rank_id = os.getenv("SLURM_PROCID")
-    logfile = f"logs/picasso-workflow-job{job_id}-rank{rank_id}.log"
+    # Log destination, in priority order:
+    #   1. PW_LOG_DIR, if set — lets the submitting tooling co-locate the
+    #      workflow log with the job's other artefacts (e.g. the SLURM
+    #      stdout/stderr in a shared per-run directory).
+    #   2. On SLURM, cwd/logs — next to the job's stdout/stderr logs.
+    #   3. Local/GUI launches (cwd is unpredictable — Windows shortcut,
+    #      macOS .app, etc.): anchor under the user's home so the log stays
+    #      discoverable.
+    pw_log_dir = os.getenv("PW_LOG_DIR")
+    if pw_log_dir:
+        log_dir = Path(pw_log_dir)
+    elif job_id is not None:
+        log_dir = Path.cwd() / "logs"
+    else:
+        log_dir = Path.home() / ".picasso_workflow" / "logs"
+    # Tag the filename by job/rank on SLURM so parallel ranks don't clash.
+    if job_id is not None:
+        logfile = str(
+            log_dir / f"picasso-workflow-job{job_id}-rank{rank_id}.log"
+        )
+    else:
+        logfile = str(log_dir / "picasso-workflow.log")
+    log_dir.mkdir(parents=True, exist_ok=True)
     # file_handler = handlers.RotatingFileHandler(
     #     logfile,
     #     maxBytes=1e6,
@@ -57,13 +70,14 @@ def config_logger():
         retention=5,
         enqueue=True,
         serialize=False,
-        level="DEBUG"
+        level="DEBUG",
     )
     logger.add(
         sys.stderr,
         format="{time:YYYY-MM-DD HH:mm:ss:SSS} | PID:{process} | {name} | {function} | {level} -> {message}",
         level="ERROR",
     )
+    logger.info(f"picasso-workflow log file: {logfile}")
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -95,6 +109,31 @@ def _load_yaml(path) -> dict:
         return yaml.safe_load(f) or {}
 
 
+def _log_dotenv():
+    """Locate the .env file actually used by load_dotenv() and log it.
+
+    ``load_dotenv()`` (no args) walks up from the caller's ``__file__``
+    directory looking for a ``.env``; ``find_dotenv()`` with default
+    ``usecwd=False`` reproduces that, since this function is called from
+    the same module body.
+    """
+    dotenv_path = find_dotenv()
+    if dotenv_path:
+        logger.info(f"Loading .env from: {dotenv_path}")
+        try:
+            with open(dotenv_path, "r") as f:
+                content = f.read()
+            logger.info(f".env content:\n{content}")
+        except OSError as exc:
+            logger.warning(f"Could not read .env at {dotenv_path}: {exc}")
+    else:
+        logger.info(
+            "No .env file found by python-dotenv "
+            f"(searched upward from {Path(__file__).parent})."
+        )
+    return dotenv_path
+
+
 def load_config():
     """Load the picasso-workflow configuration yaml file.
 
@@ -111,8 +150,15 @@ def load_config():
         pkg_config = importlib.resources.files("picasso_workflow").joinpath(
             "config.yaml"
         )
-        config = _load_yaml(pkg_config)
-    except (FileNotFoundError, TypeError):
+        pkg_data = _load_yaml(pkg_config)
+        logger.info(f"Loaded bundled config.yaml from: {pkg_config}")
+        logger.info(
+            "Bundled config.yaml content:\n"
+            f"{yaml.safe_dump(pkg_data, sort_keys=False)}"
+        )
+        config = pkg_data
+    except (FileNotFoundError, TypeError) as exc:
+        logger.warning(f"No bundled config.yaml available ({exc!r}).")
         # template = importlib.resources.files("picasso_workflow").joinpath(
         #     "config_template.yaml"
         # )
@@ -122,18 +168,46 @@ def load_config():
     # 2. Site-wide admin config (optional)
     site_config = _site_config_path()
     if site_config.exists():
-        config = _deep_merge(config, _load_yaml(site_config))
+        site_data = _load_yaml(site_config)
+        logger.info(f"Loaded site-wide config.yaml from: {site_config}")
+        logger.info(
+            "Site-wide config.yaml content:\n"
+            f"{yaml.safe_dump(site_data, sort_keys=False)}"
+        )
+        config = _deep_merge(config, site_data)
+    else:
+        logger.debug(f"No site-wide config.yaml at {site_config} (skipped).")
 
     # 3. Per-user config (optional)
     user_config = Path.home() / ".config" / "picasso_workflow" / "config.yaml"
     if user_config.exists():
-        config = _deep_merge(config, _load_yaml(user_config))
+        user_data = _load_yaml(user_config)
+        logger.info(f"Loaded per-user config.yaml from: {user_config}")
+        logger.info(
+            "Per-user config.yaml content:\n"
+            f"{yaml.safe_dump(user_data, sort_keys=False)}"
+        )
+        config = _deep_merge(config, user_data)
+    else:
+        logger.debug(f"No per-user config.yaml at {user_config} (skipped).")
 
     return config
 
 
+# Configure logger first so that .env and config.yaml loading get logged.
 config_logger()
 # logger = logging.getLogger(__name__)
+
+# Load the environment variables from the .env file (logs which file is used).
+_log_dotenv()
+load_dotenv()
+
+if os.getenv("SLURM_JOB_ID") is None:
+    # keep ON_CLUSTER in sync; original assignment above also reflects this,
+    # but .env may have just been loaded, so re-evaluate.
+    ON_CLUSTER = False
+else:
+    ON_CLUSTER = True
 
 CONFIG = load_config()
 

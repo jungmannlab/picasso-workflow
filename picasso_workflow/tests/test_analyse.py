@@ -735,7 +735,10 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_info = [info]
         self.ap.channel_tags = ["CD86"]
 
-        parameters = {"fp_spinna_batch_config": cfg_fp}
+        parameters = {
+            "fp_spinna_batch_config": cfg_fp,
+            "use_workflow_locs": True,
+        }
         parameters, results = self.ap.spinna_batch(0, parameters)
 
         # the modified config is written to a copy in the results
@@ -797,7 +800,10 @@ class TestAnalyseModules(unittest.TestCase):
         )
         self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
 
-        parameters = {"fp_spinna_batch_config": cfg_fp}
+        parameters = {
+            "fp_spinna_batch_config": cfg_fp,
+            "use_workflow_locs": True,
+        }
         parameters, results = self.ap.spinna_batch(0, parameters)
 
         assert results["success"] is True
@@ -859,7 +865,10 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_info = [info]
         self.ap.channel_tags = ["CD86"]
 
-        parameters = {"fp_spinna_batch_config": cfg_fp}
+        parameters = {
+            "fp_spinna_batch_config": cfg_fp,
+            "use_workflow_locs": True,
+        }
         parameters, results = self.ap.spinna_batch(0, parameters)
 
         written_cfg = pd.read_csv(results["fp_spinna_batch_config"])
@@ -1137,8 +1146,9 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
-    def labeling_efficiency_analysis(self, mock_spinna_sgl):
+    @patch("picasso_workflow.analyse.picasso_outpost.plot_spinna_nnd")
+    @patch("picasso_workflow.analyse.spinna.fit_le")
+    def labeling_efficiency_analysis(self, mock_fit_le, mock_plot_nnd):
         parameters = {
             "target_name": "CD86",
             "reference_name": "GFP",
@@ -1150,20 +1160,27 @@ class TestAnalyseModules(unittest.TestCase):
             "sim_repeats": 2,
             # "nn_nth": 2,
         }
-        spinna_result = {
-            "Fitted proportions of structures": np.array([0.4, 0.15, 0.35]),
-            "props": np.array([40.0, 15.0, 35.0]),
-            "props_std": np.array([2.0, 1.0, 3.0]),
-        }
-        mock_spinna_sgl.return_value = (
-            spinna_result,
-            [
-                "/path/to/figAA.png",
-                "/path/to/figAB.png",
-                "/path/to/figBA.png",
-                "/path/to/figBB.png",
-            ],
+        # fit_le returns LE values in percent. With monomer/heterodimer
+        # proportions [CD86_only, GFP_only, AB] = [0.40, 0.15, 0.35] the
+        # LE (structure basis, AB halved) is AB/(monomer+AB):
+        #   LE_CD86 = 0.175 / (0.15 + 0.175) = 53.85 %
+        #   LE_GFP  = 0.175 / (0.40 + 0.175) = 30.43 %
+        best_props = np.array([0.40, 0.15, 0.35])
+        le_values = {"CD86": 53.846153846, "GFP": 30.434782609}
+        mock_fit_le.return_value = (
+            le_values,
+            {"CD86": [5], "GFP": [5]},  # fitted_label_unc
+            10.0,  # best_distance
+            0.5,  # best_score
+            best_props,
+            MagicMock(),  # best_mixer (unused; plotting is mocked)
         )
+        mock_plot_nnd.return_value = [
+            "/path/to/figAA.png",
+            "/path/to/figAB.png",
+            "/path/to/figBA.png",
+            "/path/to/figBB.png",
+        ]
         self.ap.channel_tags = ["GFP", "CD86"]
         self.ap.channel_locs = [None, None]
         locs_dtype = [
@@ -1197,6 +1214,18 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.labeling_efficiency_analysis(
             0, parameters
         )
+
+        # LE stored on the 0-1 scale (fit_le returns percent)
+        self.assertAlmostEqual(
+            results["labeling_efficiency"]["CD86"], 0.53846153846, places=5
+        )
+        self.assertAlmostEqual(
+            results["labeling_efficiency"]["GFP"], 0.30434782609, places=5
+        )
+        # no bootstrap requested -> std is zero but the key must exist
+        self.assertEqual(results["labeling_efficiency_std"]["CD86"], 0.0)
+        self.assertEqual(results["labeling_efficiency_std"]["GFP"], 0.0)
+        self.assertEqual(len(results["fp_fig"]), 4)
 
         shutil.rmtree(
             os.path.join(

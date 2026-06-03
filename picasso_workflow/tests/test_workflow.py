@@ -103,6 +103,47 @@ class TestWorkflow(unittest.TestCase):
         shutil.rmtree(wr.result_folder)
 
     # @unittest.skip('')
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_a04b_call_module_surfaces_analyse_error(self):
+        """When the analysis step raises, the original exception must
+        propagate from call_module() -- not a KeyError from looking up
+        self.results[key] when reporting the (non-existent) success
+        result to Confluence. Regression test for workflow.py:791.
+        """
+        reporter_config = {
+            "report_name": "myreport",
+            "ConfluenceReporter": {"a": 0},
+        }
+        analysis_config = {"result_location": self.results_folder}
+        workflow_modules = []
+
+        wr = WorkflowRunner.config_from_dicts(
+            reporter_config, analysis_config, workflow_modules
+        )
+
+        boom = RuntimeError("kaboom")
+
+        def failing_module(i, parameters):
+            raise boom
+
+        wr.autopicasso.my_module = failing_module
+        # Replace the per-module success reporter with a strict mock so
+        # we can assert it is NOT invoked when the analysis step failed.
+        wr.confluencereporter.my_module = MagicMock()
+
+        with self.assertRaises(RuntimeError) as cm:
+            wr.call_module("my_module", 0, {"parameter0": 1})
+        assert "kaboom" in str(cm.exception)
+
+        # Confluence error path was used; success-path reporter was not.
+        wr.confluencereporter.report_error.assert_called_once()
+        wr.confluencereporter.my_module.assert_not_called()
+
+        shutil.rmtree(wr.result_folder)
+
+    # @unittest.skip('')
     @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
     @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
     @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)

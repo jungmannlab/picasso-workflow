@@ -172,21 +172,33 @@ def align_channels(
     )
 
 
+def _has_z(locs):
+    """Check whether a locs object (np.recarray or pd.DataFrame) has a
+    'z' coordinate. Returns False for 2D data missing the z column/field.
+    """
+    if hasattr(locs, "columns"):  # pandas DataFrame
+        return "z" in locs.columns
+    if getattr(locs, "dtype", None) is not None and locs.dtype.names:
+        return "z" in locs.dtype.names  # np.recarray / structured array
+    return hasattr(locs, "z")
+
+
 def align_by_picked(channel_locs, fiducial_locs):
     # find shift between channels
     shift = shift_from_picked(fiducial_locs)
     # print("Shift {}".format(shift))
 
     # align each channel
+    has_z = len(shift) == 3
     for i in range(len(channel_locs)):
         channel_locs[i].y -= shift[0][i]
         channel_locs[i].x -= shift[1][i]
-        if len(shift) == 3:
+        if has_z and _has_z(channel_locs[i]):
             channel_locs[i].z -= shift[2][i]
 
         fiducial_locs[i].y -= shift[0][i]
         fiducial_locs[i].x -= shift[1][i]
-        if len(shift) == 3:
+        if has_z and _has_z(fiducial_locs[i]):
             fiducial_locs[i].z -= shift[2][i]
 
     cumulative_shift = np.array(shift)[..., np.newaxis]
@@ -1974,6 +1986,72 @@ def single_spinna_run(
     # print(f"Results saved to {save_filename}_fit_summary.txt")
 
     # plot and save the NND plots
+    fp_fig = plot_spinna_nnd(
+        mixer=mixer,
+        targets=targets,
+        exp_data=exp_data,
+        opt_props=opt_props,
+        n_simulated=n_simulated,
+        sim_repeats=sim_repeats,
+        NND_bin=NND_bin,
+        NND_maxdist=NND_maxdist,
+        nn_plotted=nn_plotted,
+        save_filename=save_filename,
+        result_dir=result_dir,
+    )
+
+    return results, fp_fig
+
+
+def plot_spinna_nnd(
+    mixer,
+    targets,
+    exp_data,
+    opt_props,
+    n_simulated,
+    sim_repeats,
+    NND_bin,
+    NND_maxdist,
+    nn_plotted,
+    save_filename,
+    result_dir,
+):
+    """Plot and save the simulated-vs-experimental nearest-neighbor-distance
+    (NND) histograms for a fitted SPINNA mixer.
+
+    Extracted from single_spinna_run so it can be reused directly with the
+    StructureMixer and proportions returned by spinna.fit_le.
+
+    Args:
+        mixer : spinna.StructureMixer
+            the fitted mixer
+        targets : list of str
+            molecular target names; figures are produced for each target
+            pair (duplicated), in the order given by
+            mixer.get_neighbor_idx(duplicate=True)
+        exp_data : dict
+            experimental coordinates per target
+        opt_props : np.ndarray or tuple
+            fitted structure proportions (tuple if bootstrapped; mean used)
+        n_simulated : dict
+            number of simulated molecules per target
+        sim_repeats : int
+            number of simulation repeats
+        NND_bin : float
+            histogram bin size (nm)
+        NND_maxdist : float
+            maximum distance shown (nm)
+        nn_plotted : int
+            number of nearest neighbors to plot
+        save_filename : str
+            base filename (without extension) for saved figures
+        result_dir : str
+            directory the returned figure paths are anchored to
+
+    Returns:
+        fp_fig : list of str
+            filepaths of the saved NND .png figures
+    """
     nn_counts = {}
     for i, t1 in enumerate(targets):
         for t2 in targets[i:]:
@@ -2032,7 +2110,7 @@ def single_spinna_run(
             os.path.join(result_dir, f"{save_filename}_NND_{t1}_{t2}.png")
         )
 
-    return results, fp_fig
+    return fp_fig
 
 
 def load_structures_from_dict(structure_dict):
@@ -4147,7 +4225,10 @@ def _rmsd_at_com(locs_xy):
 
 
 def plot_1dhist(locs, field, fig, ax):
-    data = locs[field]
+    # np.asarray: lib.calculate_optimal_bins (picasso >= 0.10) samples via
+    # positional integer indexing (data[rng.choice(...)]), which fails on a
+    # pandas Series with a non-RangeIndex. Force a numpy array.
+    data = np.asarray(locs[field])
     data = data[np.isfinite(data)]
     bins = lib.calculate_optimal_bins(data, 1000)
     # Prepare the figure
@@ -4158,8 +4239,11 @@ def plot_1dhist(locs, field, fig, ax):
 
 
 def plot_2dhist(locs, field_x, field_y, fig, ax):
-    x = locs[field_x]
-    y = locs[field_y]
+    # np.asarray: see plot_1dhist - lib.calculate_optimal_bins samples by
+    # positional index, which breaks on a pandas Series with a non-default
+    # index. Force numpy arrays.
+    x = np.asarray(locs[field_x])
+    y = np.asarray(locs[field_y])
     valid = np.isfinite(x) & np.isfinite(y)
     x = x[valid]
     y = y[valid]

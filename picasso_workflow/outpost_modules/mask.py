@@ -257,19 +257,31 @@ class CellMask:
         labeled_nobkg = labeled_nobkg[labeled_nobkg > 0]
         feature, counts = np.unique(labeled_nobkg, return_counts=True)
         # sizes = np.bincount(labeled_nobkg)
-        try:
-            largest_component_index = feature[
-                counts.argsort()[-1 - nth_largest]
-            ]
-            logger.debug(
-                f"filtering {nth_largest} largest cell (starting 0)"
-                + f"largest component_index: {largest_component_index}"
-                + "features"
-                + f": {feature}"
-                + f"sizes uniques: {counts}"
+        if feature.size == 0:
+            # No connected components (e.g. the mask was eroded to nothing
+            # during smoothing). Keep the empty mask rather than crashing.
+            logger.warning(
+                "filter_mask: no connected components found; "
+                "returning an empty mask."
             )
-        except ValueError:
-            largest_component_index = 1
+            self._binary_mask = np.zeros_like(binary_mask, dtype=np.bool_)
+            self._recalc_density_mask_from_binary()
+            return
+        if nth_largest >= feature.size:
+            logger.warning(
+                f"filter_mask: requested {nth_largest} largest cell "
+                f"(starting 0) but only {feature.size} components exist; "
+                "selecting the smallest available."
+            )
+            nth_largest = feature.size - 1
+        largest_component_index = feature[counts.argsort()[-1 - nth_largest]]
+        logger.debug(
+            f"filtering {nth_largest} largest cell (starting 0)"
+            + f"largest component_index: {largest_component_index}"
+            + "features"
+            + f": {feature}"
+            + f"sizes uniques: {counts}"
+        )
         largest_component_mask = (
             labeled_array == largest_component_index
         ).astype(np.int8)

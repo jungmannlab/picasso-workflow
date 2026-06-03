@@ -7,6 +7,7 @@ Description: This is the picasso interface of picasso-workflow
 """
 from picasso import lib, io, localize, gausslq, postprocess, clusterer
 from picasso import aim, spinna
+
 # from picasso_workflow.outpost_modules import g5m
 from picasso import g5m
 from picasso import __version__ as picassoversion
@@ -23,6 +24,7 @@ import pickle
 import platform
 import random
 import string
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -35,7 +37,7 @@ import numpy as np
 import pandas as pd
 import psutil
 import yaml
-from matplotlib import cm
+from matplotlib import cm, colormaps
 from memory_profiler import memory_usage
 from picasso import CONFIG as pCONFIG
 from picasso import __version__ as picassoversion
@@ -50,6 +52,7 @@ from picasso import (
     postprocess,
     spinna,
 )
+
 # from picasso_workflow.outpost_modules import g5m
 from scipy.ndimage import label
 from scipy.spatial import KDTree, distance
@@ -91,6 +94,7 @@ from picasso_workflow import (
     process_brightfield,
     util,
 )
+from picasso_workflow import __version__ as picassoworkflowversion
 from picasso_workflow.outpost_modules import render
 from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
@@ -414,14 +418,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                             "Micro-Manager Metadata"
                         ].get(f"{cam_name}-{category}")
                         cat_vals += f"{category}: {category_value}; "
-                        
+
                         if category_value in sensitivity:
                             sensitivity = sensitivity[category_value]
                         elif str(category_value) in sensitivity:
                             sensitivity = sensitivity[str(category_value)]
                         else:
                             try:
-                                sensitivity = sensitivity.get(int(category_value), {})
+                                sensitivity = sensitivity.get(
+                                    int(category_value), {}
+                                )
                             except (ValueError, TypeError):
                                 sensitivity = {}
                     if isinstance(sensitivity, dict):
@@ -440,8 +446,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 }
                 for category in cam_config.get("Sensitivity Categories"):
                     category_key = f"{cam_name}-{category}"
-                    
-                    
+
                     category_value = self.info[0].get(category_key)
                 self.analysis_config["camera_info"] = camera_info
                 return camera_info
@@ -720,12 +725,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                     Memory available [GB] : int
                         available system memory in GB
                     GPU : str
-                        GPU name or "N/A"
+                        GPU name(s) or "N/A"
                     GPU memory [GB] : int
-                        GPU memory in GB or 0 if no GPU
+                        total GPU memory in GB or 0 if no GPU
+                    GPU clock [MHz] : int or str
+                        maximum SM (CUDA) clock, or "N/A" if no GPU
+                    GPU cores : int or str
+                        total number of CUDA cores (via NVML), or "N/A"
+                        if no GPU / NVML unavailable
         """
         results["picasso version"] = picassoversion
-        results["picasso-workflow version"] = "N/A"
+        results["picasso-workflow version"] = picassoworkflowversion
         results["Architecture"] = platform.machine()
         results["OS"] = platform.system()
         results["host"] = platform.node()
@@ -738,17 +748,101 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["Memory available [GB]"] = (
             psutil.virtual_memory().available // (1024**3)
         )
-        try:
-            gpu_info = psutil.virtual_memory().gpu
-        except AttributeError:
-            gpu_info = None
-        if gpu_info:
-            results["GPU"] = gpu_info.name
-            results["GPU memory"] = gpu_info.memory_total // (1024**3)
-        else:
-            results["GPU"] = "N/A"
-            results["GPU memory [GB]"] = 0
+        results.update(self._query_gpu_info())
         return parameters, results
+
+    def _query_gpu_info(self):
+        """Query GPU name(s), total memory, max clock and CUDA-core count.
+
+        Name, memory and clock come from nvidia-smi. CUDA-core count is not
+        exposed by nvidia-smi, so it is queried via NVML (pynvml) when
+        available and reported as "N/A" otherwise. Across multiple GPUs,
+        memory and cores are summed and the maximum clock is reported.
+
+        All fields degrade to "N/A"/0 when no NVIDIA GPU is visible to this
+        process - e.g. no GPU on the node, no driver, or (on SLURM) no GPU
+        requested via --gres=gpu / --gpus. nvidia-smi reflects the cgroup-
+        allocated devices, so this documents what the job actually got.
+
+        Returns:
+            dict : with keys "GPU", "GPU memory [GB]", "GPU clock [MHz]"
+                and "GPU cores"
+        """
+        info = {
+            "GPU": "N/A",
+            "GPU memory [GB]": 0,
+            "GPU clock [MHz]": "N/A",
+            "GPU cores": "N/A",
+        }
+        try:
+            out = subprocess.run(
+                [
+                    "nvidia-smi",
+                    # memory.total in MiB, clocks.max.sm in MHz
+                    "--query-gpu=name,memory.total,clocks.max.sm",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            ).stdout.strip()
+        except (FileNotFoundError, subprocess.SubprocessError):
+            return info
+        if not out:
+            return info
+        names = []
+        total_mib = 0
+        clocks = []
+        for line in out.splitlines():
+            parts = [x.strip() for x in line.split(",")]
+            names.append(parts[0])
+            total_mib += int(round(float(parts[1])))
+            if len(parts) > 2 and parts[2] not in ("", "[N/A]", "N/A"):
+                try:
+                    clocks.append(int(round(float(parts[2]))))
+                except ValueError:
+                    pass
+        info["GPU"] = ", ".join(names)
+        info["GPU memory [GB]"] = total_mib // 1024  # GiB
+        if clocks:
+            info["GPU clock [MHz]"] = max(clocks)
+        cores = self._query_gpu_cores()
+        if cores is not None:
+            info["GPU cores"] = cores
+        return info
+
+    @staticmethod
+    def _query_gpu_cores():
+        """Total CUDA-core count across visible GPUs via NVML (pynvml).
+
+        nvidia-smi does not expose the CUDA-core count; NVML's
+        nvmlDeviceGetNumGpuCores does (driver/NVML permitting). Returns the
+        summed core count, or None if pynvml/NVML is unavailable or too old
+        (so the caller can report "N/A").
+        """
+        try:
+            import pynvml
+        except ImportError:
+            return None
+        try:
+            pynvml.nvmlInit()
+        except Exception:
+            return None
+        try:
+            total = 0
+            for idx in range(pynvml.nvmlDeviceGetCount()):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(idx)
+                total += pynvml.nvmlDeviceGetNumGpuCores(handle)
+            return total
+        except Exception:
+            # e.g. older NVML without nvmlDeviceGetNumGpuCores
+            return None
+        finally:
+            try:
+                pynvml.nvmlShutdown()
+            except Exception:
+                pass
 
     #    @profile_resource_usage
     @module_decorator
@@ -860,18 +954,27 @@ class AutoPicasso(util.AbstractModuleCollection):
                     # sensitivity starts being a dict, and ends as a value
                     cat_vals = ""
                     for category in cam_config.get("Sensitivity Categories"):
-                        category_value = self.info[0].get(f"{cam_name}-{category}")
-                        if category_value is None and "Micro-Manager Metadata" in self.info[0]:
-                            category_value = self.info[0]["Micro-Manager Metadata"].get(f"{cam_name}-{category}")
+                        category_value = self.info[0].get(
+                            f"{cam_name}-{category}"
+                        )
+                        if (
+                            category_value is None
+                            and "Micro-Manager Metadata" in self.info[0]
+                        ):
+                            category_value = self.info[0][
+                                "Micro-Manager Metadata"
+                            ].get(f"{cam_name}-{category}")
                         cat_vals += f"{category}: {category_value}; "
-                        
+
                         if category_value in sensitivity:
                             sensitivity = sensitivity[category_value]
                         elif str(category_value) in sensitivity:
                             sensitivity = sensitivity[str(category_value)]
                         else:
                             try:
-                                sensitivity = sensitivity.get(int(category_value), {})
+                                sensitivity = sensitivity.get(
+                                    int(category_value), {}
+                                )
                             except (ValueError, TypeError):
                                 sensitivity = {}
                     if isinstance(sensitivity, dict):
@@ -1272,13 +1375,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         # auto-detect net grad if required:
         if (autograd_pars := parameters.get("auto_netgrad")) is not None:
-            if "filename" in autograd_pars.keys() and autograd_pars["filename"]:
+            if (
+                "filename" in autograd_pars.keys()
+                and autograd_pars["filename"]
+            ):
                 autograd_pars["filename"] = os.path.join(
                     results["folder"], autograd_pars["filename"]
                 )
             else:
                 autograd_pars["filename"] = os.path.join(
-                    results["folder"], "auto_identification.png")
+                    results["folder"], "auto_identification.png"
+                )
 
             potential_pars = [
                 "box_size",
@@ -1725,6 +1832,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                         filepath to full FOV rendering
                     fp_scene_ctrmass : str
                         filepath to center of mass zoom rendering (conditional, only if ctrmass_fov_nm provided)
+                    fp_scene_tiles : list of lists of str
+                        filepaths to the 5x5 tiled renderings
         """
         pixelsize = self.pixelsize
         rcode = generate_random_code(6)
@@ -1738,34 +1847,301 @@ class AutoPicasso(util.AbstractModuleCollection):
             x_mean = np.mean(self.locs["x"])
             y_mean = np.mean(self.locs["y"])
 
+        # Check if the dataset is 3D (has a 'z' column) to prevent rotation KeyErrors in 2D
+        def check_has_z(locs):
+            if isinstance(locs, list):
+                if not locs:
+                    return False
+                locs = locs[0]
+            try:
+                return "z" in locs.dtype.names
+            except AttributeError:
+                try:
+                    return "z" in locs.columns
+                except (AttributeError, TypeError):
+                    return False
+
+        has_z = check_has_z(render_locs)
+
+        # Read colormap choice (default to magma)
+        cmap_choice = parameters.get("colormap", "magma")
+
         # render whole field of view
         fullfov_pixelsize = parameters.get("fullfov_pixelsize", pixelsize)
+
+        # Normalize localizations to a list
+        locs_list = (
+            render_locs if isinstance(render_locs, list) else [render_locs]
+        )
+
+        # Calculate full FOV boundaries in camera pixels
+        x_min = min([lcs["x"].min() for lcs in locs_list])
+        x_max = max([lcs["x"].max() for lcs in locs_list])
+        y_min = min([lcs["y"].min() for lcs in locs_list])
+        y_max = max([lcs["y"].max() for lcs in locs_list])
+
+        # Density-driven ROI selection (Alternative A)
+        selected_rois = (
+            []
+        )  # list of (x_ctr, y_ctr, tile_x_min, tile_x_max, tile_y_min, tile_y_max)
+        roi_files = []
+
+        if parameters.get("generate_active_rois", True):
+            all_x = np.concatenate([lcs["x"] for lcs in locs_list])
+            all_y = np.concatenate([lcs["y"] for lcs in locs_list])
+
+            roi_size = parameters.get("ctrmass_fov_nm", 10000.0) / pixelsize
+            if roi_size <= 0:
+                roi_size = 100.0  # fallback
+
+            # Finer grid peak finding (bin size = roi_size / 2)
+            grid_step = roi_size / 2.0
+            bin_edges_x = np.arange(x_min, x_max + grid_step, grid_step)
+            bin_edges_y = np.arange(y_min, y_max + grid_step, grid_step)
+
+            hist, x_edges, y_edges = np.histogram2d(
+                all_x, all_y, bins=[bin_edges_x, bin_edges_y]
+            )
+
+            candidates = []
+            for ix in range(hist.shape[0]):
+                for iy in range(hist.shape[1]):
+                    count = hist[ix, iy]
+                    if count > 0:
+                        center_x = (x_edges[ix] + x_edges[ix + 1]) / 2
+                        center_y = (y_edges[iy] + y_edges[iy + 1]) / 2
+                        candidates.append((count, center_x, center_y))
+
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            n_rois = parameters.get("n_active_rois")
+            if n_rois is None:
+                n_rois = 4
+            roi_centers = []
+            min_distance = roi_size  # non-overlapping
+
+            for count, cx, cy in candidates:
+                if len(roi_centers) >= n_rois:
+                    break
+
+                # Shift ROI center if it would place the ROI viewport boundary outside the image area
+                if (x_max - x_min) >= roi_size:
+                    cx = np.clip(
+                        cx, x_min + roi_size / 2.0, x_max - roi_size / 2.0
+                    )
+                else:
+                    cx = (x_min + x_max) / 2.0
+
+                if (y_max - y_min) >= roi_size:
+                    cy = np.clip(
+                        cy, y_min + roi_size / 2.0, y_max - roi_size / 2.0
+                    )
+                else:
+                    cy = (y_min + y_max) / 2.0
+
+                too_close = False
+                for sx, sy in roi_centers:
+                    dist = np.sqrt((cx - sx) ** 2 + (cy - sy) ** 2)
+                    if dist < min_distance:
+                        too_close = True
+                        break
+                if not too_close:
+                    roi_centers.append((cx, cy))
+
+            # Form ROIs and render them
+            tile_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
+            for idx, (cx, cy) in enumerate(roi_centers):
+                tile_x_min = cx - roi_size / 2
+                tile_x_max = cx + roi_size / 2
+                tile_y_min = cy - roi_size / 2
+                tile_y_max = cy + roi_size / 2
+
+                selected_rois.append(
+                    (cx, cy, tile_x_min, tile_x_max, tile_y_min, tile_y_max)
+                )
+
+                tile_kwargs = {
+                    "oversampling": pixelsize / tile_pixelsize,
+                    "viewport": [
+                        (tile_y_min, tile_x_min),
+                        (tile_y_max, tile_x_max),
+                    ],
+                    "blur_method": parameters.get("ctrmass_blur_method"),
+                    "min_blur_width": parameters.get(
+                        "ctrmass_min_blur_width", 0
+                    ),
+                    "cmap": cmap_choice,
+                }
+                if has_z and parameters.get("ctrmass_ang") is not None:
+                    tile_kwargs["ang"] = parameters.get("ctrmass_ang")
+
+                roi_fp = os.path.join(
+                    results["folder"], f"locs_active_roi_{idx + 1}_{rcode}.png"
+                )
+                render.plot_scene(
+                    render_locs,
+                    tile_pixelsize,
+                    pixelsize,
+                    fp=roi_fp,
+                    render_kwargs=tile_kwargs,
+                )
+                roi_files.append(roi_fp)
+
+        results["fp_scene_rois"] = roi_files
+
+        # Render whole field of view (overview) and draw outlines
         results["fp_scene_fullfov"] = os.path.join(
             results["folder"], f"locs_fullfov_{rcode}.png"
         )
-        render.plot_scene(
+
+        fig_overview, ax_overview = render.plot_scene(
             render_locs,
             fullfov_pixelsize,
             pixelsize,
-            fp=results["fp_scene_fullfov"],
+            fp=None,
+            render_kwargs={"cmap": cmap_choice},
         )
+
+        # Save unmarked copy of the overview image
+        results["fp_scene_fullfov_unmarked"] = os.path.join(
+            results["folder"], f"locs_fullfov_unmarked_{rcode}.png"
+        )
+        fig_overview.savefig(
+            results["fp_scene_fullfov_unmarked"],
+            bbox_inches="tight",
+            pad_inches=0,
+        )
+
+        # Draw outlines of selected ROIs if present, or Zoom-In outline if Zoom-In is displayed
+        x_mean_clipped = x_mean
+        y_mean_clipped = y_mean
+        if parameters.get("ctrmass_fov_nm"):
+            zoom_size = parameters.get("ctrmass_fov_nm") / pixelsize
+            if (x_max - x_min) >= zoom_size:
+                x_mean_clipped = np.clip(
+                    x_mean, x_min + zoom_size / 2.0, x_max - zoom_size / 2.0
+                )
+            else:
+                x_mean_clipped = (x_min + x_max) / 2.0
+
+            if (y_max - y_min) >= zoom_size:
+                y_mean_clipped = np.clip(
+                    y_mean, y_min + zoom_size / 2.0, y_max - zoom_size / 2.0
+                )
+            else:
+                y_mean_clipped = (y_min + y_max) / 2.0
+
+        if selected_rois:
+            import matplotlib.patches as patches
+            import matplotlib.pyplot as plt
+
+            for idx, (_, _, t_xmin, t_xmax, t_ymin, t_ymax) in enumerate(
+                selected_rois
+            ):
+                x_min_um = (t_xmin * pixelsize) / 1000.0
+                x_max_um = (t_xmax * pixelsize) / 1000.0
+                y_min_um = (t_ymin * pixelsize) / 1000.0
+                y_max_um = (t_ymax * pixelsize) / 1000.0
+
+                width_um = x_max_um - x_min_um
+                height_um = y_max_um - y_min_um
+
+                rect = patches.Rectangle(
+                    (x_min_um, y_min_um),
+                    width_um,
+                    height_um,
+                    linewidth=1.5,
+                    edgecolor="red",
+                    facecolor="none",
+                )
+                ax_overview.add_patch(rect)
+
+                # Add text label for each active site
+                ax_overview.text(
+                    x_min_um + 0.03 * width_um,
+                    y_min_um + 0.12 * height_um,
+                    str(idx + 1),
+                    color="red",
+                    fontsize=10,
+                    fontweight="bold",
+                    bbox=dict(
+                        facecolor="black",
+                        alpha=0.6,
+                        boxstyle="round,pad=0.2",
+                        edgecolor="none",
+                    ),
+                )
+        elif parameters.get("ctrmass_fov_nm"):
+            # Draw standard Zoom-In outline on overview image
+            import matplotlib.patches as patches
+            import matplotlib.pyplot as plt
+
+            fov_half = parameters.get("ctrmass_fov_nm") / 2
+            x_min_zoom = x_mean_clipped - fov_half / pixelsize
+            x_max_zoom = x_mean_clipped + fov_half / pixelsize
+            y_min_zoom = y_mean_clipped - fov_half / pixelsize
+            y_max_zoom = y_mean_clipped + fov_half / pixelsize
+
+            x_min_um = (x_min_zoom * pixelsize) / 1000.0
+            x_max_um = (x_max_zoom * pixelsize) / 1000.0
+            y_min_um = (y_min_zoom * pixelsize) / 1000.0
+            y_max_um = (y_max_zoom * pixelsize) / 1000.0
+
+            width_um = x_max_um - x_min_um
+            height_um = y_max_um - y_min_um
+
+            rect = patches.Rectangle(
+                (x_min_um, y_min_um),
+                width_um,
+                height_um,
+                linewidth=1.5,
+                edgecolor="red",
+                facecolor="none",
+            )
+            ax_overview.add_patch(rect)
+
+            ax_overview.text(
+                x_min_um + 0.03 * width_um,
+                y_min_um + 0.12 * height_um,
+                "Zoom-In",
+                color="red",
+                fontsize=10,
+                fontweight="bold",
+                bbox=dict(
+                    facecolor="black",
+                    alpha=0.6,
+                    boxstyle="round,pad=0.2",
+                    edgecolor="none",
+                ),
+            )
+
+        import matplotlib.pyplot as plt
+
+        fig_overview.savefig(
+            results["fp_scene_fullfov"], bbox_inches="tight", pad_inches=0
+        )
+        plt.close(fig_overview)
 
         # render zoom into the center of mass
         if parameters.get("ctrmass_fov_nm"):
             ctrmass_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
             fov_half = parameters.get("ctrmass_fov_nm") / 2
-            x_min = x_mean - fov_half / pixelsize
-            x_max = x_mean + fov_half / pixelsize
-            y_min = y_mean - fov_half / pixelsize
-            y_max = y_mean + fov_half / pixelsize
+            x_min_zoom = x_mean_clipped - fov_half / pixelsize
+            x_max_zoom = x_mean_clipped + fov_half / pixelsize
+            y_min_zoom = y_mean_clipped - fov_half / pixelsize
+            y_max_zoom = y_mean_clipped + fov_half / pixelsize
 
             render_kwargs = {
                 "oversampling": pixelsize / ctrmass_pixelsize,
-                "viewport": [(y_min, x_min), (y_max, x_max)],
+                "viewport": [
+                    (y_min_zoom, x_min_zoom),
+                    (y_max_zoom, x_max_zoom),
+                ],
                 "blur_method": parameters.get("ctrmass_blur_method"),
                 "min_blur_width": parameters.get("ctrmass_min_blur_width", 0),
-                "ang": parameters.get("ctrmass_ang"),
+                "cmap": cmap_choice,
             }
+            if has_z and parameters.get("ctrmass_ang") is not None:
+                render_kwargs["ang"] = parameters.get("ctrmass_ang")
             results["fp_scene_ctrmass"] = os.path.join(
                 results["folder"], f"locs_ctrmass_{rcode}.png"
             )
@@ -1775,9 +2151,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 pixelsize,
                 fp=results["fp_scene_ctrmass"],
                 render_kwargs=render_kwargs,
-                # x_offset=x_min * pixelsize,
-                # y_offset=y_min * pixelsize,
             )
+
         return parameters, results
 
     #    @profile_resource_usage
@@ -4441,7 +4816,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         min_locs = parameters["min_locs"]
         # label locs according to clusters
         self.locs = clusterer.dbscan(
-            self.locs, radius, min_samples, min_locs, pixelsize)
+            self.locs, radius, min_samples, min_locs, pixelsize
+        )
         dbscan_info = {
             "Generated by": "Picasso DBSCAN",
             "Radius": radius,
@@ -6555,8 +6931,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["folder"], "subcluster_test.png"
         )
         # g5m.test_subclustering(center_locs, results["fp_fig_subclustering"])
-        clustered_nevents, sparse_nevents = clusterer.test_subclustering(center_locs, self.info)
-        lib.plot_subclustering_check(clustered_nevents, sparse_nevents, results["fp_fig_subclustering"])
+        clustered_nevents, sparse_nevents = clusterer.test_subclustering(
+            center_locs, self.info
+        )
+        lib.plot_subclustering_check(
+            clustered_nevents, sparse_nevents, results["fp_fig_subclustering"]
+        )
 
         results["n_locs_in"] = len(self.locs)
         results["n_locs_clustered"] = len(clustered_locs)
@@ -6695,7 +7075,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             density_results.append(density)
 
             # plot results
-            colors = cm.get_cmap("viridis", nneighbors.shape[1]).colors
+            colors = colormaps["viridis"].resampled(nneighbors.shape[1]).colors
             bins = np.arange(0, rmax_NN, step=deltar)
             nnhist_obs = np.zeros((len(bins), nneighbors.shape[1]))
             for i in range(nnhist_obs.shape[1]):
@@ -7018,7 +7398,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             # plot results
             fig, ax = plt.subplots()
-            colors = cm.get_cmap("viridis", k_max).colors
+            colors = colormaps["viridis"].resampled(k_max).colors
             bin_max = np.quantile(nneighbors[:, -1], 0.95)
             median_1stNN = np.median(nneighbors[:, 0])
             # sample bins such that there are 5 bins from 0 to middle of 1stNN
@@ -7627,7 +8007,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         max of histogram
                     n_nearest_neighbors : int
                         number of nearest neighbors to evaluate
-                    granularity : float
+                    granularity : int
                     the spinna granularity
                 optional keys:
                     density_app : list of float
@@ -7909,12 +8289,6 @@ class AutoPicasso(util.AbstractModuleCollection):
     def spinna_batch(self, i, parameters, results):
         """Run a SPINNA batch analysis from a pre-existing config file.
 
-        The current locs file(s) are saved as .hdf5 into the module's
-        results folder. Their filepaths are written into the SPINNA
-        batch config csv (given via ``fp_spinna_batch_config``) as one
-        ``exp_data_<tag>`` column per channel, so the batch analysis
-        runs on the locs produced by this workflow.
-
         File-path columns of the config csv (``structures_filename``,
         ``exp_data_*`` and ``mask_filename_*``) may have been written
         on a different machine; they are converted to the current
@@ -7924,8 +8298,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         user's original csv is not changed -- and that copy is passed
         on to picasso's batch analysis.
 
-        The config csv must already be prepared by the user; only the
-        ``exp_data_*`` columns are filled in here. See
+        If ``use_workflow_locs`` is True, the current locs file(s) are
+        additionally saved as .hdf5 into the module's results folder
+        and their filepaths are written into the SPINNA batch config
+        csv as one ``exp_data_<tag>`` column per channel, so the batch
+        analysis runs on the locs produced by this workflow. When
+        False (the default) the ``exp_data_*`` columns from the
+        user-provided csv are used as-is (after path conversion).
+
+        The config csv must already be prepared by the user. See
         ``picasso.__main__._spinna_batch_analysis`` for the columns
         expected in the config file.
 
@@ -7939,9 +8320,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                         analysis config csv file.
                 with optional keys:
                     use_workflow_locs : bool
-                        whether to use the locs previously processed in
-                        this workflow, otherwise those specified in the
-                        csv. Default: False
+                        if True, save this workflow's current locs and
+                        inject their paths into the batch config under
+                        ``exp_data_<channel-tag>``. If False, use the
+                        ``exp_data_*`` paths from the config csv
+                        unchanged. Default: False.
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper. Keys populated here:
@@ -7996,9 +8379,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # write the modified config to a copy in the results folder, so
         # the user's input is untouched and picasso's *_fitting_results
         # directory lands inside the module folder.
-        cfg_fp_used = os.path.join(
-            results["folder"], os.path.basename(cfg_fp)
-        )
+        cfg_fp_used = os.path.join(results["folder"], os.path.basename(cfg_fp))
         spinna_config.to_csv(cfg_fp_used, index=False)
         result_dir, fp_summary, fp_figs = picasso_outpost.spinna_batch(
             cfg_fp_used
@@ -9744,8 +10125,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             kwargs = {}
             if fill_holes := parameters.get("fill_holes"):
                 kwargs["fill_holes"] = fill_holes
-            if fill_holes := parameters.get("nth_largest_cell"):
-                kwargs["nth_largest"] = fill_holes
+            if (nth := parameters.get("nth_largest_cell")) is not None:
+                # nth_largest_cell is 1-based (1 = largest); filter_mask
+                # uses a 0-based rank internally.
+                kwargs["nth_largest"] = nth - 1
             cell_mask.filter_mask(**kwargs)
         if dilate_nm := parameters.get("dilate_nm"):
             cell_mask.dilate(dilate_nm)
@@ -9829,13 +10212,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                     fp_mask : str
                         the file path to the mask
                     min_density, max_density : float
-                        the density range to select
+                        the density range to select, in µm^(-2)
                 and optional keys:
                     nbins : int
                         the number of bins for plotting
                     nth_largest : int
                         select the nth largest area in density range.
-                        set 0 for largest.
+                        1-based: set 1 for largest.
                     apply_to_locs : bool
                         whether to apply the created mask to the locs
                     smoothe_nm : float
@@ -9848,7 +10231,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 in the decorator wrapper
         """
         pixelsize = self.pixelsize
-        nth_largest = parameters.get("nth_largest", 0)
+        # nth_largest is 1-based (1 = largest); converted to a 0-based
+        # rank at the component-selection step below.
+        nth_largest = parameters.get("nth_largest", 1)
         mask = outpost_modules.mask.CellMask.load(parameters["fp_mask"])
         mask_pixel_area = mask._upsample**2
         densities = mask.densities
@@ -9863,8 +10248,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             and "max_density" in parameters.keys()
             and parameters["max_density"] > 0
         ):
-            min_density = parameters["min_density"]
-            max_density = parameters["max_density"]
+            # Parameters are given in µm^(-2) (matching the histogram
+            # axis); mask.densities is in nm^(-2), so convert (1 µm^2 =
+            # 1e6 nm^2) before comparing.
+            min_density = parameters["min_density"] * 1e-6
+            max_density = parameters["max_density"] * 1e-6
         elif std_cutoff := parameters["density_std_cutoff"]:
             median_nlocs = np.median(densities_to_plot) * mask_pixel_area
             min_nlocs = median_nlocs - std_cutoff * np.sqrt(median_nlocs)
@@ -9922,12 +10310,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         # select requested densities
         densities[(densities < min_density) | (densities > max_density)] = 0
         assert densities.shape != (0,)
-        # select nth largest connected area
+        # select nth largest connected area by area (1 = largest); mirror
+        # CellMask.filter_mask, which ranks components by pixel count.
+        # label() assigns ids in scan order, not by size, so we must sort
+        # on the counts rather than offsetting the largest label id.
         labeled_array, num_features = label(densities > 0)
-        sizes = np.bincount(labeled_array.ravel())
+        labeled_nobkg = labeled_array.ravel()
+        labeled_nobkg = labeled_nobkg[labeled_nobkg > 0]
+        feature, counts = np.unique(labeled_nobkg, return_counts=True)
         try:
-            component_index = sizes[1:].argmax() + 1 - nth_largest
-        except ValueError:
+            component_index = feature[counts.argsort()[-nth_largest]]
+        except (ValueError, IndexError):
             component_index = 1
         component_mask = (labeled_array == component_index).astype(np.int8)
         mask._binary_mask = component_mask.astype(np.bool_)
@@ -11733,29 +12126,6 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    def create_le_structures(self, target, reference, pair_distance):
-        # target monomer
-        structures = self._create_spinna_structure(
-            [target], [[1]], pair_distance
-        )
-        # reference monomer
-        structures += self._create_spinna_structure(
-            [reference], [[1]], pair_distance
-        )
-        # heterodimer
-        struct = {
-            "Molecular targets": [target, reference],
-            "Structure title": f"{target}-{reference}-heterodimer",
-            f"{target}_x": [-pair_distance / 2],
-            f"{target}_y": [0],
-            f"{target}_z": [0],
-            f"{reference}_x": [pair_distance / 2],
-            f"{reference}_y": [0],
-            f"{reference}_z": [0],
-        }
-        structures.append(struct)
-        return structures
-
     #    @profile_resource_usage
     @module_decorator
     def labeling_efficiency_analysis(self, i, parameters, results):
@@ -11831,14 +12201,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                     density : dict, channel tag to float
                         density to simulate [nm^2 or nm^3];
                         area density if 2D; volume density if 3D
-                    granularity : float
-                        the spinna res_factor
+                    granularity : int
+                        the spinna granularity
                     sim_repeats : int
                         number of simulation repeats, for noise reduction
                 and optional keys:
                     nn_nth : int
                         number of nearest neighbors to analyse
                         default: 1
+                    NND_bin : int
+                        bin size (nm)
+                        auto-calculated if None or 0
+                    NND_maxdist : int
+                        maximum distance in histogram (nm)
+                        auto-calculated if None or 0
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -11847,10 +12223,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters["nn_nth"] = 2
         target = parameters["target_name"]
         reference = parameters["reference_name"]
-        labeling_efficiency = {
-            target: float(1.0),
-            reference: float(1.0),
-        }
+        # spinna.fit_le forces LE=100% internally during the fit, so we no
+        # longer pass an explicit labeling_efficiency dict here.
 
         pair_distance = parameters["pair_distance"]
 
@@ -11862,18 +12236,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         # props = {}
         dimensionality = 2
         pixelsize = self.pixelsize
-        width = max([locs["x"].max() for locs in self.channel_locs]) - min(
-            [locs["x"].min() for locs in self.channel_locs]
-        )
-        height = max([locs["y"].max() for locs in self.channel_locs]) - min(
-            [locs["y"].min() for locs in self.channel_locs]
-        )
-        try:
-            depth = max([locs["z"].max() for locs in self.channel_locs]) - min(
-                [locs["z"].min() for locs in self.channel_locs]
-            )
-        except (ValueError, KeyError):
-            depth = None
 
         if isinstance(parameters["density"], list):
             density = {
@@ -11912,10 +12274,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ).T
                 # dim = 2
 
-        compound_density = density_gt[target] / 1 + density_gt[reference] / 1
+        compound_density = density_gt[target] / 1 + density_gt[reference] / 1  # in nm^-2
         # area = parameters["n_simulate"] / (compound_density / 1e6)
         # area = parameters["n_simulate"] / (compound_density)
-        area = parameters["n_simulate"] / (compound_density * 1e6)
+        area = parameters["n_simulate"] / (compound_density * 1e6)  # in µm^2
         n_sim_targets = {
             tag: int(
                 parameters["n_simulate"] * density_gt[tag] / compound_density
@@ -11923,109 +12285,84 @@ class AutoPicasso(util.AbstractModuleCollection):
             for tag in [target, reference]
         }
 
-        if isinstance(pair_distance, list):
-            all_test_structures = []
-            for test_distance in pair_distance:
-                structures = self.create_le_structures(
-                    target, reference, test_distance
-                )
-                (
-                    structures,
-                    targets,
-                ) = picasso_outpost.load_structures_from_dict(structures)
-                all_test_structures.append(structures)
-                logger.debug(f"pair distance: {test_distance}")
-                tgts = []
-                for structure in structures:
-                    for tgt in structure.targets:
-                        if tgt not in tgts:
-                            tgts.append(tgt)
+        # simulation ROI (area-based, as in the prior single_spinna_run
+        # call): a square box matching the requested number of simulated
+        # molecules at the given density.
+        sim_width = np.sqrt(area * 1e6)  # in nm
 
-                # number of molecular targets in each structure; each
-                # row gives one target species and each column gives one
-                # structure
-                n_t = len(tgts)
-                n_s = len(structures)
-                logger.debug(f"{n_s} structures: {str(structures)}")
-                logger.debug(f"{n_t} targets: {str(tgts)}")
-
-            logger.debug(str(all_test_structures))
-            label_unc = {
-                k: v if isinstance(v, list) else [v]
-                for k, v in parameters["labeling_uncertainty"].items()
-            }
-            (
-                best_score,
-                best_idx,
-                label_unc,
-                best_mixer,
-                best_props,
-            ) = spinna.compare_models(
-                models=all_test_structures,
-                exp_data=exp_data,
-                granularity=parameters["granularity"],
-                label_unc=parameters["labeling_uncertainty"],
-                le=labeling_efficiency,
-                width=width,
-                height=height,
-                depth=depth,
-            )
-            pair_distance = pair_distance[best_idx]
-            structures = all_test_structures[best_idx]
-            labeling_uncertainty = label_unc
-            results["best_pair_distance"] = pair_distance
-        else:
-            structures = self.create_le_structures(
-                target, reference, pair_distance
-            )
-            labeling_uncertainty = {
-                k: v[0] if isinstance(v, list) else v
-                for k, v in parameters["labeling_uncertainty"].items()
-            }
-
-            structures, targets = picasso_outpost.load_structures_from_dict(
-                structures
-            )
-
-        N_structures = picasso_outpost.generate_N_structures(
-            structures, n_sim_targets, parameters["granularity"]
+        distances = (
+            pair_distance
+            if isinstance(pair_distance, list)
+            else [pair_distance]
         )
+        # Only the two fitted species (target, reference) may appear in
+        # label_unc: fit_le passes the whole dict through to StructureMixer,
+        # and any extra channel key keeps its list value (a search-space
+        # list) which StructureMixer rejects ("must be positive numbers").
+        # Values are wrapped in lists (per-target label-uncertainty search
+        # space expected by fit_le / compare_models).
+        lu = parameters["labeling_uncertainty"]
+        label_unc = {
+            tag: (lu[tag] if isinstance(lu[tag], list) else [lu[tag]])
+            for tag in (target, reference)
+        }
+
+        # spinna.fit_le builds the monomer/heterodimer structures, forces
+        # LE=100%, fits label uncertainty + the best heterodimer distance
+        # via compare_models, and converts the fitted proportions to LE.
+        (
+            le_values,
+            _fitted_label_unc,
+            best_distance,
+            _best_score,
+            best_props,
+            best_mixer,
+        ) = spinna.fit_le(
+            target_a=target,
+            target_b=reference,
+            exp_data=exp_data,
+            granularity=parameters["granularity"],
+            label_unc=label_unc,
+            distances=distances,
+            N_sim=parameters["sim_repeats"],
+            width=sim_width,
+            height=sim_width,
+            depth=None,
+            random_rot_mode="2D",
+            asynch=True,
+            savedir=results["folder"],
+            fitting_mode="coarse-to-fine",
+        )
+        results["best_pair_distance"] = best_distance
 
         # bin size: more than Nyquist subsampling
         expected_1stNN_peak = (
             2 / (2 * dimensionality * np.pi * (compound_density / 2))
         ) ** (1 / dimensionality)
-        fit_NND_bin = pair_distance / 3
+        fit_NND_bin = parameters.get("NND_bin")
+        if not fit_NND_bin:
+            fit_NND_bin = best_distance / 3
         # max dist: a few times the first NN distance peak
-        fit_NND_maxdist = 4 * parameters["nn_nth"] * expected_1stNN_peak
+        fit_NND_maxdist = parameters.get("NND_maxdist")
+        if not fit_NND_maxdist:
+            fit_NND_maxdist = 4 * parameters["nn_nth"] * expected_1stNN_peak
 
-        spinna_parameters = {
-            "structures": structures,
-            "label_unc": labeling_uncertainty,
-            "le": labeling_efficiency,
-            "mask_dict": None,
-            "width": np.sqrt(area * 1e6),
-            "height": np.sqrt(area * 1e6),
-            "depth": None,
-            "random_rot_mode": "2D",
-            "exp_data": exp_data,
-            "sim_repeats": parameters["sim_repeats"],
-            "NND_bin": fit_NND_bin,
-            "NND_maxdist": fit_NND_maxdist,
-            "N_structures": N_structures,
-            "save_filename": os.path.join(
+        # NND figures (simulated vs experimental) for the fitted model
+        fp_fig = picasso_outpost.plot_spinna_nnd(
+            mixer=best_mixer,
+            targets=[target, reference],
+            exp_data=exp_data,
+            opt_props=best_props,
+            n_simulated=n_sim_targets,
+            sim_repeats=parameters["sim_repeats"],
+            NND_bin=fit_NND_bin,
+            NND_maxdist=fit_NND_maxdist,
+            nn_plotted=parameters["nn_nth"],
+            save_filename=os.path.join(
                 results["folder"], f"interaction-{target}-{reference}"
             ),
-            "asynch": True,
-            "targets": [target, reference],
-            "apply_mask": False,
-            "nn_plotted": parameters["nn_nth"],
-            "result_dir": results["folder"],
-            "n_simulated": n_sim_targets,
-            "bootstrap": parameters.get("bootstrap"),
-        }
-
-        result, fp_fig = picasso_outpost.single_spinna_run(**spinna_parameters)
+            result_dir=results["folder"],
+        )
         plt.close("all")
 
         # rename figures with random code
@@ -12040,21 +12377,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 pass
             fp_fig_out.append(fp_out)
         results["fp_fig"] = fp_fig_out
-        props = result["props"]  # given in percent
-        prop_t = props[0]
-        prop_r = props[1]
-        prop_tr = props[2]
-        std_t = result["props_std"][0]
-        std_r = result["props_std"][1]
-        std_tr = result["props_std"][2]
-        results["spinna_props_std"] = result["props_std"]
-        results["spinna_props_std"] = result["props_std"]
 
-        # SPINNA outputs proportions in terms of #molecules
-        le_target = prop_tr / (2 * prop_r + prop_tr)
-        le_reference = prop_tr / (2 * prop_t + prop_tr)
+        # fit_le returns LE in percent; store on the 0-1 scale.
+        le_target = le_values[target] / 100
+        le_reference = le_values[reference] / 100
 
-        # error propagation for std
+        # error propagation for std (only meaningful when bootstrapping)
         def le_std(prop_sglo, prop_dbl, std_sglo, std_dbl):
             """Calculate the standard deviation of le,
             by error propagation: sum of derivatives
@@ -12066,8 +12394,41 @@ class AutoPicasso(util.AbstractModuleCollection):
             ) ** 2
             return np.abs(deriv_sglo * std_sglo) + np.abs(deriv_dbl * std_dbl)
 
-        le_target_std = le_std(prop_r, prop_tr, std_r, std_tr)
-        le_reference_std = le_std(prop_t, prop_tr, std_t, std_tr)
+        if parameters.get("bootstrap"):
+            # fit_le does not bootstrap; run one bootstrap stoichiometry fit
+            # on the fitted mixer to recover proportion uncertainties.
+            # best_mixer.structures order is [monomer_A, monomer_B, het].
+            N_structures = picasso_outpost.generate_N_structures(
+                best_mixer.structures,
+                n_sim_targets,
+                parameters["granularity"],
+            )
+            _, props_std = spinna.SPINNA(
+                mixer=best_mixer,
+                gt_coords=exp_data,
+                N_sim=parameters["sim_repeats"],
+            ).fit_stoichiometry(
+                N_structures,
+                save=os.path.join(
+                    results["folder"],
+                    f"interaction-{target}-{reference}_le_fit_scores.csv",
+                ),
+                asynch=True,
+                bootstrap=True,
+            )
+            prop_t, prop_r, prop_tr = (
+                best_props[0],
+                best_props[1],
+                best_props[2],
+            )
+            std_t, std_r, std_tr = props_std[0], props_std[1], props_std[2]
+            le_target_std = le_std(prop_r, prop_tr, std_r, std_tr)
+            le_reference_std = le_std(prop_t, prop_tr, std_t, std_tr)
+        else:
+            props_std = [0, 0, 0]
+            le_target_std = 0.0
+            le_reference_std = 0.0
+        results["spinna_props_std"] = props_std
 
         results["labeling_efficiency"] = {
             parameters["target_name"]: le_target,

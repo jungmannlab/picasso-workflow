@@ -14,18 +14,42 @@
 # The project directory is inferred automatically from the location of this
 # script, so the script can be called from any directory.
 #
-# Results land in <project>/test-results/ as both a plain log
-# (tier<N>_<jobid>.log) and a JUnit XML report (tier<N>_<jobid>.xml).
+# All artefacts of a single invocation are gathered in one per-run
+# directory:
+#
+#   <project>/test-results/<timestamp>_<branch>_<sha>/
+#       run_info.txt                       run metadata
+#       tier<N>_<jobid>.log                SLURM stdout+stderr per tier
+#       tier<N>_<jobid>.xml                JUnit XML report per tier
+#       picasso-workflow-job<jobid>-rank<rank>.log
+#                                          the picasso-workflow loguru log
+#
+# A <project>/test-results/latest symlink always points at the most recent
+# run directory, so downstream analysis can just read test-results/latest/.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-mkdir -p "$PROJECT_DIR/test-results"
+# One directory per run so artefacts from different runs never intermingle.
+# Tag it with the git branch and short SHA when available for traceability.
+RUN_TS="$(date +%Y%m%d_%H%M%S)"
+GIT_BRANCH="$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo nogit)"
+GIT_SHA="$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+# Sanitise the branch name (slashes etc.) so it is safe as a path component.
+GIT_BRANCH_SAFE="$(printf '%s' "$GIT_BRANCH" | tr '/ ' '__')"
+RUN_ID="${RUN_TS}_${GIT_BRANCH_SAFE}_${GIT_SHA}"
+RUN_DIR="$PROJECT_DIR/test-results/$RUN_ID"
+
+mkdir -p "$RUN_DIR"
+
+# Refresh the convenience symlink to the newest run directory.
+ln -sfn "$RUN_ID" "$PROJECT_DIR/test-results/latest"
 
 echo "Project directory: $PROJECT_DIR"
-echo "Results directory: $PROJECT_DIR/test-results"
+echo "Results directory: $RUN_DIR"
+echo "                   (also reachable via test-results/latest)"
 
 # Resolve PW_TEST_DATA_DIR: env var takes priority, then config.yaml.
 # This mirrors the lookup order in the network_test_data pytest fixture.
@@ -57,17 +81,23 @@ else
 fi
 echo ""
 
-# Common sbatch flags passed to every job.
+# Common sbatch flags passed to every job. PW_RUN_DIR tells each sbatch
+# script where to write its JUnit XML; PW_LOG_DIR redirects the
+# picasso-workflow loguru log into the same per-run directory; and the
+# per-tier --output/--error flags (added below) place the SLURM logs there
+# too. All three therefore land together in $RUN_DIR.
 COMMON=(
     --parsable
     --chdir="$PROJECT_DIR"
-    --export="ALL,PW_PROJECT_DIR=$PROJECT_DIR"
+    --export="ALL,PW_PROJECT_DIR=$PROJECT_DIR,PW_RUN_DIR=$RUN_DIR,PW_LOG_DIR=$RUN_DIR"
 )
 
 # ---------------------------------------------------------------------------
 # Tier 1 + 2: unit tests + template validation (no picasso required)
 # ---------------------------------------------------------------------------
 JID1=$(sbatch "${COMMON[@]}" \
+    --output="$RUN_DIR/tier1_2_%j.log" \
+    --error="$RUN_DIR/tier1_2_%j.log" \
     "$SCRIPT_DIR/tier1_2.sbatch")
 echo "Submitted Tier 1+2 (unit + template):  job $JID1"
 
@@ -77,6 +107,8 @@ echo "Submitted Tier 1+2 (unit + template):  job $JID1"
 # ---------------------------------------------------------------------------
 JID2=$(sbatch "${COMMON[@]}" \
     --dependency=afterok:"$JID1" \
+    --output="$RUN_DIR/tier3_%j.log" \
+    --error="$RUN_DIR/tier3_%j.log" \
     "$SCRIPT_DIR/tier3.sbatch")
 echo "Submitted Tier 3  (integration):        job $JID2  (depends on $JID1)"
 
@@ -87,9 +119,65 @@ echo "Submitted Tier 3  (integration):        job $JID2  (depends on $JID1)"
 # ---------------------------------------------------------------------------
 JID3=$(sbatch "${COMMON[@]}" \
     --dependency=afterok:"$JID2" \
+    --output="$RUN_DIR/tier4_%j.log" \
+    --error="$RUN_DIR/tier4_%j.log" \
     "$SCRIPT_DIR/tier4.sbatch")
 echo "Submitted Tier 4  (real data):          job $JID3  (depends on $JID2)"
 
+# ---------------------------------------------------------------------------
+# Template workflow runs: submit each discovered run_workflow_slurm.sh as a
+# real end-to-end workflow job. These are self-contained SBATCH scripts (one
+# per template folder) that cd into their folder and run the production
+# workflow via start_workflow.py; their stdout/stderr and the picasso-workflow
+# log land in <template>/logs/ (per the script's own #SBATCH --output and the
+# cwd/logs anchoring in config_logger).
+#
+# A template is opted in simply by containing a run_workflow_slurm.sh under
+# PW_TEST_DATA_DIR. Gated on Tier 3 passing, like Tier 4.
+# ---------------------------------------------------------------------------
+TEMPLATE_JOBS=()
+if [[ -n "${PW_TEST_DATA_DIR:-}" && -d "${PW_TEST_DATA_DIR:-}" ]]; then
+    while IFS= read -r _script; do
+        [[ -z "$_script" ]] && continue
+        _tdir="$(cd "$(dirname "$_script")" && pwd)"
+        _jid=$(sbatch --parsable --dependency=afterok:"$JID2" "$_script")
+        TEMPLATE_JOBS+=("${_jid}|${_tdir}")
+        echo "Submitted template run:                 job $_jid  ($_tdir)"
+    done < <(
+        find "$PW_TEST_DATA_DIR" -type f -name run_workflow_slurm.sh | sort
+    )
+fi
+if [[ ${#TEMPLATE_JOBS[@]} -eq 0 ]]; then
+    echo "Template runs:                          none found under PW_TEST_DATA_DIR"
+fi
+
+# Write a manifest so the run directory is self-describing for later analysis.
+{
+    echo "run_id:        $RUN_ID"
+    echo "submitted_at:  $(date)"
+    echo "submitted_by:  $(whoami)@$(hostname)"
+    echo "project_dir:   $PROJECT_DIR"
+    echo "git_branch:    $GIT_BRANCH"
+    echo "git_sha:       $GIT_SHA"
+    echo "test_data_dir: ${PW_TEST_DATA_DIR:-<not configured — tier 4 real_data skipped>}"
+    echo "tier1_2_job:   $JID1"
+    echo "tier3_job:     $JID2"
+    echo "tier4_job:     $JID3"
+    if [[ ${#TEMPLATE_JOBS[@]} -gt 0 ]]; then
+        echo "template_jobs:"
+        for _tj in "${TEMPLATE_JOBS[@]}"; do
+            echo "  ${_tj%%|*} -> ${_tj#*|}  (logs in <template>/logs/)"
+        done
+    fi
+} > "$RUN_DIR/run_info.txt"
+
+# Assemble the full job-id list (tiers + template runs) for monitoring.
+ALL_JIDS="$JID1,$JID2,$JID3"
+for _tj in ${TEMPLATE_JOBS[@]+"${TEMPLATE_JOBS[@]}"}; do
+    ALL_JIDS+=",${_tj%%|*}"
+done
+
 echo ""
-echo "Monitor:  squeue -j $JID1,$JID2,$JID3"
-echo "Tail log: tail -f $PROJECT_DIR/test-results/tier1_2_${JID1}.log"
+echo "Monitor:  squeue -j $ALL_JIDS"
+echo "Tail log: tail -f $RUN_DIR/tier1_2_${JID1}.log"
+echo "Results:  $RUN_DIR  (or test-results/latest)"

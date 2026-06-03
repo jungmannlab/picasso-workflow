@@ -179,11 +179,18 @@ class AggregationWorkflowRunner:
             )
         else:
             report_name = reporter_config["report_name"]
+        # analysis result directory; computed before the Confluence page so
+        # its location can be documented on the overview page.
+        instance.result_folder = os.path.join(
+            analysis_config["result_location"], report_name
+        )
         if confluence_config := reporter_config.get("ConfluenceReporter"):
             instance._initialize_confluence_interface(**confluence_config)
-            body_text = """<b>Aggregation analysis reslts</b>"""
+            # The overview content (run metadata + config snapshot) is
+            # written by the AggregationWorkflowCoordinator, which has the
+            # orchestration context. Here we only ensure the page exists.
             try:
-                instance.ci.create_page(report_name, body_text)
+                instance.ci.create_page(report_name, "")
             except ConfluenceInterfaceError:
                 logger.debug(
                     "Error creating page, it already exists. Continuing"
@@ -197,9 +204,6 @@ class AggregationWorkflowRunner:
         instance.analysis_config = analysis_config
         # reporter_config['report_name'] = report_name
         # create analysis result directory
-        instance.result_folder = os.path.join(
-            analysis_config["result_location"], report_name
-        )
         try:
             os.mkdir(instance.result_folder)
         except FileExistsError:
@@ -785,6 +789,15 @@ class WorkflowRunner:
             analyse_error = copy.copy(e)
             self.confluencereporter.report_error(e, fun_name)
             # raise e
+
+        # If the analysis step crashed, self.results[key] was never
+        # written; skip the per-module success-path Confluence reporter
+        # (which would crash with KeyError and mask analyse_error) and
+        # re-raise the real cause. The error has already been posted to
+        # Confluence via report_error(...) above.
+        if analyse_error is not None:
+            raise analyse_error
+
         # logger.debug(f"RESULTS: {self.results[key]}")
         fun_cr = getattr(self.confluencereporter, fun_name)
         try:
@@ -792,8 +805,5 @@ class WorkflowRunner:
         except ConfluenceInterfaceError as e:
             logger.error(e)
             logger.error(traceback.format_exc())
-
-        if analyse_error is not None:
-            raise analyse_error
 
         return self.results[key]["success"]

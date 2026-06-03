@@ -7,12 +7,71 @@ Description: Test the module analyse.py
 """
 import logging
 
+import numpy as np
+
 from picasso_workflow.outpost_modules import mask
 from picasso import io
 import matplotlib.pyplot as plt
 
 
 logger = logging.getLogger(__name__)
+
+
+def _cellmask_with_components():
+    """Build a CellMask whose binary mask has three separate components
+    whose scan-order label ids deliberately differ from their area rank,
+    so a label-id-based selection (the previous bug) cannot pass by luck.
+
+    Layout (row-major scan assigns labels in first-encounter order):
+        comp A : area 12, scanned first  -> label 1   (LARGEST)
+        comp B : area  2, scanned second -> label 2   (smallest)
+        comp C : area  9, scanned third  -> label 3   (medium)
+
+    Area rank therefore is A (0th) > C (1st) > B (2nd), while the label
+    ids are A=1, B=2, C=3. The old `largest_label - nth_largest` logic
+    would select label 0 (background) for nth_largest=1; the area-rank
+    logic correctly selects C.
+    """
+    binary = np.zeros((10, 10), dtype=bool)
+    comp_a = (slice(0, 2), slice(0, 6))  # 2 * 6 = 12
+    comp_b = (slice(0, 1), slice(8, 10))  # 1 * 2 = 2
+    comp_c = (slice(4, 7), slice(0, 3))  # 3 * 3 = 9
+    binary[comp_a] = True
+    binary[comp_b] = True
+    binary[comp_c] = True
+
+    cell_mask = mask.CellMask()
+    cell_mask._binary_mask = binary
+    # _recalc_density_mask_from_binary (called by filter_mask) needs a
+    # finite initial density of the same shape.
+    cell_mask._initial_density = np.ones_like(binary, dtype=np.float64)
+    cell_mask._upsample = 10
+    return cell_mask, {"a": comp_a, "b": comp_b, "c": comp_c}
+
+
+def test_filter_mask_selects_nth_largest_by_area():
+    """filter_mask(nth_largest=k) must select the kth-largest component
+    by area (0 = largest), not by connected-component label id."""
+    expected_by_rank = ["a", "c", "b"]  # largest, second, third by area
+    for nth, key in enumerate(expected_by_rank):
+        cell_mask, comps = _cellmask_with_components()
+        cell_mask.filter_mask(nth_largest=nth, fill_holes=False)
+
+        expected = np.zeros((10, 10), dtype=bool)
+        expected[comps[key]] = True
+        assert np.array_equal(cell_mask._binary_mask, expected), (
+            f"nth_largest={nth} selected the wrong component"
+        )
+
+
+def test_filter_mask_default_selects_largest():
+    """The default (nth_largest=0) selects the single largest component."""
+    cell_mask, comps = _cellmask_with_components()
+    cell_mask.filter_mask(fill_holes=False)
+
+    expected = np.zeros((10, 10), dtype=bool)
+    expected[comps["a"]] = True
+    assert np.array_equal(cell_mask._binary_mask, expected)
 
 
 if __name__ == "__main__":

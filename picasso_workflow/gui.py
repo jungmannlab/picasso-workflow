@@ -7,9 +7,10 @@ Description: GUI descriptor module for picasso-workflow
 """
 
 from picasso_workflow import util, CONFIG
-import logging
+from loguru import logger
 import subprocess
 import os
+import re
 import sys
 import yaml
 import importlib.util
@@ -22,15 +23,24 @@ import functools
 import inspect
 import textwrap
 from picasso import lib
-from PyQt5 import QtWidgets, QtCore, QtGui
-from PyQt5.QtCore import Qt, QEvent
+from PyQt6 import QtWidgets, QtCore, QtGui
+from PyQt6.QtCore import Qt, QEvent
 
 
-logger = logging.getLogger(__name__)
 try:
     from picasso_workflow._version import __version__ as __GUIVERSION__
 except ImportError:
     __GUIVERSION__ = "unknown"
+
+
+def _read_text_safe(path):
+    """Read a text file for logging. Returns a sentinel on any failure
+    so a logging side-effect can never raise into the caller."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"(could not read {path!r}: {exc!r})"
 
 
 class ModuleDescriptor(util.AbstractModuleCollection):
@@ -1332,6 +1342,27 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "angle",
                 "required": False,
             },
+            "generate_active_rois": {
+                "type": "bool",
+                "description": "Whether to generate density-driven active site zoom-in previews next to the overview image",
+                "default": True,
+                "required": False,
+            },
+            "n_active_rois": {
+                "type": "int",
+                "description": "Number of high-density active sites (ROIs) to generate",
+                "min": 1,
+                "max": 25,
+                "default": 4,
+                "required": False,
+            },
+            "colormap": {
+                "type": "str",
+                "description": "Colormap of the generated images",
+                "options": ["magma", "hot", "inferno", "viridis", "gray"],
+                "default": "magma",
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -1356,10 +1387,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "filepath to full FOV rendering",
             },
+            "fp_scene_fullfov_unmarked": {
+                "type": "str",
+                "description": "filepath to full FOV rendering without outlines",
+            },
             "fp_scene_ctrmass": {
                 "type": "str",
                 "description": "filepath to center of mass zoom rendering \
                     (conditional, only if ctrmass_fov_nm provided)",
+            },
+            "fp_scene_rois": {
+                "type": "list",
+                "description": "list of filepaths to the density-driven active site Zoom-In previews",
             },
         }
 
@@ -2432,9 +2471,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Output folder for module results",
             },
-            "nneighbor_distances": {
-                "type": "numpy.ndarray",
-                "description": "Nearest neighbor distance matrix",
+            "nneighbor": {
+                "type": "Path",
+                "description": "File path to the nearest neighbor data",
             },
         }
 
@@ -3182,7 +3221,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         max of histogram
                     n_nearest_neighbors : int
                         number of nearest neighbors to evaluate
-                    granularity : float
+                    granularity : int
                     the spinna granularity
                 optional keys:
                     density_app : list of float
@@ -3268,7 +3307,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": True,
             },
             "granularity": {
-                "type": "float",
+                "type": "int",
                 "description": "The spinna granularity",
                 "required": True,
             },
@@ -4326,8 +4365,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "nth_largest_cell": {
                 "type": "int",
                 "description": "If select_cell is True: Select the nth \
-                    largest cell.",
+                    largest cell by area (1 = largest, 2 = second \
+                    largest, ...).",
                 "default": 1,
+                "min": 1,
                 "required": True,
             },
             "fill_holes": {
@@ -4388,9 +4429,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Output folder for module results",
             },
-            "mask2": {
-                "type": "numpy.ndarray",
-                "description": "Alternative generated mask",
+            "fp_mask": {
+                "type": "Path",
+                "description": "Path to the saved mask",
+            },
+            "area": {
+                "type": "float",
+                "description": "area in µm^2",
             },
         }
 
@@ -4419,7 +4464,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         the number of bins for plotting
                     nth_largest : int
                         select the nth largest area in density range.
-                        set 0 for largest.
+                        1-based: set 1 for largest.
                     apply_to_locs : bool
                         whether to apply the created mask to the locs
                     smoothe_nm : float
@@ -4448,8 +4493,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             # },
             "fp_mask": {
                 "type": "path",
-                "description": "The file path to the mask min_density, \
-                    max_density : float the density range to select",
+                "description": "The file path to the mask to refine.",
                 "required": True,
             },
             "density_std_cutoff": {
@@ -4457,22 +4501,23 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Density range in units of std/median, "
                 "symmetric around median. Alternative to max/min",
                 "min": 0,
-                "max": 1,
                 "default": 0,
                 "required": False,
             },
-            "density_min": {
+            "min_density": {
                 "type": "float",
-                "description": "Lower density cutoff."
+                "description": "Lower density cutoff in µm^(-2). "
                 "Alternative to density_std_cutoff",
                 "default": 0,
+                "min": 0,
                 "required": False,
             },
-            "density_max": {
+            "max_density": {
                 "type": "float",
-                "description": "Higher density cutoff."
+                "description": "Higher density cutoff in µm^(-2). "
                 "Alternative to density_std_cutoff",
                 "default": 0,
+                "min": 0,
                 "required": False,
             },
             "nbins": {
@@ -4483,10 +4528,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "nth_largest": {
                 "type": "int",
                 "description": "Select the nth largest contiguous area in density "
-                "range. Set 0 for largest.",
+                "range (1 = largest, 2 = second largest, ...).",
                 "required": False,
-                "min": 0,
-                "default": 0,
+                "min": 1,
+                "default": 1,
             },
             "apply_to_locs": {
                 "type": "bool",
@@ -6025,14 +6070,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     density : dict, channel tag to float
                         density to simulate [nm^2 or nm^3];
                         area density if 2D; volume density if 3D
-                    granularity : float
-                        the spinna res_factor
+                    granularity : int
+                        the spinna granularity
                     sim_repeats : int
                         number of simulation repeats, for noise reduction
                 and optional keys:
                     nn_nth : int
                         number of nearest neighbors to analyse
                         default: 1
+                    NND_bin : int
+                        bin size (nm)
+                        auto-calculated if None or 0
+                    NND_maxdist : int
+                        maximum distance in histogram (nm)
+                        auto-calculated if None or 0
             results : dict
                 the results this function generates. This is created
                 in the decorator wrapper
@@ -6082,8 +6133,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": True,
             },
             "granularity": {
-                "type": "float",
-                "description": "The spinna res_factor",
+                "type": "int",
+                "description": "The spinna granularity",
                 "default": 100,
                 "required": True,
             },
@@ -6097,6 +6148,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "int",
                 "description": "Neighbor up to which to evaluate",
                 "default": 2,
+                "required": False,
+            },
+            "NND_bin": {
+                "type": "int",
+                "description": "Bin size (nm). Auto-calculated if None or 0",
+                "default": 0,
+                "required": False,
+            },
+            "NND_maxdist": {
+                "type": "int",
+                "description": "Maximum distance in histogram (nm). Auto-calculated if None or 0.",
+                "default": 0,
                 "required": False,
             },
         }
@@ -7185,6 +7248,7 @@ class SlurmCommunicator:
 
         sbatch_cmd += f" {script_path}"
 
+        logger.info(f"Submitting job via SSH: {sbatch_cmd}")
         result = self.execute_ssh_command(sbatch_cmd)
 
         # Parse job ID from output
@@ -7376,7 +7440,9 @@ class FilePathEditor(QtWidgets.QWidget):
         # Create line edit and button
         self.lineEdit = QtWidgets.QLineEdit(self)
         self.button = QtWidgets.QPushButton("Browse", self)
-        self.button.setFocusPolicy(QtCore.Qt.NoFocus)  # Prevent focus issues
+        self.button.setFocusPolicy(
+            QtCore.Qt.FocusPolicy.NoFocus
+        )  # Prevent focus issues
 
         # Add widgets to layout
         layout.addWidget(self.lineEdit)
@@ -7552,8 +7618,10 @@ class DroppableTreeWidget(QtWidgets.QTreeWidget):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
-        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDrop)
-        self.setDefaultDropAction(Qt.MoveAction)
+        self.setDragDropMode(
+            QtWidgets.QAbstractItemView.DragDropMode.DragDrop
+        )
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self._drag_source_item = None
 
     def dragEnterEvent(self, event):
@@ -7569,7 +7637,7 @@ class DroppableTreeWidget(QtWidgets.QTreeWidget):
     def dragMoveEvent(self, event):
         if event.mimeData().hasUrls() or event.source() == self:
             # Get item under cursor for visual feedback
-            item = self.itemAt(event.pos())
+            item = self.itemAt(event.position().toPoint())
             if item:
                 event.acceptProposedAction()
             else:
@@ -7592,7 +7660,7 @@ class DroppableTreeWidget(QtWidgets.QTreeWidget):
             self._drag_source_item = None
 
     def dropEvent(self, event):
-        target_item = self.itemAt(event.pos())
+        target_item = self.itemAt(event.position().toPoint())
 
         if event.mimeData().hasUrls():
             # External file drop
@@ -7642,7 +7710,7 @@ class FilePathDelegate(QtWidgets.QStyledItemDelegate):
         super().destroyEditor(editor, index)
 
     def setEditorData(self, editor, index):
-        value = index.model().data(index, QtCore.Qt.EditRole)
+        value = index.model().data(index, QtCore.Qt.ItemDataRole.EditRole)
         if value:
             editor.setText(str(value))
 
@@ -7650,7 +7718,7 @@ class FilePathDelegate(QtWidgets.QStyledItemDelegate):
         # Check if editor is still valid
         try:
             text = editor.text()
-            model.setData(index, text, QtCore.Qt.EditRole)
+            model.setData(index, text, QtCore.Qt.ItemDataRole.EditRole)
         except RuntimeError:
             pass  # Editor was deleted
 
@@ -7670,7 +7738,7 @@ class FilePathDelegate(QtWidgets.QStyledItemDelegate):
     def eventFilter(self, editor, event):
         """Prevent editor from closing when file dialog opens."""
         # Don't let focus out events close the editor if we're browsing
-        if event.type() == QtCore.QEvent.FocusOut:
+        if event.type() == QtCore.QEvent.Type.FocusOut:
             if hasattr(editor, "_browsing") and editor._browsing:
                 return True  # Ignore the event
         return super().eventFilter(editor, event)
@@ -7687,8 +7755,8 @@ def dict_to_table(d, table):
 
 class ToolTipDelegate(QtWidgets.QStyledItemDelegate):
     def helpEvent(self, event, view, option, index):
-        if event.type() == QEvent.ToolTip:
-            tooltip = index.data(Qt.ToolTipRole)
+        if event.type() == QEvent.Type.ToolTip:
+            tooltip = index.data(Qt.ItemDataRole.ToolTipRole)
             if tooltip:
                 QtWidgets.QToolTip.showText(event.globalPos(), tooltip)
                 return True
@@ -7791,10 +7859,10 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             self._on_command_changed
         )
         # self.command_combo.model().setData(
-        #     0, "Map different values onto workers (e.g. files to load)", Qt.ToolTipRole
+        #     0, "Map different values onto workers (e.g. files to load)", Qt.ItemDataRole.ToolTipRole
         # )  # Tooltip
         # self.command_combo.model().setData(
-        #     1, "Load value from a result of a previous module in this or a previous workflow stage", Qt.ToolTipRole
+        #     1, "Load value from a result of a previous module in this or a previous workflow stage", Qt.ItemDataRole.ToolTipRole
         # )  # Tooltip
         layout.addWidget(self.command_combo)
         layout.addSpacing(10)
@@ -7876,7 +7944,8 @@ class ParameterCmdDialog(QtWidgets.QDialog):
 
         # Buttons
         button_box = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
@@ -8204,11 +8273,11 @@ class Window(QtWidgets.QMainWindow):
         # disable Investigation workflow, which is in Development
         index = self.workflow_type.model().index(2, 0)
         self.workflow_type.model().setData(
-            index, 0, Qt.UserRole - 1
+            index, 0, Qt.ItemDataRole.UserRole - 1
         )  # 0 disables the item
         self.workflow_type.setItemDelegate(ToolTipDelegate(self.workflow_type))
         self.workflow_type.model().setData(
-            index, "Not Implemented yet", Qt.ToolTipRole
+            index, "Not Implemented yet", Qt.ItemDataRole.ToolTipRole
         )  # Tooltip
 
         self.workflow_type.currentIndexChanged.connect(
@@ -8290,7 +8359,9 @@ class Window(QtWidgets.QMainWindow):
         self.confluence_token_edit.setPlaceholderText(
             "API token (or set CONFLUENCE_BEARER env var)"
         )
-        self.confluence_token_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+        self.confluence_token_edit.setEchoMode(
+            QtWidgets.QLineEdit.EchoMode.Password
+        )
         self.confluence_token_edit.setToolTip(
             "If empty, host will load from environment variable"
         )
@@ -8361,6 +8432,20 @@ class Window(QtWidgets.QMainWindow):
             CONFIG["SlurmDefault"].get("cores", 1)
         )
         cluster_config_layout.addWidget(self.cluster_cores_spin)
+
+        # Number of GPUs per node (0 = no GPU requested)
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#GPUs/node:"))
+        self.cluster_gpus_spin = QtWidgets.QSpinBox()
+        self.cluster_gpus_spin.setMinimum(0)
+        self.cluster_gpus_spin.setMaximum(64)
+        self.cluster_gpus_spin.setValue(
+            CONFIG["SlurmDefault"].get("gpus", 0)
+        )
+        self.cluster_gpus_spin.setToolTip(
+            "Number of GPUs to request per node via SLURM "
+            "(adds '#SBATCH --gres=gpu:N'). 0 = no GPU."
+        )
+        cluster_config_layout.addWidget(self.cluster_gpus_spin)
 
         # Memory
         cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"))
@@ -8556,8 +8641,8 @@ class Window(QtWidgets.QMainWindow):
         self.files_table.setHorizontalHeaderLabels(["Name", "File Path"])
         # Configure column stretching - Name column resizes to contents, File Path column stretches
         header = self.files_table.horizontalHeader()
-        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
         dict_to_table(d, self.files_table)
         # Store delegate as instance variable to prevent garbage collection
         self.file_path_delegate = FilePathDelegate(self)
@@ -8580,19 +8665,19 @@ class Window(QtWidgets.QMainWindow):
         )
         header_agg = self.files_tree_agg.header()
         header_agg.setSectionResizeMode(
-            0, QtWidgets.QHeaderView.ResizeToContents
+            0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
         header_agg.setSectionResizeMode(
-            1, QtWidgets.QHeaderView.ResizeToContents
+            1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
-        header_agg.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        header_agg.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
         self.file_path_delegate_tree_agg = FilePathDelegate(self)
         self.files_tree_agg.setItemDelegateForColumn(
             2, self.file_path_delegate_tree_agg
         )
         self.files_tree_agg.setAlternatingRowColors(True)
         self.files_tree_agg.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
+            QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self.files_stack.addWidget(self.files_tree_agg)
 
@@ -8606,14 +8691,14 @@ class Window(QtWidgets.QMainWindow):
         )
         header_inv = self.files_tree_inv.header()
         header_inv.setSectionResizeMode(
-            0, QtWidgets.QHeaderView.ResizeToContents
+            0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
         header_inv.setSectionResizeMode(
-            1, QtWidgets.QHeaderView.ResizeToContents
+            1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
-        header_inv.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        header_inv.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
         header_inv.setSectionResizeMode(
-            3, QtWidgets.QHeaderView.ResizeToContents
+            3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
         self.file_path_delegate_tree_inv = FilePathDelegate(self)
         self.files_tree_inv.setItemDelegateForColumn(
@@ -8621,7 +8706,7 @@ class Window(QtWidgets.QMainWindow):
         )
         self.files_tree_inv.setAlternatingRowColors(True)
         self.files_tree_inv.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
+            QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self.files_stack.addWidget(self.files_tree_inv)
 
@@ -8664,7 +8749,7 @@ class Window(QtWidgets.QMainWindow):
         parameters_scroll.setWidget(module_parameters)
         parameters_scroll.setWidgetResizable(True)
         parameters_scroll.setHorizontalScrollBarPolicy(
-            QtCore.Qt.ScrollBarAlwaysOff
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         parameters_scroll.setMinimumHeight(100)
         parameters_scroll.setMaximumHeight(300)
@@ -8789,6 +8874,9 @@ class Window(QtWidgets.QMainWindow):
 
         # Add to tree
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.add_dataset", dataset=dataset_name
+        )
 
     def add_channel(self):
         """Add new channel to ALL datasets."""
@@ -8827,6 +8915,9 @@ class Window(QtWidgets.QMainWindow):
 
         # Refresh tree
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.add_channel", channel=channel_name
+        )
 
     def remove_channel(self):
         """Remove selected channel from ALL datasets."""
@@ -8862,7 +8953,7 @@ class Window(QtWidgets.QMainWindow):
         msg = f"Remove channel '{channel_name}' from all datasets?"
         if (
             QtWidgets.QMessageBox.question(self, "Confirm", msg)
-            != QtWidgets.QMessageBox.Yes
+            != QtWidgets.QMessageBox.StandardButton.Yes
         ):
             return
 
@@ -8877,6 +8968,9 @@ class Window(QtWidgets.QMainWindow):
 
         # Refresh tree
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.remove_channel", channel=channel_name
+        )
 
     def rename_dataset(self):
         """Rename selected dataset with validation (no underscores)."""
@@ -8952,45 +9046,45 @@ class Window(QtWidgets.QMainWindow):
 
         # Refresh tree
         self._populate_tree_from_data()
-
-    def rename_channel(self):
-        """Rename selected channel in ALL datasets with validation (no underscores)."""
-        current_tree = self._get_current_tree_widget()
-        if not current_tree:
-            return
-
-        selected = current_tree.selectedItems()
-
-        if not selected:
-            QtWidgets.QMessageBox.information(
-                self, "No Selection", "Please select a channel to rename."
-            )
-            return
-
-        # Get channel item (must have parent)
-        item = selected[0]
-        if item.parent() is None:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Invalid Selection",
-                "Please select a channel (not a dataset) to rename.",
-            )
-            return
-
-        old_name = item.text(1)
-
-        # Prompt for new name
-        new_name, ok = QtWidgets.QInputDialog.getText(
-            self,
-            "Rename Channel",
-            f"Enter new name for channel '{old_name}':",
-            text=old_name,
+        self._log_workflow_config_event(
+            "tree.rename_dataset", old=old_name, new=new_name
         )
 
-        if not ok or not new_name.strip():
-            return
+    def _channel_name_from_item(self, item):
+        """Return the channel name a tree item represents, by position.
 
-        new_name = new_name.strip()
+        ``_populate_tree_from_data`` creates one child per entry in
+        ``tree_data["channels"]`` in that exact order, so a channel item's
+        index under its dataset parent is its index into the channels list.
+        Using the position (rather than ``item.text(1)``) is authoritative:
+        it is correct even when the cell was just edited inline and column 1
+        already holds the new, not-yet-committed name.
+
+        Returns None if the item is not a channel row or is out of range.
+        """
+        dataset_item = item.parent()
+        if dataset_item is None:
+            return None
+        child_index = dataset_item.indexOfChild(item)
+        channels = self.tree_data["channels"]
+        if 0 <= child_index < len(channels):
+            return channels[child_index]
+        return None
+
+    def _rename_channel(self, old_name, new_name):
+        """Rename a channel across ALL datasets, with validation.
+
+        Shared by the "Rename Channel" button and inline (double-click)
+        editing so both go through identical logic. On any validation
+        failure the tree is repopulated from ``tree_data`` (reverting an
+        inline edit) and False is returned. Returns True on success.
+        """
+        new_name = (new_name or "").strip()
+
+        # No-op / empty: just resync the view (reverts a blanked inline edit).
+        if not new_name or new_name == old_name:
+            self._populate_tree_from_data()
+            return False
 
         # Validate no underscores
         if "_" in new_name:
@@ -9001,14 +9095,24 @@ class Window(QtWidgets.QMainWindow):
                 "Underscores are used to separate dataset and channel names "
                 "in the {dataset}_{channel} format.",
             )
-            return
+            self._populate_tree_from_data()
+            return False
 
         # Check if already exists
-        if new_name in self.tree_data["channels"] and new_name != old_name:
+        if new_name in self.tree_data["channels"]:
             QtWidgets.QMessageBox.warning(
                 self, "Duplicate", f"Channel '{new_name}' already exists."
             )
-            return
+            self._populate_tree_from_data()
+            return False
+
+        if old_name not in self.tree_data["channels"]:
+            logger.warning(
+                f"Cannot rename channel: '{old_name}' not found in "
+                f"tree_data channels {self.tree_data['channels']}"
+            )
+            self._populate_tree_from_data()
+            return False
 
         # Update channels list
         idx = self.tree_data["channels"].index(old_name)
@@ -9023,6 +9127,56 @@ class Window(QtWidgets.QMainWindow):
 
         # Refresh tree
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.rename_channel", old=old_name, new=new_name
+        )
+        return True
+
+    def rename_channel(self):
+        """Rename selected channel in ALL datasets with validation (no underscores)."""
+        current_tree = self._get_current_tree_widget()
+        if not current_tree:
+            return
+
+        # Use the focused item, not selectedItems()[0]: with
+        # ExtendedSelection the latter returns items in tree order, so a
+        # lingering selection on the first channel would always win.
+        item = current_tree.currentItem()
+        if item is None:
+            selected = current_tree.selectedItems()
+            item = selected[0] if selected else None
+
+        if item is None:
+            QtWidgets.QMessageBox.information(
+                self, "No Selection", "Please select a channel to rename."
+            )
+            return
+
+        # Get channel item (must have parent)
+        if item.parent() is None:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Invalid Selection",
+                "Please select a channel (not a dataset) to rename.",
+            )
+            return
+
+        old_name = self._channel_name_from_item(item)
+        if old_name is None:
+            return
+
+        # Prompt for new name
+        new_name, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Rename Channel",
+            f"Enter new name for channel '{old_name}':",
+            text=old_name,
+        )
+
+        if not ok or not new_name.strip():
+            return
+
+        self._rename_channel(old_name, new_name)
 
     def remove_tree_items(self):
         """Remove selected datasets or channels."""
@@ -9048,7 +9202,7 @@ class Window(QtWidgets.QMainWindow):
         msg = f"Remove {len(datasets_to_remove)} dataset(s)?"
         if (
             QtWidgets.QMessageBox.question(self, "Confirm", msg)
-            != QtWidgets.QMessageBox.Yes
+            != QtWidgets.QMessageBox.StandardButton.Yes
         ):
             return
 
@@ -9059,6 +9213,9 @@ class Window(QtWidgets.QMainWindow):
                 del self.tree_data["conditions"][dataset_name]
 
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.remove_datasets", datasets=datasets_to_remove
+        )
 
     def clear_tree(self):
         """Clear all items from the tree."""
@@ -9073,10 +9230,10 @@ class Window(QtWidgets.QMainWindow):
             self,
             "Clear Tree",
             "Clear all datasets and channels?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
         )
 
-        if reply != QtWidgets.QMessageBox.Yes:
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
             return
 
         current_tree.clear()
@@ -9086,6 +9243,7 @@ class Window(QtWidgets.QMainWindow):
             "file_paths": {},
             "conditions": {},
         }
+        self._log_workflow_config_event("tree.clear")
 
     def _get_current_tree_widget(self):
         """Get currently visible tree widget based on workflow type."""
@@ -9111,7 +9269,7 @@ class Window(QtWidgets.QMainWindow):
                 dataset_item = QtWidgets.QTreeWidgetItem(current_tree)
                 dataset_item.setText(0, dataset)
                 dataset_item.setFlags(
-                    dataset_item.flags() & ~Qt.ItemIsEditable
+                    dataset_item.flags() & ~Qt.ItemFlag.ItemIsEditable
                 )
 
                 for channel in self.tree_data["channels"]:
@@ -9129,7 +9287,7 @@ class Window(QtWidgets.QMainWindow):
                         )
 
                     # Make only File Path (and Condition) editable
-                    flags = channel_item.flags() | Qt.ItemIsEditable
+                    flags = channel_item.flags() | Qt.ItemFlag.ItemIsEditable
                     channel_item.setFlags(flags)
 
                 dataset_item.setExpanded(True)
@@ -9149,14 +9307,39 @@ class Window(QtWidgets.QMainWindow):
         channel_name = item.text(1)
 
         # Update data structure
+        if column == 1:  # Channel renamed inline (double-click edit)
+            # Resolve the pre-edit name by position (column 1 already holds
+            # the new text), then funnel through the same core as the
+            # "Rename Channel" button so behaviour is identical.
+            old_name = self._channel_name_from_item(item)
+            new_name = item.text(1)
+            if old_name is not None:
+                self._rename_channel(old_name, new_name)
+            else:
+                logger.debug(
+                    "Could not resolve channel for inline rename to "
+                    f"'{new_name}'"
+                )
+            return
         if column == 2:  # File Path
             file_path = item.text(2)
             self.tree_data["file_paths"][dataset_name][
                 channel_name
             ] = file_path
+            self._log_workflow_config_event(
+                "tree.set_file_path",
+                dataset=dataset_name,
+                channel=channel_name,
+                path=file_path,
+            )
         elif column == 3:  # Condition (Investigation only)
             condition = item.text(3)
             self.tree_data["conditions"][dataset_name] = condition
+            self._log_workflow_config_event(
+                "tree.set_condition",
+                dataset=dataset_name,
+                condition=condition,
+            )
 
         self._update_validation_display()
 
@@ -9169,6 +9352,9 @@ class Window(QtWidgets.QMainWindow):
             name = os.path.basename(path)
             self.files_table.setItem(row, 0, QtWidgets.QTableWidgetItem(name))
             self.files_table.setItem(row, 1, QtWidgets.QTableWidgetItem(path))
+        self._log_workflow_config_event(
+            "files_table.drop", n_added=len(file_paths), paths=list(file_paths)
+        )
 
     def _on_files_dropped_tree(self, file_paths, target_item):
         """Handle files dropped onto the Aggregation/Investigation tree."""
@@ -9206,6 +9392,9 @@ class Window(QtWidgets.QMainWindow):
                     self.tree_data["file_paths"][dataset_name][channel] = path
 
         self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.drop", n_added=len(file_paths), paths=list(file_paths)
+        )
 
     def _on_file_moved_tree(self, source_item, target_item):
         """Handle file moved between channels within the tree."""
@@ -9232,6 +9421,12 @@ class Window(QtWidgets.QMainWindow):
                 target_channel
             ] = source_path
             self._populate_tree_from_data()
+            self._log_workflow_config_event(
+                "tree.move_file",
+                source=(source_dataset, source_channel),
+                target=(target_dataset, target_channel),
+                path=source_path,
+            )
 
     def _update_validation_display(self):
         """Update visual indicators for missing file paths."""
@@ -9239,24 +9434,32 @@ class Window(QtWidgets.QMainWindow):
         if not current_tree:
             return
 
-        root = current_tree.invisibleRootItem()
+        # setForeground emits itemChanged. Without blocking, these purely
+        # cosmetic colour updates re-enter _on_tree_item_changed (e.g. the
+        # column-1 path calls _rename_channel -> _populate_tree_from_data ->
+        # clear()), deleting the items this loop is still iterating over.
+        current_tree.blockSignals(True)
+        try:
+            root = current_tree.invisibleRootItem()
 
-        for dataset_idx in range(root.childCount()):
-            dataset_item = root.child(dataset_idx)
+            for dataset_idx in range(root.childCount()):
+                dataset_item = root.child(dataset_idx)
 
-            for channel_idx in range(dataset_item.childCount()):
-                channel_item = dataset_item.child(channel_idx)
-                file_path = channel_item.text(2)
+                for channel_idx in range(dataset_item.childCount()):
+                    channel_item = dataset_item.child(channel_idx)
+                    file_path = channel_item.text(2)
 
-                # Red text if empty, black otherwise
-                color = (
-                    QtGui.QColor("red")
-                    if not file_path.strip()
-                    else QtGui.QColor("black")
-                )
+                    # Red text if empty, black otherwise
+                    color = (
+                        QtGui.QColor("red")
+                        if not file_path.strip()
+                        else QtGui.QColor("black")
+                    )
 
-                for col in range(channel_item.columnCount()):
-                    channel_item.setForeground(col, color)
+                    for col in range(channel_item.columnCount()):
+                        channel_item.setForeground(col, color)
+        finally:
+            current_tree.blockSignals(False)
 
     def _simple_to_tree(self):
         """Convert simple table to tree format using {dataset}_{channel} naming."""
@@ -9393,6 +9596,10 @@ class Window(QtWidgets.QMainWindow):
             if item.widget():
                 item.widget().deleteLater()
 
+        self.find_files_button = QtWidgets.QPushButton("Find in folder")
+        self.find_files_button.clicked.connect(self.find_dataset_files)
+        self.file_buttons_layout.addWidget(self.find_files_button)
+
         if workflow_type_index == 0:  # Single Workflow
             self.add_files_button = QtWidgets.QPushButton("Add files")
             self.add_files_button.clicked.connect(self.add_files)
@@ -9442,6 +9649,93 @@ class Window(QtWidgets.QMainWindow):
             self.file_buttons_layout.addWidget(self.remove_dataset_button)
             self.file_buttons_layout.addWidget(self.clear_tree_button)
 
+    def find_dataset_files(self):
+        """Find dataset files (.tif, .ome.tif, .nd2) in a selected folder."""
+        folder = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            "Select Data Folder",
+            "",
+        )
+        if folder:
+            from picasso_workflow.metaworkflow import find_dnapaint_raw
+
+            datasets, _ = find_dnapaint_raw(folder)
+            if datasets:
+                workflow_type_index = self.workflow_type.currentIndex()
+                if workflow_type_index == 0:
+                    # Single workflow
+                    for key, paths in datasets.items():
+                        row = self.files_table.rowCount()
+                        self.files_table.insertRow(row)
+                        self.files_table.setItem(
+                            row, 0, QtWidgets.QTableWidgetItem(key)
+                        )
+                        if isinstance(paths, list):
+                            if len(paths) == 1:
+                                self.files_table.setItem(
+                                    row,
+                                    1,
+                                    QtWidgets.QTableWidgetItem(paths[0]),
+                                )
+                            else:
+                                self.files_table.setItem(
+                                    row,
+                                    1,
+                                    QtWidgets.QTableWidgetItem(repr(paths)),
+                                )
+                        else:
+                            self.files_table.setItem(
+                                row, 1, QtWidgets.QTableWidgetItem(paths)
+                            )
+                else:
+                    # Aggregation / Investigation workflow
+                    if not self.tree_data.get("channels"):
+                        self.tree_data["channels"] = ["ch1"]
+
+                    for key, paths in datasets.items():
+                        # Ensure unique key
+                        unique_key = key
+                        counter = 1
+                        while unique_key in self.tree_data.get("datasets", []):
+                            unique_key = f"{key}_{counter}"
+                            counter += 1
+
+                        if "datasets" not in self.tree_data:
+                            self.tree_data["datasets"] = []
+                        if "conditions" not in self.tree_data:
+                            self.tree_data["conditions"] = {}
+                        if "file_paths" not in self.tree_data:
+                            self.tree_data["file_paths"] = {}
+
+                        self.tree_data["datasets"].append(unique_key)
+                        self.tree_data["conditions"][unique_key] = ""
+                        self.tree_data["file_paths"][unique_key] = {}
+
+                        # Assign to the first channel
+                        target_channel = self.tree_data["channels"][0]
+
+                        if isinstance(paths, list):
+                            if len(paths) == 1:
+                                self.tree_data["file_paths"][unique_key][
+                                    target_channel
+                                ] = paths[0]
+                            else:
+                                self.tree_data["file_paths"][unique_key][
+                                    target_channel
+                                ] = repr(paths)
+                        else:
+                            self.tree_data["file_paths"][unique_key][
+                                target_channel
+                            ] = paths
+
+                    self._populate_tree_from_data()
+            else:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "No files found",
+                    f"Could not find any supported dataset files in {folder}",
+                )
+
     def _set_widgets_enabled(self, enabled):
         """Enable or disable file and module widgets based on results folder selection."""
         self.workflow_type.setEnabled(enabled)
@@ -9468,6 +9762,158 @@ class Window(QtWidgets.QMainWindow):
         if enabled:
             self._apply_files_mode_state()
 
+    # ------------------------------------------------------------------
+    # Workflow-configuration logging helpers
+    # ------------------------------------------------------------------
+    # These produce a compact, structured snapshot of the parts of the GUI
+    # state that get baked into the generated start_workflow.py script:
+    # the input-files configuration (explicit table or tree, depending on
+    # workflow type) and the module list with their parameter dicts.
+    # Every user-driven mutation of either side calls
+    # ``_log_workflow_config_event`` so the logfile holds an audit trail of
+    # how the configuration evolved before submission.
+    def _files_config_snapshot(self):
+        """Return a dict describing the current input-files configuration.
+
+        Schema:
+            workflow_type: "Single" | "Aggregation" | "Investigation"
+            files_mode:    "explicit" | "auto_detect" | "no_input_files"
+                           (only meaningful for Single Workflow)
+            files:         list[{name, path}]                (Single)
+                           list[{dataset, channel, path, condition?}] (Tree)
+        """
+        try:
+            workflow_type_index = self.workflow_type.currentIndex()
+        except AttributeError:
+            # Called before UI fully constructed; just return what we can.
+            workflow_type_index = 0
+        type_name = {0: "Single", 1: "Aggregation", 2: "Investigation"}.get(
+            workflow_type_index, f"unknown({workflow_type_index})"
+        )
+
+        snapshot = {"workflow_type": type_name}
+
+        if workflow_type_index == 0:
+            try:
+                mode_index = self.files_mode_combo.currentIndex()
+            except AttributeError:
+                mode_index = 0
+            snapshot["files_mode"] = {
+                0: "explicit",
+                1: "auto_detect",
+                2: "no_input_files",
+            }.get(mode_index, f"unknown({mode_index})")
+            files = []
+            if hasattr(self, "files_table"):
+                for row in range(self.files_table.rowCount()):
+                    name_item = self.files_table.item(row, 0)
+                    path_item = self.files_table.item(row, 1)
+                    files.append(
+                        {
+                            "name": name_item.text() if name_item else "",
+                            "path": path_item.text() if path_item else "",
+                        }
+                    )
+            snapshot["files"] = files
+        else:
+            tree = getattr(self, "tree_data", None) or {}
+            datasets = list(tree.get("datasets", []))
+            channels = list(tree.get("channels", []))
+            file_paths = tree.get("file_paths", {}) or {}
+            conditions = tree.get("conditions", {}) or {}
+            entries = []
+            for ds in datasets:
+                for ch in channels:
+                    entry = {
+                        "dataset": ds,
+                        "channel": ch,
+                        "path": file_paths.get(ds, {}).get(ch, ""),
+                    }
+                    if workflow_type_index == 2:
+                        entry["condition"] = conditions.get(ds, "")
+                    entries.append(entry)
+            snapshot["datasets"] = datasets
+            snapshot["channels"] = channels
+            snapshot["files"] = entries
+        return snapshot
+
+    @staticmethod
+    def _yaml_safe(value):
+        """Recursively convert tuples to lists so the structure can be
+        serialized with yaml.safe_dump (which has no Python-tuple
+        representer). Module parameters often hold command tuples like
+        ``('$map', 'filepath')`` that would otherwise raise."""
+        if isinstance(value, dict):
+            return {k: Window._yaml_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [Window._yaml_safe(v) for v in value]
+        return value
+
+    def _modules_config_snapshot(self):
+        """Return a dict with the current single and aggregation modules.
+
+        Module entries are ``[name, params_dict]`` so the logged output
+        stays a single line per module after yaml.safe_dump.
+        """
+        return {
+            "single_workflow_modules": [
+                [name, Window._yaml_safe(params)]
+                for name, params in getattr(
+                    self, "single_workflow_modules", []
+                )
+            ],
+            "aggregation_workflow_modules": [
+                [name, Window._yaml_safe(params)]
+                for name, params in getattr(
+                    self, "aggregation_workflow_modules", []
+                )
+            ],
+        }
+
+    def _log_workflow_config_event(self, event, **details):
+        """Log a workflow-configuration mutation.
+
+        The one-line INFO message names the event and includes a few
+        compact stats; the DEBUG follow-ups dump the full files + modules
+        snapshots so the logfile can be replayed to reconstruct any state.
+        """
+        try:
+            files_snapshot = self._files_config_snapshot()
+        except Exception as exc:  # pragma: no cover - defensive
+            files_snapshot = {"error": repr(exc)}
+        try:
+            modules_snapshot = self._modules_config_snapshot()
+        except Exception as exc:  # pragma: no cover - defensive
+            modules_snapshot = {"error": repr(exc)}
+
+        n_files = (
+            len(files_snapshot.get("files", []))
+            if isinstance(files_snapshot, dict)
+            else "?"
+        )
+        n_sgl = len(modules_snapshot.get("single_workflow_modules", []))
+        n_agg = len(modules_snapshot.get("aggregation_workflow_modules", []))
+        detail_str = (
+            " | " + ", ".join(f"{k}={v!r}" for k, v in details.items())
+            if details
+            else ""
+        )
+        logger.info(
+            f"workflow-config: {event} "
+            f"[type={files_snapshot.get('workflow_type', '?')}, "
+            f"files={n_files}, sgl_modules={n_sgl}, "
+            f"agg_modules={n_agg}]"
+            f"{detail_str}"
+        )
+        logger.debug(
+            "workflow-config files snapshot:\n"
+            + yaml.safe_dump(files_snapshot, sort_keys=False)
+        )
+        logger.debug(
+            "workflow-config modules snapshot:\n"
+            + yaml.safe_dump(modules_snapshot, sort_keys=False)
+        )
+
     def add_files(self):
         """Add a new row to the table below the selected row or at the end."""
         # Determine insertion position
@@ -9490,6 +9936,9 @@ class Window(QtWidgets.QMainWindow):
         self.files_table.setItem(
             insert_position, 1, QtWidgets.QTableWidgetItem("")
         )
+        self._log_workflow_config_event(
+            "files_table.add_row", row=insert_position
+        )
 
     def remove_selected_files(self):
         """Remove the selected row(s) from the table based on any selected cells."""
@@ -9503,12 +9952,16 @@ class Window(QtWidgets.QMainWindow):
         # Remove rows in reverse order to avoid index shifting issues
         for row in selected_row_numbers:
             self.files_table.removeRow(row)
+        self._log_workflow_config_event(
+            "files_table.remove_rows", removed_rows=selected_row_numbers
+        )
 
     def clear_file_list(self):
         """Clear all rows from the table."""
         if self.files_table.rowCount() == 0:
             return
         self.files_table.setRowCount(0)
+        self._log_workflow_config_event("files_table.clear")
 
     def select_results_folder(self):
         """Open a folder selection dialog and display the selected folder."""
@@ -9526,12 +9979,16 @@ class Window(QtWidgets.QMainWindow):
             self.results_folder_display.setText(os.path.normpath(folder))
             # Enable widgets when a folder is selected
             self._set_widgets_enabled(True)
+            logger.info(f"workflow-config: loading results folder {folder}")
 
             # Search for YAML files and load file list
             self._load_yaml_file_list(folder)
 
             # Search for workflow definition and load it
             self._load_workflow_definition(folder)
+            self._log_workflow_config_event(
+                "results_folder.loaded", source=folder
+            )
         else:
             # If dialog was cancelled and no folder is selected, disable widgets
             if not self.results_folder_display.text():
@@ -9551,25 +10008,44 @@ class Window(QtWidgets.QMainWindow):
         if not folder or not os.path.isdir(folder):
             return
         self._set_widgets_enabled(True)
+        logger.info(f"workflow-config: results folder dropped: {folder}")
         self._load_yaml_file_list(folder)
         self._load_workflow_definition(folder)
+        self._log_workflow_config_event(
+            "results_folder.dropped", source=folder
+        )
 
     def on_template_changed(self, template_name):
         """Load a template"""
         try:
-            template_folder = CONFIG["Templates"][template_name]
-            if template_folder[:2] == 'r"' or template_folder[:2] == "r'":
-                template_folder = template_folder[2:-1]
+            template_path = CONFIG["Templates"][template_name]
+            if template_path[:2] == 'r"' or template_path[:2] == "r'":
+                template_path = template_path[2:-1]
+
+            # If path points to a file, use its directory
+            if template_path.endswith(".py"):
+                template_folder = os.path.dirname(template_path)
+            else:
+                template_folder = template_path
         except KeyError:
             return
         # # Enable widgets when a folder is selected
         # self._set_widgets_enabled(True)
+        logger.info(
+            f"workflow-config: loading template '{template_name}' "
+            f"from {template_folder}"
+        )
 
         # Search for YAML files and load file list
         self._load_yaml_file_list(template_folder)
 
         # Search for workflow definition and load it
         self._load_workflow_definition(template_folder)
+        self._log_workflow_config_event(
+            "template.loaded",
+            template=template_name,
+            source=template_folder,
+        )
 
     def _load_yaml_file_list(self, folder):
         """Search for YAML files in folder and load file list if found.
@@ -9612,6 +10088,10 @@ class Window(QtWidgets.QMainWindow):
                         dict_to_table(file_dict, self.files_table)
 
                         logger.debug(f"Loaded file list from {yaml_file}")
+                        self._log_workflow_config_event(
+                            "files_table.load_yaml",
+                            source=yaml_path,
+                        )
                         return  # Stop after loading first matching file
                     else:
                         logger.warning(
@@ -9993,8 +10473,10 @@ class Window(QtWidgets.QMainWindow):
                 # )
 
             # Load aggregation workflow if found
-            if workflow_modules_agg is not None and isinstance(
-                workflow_modules_agg, list
+            if (
+                workflow_modules_agg is not None
+                and isinstance(workflow_modules_agg, list)
+                and len(workflow_modules_agg) > 0
             ):
                 self._populate_workflow_from_definition(
                     workflow_modules_agg,
@@ -10135,8 +10617,10 @@ class Window(QtWidgets.QMainWindow):
                 )
 
             # Load aggregation workflow if present
-            if workflow_modules_agg is not None and isinstance(
-                workflow_modules_agg, list
+            if (
+                workflow_modules_agg is not None
+                and isinstance(workflow_modules_agg, list)
+                and len(workflow_modules_agg) > 0
             ):
                 self._populate_workflow_from_definition(
                     workflow_modules_agg,
@@ -10189,6 +10673,19 @@ class Window(QtWidgets.QMainWindow):
             workflow_list.append((module_name, params))
             index = len(workflow_list) - 1
             list_widget.addItem(f"{index:02d}: {module_name}")
+
+        # Per-list audit event. Both _load_workflow_definition and the
+        # alt loader funnel through here, so this also covers the early
+        # return path where the alt loader is invoked.
+        self._log_workflow_config_event(
+            "modules.populate_from_definition",
+            workflow=workflow_name,
+            n_modules=len(workflow_def),
+            modules=[
+                [name, Window._yaml_safe(params)]
+                for name, params in workflow_def
+            ],
+        )
 
     def _convert_param_to_gui_format(self, param_value):
         """Convert parameter value from workflow definition to GUI format.
@@ -10271,6 +10768,13 @@ class Window(QtWidgets.QMainWindow):
             self.single_workflow_modules.append((module_name, param_values))
             index = len(self.single_workflow_modules) - 1
             self.single_workflow_list.addItem(f"{index:02d}: {module_name}")
+            self._log_workflow_config_event(
+                "modules.add",
+                tab="single",
+                index=index,
+                module=module_name,
+                params=param_values,
+            )
         elif current_tab_index == 1:  # Aggregation Workflow
             self.aggregation_workflow_modules.append(
                 (module_name, param_values)
@@ -10278,6 +10782,13 @@ class Window(QtWidgets.QMainWindow):
             index = len(self.aggregation_workflow_modules) - 1
             self.aggregation_workflow_list.addItem(
                 f"{index:02d}: {module_name}"
+            )
+            self._log_workflow_config_event(
+                "modules.add",
+                tab="aggregation",
+                index=index,
+                module=module_name,
+                params=param_values,
             )
 
     def _renumber_workflow_items(self, list_widget, modules):
@@ -10516,20 +11027,94 @@ class Window(QtWidgets.QMainWindow):
         if current_tab_index == 0:  # Single Dataset Workflow
             current_row = self.single_workflow_list.currentRow()
             if current_row >= 0:
-                self.single_workflow_list.takeItem(current_row)
-                del self.single_workflow_modules[current_row]
-                self._renumber_workflow_items(
-                    self.single_workflow_list, self.single_workflow_modules
+                removed = self.single_workflow_modules[current_row][0]
+                self._remove_module(
+                    self.single_workflow_list,
+                    self.single_workflow_modules,
+                    current_row,
+                )
+                self._log_workflow_config_event(
+                    "modules.remove",
+                    tab="single",
+                    index=current_row,
+                    module=removed,
                 )
         elif current_tab_index == 1:  # Aggregation Workflow
             current_row = self.aggregation_workflow_list.currentRow()
             if current_row >= 0:
-                self.aggregation_workflow_list.takeItem(current_row)
-                del self.aggregation_workflow_modules[current_row]
-                self._renumber_workflow_items(
+                removed = self.aggregation_workflow_modules[current_row][0]
+                self._remove_module(
                     self.aggregation_workflow_list,
                     self.aggregation_workflow_modules,
+                    current_row,
                 )
+                self._log_workflow_config_event(
+                    "modules.remove",
+                    tab="aggregation",
+                    index=current_row,
+                    module=removed,
+                )
+
+    def _reorder_module(
+        self, list_widget, modules, tab_index, from_row, to_row
+    ):
+        """Move a module from from_row to to_row, keeping its parameters intact.
+
+        Reordering must not corrupt the parameters of the modules involved.
+        Before swapping, any pending widget edits are flushed to the module
+        currently being edited (at its pre-swap index). After swapping, the
+        editing index is repointed to the moved module's new row and the
+        selection is updated with the list-widget signal blocked, so the
+        selection-changed handler does not re-save the editor widgets onto a
+        now-stale index.
+        """
+        # Persist any pending edits to the currently edited item *before*
+        # the swap, while indices still match the editor widgets.
+        self._update_editing_workflow_item()
+
+        # Swap the module tuples (name, params) in the data model.
+        modules[from_row], modules[to_row] = (
+            modules[to_row],
+            modules[from_row],
+        )
+
+        # Refresh the displayed numbering/labels.
+        self._renumber_workflow_items(list_widget, modules)
+
+        # The editor widgets still show the moved module; point the editing
+        # state at its new row and move the selection without triggering a
+        # stale save/reload through currentRowChanged.
+        self.editing_workflow_index = to_row
+        self.editing_workflow_tab = tab_index
+        list_widget.blockSignals(True)
+        list_widget.setCurrentRow(to_row)
+        list_widget.blockSignals(False)
+
+    def _remove_module(self, list_widget, modules, row):
+        """Remove the module at row, keeping remaining parameters intact.
+
+        Clearing the editing state before touching the widget prevents the
+        selection-changed handler (fired by takeItem/setCurrentRow) from
+        flushing the editor widgets onto a now-stale index. The list-widget
+        signal is blocked during the mutation, then a clean selection is
+        restored so the editor reloads the correct module.
+        """
+        # We are deleting the item that may currently be in the editor; drop
+        # the editing state so no stale save happens during the mutation.
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+
+        list_widget.blockSignals(True)
+        list_widget.takeItem(row)
+        list_widget.blockSignals(False)
+        del modules[row]
+        self._renumber_workflow_items(list_widget, modules)
+
+        # Restore a valid selection (and reload the editor) if any modules
+        # remain, clamping to the last row when the tail item was removed.
+        if modules:
+            new_row = min(row, len(modules) - 1)
+            list_widget.setCurrentRow(new_row)
 
     def move_up(self):
         """Move the selected module up in the workflow order."""
@@ -10538,36 +11123,35 @@ class Window(QtWidgets.QMainWindow):
         if current_tab_index == 0:  # Single Dataset Workflow
             current_row = self.single_workflow_list.currentRow()
             if current_row > 0:  # Can't move first item up
-                # Swap in list
-                (
-                    self.single_workflow_modules[current_row],
-                    self.single_workflow_modules[current_row - 1],
-                ) = (
-                    self.single_workflow_modules[current_row - 1],
-                    self.single_workflow_modules[current_row],
+                self._reorder_module(
+                    self.single_workflow_list,
+                    self.single_workflow_modules,
+                    current_tab_index,
+                    current_row,
+                    current_row - 1,
                 )
-                # Update display and maintain selection
-                self._renumber_workflow_items(
-                    self.single_workflow_list, self.single_workflow_modules
+                self._log_workflow_config_event(
+                    "modules.move_up",
+                    tab="single",
+                    from_index=current_row,
+                    to_index=current_row - 1,
                 )
-                self.single_workflow_list.setCurrentRow(current_row - 1)
         elif current_tab_index == 1:  # Aggregation Workflow
             current_row = self.aggregation_workflow_list.currentRow()
             if current_row > 0:  # Can't move first item up
-                # Swap in list
-                (
-                    self.aggregation_workflow_modules[current_row],
-                    self.aggregation_workflow_modules[current_row - 1],
-                ) = (
-                    self.aggregation_workflow_modules[current_row - 1],
-                    self.aggregation_workflow_modules[current_row],
-                )
-                # Update display and maintain selection
-                self._renumber_workflow_items(
+                self._reorder_module(
                     self.aggregation_workflow_list,
                     self.aggregation_workflow_modules,
+                    current_tab_index,
+                    current_row,
+                    current_row - 1,
                 )
-                self.aggregation_workflow_list.setCurrentRow(current_row - 1)
+                self._log_workflow_config_event(
+                    "modules.move_up",
+                    tab="aggregation",
+                    from_index=current_row,
+                    to_index=current_row - 1,
+                )
 
     def move_down(self):
         """Move the selected module down in the workflow order."""
@@ -10577,37 +11161,36 @@ class Window(QtWidgets.QMainWindow):
             current_row = self.single_workflow_list.currentRow()
             max_row = len(self.single_workflow_modules) - 1
             if 0 <= current_row < max_row:  # Can't move last item down
-                # Swap in list
-                (
-                    self.single_workflow_modules[current_row],
-                    self.single_workflow_modules[current_row + 1],
-                ) = (
-                    self.single_workflow_modules[current_row + 1],
-                    self.single_workflow_modules[current_row],
+                self._reorder_module(
+                    self.single_workflow_list,
+                    self.single_workflow_modules,
+                    current_tab_index,
+                    current_row,
+                    current_row + 1,
                 )
-                # Update display and maintain selection
-                self._renumber_workflow_items(
-                    self.single_workflow_list, self.single_workflow_modules
+                self._log_workflow_config_event(
+                    "modules.move_down",
+                    tab="single",
+                    from_index=current_row,
+                    to_index=current_row + 1,
                 )
-                self.single_workflow_list.setCurrentRow(current_row + 1)
         elif current_tab_index == 1:  # Aggregation Workflow
             current_row = self.aggregation_workflow_list.currentRow()
             max_row = len(self.aggregation_workflow_modules) - 1
             if 0 <= current_row < max_row:  # Can't move last item down
-                # Swap in list
-                (
-                    self.aggregation_workflow_modules[current_row],
-                    self.aggregation_workflow_modules[current_row + 1],
-                ) = (
-                    self.aggregation_workflow_modules[current_row + 1],
-                    self.aggregation_workflow_modules[current_row],
-                )
-                # Update display and maintain selection
-                self._renumber_workflow_items(
+                self._reorder_module(
                     self.aggregation_workflow_list,
                     self.aggregation_workflow_modules,
+                    current_tab_index,
+                    current_row,
+                    current_row + 1,
                 )
-                self.aggregation_workflow_list.setCurrentRow(current_row + 1)
+                self._log_workflow_config_event(
+                    "modules.move_down",
+                    tab="aggregation",
+                    from_index=current_row,
+                    to_index=current_row + 1,
+                )
 
     def create_python_script(
         self, host_cluster, login_node, filename="start_workflow.py"
@@ -11003,9 +11586,7 @@ class Window(QtWidgets.QMainWindow):
             if no_input_files:
                 # run the workflow exactly once with no dataset; the
                 # marker comment lets the GUI restore the mode on load.
-                src_loc_arg_line = (
-                    f"        None,  {self._NOFILES_MARKER}"
-                )
+                src_loc_arg_line = f"        None,  {self._NOFILES_MARKER}"
             else:
                 src_loc_arg_line = "        src_loc_file,"
             script_lines.extend(
@@ -11132,9 +11713,18 @@ class Window(QtWidgets.QMainWindow):
         self.slurm_communicator.test_connection()
 
         scriptname = "start_workflow.py"
-        self.create_python_script(host_cluster, login_node, scriptname)
+        python_script_path = self.create_python_script(
+            host_cluster, login_node, scriptname
+        )
 
-        job_name = "mypwjob"
+        # Use the results folder's last directory as a meaningful job name
+        # (falls back to "mypwjob" if it cannot be determined). Sanitize to
+        # SLURM-safe characters: keep [A-Za-z0-9._-], collapse any run of
+        # other characters (e.g. whitespace) into a single underscore.
+        job_name = os.path.basename(os.path.normpath(results_folder_local))
+        job_name = re.sub(r"[^A-Za-z0-9._-]+", "_", job_name).strip("_")
+        if job_name in ("", "."):
+            job_name = "mypwjob"
         slurm_options = {
             "nodes": self.cluster_nodes_spin.value(),
             # "ntasks": Number of tasks,
@@ -11144,9 +11734,14 @@ class Window(QtWidgets.QMainWindow):
             # "mail-type": "ALL",
             # "mail-user": f"{username}@biochem.mpg.de",
         }
-        if email := self.slurm_email_edit.text().strip() != "":
+        if (email := self.slurm_email_edit.text().strip()) != "":
             slurm_options["mail-user"] = email
             slurm_options["mail-type"] = "ALL"
+
+        # Request GPUs only when asked for (--gres=gpu:N)
+        n_gpus = self.cluster_gpus_spin.value()
+        if n_gpus > 0:
+            slurm_options["gres"] = f"gpu:{n_gpus}"
 
         # use_pw_mod = self.cluster_use_module.isChecked()
 
@@ -11166,13 +11761,81 @@ class Window(QtWidgets.QMainWindow):
         script_path = self.slurm_communicator.write_slurm_script(
             script_content, results_folder_local
         )
+
+        # Persist the exact configuration that is about to be submitted to
+        # the cluster. We log it twice: once via the logger (the same file
+        # all the workflow-config edits land in) and once as a sibling
+        # YAML next to the generated scripts so the run folder is
+        # self-describing if the logfile is later rotated/lost.
+        submission_summary = {
+            "host_cluster": host_cluster,
+            "login_node": login_node,
+            "username": username,
+            "ssh_key_path": ssh_key_path,
+            "results_folder_local": results_folder_local,
+            "results_folder_host": results_folder_host,
+            "job_name": job_name,
+            "slurm_options": slurm_options,
+            "scriptname": scriptname,
+            "python_script_path": python_script_path,
+            "slurm_script_path": (
+                script_path
+                if isinstance(script_path, str)
+                else str(script_path)
+            ),
+            "workflow_config": {
+                "files": self._files_config_snapshot(),
+                "modules": self._modules_config_snapshot(),
+            },
+        }
+        logger.info(
+            f"SLURM submission prepared: host={host_cluster} "
+            f"login={login_node} user={username} "
+            f"job={job_name} "
+            f"results_folder={results_folder_local} "
+            f"slurm_options={slurm_options}"
+        )
+        logger.info(
+            "SLURM submission configuration:\n"
+            + yaml.safe_dump(submission_summary, sort_keys=False)
+        )
+        logger.debug(
+            "Generated start_workflow.py content:\n"
+            + _read_text_safe(python_script_path)
+        )
+        logger.debug("Generated SLURM script content:\n" + script_content)
+        # Sidecar file inside the run folder. Best-effort: if the disk
+        # write fails we have already logged the same info above.
+        try:
+            sidecar = os.path.join(
+                results_folder_local, "slurm_submission_config.yaml"
+            )
+            with open(sidecar, "w", newline="\n") as f:
+                yaml.safe_dump(submission_summary, f, sort_keys=False)
+            logger.info(f"Wrote SLURM submission config to {sidecar}")
+        except OSError as exc:
+            logger.warning(
+                f"Could not write slurm_submission_config.yaml: {exc}"
+            )
+
         return host_cluster, script_path
 
     def start_slurm(self):
         """"""
+        logger.info("start_slurm: assembling SLURM scripts")
         host_cluster, script_path = self.assemble_slurm_scripts()
+        logger.info(
+            f"start_slurm: submitting job to {host_cluster} "
+            f"using script {script_path}"
+        )
         result = self.slurm_communicator.submit_job(
             script_path, host_cluster, additional_options=None
+        )
+        logger.info(
+            f"start_slurm: submission result success={result['success']} "
+            f"job_id={result.get('job_id')} "
+            f"stdout={result.get('stdout', '').strip()!r} "
+            f"stderr={result.get('stderr', '').strip()!r}"
         )
 
         # Store and display job ID
@@ -11650,7 +12313,7 @@ class Window(QtWidgets.QMainWindow):
         dialog = ParameterCmdDialog(
             workflow_modules, self.module_descriptor, curr_module_index, self
         )
-        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             command_str = dialog.command_result.text()
             # Convert widget to QLineEdit and populate
             self._convert_widget_to_textbox(param_name, command_str)
@@ -11953,25 +12616,43 @@ class Window(QtWidgets.QMainWindow):
         # Update the appropriate workflow list
         if self.editing_workflow_tab == 0:  # Single Dataset Workflow
             if self.editing_workflow_index < len(self.single_workflow_modules):
-                module_name = self.single_workflow_modules[
+                module_name, old_params = self.single_workflow_modules[
                     self.editing_workflow_index
-                ][0]
-                # Update parameters while keeping module name
-                self.single_workflow_modules[self.editing_workflow_index] = (
-                    module_name,
-                    param_values,
-                )
+                ]
+                if old_params != param_values:
+                    # Update parameters while keeping module name
+                    self.single_workflow_modules[
+                        self.editing_workflow_index
+                    ] = (
+                        module_name,
+                        param_values,
+                    )
+                    self._log_workflow_config_event(
+                        "modules.params_changed",
+                        tab="single",
+                        index=self.editing_workflow_index,
+                        module=module_name,
+                        params=param_values,
+                    )
         elif self.editing_workflow_tab == 1:  # Aggregation Workflow
             if self.editing_workflow_index < len(
                 self.aggregation_workflow_modules
             ):
-                module_name = self.aggregation_workflow_modules[
+                module_name, old_params = self.aggregation_workflow_modules[
                     self.editing_workflow_index
-                ][0]
-                # Update parameters while keeping module name
-                self.aggregation_workflow_modules[
-                    self.editing_workflow_index
-                ] = (module_name, param_values)
+                ]
+                if old_params != param_values:
+                    # Update parameters while keeping module name
+                    self.aggregation_workflow_modules[
+                        self.editing_workflow_index
+                    ] = (module_name, param_values)
+                    self._log_workflow_config_event(
+                        "modules.params_changed",
+                        tab="aggregation",
+                        index=self.editing_workflow_index,
+                        module=module_name,
+                        params=param_values,
+                    )
 
     def _on_parameter_changed(self):
         """Called when a parameter textbox loses focus (editingFinished signal)."""
@@ -12151,7 +12832,7 @@ def main():
         sys.exit(1)
 
     window.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
