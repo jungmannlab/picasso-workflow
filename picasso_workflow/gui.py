@@ -6069,8 +6069,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     density : dict, channel tag to float
                         density to simulate [nm^2 or nm^3];
                         area density if 2D; volume density if 3D
-                    granularity : float
-                        the spinna res_factor
+                    granularity : int
+                        the spinna granularity
                     sim_repeats : int
                         number of simulation repeats, for noise reduction
                 and optional keys:
@@ -6126,8 +6126,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": True,
             },
             "granularity": {
-                "type": "float",
-                "description": "The spinna res_factor",
+                "type": "int",
+                "description": "The spinna granularity",
                 "default": 100,
                 "required": True,
             },
