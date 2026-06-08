@@ -100,7 +100,7 @@ select = "C,E,F,W,B,B9,I"
 # Plugins
 require-code = "True"
 ban-relative-imports = "True"
-docstring-convention = "google"
+docstring-convention = "numpy"
 # flake8-bugbear
 # flake8-eradicate
 # flake8-docstrings
@@ -119,9 +119,15 @@ fail_under = 80
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q"
+# Local default: run only the fast unit tests. The heavy `integration`
+# tests (synthetic pipeline + template smoke) are deselected here so a bare
+# `pytest -v` stays quick during development. Opt back in explicitly with
+# `pytest -m integration` (or run them on the cluster via
+# tools/cluster_tests/submit_all.sh). The cluster tier sbatch scripts pass
+# their own `-m ...`, which overrides this default (last `-m` wins).
+addopts = "-ra -q -m 'not integration'"
 testpaths = ["picasso_workflow/tests"]
 markers = [
-    "integration: tests that run the real picasso pipeline (deselect with '-m not integration')",
+    "integration: tests that run the real picasso pipeline (run with '-m integration'; deselected by default)",
     "real_data: tests that require acquired datasets from the lab network volumes (set PW_TEST_DATA_DIR)",
 ]

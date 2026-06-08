@@ -1,10 +1,18 @@
 #!/usr/bin/env python
-"""
-Module Name: confluence.py
+"""Interaction with Confluence.
+
+Defines :class:`ConfluenceReporter`, which documents each analysis module's
+parameters and results on Confluence (mirroring the
+:class:`~picasso_workflow.util.AbstractModuleCollection` contract), and
+:class:`ConfluenceInterface`, a thin wrapper around the Atlassian Confluence
+API.
+
 Author: Heinrich Grabmayr
-Initial Date: March 7, 2024
-Description: Interaction with Confluence
+Initial date: March 7, 2024
 """
+
+from __future__ import annotations
+
 import html
 
 # import logging
@@ -24,10 +32,21 @@ from picasso_workflow.util import AbstractModuleCollection
 
 
 def _yaml_safe(value):
-    """Recursively convert tuples to lists so a structure can be serialized
-    with yaml.safe_dump (which has no Python-tuple representer). Module
-    parameters often hold command tuples like ``('$map', 'filepath')`` that
-    would otherwise raise.
+    """Recursively convert tuples to lists for ``yaml.safe_dump``.
+
+    ``yaml.safe_dump`` has no Python-tuple representer; module parameters
+    often hold command tuples like ``('$map', 'filepath')`` that would
+    otherwise raise.
+
+    Parameters
+    ----------
+    value : object
+        The structure to sanitize.
+
+    Returns
+    -------
+    object
+        The structure with all tuples replaced by lists.
     """
     if isinstance(value, dict):
         return {k: _yaml_safe(v) for k, v in value.items()}
@@ -39,11 +58,24 @@ def _yaml_safe(value):
 def config_snapshot_macro(
     config, title="Workflow configuration (YAML snapshot)"
 ):
-    """Build a collapsible Confluence 'expand' macro containing ``config``
-    as a YAML code block, for reproducibility.
+    """Build a collapsible Confluence 'expand' macro with a YAML config.
 
-    Returns an empty string if the config cannot be serialized, so a
-    snapshot problem never prevents a page from being created.
+    Renders ``config`` as a YAML code block inside an expand macro, for
+    reproducibility.
+
+    Parameters
+    ----------
+    config : object
+        The configuration to serialize.
+    title : str, optional
+        The macro title. Default is ``"Workflow configuration (YAML
+        snapshot)"``.
+
+    Returns
+    -------
+    str
+        The storage-format macro, or an empty string if the config cannot be
+        serialized (so a snapshot problem never blocks page creation).
     """
     try:
         yaml_text = yaml.safe_dump(
@@ -76,20 +108,24 @@ def overview_body(title, rows, intro_html="", config=None):
     """Build a Confluence storage-format overview page body.
 
     A reusable page body used for run overview pages (e.g. the aggregation
-    main page): a heading, an optional intro paragraph, a metadata table,
-    and an optional collapsible YAML snapshot of the run configuration.
+    main page): a heading, an optional intro paragraph, a metadata table and
+    an optional collapsible YAML snapshot of the run configuration.
 
-    Args:
-        title : str
-            page heading
-        rows : list of (label, value) tuples
-            metadata rendered as a two-column table
-        intro_html : str, optional
-            intro paragraph(s); must already be valid storage-format HTML
-        config : dict or None, optional
-            run configuration rendered as a collapsible YAML snapshot
-    Returns:
-        str : Confluence storage-format HTML body
+    Parameters
+    ----------
+    title : str
+        Page heading.
+    rows : list of tuple
+        ``(label, value)`` metadata rendered as a two-column table.
+    intro_html : str, optional
+        Intro paragraph(s); must already be valid storage-format HTML.
+    config : dict or None, optional
+        Run configuration rendered as a collapsible YAML snapshot.
+
+    Returns
+    -------
+    str
+        Confluence storage-format HTML body.
     """
     table_rows = "".join(
         f"<tr><th>{html.escape(str(k))}</th>"
@@ -106,6 +142,23 @@ def overview_body(title, rows, intro_html="", config=None):
 
 
 def module_decorator(method):
+    """Wrap a reporter module to render its parameters and results.
+
+    Builds collapsible "Parameters" and "Results" expand macros from the
+    module's ``parameters`` and ``results`` dicts and passes them to the
+    wrapped method as ``parameter_text`` and ``result_text``.
+
+    Parameters
+    ----------
+    method : callable
+        The reporter method to wrap.
+
+    Returns
+    -------
+    callable
+        The wrapped method.
+    """
+
     def module_wrapper(self, i, parameters, results, postpone_report=False):
         # create parameter and results documentation
         parameter_text = """
@@ -163,19 +216,38 @@ def module_decorator(method):
 
 
 class ConfluenceReporter(AbstractModuleCollection):
-    """A class to upload reports of automated picasso evaluations
-    to confluence
+    """Upload reports of automated picasso evaluations to Confluence.
+
+    Implements the reporting side of the
+    :class:`~picasso_workflow.util.AbstractModuleCollection` contract: for
+    each analysis module there is a matching method that documents that
+    module's parameters and results on the report's Confluence page.
     """
 
     def __init__(
         self,
-        base_url,
-        space_key,
-        parent_page_title,
-        report_name,
-        username=None,
-        token=None,
+        base_url: str,
+        space_key: str,
+        parent_page_title: str,
+        report_name: str,
+        username: str | None = None,
+        token: str | None = None,
     ):
+        """Initialize the reporter and create (or reuse) its report page.
+
+        Parameters
+        ----------
+        base_url : str
+            Base URL of the Confluence instance.
+        space_key : str
+            Key of the Confluence space.
+        parent_page_title : str
+            Title of the parent page under which the report nests.
+        report_name : str
+            Title of the report page to create or reuse.
+        username, token : str, optional
+            Confluence credentials.
+        """
         logger.debug("Initializing ConfluenceReporter.")
 
         self.ci = ConfluenceInterface(
@@ -194,25 +266,21 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_id, pgname = self.ci.get_page_properties(
                 self.report_page_name
             )
-            logger.debug(
-                f"""Failed to create page {self.report_page_name}.
-                Continuing on the pre-existing page"""
-            )
+            logger.debug(f"""Failed to create page {self.report_page_name}.
+                Continuing on the pre-existing page""")
 
     def report_error(self, e, module):
-        """Report errors that occur during analysis to Confluence.
+        """Report an analysis error to Confluence.
 
-        Creates a Confluence page section documenting errors that occurred
-        during workflow execution, including exception details and traceback.
+        Appends a page section documenting an error that occurred during
+        workflow execution, including the exception and traceback.
 
-        Args:
-            e : Exception
-                The exception that occurred during analysis
-            module : str
-                Name or identifier of the module where the error occurred
-
-        Returns:
-            None
+        Parameters
+        ----------
+        e : Exception
+            The exception that occurred during analysis.
+        module : str
+            Name of the module where the error occurred.
         """
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
@@ -229,33 +297,20 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     def dummy_module(self, i, parameters, results, postpone_report=False):
-        """A module that does nothing, for quickly removing
-        modules in a workflow without having to renumber the
-        following result idcs. Only for workflow debugging,
-        remove when done.
+        """Report the placeholder ``dummy_module``.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys: (none)
-                Optional keys: (none)
-            results : dict
-                Automatic keys (provided by decorator):
-                    start time : str
-                        Module execution start timestamp
-                    end time : str
-                        Module execution end timestamp
-                    duration : float
-                        Module execution duration in seconds
-                    folder : str
-                        Output folder for module results
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results (unchanged)
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Uses no keys.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        postpone_report : bool, optional
+            If True, build the report text but defer posting it. Default is
+            False.
         """
         logger.debug("dummy_module.")
         text = f"""
@@ -288,41 +343,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Execute different sub-module sequences based on a condition.
+        """Report the ``conditional_branch`` module to Confluence.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    condition : dict
-                        condition dictionary with keys:
-                            - "left": value or parameter command tuple
-                            - "operator": str (>, <, >=, <=, ==, !=)
-                            - "right": value or parameter command tuple
-                        or logical condition with "and"/"or" keys
-                    if_true : list of tuples
-                        list of (module_name, module_parameters) tuples
-                        to execute if condition is True
-                    if_false : list of tuples
-                        list of (module_name, module_parameters) tuples
-                        to execute if condition is False
-                optional keys:
-                    parameter_command_executor : ParameterCommandExecutor
-                        if provided, will be used for resolving parameter
-                        commands in condition values
-            results : dict
-                the results this function generates
+        Documents which branch was taken and the executed sub-modules.
 
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results including:
-                    - condition_result : bool
-                    - branch_taken : str ("if_true" or "if_false")
-                    - if_branch : dict of sub-module results
-                    - branch_modules : dict of flat-indexed results
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, build the report text but defer posting it. Default is
+            False.
         """
         logger.debug(f"Reporting conditional_branch module {i:02d}")
 
@@ -493,39 +529,20 @@ class ConfluenceReporter(AbstractModuleCollection):
     def analysis_documentation(
         self, i, parameters, results, postpone_report=False
     ):
-        """This module documents where and how analysis is being performed
-        Args:
-            parameters : dict
-                This module does not use any parameters
-        Returns:
-            parameters : dict
-                as input, unchanged
-            results : dict
-                the analysis results, updated with:
-                    picasso version : str
-                        version of picasso library used
-                    picasso-workflow version : str
-                        version of picasso-workflow
-                    Architecture : str
-                        machine architecture
-                    OS : str
-                        operating system
-                    host : str
-                        hostname of machine
-                    processor : str
-                        processor information
-                    CPU Frequency [MHz] : float
-                        current CPU frequency
-                    CPU cores : int
-                        number of CPU cores
-                    Memory total [GB] : int
-                        total system memory in GB
-                    Memory available [GB] : int
-                        available system memory in GB
-                    GPU : str
-                        GPU name or "N/A"
-                    GPU memory [GB] : int
-                        GPU memory in GB or 0 if no GPU
+        """Report the ``analysis_documentation`` module to Confluence.
+
+        Tabulates the recorded hardware/software metadata.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting analysis_documentation.")
         text = f"""
@@ -555,25 +572,18 @@ class ConfluenceReporter(AbstractModuleCollection):
     def convert_zeiss_movie(
         self, i, parameters, results, postpone_report=False
     ):
-        """Converts a DNA-PAINT movie into .raw, as supported by picasso.
-        Args:
-            parameters : dict
-                necessary items:
-                    filepath : str
-                        the czi file name to load.
-                optional items:
-                    filename_raw : str
-                        the raw file name to write to
-                    info : dict, information as used by picasso
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    filepath_raw : str
-                        full path to the output raw file
-                    filename_raw : str
-                        name of the output raw file
+        """Report the ``convert_zeiss_movie`` module to Confluence.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting convert_zeiss_movie.")
         text = f"""
@@ -594,51 +604,22 @@ class ConfluenceReporter(AbstractModuleCollection):
     def load_dataset_movie(
         self, i, pars_load, results_load, postpone_report=False
     ):
-        """Loads a DNA-PAINT dataset in a format supported by picasso.
+        """Report the ``load_dataset_movie`` module to Confluence.
 
-        Loads DNA-PAINT movie data and metadata into memory for subsequent
-        analysis. Optionally creates sample movies and loads camera
-        configuration. The data is saved in self.movie and self.info.
+        Documents the loaded movie, its size and (if created) the subsampled
+        sample movie.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    filename : str
-                        Path to the movie file to load
-                Optional keys:
-                    sample_movie : dict
-                        Parameters for creating a subsampled movie
-                    load_camera_info : bool
-                        Whether to load camera configuration from
-                        picasso.CONFIG
-            results : dict
-                Automatic keys (provided by decorator):
-                    start time : str
-                        Module execution start timestamp
-                    end time : str
-                        Module execution end timestamp
-                    duration : float
-                        Module execution duration in seconds
-                    folder : str
-                        Output folder for module results
-                    folder : str
-                        Output folder for generated files
-                Results updated with:
-                    picasso version : str
-                        Version of picasso library used
-                    movie.shape : tuple
-                        Movie dimensions (frames, width, height)
-                    sample_movie : dict
-                        Results from subsampled movie creation (if requested)
-
-        Returns:
-            parameters : dict
-                Input parameters, potentially modified (sample_movie paths
-                updated)
-            results : dict
-                Input results with added movie information and metadata
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        pars_load, results_load : dict
+            The ``load_dataset_movie`` module's parameters and results (see
+            the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting a loaded dataset.")
         text = f"""
@@ -694,25 +675,18 @@ class ConfluenceReporter(AbstractModuleCollection):
     def load_dataset_localizations(
         self, i, parameters, results, postpone_report=False
     ):
-        """Loads a DNA-PAINT dataset in a format supported by picasso.
-        The data is saved in
-            self.locs
-            self.info
-        Args:
-            parameters : dict
-                necessary items:
-                    filename : str
-                        the (main) file name to load. This can be image files,
-                        or hdf5.
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    picasso version : str
-                        version of picasso library used
-                    nlocs : int
-                        number of localizations loaded
+        """Report the ``load_dataset_localizations`` module to Confluence.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting a loaded dataset.")
         text = f"""
@@ -742,69 +716,23 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Identifies localizations in a loaded dataset.
+        """Report the ``identify`` module to Confluence.
 
-        Identifies potential localization sites in the loaded movie using
-        net gradient thresholding. Optionally performs automatic net gradient
-        detection and creates identification vs frame plots.
-        The data is saved in self.identifications.
+        Documents the identification settings and counts, and uploads the
+        auto-netgrad and identifications-vs-frame plots if present.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    box_size : int
-                        Size of the detection box in pixels
-                    min_gradient : float
-                        Minimum net gradient threshold for detection
-                        (required unless auto_netgrad is provided)
-                Optional keys:
-                    auto_netgrad : dict
-                        Parameters for automatic net gradient detection:
-                            box_size : int
-                                Box size for auto detection
-                            frame_numbers : list or int
-                                Frame range for analysis
-                            filename : str
-                                Output filename for auto-detection plot
-                            start_ng : float
-                                Starting net gradient value
-                            zscore : float
-                                Z-score threshold for detection
-                            bins : int
-                                Number of histogram bins
-                    ids_vs_frame : dict
-                        Parameters for plotting identifications vs time:
-                            filename : str
-                                Output filename for plot
-            results : dict
-                Automatic keys (provided by decorator):
-                    start time : str
-                        Module execution start timestamp
-                    end time : str
-                        Module execution end timestamp
-                    duration : float
-                        Module execution duration in seconds
-                    folder : str
-                        Output folder for module results
-                    folder : str
-                        Output folder for generated files
-                Results updated with:
-                    num_identifications : int
-                        Total number of identifications found
-                    auto_netgrad : dict
-                        Results from automatic net gradient detection (if
-                        requested)
-                    ids_vs_frame : dict
-                        Results from identifications vs frame analysis (if
-                        requested)
-
-        Returns:
-            parameters : dict
-                Input parameters, potentially with updated min_gradient
-            results : dict
-                Input results with identification statistics and optional plots
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting Identification.")
         text = f"""
@@ -889,35 +817,21 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     def localize(self, i, parameters, results, postpone_report=False):
-        """Localizes Spots previously identified.
-        The data is saved in
-            self.locs
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    box_size : as always
-                    fit_parallel : bool
-                        whether to fit on multiple cores
-                optional items:
-                    locs_vs_frame : dict
-                        for plotting locs vs time
-                        items correspond to arguments of _plot_locs_vs_frame
-                    save_locs : dict
-                        if saving localizations is requested.
-                        Items correpsond to arguments of save_locs
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    locs_vs_frame : dict
-                        plot results if locs_vs_frame parameter was provided
-                    locs_columns : list
-                        list of column names in the localizations array
+        """Report the ``localize`` module to Confluence.
+
+        Documents the localization run and uploads the locs-vs-frame plot if
+        present.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting Localization of spots.")
         text = f"""
@@ -955,29 +869,23 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Fits z positions to previously localized spots.
+        """Report the ``zfit`` module to Confluence.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    magnification_factor : float
-                        the magnification factor for z calibration
-                optional items:
-                    fp_calibration : str
-                        filepath to the 3D calibration yaml file
-                        if not given
-                    save_locs : dict
-                        if saving localizations is requested.
-                        Items correpsond to arguments of save_locs
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results
+        Documents the z calibration used and uploads the calibration and
+        z-histogram figures if present.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting zfit.")
         text = f"""
@@ -1049,24 +957,20 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """
-        Loads a specific picasso configuration file, as opposed to the default
-        version residing in the picasso installation folder.
+        """Report the ``load_picassoconfig`` module to Confluence.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    fp_config : str
-                        filepath to a config file.
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting load_picassoconfig.")
         text = f"""
@@ -1089,35 +993,20 @@ class ConfluenceReporter(AbstractModuleCollection):
     def export_brightfield(
         self, i, parameters, results, postpone_report=False
     ):
-        """Opens a single-plane tiff image and saves it to png with
-        contrast adjustment.
+        """Report the ``export_brightfield`` module to Confluence.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    filepath : str or list of str or dict
-                        the tiff file(s) to load. The converted file(s) will
-                        have the same name, but with .png extension
-                        if dict: keys are labels
-                optional items:
-                    min_quantile : float, default: 0
-                        the quantile below which pixels are shown black
-                    max_quantile : float, default: 1
-                        the quantile above which pixels are shown white
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    labeled filepaths : dict
-                        keys : labels
-                        values : filepaths
-                    success : bool
-                        whether the export was successful
+        Uploads each exported brightfield PNG to the report page.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting export_brightfield.")
         text = f"""
@@ -1166,36 +1055,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Renders localizations on the whole field of view, and on
-        a zoom in around the center of mass of localizations.
+        """Report the ``render`` module to Confluence.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                optional items:
-                    ctrmass_fov_nm : Field of view of the zoom in rendering
-                        around the center of mass in nm
-                    fullfov_pixelsize : The rendered pixel size [nm] of the
-                        full FOV rendering
-                    ctrmass_pixelsize : The rendered pixel size [nm] of the
-                        zoom in rendering around the center of mass
-                    ctrmass_blur_method : Blur method
-                    ctrmass_min_blur_width : min blur with
-                    ctrmass_ang : angle
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    fp_scene_fullfov : str
-                        filepath to full FOV rendering
-                    fp_scene_ctrmass : str
-                        filepath to center of mass zoom rendering (conditional, only if ctrmass_fov_nm provided)
-                    fp_scene_tiles : list of lists of str
-                        filepaths to the 5x5 tiled renderings
+        Uploads the full-FOV, center-of-mass-zoom and tiled renderings.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting render.")
         text = f"""
@@ -1307,38 +1182,20 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     def undrift_rcc(self, i, parameters, results, postpone_report=False):
-        """Undrifts localized data using redundant cross correlation.
-        drift is saved in
-        self.drift
+        """Report the ``undrift_rcc`` module to Confluence.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    segmentation : int
-                        the number of frames segmented for RCC
-                optional items:
-                    max_iter_segmentations : int, default: 3
-                        maximum number of iterations to adaptively increase segmentation if RCC fails
-                    filename : str
-                        the drift txt file name
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-                Note: dimensions parameter is set to ['x', 'y'] by this module
-            results : dict
-                the analysis results, updated with:
-                    success : bool
-                        whether undrifting was successful
-                    message : str
-                        error or warning messages if any
-                    filepath_driftfile : str
-                        filepath to drift txt file (conditional, only if undrifting succeeded)
-                    filepath_plot : str
-                        filepath to drift plot png (conditional, only if undrifting succeeded)
+        Documents the RCC settings and uploads the drift plot if present.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting undrifting via RCC.")
         text = f"""
@@ -1377,74 +1234,23 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Undrift localized data using iterative RSSO-based drift correction
+        """Report the ``undrift_rsso`` module to Confluence.
 
-        This method applies an iterative RSSO (Redundant Spot Shift
-        Overrepresentation) approach where each frame is compared against
-        the whole dataset to compute total drift for that frame. The process
-        is repeated iteratively with the undrifted dataset to improve accuracy.
-        Includes uncertainty analysis, confidence evaluation, windowing and
-        outlier detection.
+        Documents the iterative RSSO drift correction (magnitudes, confidence
+        intervals, iterations) and uploads the drift plots.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    ton : float
-                        Half-life of localization in frames (how long a spot
-                        stays visible)
-                    toff : float
-                        Time in frames for a spot to reappear after
-                        disappearing
-                    max_shift : float
-                        Maximum expected drift per frame in pixels
-                optional items:
-                    min_locs_per_frame : int
-                        Minimum localizations per frame for reliable drift
-                        estimation (default: 10)
-                    max_iterations : int
-                        Maximum number of iterative refinement rounds (default: 5)
-                    convergence_threshold : float
-                        RMS drift change threshold for convergence in nm (default: 0.1)
-                    plot_drift : bool
-                        Whether to save drift plots (default: True)
-                    save_locs : bool
-                        Whether to save undrifted localizations (default: True)
-                    n_processes : int or None
-                        Number of processes for parallel computation (default: auto)
-                    confidence_threshold : float
-                        Confidence threshold for windowing analysis (default: 0.8)
-                    outlier_detection_enabled : bool
-                        Enable RSSO failure and outlier detection (default: True)
-                    outlier_z_threshold : float
-                        Z-score threshold for temporal outlier detection (default: 3.5)
-                    min_signal_to_noise : float
-                        Minimum signal-to-noise ratio for drift measurements (default: 0.5)
-                    windowing_enabled : bool
-                        Enable adaptive windowing for low-confidence frames (default: True)
-                    window_size_range : tuple
-                        Min and max window sizes for adaptive windowing (default: (3, 20))
-
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results including:
-                    success : bool
-                        whether drift correction succeeded
-                    drift_x, drift_y : ndarray
-                        total drift trajectories in nm for each frame
-                    uncertainty_x, uncertainty_y : ndarray
-                        uncertainty estimates for drift measurements
-                    drift_quality : ndarray
-                        quality/confidence metrics per frame
-                    n_iterations : int
-                        number of iterations performed
-                    convergence_rms : float
-                        final RMS change indicating convergence
-                    drift_plots : str
-                        path to drift visualization plots
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting undrift_rsso.")
 
@@ -1596,41 +1402,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Unrift localized data using the AIM algorithm
-        drift is saved in
-        self.drift
+        """Report the ``undrift_aim`` module to Confluence.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    segmentation : int
-                        the number of frames segmented
-                    intersect_d : float
-                        Intersect distance in nanometers.
-                    roi_r : float
-                        Radius of the local search region in nanometers.
-                        Should be larger than the maximum expected drift wihtin
-                        segmentation.
-                    dimensions : list of str
-                        the dimensions undrifted, typically ['x', 'y'].
-                optional items:
-                    progress : callback function
-                        progress callback for status updates
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    success : bool
-                        whether undrifting was successful
-                    fp_driftfile : str
-                        filepath to drift txt file
-                    fp_fig : str
-                        filepath to drift plot png
+        Documents the AIM settings and uploads the drift plot if present.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting undrift_aim.")
         text = f"""
@@ -1776,20 +1563,18 @@ class ConfluenceReporter(AbstractModuleCollection):
     #     )
 
     def density(self, i, parameters, results, postpone_report=False):
-        """Calculate local localization density
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    radius : float
-                        the radius for calculating local density
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``density`` module to Confluence.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting density.")
         text = f"""
@@ -1822,50 +1607,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Perform clustering using dbscan.
+        """Report the ``dbscan`` module to Confluence.
 
-        Applies DBSCAN clustering algorithm to localizations, optionally
-        replacing localizations with cluster centers for subsequent analysis.
-        After this module, the standard locs will be the cluster centers.
+        Documents the DBSCAN settings and uploads the cluster-size figure.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    radius : float
-                        The DBSCAN radius parameter in nm
-                    min_samples : int
-                        Minimum number of samples required for a cluster
-                    continue_with_centers : bool
-                        Whether to replace localizations with cluster centers
-                Optional keys:
-                    save_locs : bool
-                        Whether to save clustered localization data to results
-                        folder
-            results : dict
-                Automatic keys (provided by decorator):
-                    start time : str
-                        Module execution start timestamp
-                    end time : str
-                        Module execution end timestamp
-                    duration : float
-                        Module execution duration in seconds
-                    folder : str
-                        Output folder for module results
-                    folder : str
-                        Output folder for generated files
-                Results updated with:
-                    fp_fig_clustersizes : str
-                        Filepath to cluster size distribution figure
-                    fp_centers : str
-                        Filepath to cluster centers file
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with clustering outputs and file paths
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting dbscan.")
         text = f"""
@@ -1904,23 +1661,18 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     def hdbscan(self, i, parameters, results, postpone_report=False):
-        """Perform hdbscan clustering. After this module, the standard
-        locs will be the cluster centers.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    min_cluster : float
-                        the hdbscan min_cluster
-                    min_samples : float
-                        the hdbscan min_sample
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``hdbscan`` module to Confluence.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting hdbscan.")
         text = f"""
@@ -1954,6 +1706,21 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
+        """Report the ``binding_event_analysis`` module to Confluence.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
+        """
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: binding_event_analysis</strong></p>
@@ -1983,55 +1750,23 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Perform resolution analysis using point pattern autocorrelation
+        """Report the ``resolution_analysis`` module to Confluence.
 
-        This method calculates the spatial resolution of localizations
-        by computing a 2D autocorrelation function and fitting a Gaussian to
-        extract resolution metrics. The analysis includes 2D Gaussian fitting,
-        radial profile computation, and 1D Gaussian fitting to the radial profile.
+        Documents the autocorrelation resolution metrics and uploads the
+        resolution and radial-profile plots.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                with optional keys:
-                    delta_r : float
-                        grid spacing for autocorrelation (default: 5 nm)
-                    r_max : float
-                        maximum radius for autocorrelation (default: 100 nm)
-                    batch_size : int or None
-                        number of data points per batch for chunking (auto-calculated if None)
-                    n_processes : int or None
-                        number of parallel processes (auto-detected if None, capped at 4)
-                    use_chunking : bool
-                        enable memory-efficient chunking for large datasets (default: True)
-                    use_sparse : bool
-                        use sparse matrices for very large grids (default: False)
-
-        Results:
-            resolution : float
-                average resolution in nm (FWHM)
-            sigma_x, sigma_y : float
-                Gaussian standard deviations in x,y directions
-            fwhm_x, fwhm_y : float
-                Full-width half-maximum in x,y directions
-            fit_quality : float
-                R-squared goodness of fit
-            autocorr_map : ndarray
-                2D autocorrelation intensity map
-            radial_profile : ndarray
-                radial profile of autocorrelation
-            radial_distances : ndarray
-                distance values for radial profile
-            resolution_radial : float
-                resolution from radial Gaussian fit (FWHM)
-            resolution_dblradial : float
-                resolution from double Gaussian fit (FWHM)
-            fig_resolution : str
-                path to resolution plot
-            fig_radial : str
-                path to radial profile plot
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
 
         resolution = results.get("resolution", np.nan)
@@ -2086,57 +1821,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Calculate resolution using spatial FRC approach
+        """Report the ``resolution_frc_spatial`` module to Confluence.
 
-        This method divides the FOV into spatial regions, computes FRC for each
-        region independently, and averages the results. Benefits:
-        - Lower memory usage (smaller images per region)
-        - Better statistics through spatial averaging
-        - Efficient multiprocessing (fully independent regions)
-        - Preserves high spatial frequencies
+        Documents the spatial-FRC resolution metrics and uploads the FRC plot.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with optional keys:
-                    pixelsize_render : float
-                        pixel size for rendered images in nm (default: 5 nm)
-                    smoothing_sigma : float or None
-                        Gaussian smoothing sigma in pixels (default: None)
-                    threshold : float
-                        FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
-                    region_size : float
-                        size of each spatial region in micrometers (default: 10.0 µm)
-                    min_locs_per_region : int
-                        minimum localizations per region to process (default: 500)
-                    max_frc_range_nm : float or None
-                        maximum FRC range in nm (default: None = full range)
-                    n_processes : int
-                        number of parallel processes (default: 4)
-                    smoothing_window : float
-                        moving average window size for FRC smoothing in 1/nm
-                        (default: 0.005)
-
-        Results:
-            resolution_frc_spatial : float
-                mean FRC-based resolution in nm
-            resolution_std : float
-                standard deviation across regions
-            n_regions : int
-                number of valid regions processed
-            cutoff_frequency : float
-                mean spatial frequency at resolution cutoff (1/nm)
-            frc_curve_mean : ndarray
-                mean FRC curve across regions
-            frc_curve_std : ndarray
-                std of FRC curves
-            spatial_frequencies : ndarray
-                spatial frequency values (1/nm)
-            threshold : float
-                threshold used
-            fig_frc : str
-                path to FRC curve plot
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
 
         resolution = results.get("resolution_frc_spatial", [np.nan])[0]
@@ -2400,68 +2100,23 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Fit a Completely Spatially Random Distribution to nearest neighbors.
+        """Report the ``fit_csr`` module to Confluence.
 
-        Fits CSR model to nearest neighbor distance distributions and evaluates
-        goodness-of-fit using statistical measures and visualization.
+        Documents the CSR fit (density, goodness-of-fit metrics) and uploads
+        the fit figures.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    nneighbors : str or numpy.ndarray or list
-                        If str: filepath to nearest neighbor data file
-                        If array: 2D array (N, k) of kth nearest neighbor
-                        distances
-                        If list: multiple datasets or file paths
-                    dimensionality : int
-                        Spatial dimensionality (2 or 3) for CSR model
-                Optional keys:
-                    kmin : int
-                        Minimum k-th nearest neighbor order to fit (default: 1)
-                    min_dist : float
-                        Minimum observable distance in nm due to technical
-                        limits
-                    max_dist : float
-                        Maximum distance for filtering analysis
-                    bkg_fraction : float
-                        Background fraction for fitting
-                    fit_bkg : bool
-                        Whether to fit background (default: False)
-            results : dict
-                Automatic keys (provided by decorator):
-                    start time : str
-                        Module execution start timestamp
-                    end time : str
-                        Module execution end timestamp
-                    duration : float
-                        Module execution duration in seconds
-                    folder : str
-                        Output folder for module results
-                    folder : str
-                        Output folder for generated files
-                Results updated with:
-                    density : float or list
-                        Fitted spatial density value(s) in units^(-d)
-                    bkg_fraction : list
-                        Background fraction values
-                    fp_fig : str or list
-                        Filepath(s) to CSR fit visualization figure(s)
-                    wasserstein_distances_per_k : list
-                        Wasserstein distances for each k-th nearest neighbor
-                        order
-                    mean_wasserstein_distance : float or list
-                        Mean Wasserstein distance across all k orders
-                    ks_pvalues_per_k : list
-                        Kolmogorov-Smirnov p-values for each k-th NN order
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with CSR fitting results and goodness-of-fit
-                metrics
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting fit_csr.")
         text = f"""
@@ -2680,36 +2335,23 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Aligns multiple channels to each other (part of an aggregation
-        workflow)
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                and optional keys:
-                    filepaths : list of str
-                        the previously saved hdf5 files to be loaded and
-                        aligned. if not given, the last processed data is used
-                    align_pars : dict
-                        kwargs of picasso_outpost.align_channels
-                            max_iterations, convergence
-                    fp_fiducials : list of str
-                        the previously saved hdf5 files of fiducial markers
-                        to be loaded and aligned.
-                    fig_filename : str
-                        the location to save the drift figure to
-                    crop_boundaries : bool
-                        whether to crop the localizations according to the
-                        image boundaries (after shifting)
-                    fp_co_shift_channel_locs : list of str
-                        hdf5 files not in the 'main workflow' that should
-                        be shifted as well. This could e.g. be clustered
-                        localizations when the workflow has continued with
-                        cluster centers
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``align_channels`` module to Confluence.
+
+        Documents the per-channel shifts (and RSSO uncertainties, if any) and
+        uploads the before/after and shift-plot figures.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting align_channels.")
         shifttxt = f"""
@@ -2824,21 +2466,18 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     def combine_channels(self, i, parameters, results, postpone_report=False):
-        """Combines multiple channels into one dataset. This is relevant
-        e.g. for RESI.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                and optional keys:
-                    tag : str
-                        the tag / name of the combined dataset
-                    combine_col : str
-                        the column name for the IDs to the different datasets
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``combine_channels`` module to Confluence.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting combine_channels.")
         text = f"""
@@ -2862,29 +2501,18 @@ class ConfluenceReporter(AbstractModuleCollection):
     def save_datasets_aggregated(
         self, i, parameters, results, postpone_report=False
     ):
-        """Save data of multiple single-dataset workflows from one
-        aggregation workflow.
+        """Report the ``save_datasets_aggregated`` module to Confluence.
 
-        Saves all channel localization data and metadata from the aggregated
-        workflow to individual files in the results folder.
-
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys: (none)
-                Optional keys: (none)
-            results : dict
-                The results dictionary, updated with:
-                    filepaths : list
-                        List of all saved file paths from the aggregated
-                        datasets
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Updated results dictionary with saved file paths
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting save_datasets_aggregated.")
         text = f"""
@@ -3611,39 +3239,20 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     def create_mask(self, i, parameters, results, postpone_report=False):
-        """
-        This is Susanne's implementation of calculating a cell mask,
-        written (ni part?) for the initial version of the DC-Atlas.
-        May be obsolete with create_mask2, but kept for backwards
-        compatibility. To be deprecated on the long run.
+        """Report the ``create_mask`` module to Confluence.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_channel_map : str
-                        filepath to the map from 'combine_channels' module,
-                        which is a dict from channel name to ID int in the
-                        locs['combine_id']
-                    fp_combined_locs : str
-                        filepath to the locs combined in 'combine_channels'
-                        module
-                    margin : float
-                        Size of the added empty margin to the FOV, in nm
-                    binsize : float
-                        Size o fthe 2D histogram bins of the first step, in nm
-                    sigma_mask_blur : int
-                        parameter of the gaussian blur in binsize units
-                    mask_resolution : float
-                        Controls the digital resolution of the mask, in nm
-                    combine_col : str
-                        the name of the combine column, e.g. 'combine_id'
-                        or 'protein'. Same as used in 'combine_channels' module
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        Uploads the blur and mask figures.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting create_mask.")
         text = f"""
@@ -3705,57 +3314,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """
-        This is Rafal's implementation of cell masking, written for the
-        3rd version of the DC Atlas. It is (mostly?) identical with an
-        implementation of it in spinna, which will be integrated into
-        picasso soon. Evaluate deprecation (or moving source from
-        outpost_modules/ripleys to picasso/spinna) at that time.
+        """Report the ``create_mask2`` module to Confluence.
 
-        the locs must be protein positions at this stage.
+        Documents the cell area and uploads the localization and mask figures.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    binsize : float
-                        the bin size in nanometers. A good value is 20
-                    blursize : float
-                        the gaussian blur to apply in nanometers.
-                        A good value is 400
-                    mask_pixel_size : float
-                        the pixelsize of the final mask, in nanometers.
-                        Often used: 10
-                    threshold : float
-                        the threshold value below which the mask is set
-                        to zero. For example 1 / 3
-                    binary : boolean
-                        whether to create a binary or density mask
-                    select_cell : boolean
-                        whether to select the largest connected component,
-                        assumed to be the cell of interest.
-                    fill_holes : boolean
-                        whether to fill holes in the cell mask
-                    dilate_nm : float
-                        the nanometers to dilate the mask (useful if a large
-                        threshold has been used)
-                    apply_to_locs : boolean
-                        whether to drop all localizations outside the area
-                and optional keys:
-                    fp_combined_locs : str default: None or ''
-                        filepath to the locs combined in 'combine_channels'
-                        module. If None or '', loaded channel_locs is used
-                    fp_channel_map : str
-                        filepath to the map from 'combine_channels' module,
-                        which is a dict from channel name to ID int in the
-                        locs['combine_id']
-                    combine_col : str
-                        the name of the combine column, e.g. 'combine_id'
-                        or 'protein'. Same as used in 'combine_channels' module
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting create_mask2.")
         text = f"""
@@ -3826,38 +3400,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """
-        This module analyses and refines a previously created mask.
-        Particularly, the density histogram of the mask bins are plotted,
-        and an area of homogeneous density can be selected
+        """Report the ``refine_mask_by_density`` module to Confluence.
 
-        the locs must be protein positions at this stage.
+        Uploads the density-histogram and refined-mask figures.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_mask : str
-                        the file path to the mask
-                    min_density, max_density : float
-                        the density range to select
-                and optional keys:
-                    nbins : int
-                        the number of bins for plotting
-                    nth_largest : int
-                        select the nth largest area in density range.
-                        1-based: set 1 for largest.
-                    apply_to_locs : bool
-                        whether to apply the created mask to the locs
-                    smoothe_nm : float
-                        the number of nanometers to dilate and erode
-                        the mask. This can be useful to remove excessive
-                        holes and ragging in the mask due to the
-                        density thresholding
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting refine_mask_by_density.")
         text = f"""
@@ -3925,35 +3483,18 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     def dbscan_molint(self, i, parameters, results, postpone_report=False):
-        """TO BE CLEANED UP
-        dbscan implementation for molecular interactions workflow
+        """Report the ``dbscan_molint`` module to Confluence.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_channel_map : str
-                        filepath to the map from 'combine_channels' module,
-                        which is a dict from channel name to ID int in the
-                        locs['combine_id']
-                    epsilon_nm : float
-                        dbscan epsilon in nm
-                    minpts : int
-                        minimum number of points
-                    sigma_linker : float
-                        ... in nm
-                    fp_merge_mask : str
-                        filepath to the merge mask (generated in module
-                        'create_mask')
-                    thresh_type : str
-                        ...
-                    cell_name : str
-                        the name of the cell currently analyzed
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting dbscan_molint.")
         text = f"""
@@ -3988,35 +3529,18 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     def CSR_sim_in_mask(self, i, parameters, results, postpone_report=False):
-        """TO BE CLEANED UP
-        simulate CSR within a density mask, and perform dbscan as well
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_channel_map : str
-                        filepath to the map from 'combine_channels' module,
-                        which is a dict from channel name to ID int in the
-                        locs['combine_id']
-                    fp_mask_dict : str
-                        filepath to the mask_dict.pkl file generated in
-                        the 'create_mask' module
-                    N_repeats : int
-                        number of simulation repeats
-                    epsilon_nm : float
-                        dbscan epsilon in nm
-                    minpts : int
-                        minimum number of points
-                    sigma_linker : float
-                        ... in nm
-                    fp_merge_mask : str
-                        filepath to the merge mask (generated in module
-                        'create_mask')
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``CSR_sim_in_mask`` module to Confluence.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting CSR_sim_in_mask.")
         text = f"""
@@ -4248,37 +3772,20 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     def interaction_graph(self, i, parameters, results, postpone_report=False):
-        """Plot the interaction graph, displaying the different targets
-        and their interactions in a graph. The node sizes denote the
-        density, and the ripley interaction matrix is represented in the
-        edges.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_workflows : list of str
-                        the paths to the folders of separate workflows
-                        where the separate ripleys analyses have been done
-                    report_names : list of str
-                        the report names of those worklfows
-                    swkfl_protint_key : str
-                        the results key of the protein_interactions module.
-                        e.g. '09_protein_interactions'
-                    fp_density : str
-                        fp to the denfsities of the channels.
-                    fp_ripleys_meanvals : str
-                        the filepath to the interaction matrix
-                    edge_factor : float
-                        factor to display useful sizes
-                    node_factor : float
-                        factor to display useful sizes
-                    channel_colors : list of str
-                        colors to describe the receptors with
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``interaction_graph`` module to Confluence.
+
+        Uploads the target-interaction graph figure.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting interaction_graph.")
         text = f"""
@@ -4321,27 +3828,20 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Find localizations stemming from gold beads based on blinking
-        kinetics.
-        The metrics used are number of locs and rms deviation from mean
-        frame
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                and optional keys:
-                    remove_gold : bool
-                        if present and set to True, the gold locs
-                        are discarded and self.locs is set to the
-                        nongold-locs
-                    diameter : float
-                        the pick similar diameter for identifying gold
-                    std_range, mean_rmsd : float
-                        the pick similar parameters identifying gold
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``find_gold`` module to Confluence.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting find_gold.")
         text = f"""
@@ -4375,35 +3875,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """pick similar in nlocs/rmsd space (with specified limits in
-        that space).
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    diameter : float
-                        the pick similar diameter for identifying gold
-                and optional keys:
-                    min_n_locs_per_frame : float, range 0-1
-                        the min percentage of frames with events in the pick
-                        region to pick. default: 0.01
-                    max_n_locs_per_frame : float, range 0-1
-                        the max percentage of frames with events in the pick
-                        region to pick. default: 0.01
-                    min_rmsd : float
-                        the minimum root mean square distance from pick center
-                        to pick
-                    max_rmsd : float
-                        the maximum root mean square distance from pick center
-                        to pick
-                    n_plot_structures : int
-                        the number of structures to plot
-                    display_pixelsize : float
-                        the pixelsize for display in nm, default: 1
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``find_similar`` module to Confluence.
+
+        Uploads the phase-space and picked-locs figures.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting find_structures.")
         text = f"""
@@ -4516,31 +4003,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """pick similar on clusters in nlocs/rmsd space.
-        This may be useful for automated picking of origamis, and may
-        help for defining parameters for finding gold
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    diameter : float
-                        the pick similar diameter for identifying gold
-                and optional keys:
-                    min_n_locs_per_frame : float
-                        the percentage of frames with events in the pick
-                        region below which there is noise. default: 0.01
-                    n_plot_structures : int
-                        the number of structures to plot
-                    display_pixelsize : float
-                        the pixelsize for display in nm, default: 1
-                    xi : float
-                        the xi parameter for clustering. default 0.05
-                    min_cluster_size : float
-                        the minimun cluster size (fract). default .05
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``find_structures`` module to Confluence.
+
+        Uploads the raw-cluster and pick-similar-cluster figures.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting find_structures.")
         text = f"""
@@ -4648,20 +4126,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Performs undrift from piced locs.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_picked_locs : str
-                        filepath to the picked locs to undrift from
-                        (.hdf5 file of list of locs, with 'group' column
-                         to describe picks)
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``undrift_from_picked`` module to Confluence.
+
+        Uploads the drift figure.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting undrift_from_picked.")
         text = f"""
@@ -4707,30 +4187,20 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Filter localizations to lie within a min-max range of a metric.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    field : str or list of str
-                        the field(s) to filter on
-                and optional keys:
-                    minval : dtype of field (or list of it)
-                        the minimum value(s) to accept
-                    maxval : dtype of field (or list of it)
-                        the maximum value(s) to accept
-                    mode : str
-                        the mode of threshold application:
-                         - absolute: minval and maxval are values
-                            in units of the field
-                         - zscore: minval and maxval are in units of
-                            standard deviations from the mean
-                            (-2, 2 means cut off at 2*std from mean)
-                         - quantile: minval and maxval are quantiles
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``filter_locs`` module to Confluence.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting filter_locs.")
 
@@ -4813,29 +4283,22 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Filter molecule positions (after clustering or Gaussian Mixture)
-        for those who show transient binding. Specifically, the mean frame
-        should not be at extreme positions
-        (default, 0.1 > mean frame / nframes > 0.9), and std of frames
-        (default: 0.3 > std frame).
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                and optional keys:
-                    meanframe_cutoff : float (0-1, default .1)
-                        filter out positions at more extreme temporal positions
-                    stdframe_cutoff : float
-                        filter out positions with lower std than .16
-                    fp_locs : str
-                        the filepath to the underlying localizations
-                        (self.locs are centers). If given, these are filtered
-                        as well and saved with the same filename in the current
-                        results folder
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``filter_transient_binding`` module to Confluence.
+
+        Documents the filter ranges and uploads the before/after histograms.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting filter_transient_binding.")
 
@@ -4899,20 +4362,18 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     def link_locs(self, i, parameters, results, postpone_report=False):
-        """Link localizations.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    d_max : int
-                        maximum distance to link [px]
-                    tolerance : int
-                        maximum transient dark time [frames]
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``link_locs`` module to Confluence.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting link_locs.")
         text = f"""
@@ -4957,36 +4418,23 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Calls another module (as a sub-module) for all pairs in the
-        channel_locs
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    module_name : str
-                        the module to call
-                    param_target1 : str
-                        parameter name of the first target to set for the
-                        module
-                    param_target2 : str
-                        parameter name of the second target to set for the
-                        module
-                    module_kwargs : dict
-                        the other arguments to the module
-                and optional keys:
-                    result_scalar : str
-                        the key to display in a heatmap as main result
-                    scalar_threshold : float
-                        the saturation value in the heatmap
-                    scalar_minval : float
-                        the minimum value for color in the heatmap
-                    result_fpfig : str or list of str
-                        the key to the filepath of one or more figures
-                        generated to display for documentation
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Report the ``pairwise_module_executor`` module to Confluence.
+
+        Documents the sub-module run for all channel pairs and uploads the
+        result heatmap(s) and figures.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         logger.debug("Reporting pairwise_module_executor.")
         text = f"""
@@ -5047,34 +4495,20 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Generate random values and plot for debugging and testing the
-        pairwise module.
+        """Report the ``random_val`` debugging module to Confluence.
 
-        Creates a random value and generates a test plot with random data
-        for debugging purposes in pairwise module workflows.
-
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    xlabel : str
-                        Label for the x-axis of the test plot
-                    ylabel : str
-                        Label for the y-axis of the test plot
-                Optional keys: (none)
-            results : dict
-                The results dictionary, updated with:
-                    random_val : float
-                        A random value between 0 and 1
-                    fp_fig : str
-                        Filepath to the generated test figure
-
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Updated results dictionary with random value and figure path
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
         pass
 
@@ -5088,89 +4522,25 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
-        """Analyse for labeling efficiency.
-        Perform 3 component SPINNA analysis for monomers and heterodimers
-        of target (A) and reference (B). For the analysis, we enter a
-        labeling efficiency of 1, yielding proportions of monomers and
-        dimers as seen in the data. The real labeling efficiency is then
+        """Report the ``labeling_efficiency_analysis`` module to Confluence.
 
-        Model:
-        Binders A and B bind to an engineered construct A*-anchor-B*.
-            A <-> A*-anchor-B* <-> B
-        There are four possible configurations:
-            A_only: AA*-anchor-B*
-            AB: AA*-anchor-B*B
-            B_only: A*-anchor-B*B
-            None (invisible in data): A*-anchor-B*
-        Number of total constructs with A, or B, respectively:
-            #A_tot = #A_only + #AB
-            #B_tot = #B_only + #AB
+        Documents the derived labeling efficiencies (and uncertainties) and
+        uploads the SPINNA NND figures. See the matching
+        :class:`~picasso_workflow.util.AbstractModuleCollection` method for the
+        model derivation.
 
-        Proportions can be given in terms of #structures, or in terms
-        of #molecules, e.g.
-        with proportions given in terms of #structures
-         10 monomers, 10 dimers (20molecules in dimers) -> p_m = 50%, p_d=50%
-
-        with proportions given in terms of #molecules
-         10 monomers, 10 dimers (20molecules in dimers) -> p_m = 33%, p_d=66%
-
-        in terms of #structures
-        prop_A^S = #A_only / (#A_only + #B_only + #AB)
-        prop_B^S = #B_only / (#A_only + #B_only + #AB)
-        prop_AB^S = #AB / (#A_only + #B_only + #AB)
-        in terms of #molecules
-        prop_A^S = #A_only / (#A_only + #B_only + 2 #AB)
-        prop_B^S = #B_only / (#A_only + #B_only + 2 #AB)
-        prop_AB^S = 2 #AB / (#A_only + #B_only + 2 #AB)
-
-        #AB = #anchor * LE_A * LE_B
-        #A_tot = #anchor * LE_A
-        #B_tot = #anchor * LE_B
-        #A_only = #A_tot - #AB = #anchor * LE_A * (1 - LE_B)
-        #B_only = #B_tot - #AB = #anchor * LE_B * (1 - LE_A)
-
-        THUS, finally, the labeling efficiency can be calculated by
-
-        with proportions given in terms of #structures
-        LE_A = prop(AB) / (prop(B) + prop(AB))
-        LE_B = prop(AB) / (prop(A) + prop(AB))
-
-        with proportions given in terms of #molecules
-        LE_A = prop(AB) / (2 * prop(B) + prop(AB))
-        LE_B = prop(AB) / (2 * prop(A) + prop(AB))
-
-        SPINNA outputs propportions in terms of #molecules, so the last
-        formulae are used below.
-
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    reference_name : str
-                        the channgel_tag of the reference
-                    target_name : str
-                        the channel_tag of the target queried for LE
-                    pair_distance: 10 # real distance of pair of tags in nm
-                    labeling_uncertainty : dict, channel tag to float
-                        labeling uncertainty [nm]; good value is e.g. 5
-                    n_simulate : int
-                        number of target molecules to be simulated;
-                        good value is e.g. 50000
-                    density : dict, channel tag to float
-                        density to simulate [nm^2 or nm^3];
-                        area density if 2D; volume density if 3D
-                    granularity : float
-                        the spinna res_factor
-                    sim_repeats : int
-                        number of simulation repeats, for noise reduction
-                and optional keys:
-                    nn_nth : int
-                        number of nearest neighbors to analyse
-                        default: 1
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
         """
 
         def show_dict_percentages(d):
@@ -5240,13 +4610,26 @@ class ConfluenceReporter(AbstractModuleCollection):
 
 
 class UndriftError(Exception):
+    """Raised when an undrift step fails."""
+
     pass
 
 
 def confluence_call(method):
-    """When calling the confluence API, sometimes the connection is lost.
-    Therefore, wrap the functions using this decorator in order to
-    re-connect and call again in that case.
+    """Retry a Confluence API call once after reconnecting on failure.
+
+    The Confluence connection is sometimes lost; wrapping an interface method
+    with this decorator reconnects and calls it again in that case.
+
+    Parameters
+    ----------
+    method : callable
+        The :class:`ConfluenceInterface` method to wrap.
+
+    Returns
+    -------
+    callable
+        The wrapped method.
     """
 
     def confluence_call_wrapper(self, *args, **kwargs):
@@ -5270,30 +4653,28 @@ def confluence_call(method):
 
 
 class ConfluenceInterface:
-    """A Interface class to access Confluence
+    """Interface to the Confluence API.
 
-    For access to the Confluence API, create an API token in confluence,
-    and store it as an environment variable:
-    $ setx CONFLUENCE_BEARER "your_confluence_api_token"
-    If the token is not stored as an environment variable, specify it
-    here at initialization.
+    For API access, create an API token in Confluence and store it as the
+    environment variable ``CONFLUENCE_BEARER`` (e.g.
+    ``setx CONFLUENCE_BEARER "your_confluence_api_token"``); otherwise pass it
+    at initialization.
 
-    Args:
-        base_url : str
-            the confluence url to connect to.
-        space_key : str
-            the confluence space key to work in
-        parent_page_title : str
-            the (already existing) parent page to crate the reports under
-        username : str, default None
-            the username to authenticate with.
-            If given, authentiation is performed with url, username and
-            password.
-            If None or "", authentication is performed with url and token.
-            For Confluence Server, token-based authentication is needed.
-        token : str, default None
-            the password (if username-based authentication), or token.
-            If None, the environment variable CONFLUENCE_BEARER is polled.
+    Parameters
+    ----------
+    base_url : str
+        The Confluence URL to connect to.
+    space_key : str
+        The Confluence space key to work in.
+    parent_page_title : str
+        The (already existing) parent page to create the reports under.
+    username : str, optional
+        Username to authenticate with. If given, authentication uses url +
+        username + password; if None or ``""``, url + token (Confluence
+        Server needs token-based authentication).
+    token : str, optional
+        The password (for username-based auth) or token. If None, the
+        ``CONFLUENCE_BEARER`` environment variable is used.
     """
 
     def __init__(
@@ -5344,12 +4725,19 @@ class ConfluenceInterface:
 
     @confluence_call
     def get_page_properties(self, page_title="", page_id=""):
-        """
-        Returns:
-            id : str
-                the page id
-            title : str
-                the page title
+        """Get a page's id and title.
+
+        Parameters
+        ----------
+        page_title, page_id : str, optional
+            Look up the page by title or by id (exactly one must be given).
+
+        Returns
+        -------
+        id : str
+            The page id.
+        title : str
+            The page title.
         """
         if page_title != "":
             page = self.confluence.get_page_by_title(
@@ -5368,11 +4756,17 @@ class ConfluenceInterface:
 
     @confluence_call
     def get_page_version(self, page_title="", page_id=""):
-        """
-        Returns:
-            data : dict
-                results
-                    id, title, version
+        """Get a page's version number.
+
+        Parameters
+        ----------
+        page_title, page_id : str, optional
+            Look up the page by title or by id (exactly one must be given).
+
+        Returns
+        -------
+        int
+            The page version number.
         """
         if page_title != "":
             page = self.confluence.get_page_by_title(
@@ -5389,11 +4783,17 @@ class ConfluenceInterface:
 
     @confluence_call
     def get_page_body(self, page_title="", page_id=""):
-        """
-        Returns:
-            data : dict
-                results
-                    id, title, version
+        """Get a page's storage-format body.
+
+        Parameters
+        ----------
+        page_title, page_id : str, optional
+            Look up the page by title or by id (exactly one must be given).
+
+        Returns
+        -------
+        str
+            The page body in Confluence storage format.
         """
         if page_title != "":
             page = self.confluence.get_page_by_title(
@@ -5410,18 +4810,22 @@ class ConfluenceInterface:
 
     @confluence_call
     def create_page(self, page_title, body_text, parent_id="rootparent"):
-        """
-        Args:
-            page_title : str
-                the title of the page to be created
-            body_text : str
-                the content of the page, with the confuence markdown / html
-            parent_id : str
-                the id of the parent page. If 'rootparent', the parent_page_id
-                of this ConfluenceInterface is used
-        Returns:
-            page_id : str
-                the id of the newly created page
+        """Create a Confluence page.
+
+        Parameters
+        ----------
+        page_title : str
+            The title of the page to create.
+        body_text : str
+            The page content (Confluence storage-format HTML).
+        parent_id : str, optional
+            The id of the parent page. If ``'rootparent'`` (the default), this
+            interface's ``parent_page_id`` is used.
+
+        Returns
+        -------
+        page_id : str
+            The id of the newly created page.
         """
         if parent_id == "rootparent":
             parent_id = self.parent_page_id
@@ -5447,15 +4851,19 @@ class ConfluenceInterface:
 
     @confluence_call
     def upload_attachment(self, page_id, filename):
-        """Uploads an attachment to a page
-        Args:
-            page_id : str
-                the page id the attachment should be saved to.
-            filename : str
-                the local filename of the file to attach
-        Returns:
-            attachment_id : str
-                the id of the attachment
+        """Upload an attachment to a page.
+
+        Parameters
+        ----------
+        page_id : str
+            The page id to attach the file to.
+        filename : str
+            The local filename of the file to attach.
+
+        Returns
+        -------
+        attachment_id : str
+            The id of the attachment.
         """
         self.confluence.attach_file(
             filename=filename, page_id=page_id, space=self.space_key
@@ -5472,15 +4880,19 @@ class ConfluenceInterface:
 
     @confluence_call
     def get_attachment_id(self, page_id, filename):
-        """Get the id of an attachment to a page
-        Args:
-            page_id : str
-                the page id the attachment should be saved to.
-            filename : str
-                the local filename of the file to retreive
-        Returns:
-            attachment_id : str
-                the id of the attachment
+        """Get the id of an attachment on a page.
+
+        Parameters
+        ----------
+        page_id : str
+            The page id holding the attachment.
+        filename : str
+            The filename of the attachment to look up.
+
+        Returns
+        -------
+        attachment_id : str
+            The id of the attachment.
         """
         attachments_container = self.confluence.get_attachments_from_content(
             page_id, start=0, limit=500
@@ -5495,13 +4907,14 @@ class ConfluenceInterface:
 
     @confluence_call
     def delete_attachment(self, page_id, attachment_id):
-        """Deletes an attachment to a page
-        Args:
-            page_id : str
-                the page id the attachment should be saved to.
-            attachment_id : str
-                the id of the attachment
-        Returns:
+        """Delete an attachment from a page.
+
+        Parameters
+        ----------
+        page_id : str
+            The page id holding the attachment.
+        attachment_id : str
+            The id of the attachment to delete.
         """
         self.confluence.delete_attachment(page_id, attachment_id, version=None)
 
@@ -5568,4 +4981,6 @@ class ConfluenceInterface:
 
 
 class ConfluenceInterfaceError(Exception):
+    """Raised when a :class:`ConfluenceInterface` operation fails."""
+
     pass

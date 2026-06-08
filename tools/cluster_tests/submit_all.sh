@@ -151,7 +151,38 @@ if [[ ${#TEMPLATE_JOBS[@]} -eq 0 ]]; then
     echo "Template runs:                          none found under PW_TEST_DATA_DIR"
 fi
 
-# Write a manifest so the run directory is self-describing for later analysis.
+# Write a machine-readable manifest (one row per job) that summarize.py reads
+# to build the final report. Columns: kind <TAB> jobid <TAB> label <TAB> dir.
+# For tiers, dir is "-"; for templates it is the template folder (whose
+# logs/ holds the per-job logs scanned for the "ran through" verdict).
+{
+    printf 'tier\t%s\ttier1_2\t-\n' "$JID1"
+    printf 'tier\t%s\ttier3\t-\n' "$JID2"
+    printf 'tier\t%s\ttier4\t-\n' "$JID3"
+    for _tj in ${TEMPLATE_JOBS[@]+"${TEMPLATE_JOBS[@]}"}; do
+        printf 'template\t%s\t%s\t%s\n' \
+            "${_tj%%|*}" "$(basename "${_tj#*|}")" "${_tj#*|}"
+    done
+} > "$RUN_DIR/jobs.tsv"
+
+# ---------------------------------------------------------------------------
+# Summary job: runs after every tier and template job reaches a terminal
+# state (afterany, so it runs whether they passed or failed) and condenses
+# all artefacts into one SUMMARY.txt. This is what makes the whole run a
+# "submit once, read one file" affair.
+# ---------------------------------------------------------------------------
+DEP_LIST="afterany:$JID1:$JID2:$JID3"
+for _tj in ${TEMPLATE_JOBS[@]+"${TEMPLATE_JOBS[@]}"}; do
+    DEP_LIST+=":${_tj%%|*}"
+done
+JIDS=$(sbatch "${COMMON[@]}" \
+    --dependency="$DEP_LIST" \
+    --output="$RUN_DIR/summary_%j.log" \
+    --error="$RUN_DIR/summary_%j.log" \
+    "$SCRIPT_DIR/summary.sbatch")
+echo "Submitted summary (report):             job $JIDS  (depends on all above)"
+
+# Write a human-readable manifest so the run directory is self-describing.
 {
     echo "run_id:        $RUN_ID"
     echo "submitted_at:  $(date)"
@@ -163,6 +194,7 @@ fi
     echo "tier1_2_job:   $JID1"
     echo "tier3_job:     $JID2"
     echo "tier4_job:     $JID3"
+    echo "summary_job:   $JIDS"
     if [[ ${#TEMPLATE_JOBS[@]} -gt 0 ]]; then
         echo "template_jobs:"
         for _tj in "${TEMPLATE_JOBS[@]}"; do
@@ -171,13 +203,20 @@ fi
     fi
 } > "$RUN_DIR/run_info.txt"
 
-# Assemble the full job-id list (tiers + template runs) for monitoring.
+# Assemble the full job-id list (tiers + template runs + summary) for
+# monitoring.
 ALL_JIDS="$JID1,$JID2,$JID3"
 for _tj in ${TEMPLATE_JOBS[@]+"${TEMPLATE_JOBS[@]}"}; do
     ALL_JIDS+=",${_tj%%|*}"
 done
+ALL_JIDS+=",$JIDS"
 
 echo ""
 echo "Monitor:  squeue -j $ALL_JIDS"
 echo "Tail log: tail -f $RUN_DIR/tier1_2_${JID1}.log"
+echo "Report:   $RUN_DIR/SUMMARY.txt  (written when summary job $JIDS finishes)"
+echo "          → also reachable at test-results/latest/SUMMARY.txt"
 echo "Results:  $RUN_DIR  (or test-results/latest)"
+echo ""
+echo "On-demand snapshot before the run finishes:"
+echo "  python3 tools/cluster_tests/summarize.py $RUN_DIR"

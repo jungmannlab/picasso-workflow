@@ -784,12 +784,12 @@ def analyze_2_channels(
     if aggfun is None:
         aggfun = "mean"
     if aggfun == "mean":
-        ripley_integral = np.trapz(K_exp_norm, radii)
+        ripley_integral = np.trapezoid(K_exp_norm, radii)
         agg_value = ripley_integral / (np.max(radii) - np.min(radii))
     elif aggfun == "sum":
         agg_value = np.sum(K_exp_norm)
     elif aggfun == "integral":
-        agg_value = np.trapz(K_exp_norm, radii)
+        agg_value = np.trapezoid(K_exp_norm, radii)
     else:
         raise NotImplementedError(f"aggfun {aggfun} not implemented.")
     if agg_value is np.nan:

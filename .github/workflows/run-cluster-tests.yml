@@ -71,6 +71,34 @@ jobs:
           done
           echo "All jobs finished."
 
+      # Reuse the same summarizer as submit_all.sh to produce one consolidated
+      # report. We synthesise the jobs.tsv manifest it expects from the job IDs
+      # captured above (no template-workflow runs in CI), then surface the
+      # report on the run page and as an artifact. Reporting only — the
+      # authoritative pass/fail gate is the sacct check below.
+      - name: Build run summary report
+        if: always()
+        run: |
+          RUN_DIR="$GITHUB_WORKSPACE/test-results"
+          {
+            echo "run_id:        ci-${GITHUB_RUN_NUMBER}-${GITHUB_REF_NAME}-${GITHUB_SHA:0:7}"
+            echo "git_branch:    ${GITHUB_REF_NAME}"
+            echo "git_sha:       ${GITHUB_SHA:0:7}"
+            echo "project_dir:   ${GITHUB_WORKSPACE}"
+          } > "$RUN_DIR/run_info.txt"
+          {
+            printf 'tier\t%s\ttier1_2\t-\n' "${{ steps.submit.outputs.jid1 }}"
+            printf 'tier\t%s\ttier3\t-\n'  "${{ steps.submit.outputs.jid2 }}"
+          } > "$RUN_DIR/jobs.tsv"
+          python3 tools/cluster_tests/summarize.py "$RUN_DIR" || true
+          {
+            echo '### Cluster test summary — tiers 1–3'
+            echo '```'
+            cat "$RUN_DIR/SUMMARY.txt" 2>/dev/null \
+              || echo '(summary not generated)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Check SLURM exit codes
         run: |
           failed=0
@@ -84,12 +112,15 @@ jobs:
           done
           exit $failed
 
-      - name: Upload JUnit XML results
+      - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cluster-test-results-tier1-3
           path: |
+            ${{ github.workspace }}/test-results/SUMMARY.txt
+            ${{ github.workspace }}/test-results/summary.json
+            ${{ github.workspace }}/test-results/jobs.tsv
             ${{ github.workspace }}/test-results/tier1_2_*.xml
             ${{ github.workspace }}/test-results/tier3_*.xml
 
@@ -136,6 +167,28 @@ jobs:
           done
           echo "Job finished."
 
+      # Same summarizer as tiers-1-3, scoped to the tier-4 job.
+      - name: Build run summary report
+        if: always()
+        run: |
+          RUN_DIR="$GITHUB_WORKSPACE/test-results"
+          {
+            echo "run_id:        ci-${GITHUB_RUN_NUMBER}-${GITHUB_REF_NAME}-${GITHUB_SHA:0:7}"
+            echo "git_branch:    ${GITHUB_REF_NAME}"
+            echo "git_sha:       ${GITHUB_SHA:0:7}"
+            echo "project_dir:   ${GITHUB_WORKSPACE}"
+          } > "$RUN_DIR/run_info.txt"
+          printf 'tier\t%s\ttier4\t-\n' "${{ steps.submit.outputs.jid }}" \
+            > "$RUN_DIR/jobs.tsv"
+          python3 tools/cluster_tests/summarize.py "$RUN_DIR" || true
+          {
+            echo '### Cluster test summary — tier 4 (real data)'
+            echo '```'
+            cat "$RUN_DIR/SUMMARY.txt" 2>/dev/null \
+              || echo '(summary not generated)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Check SLURM exit code
         run: |
           jid="${{ steps.submit.outputs.jid }}"
@@ -146,9 +199,13 @@ jobs:
             exit 1
           fi
 
-      - name: Upload JUnit XML results
+      - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cluster-test-results-tier4
-          path: ${{ github.workspace }}/test-results/tier4_*.xml
+          path: |
+            ${{ github.workspace }}/test-results/SUMMARY.txt
+            ${{ github.workspace }}/test-results/summary.json
+            ${{ github.workspace }}/test-results/jobs.tsv
+            ${{ github.workspace }}/test-results/tier4_*.xml
