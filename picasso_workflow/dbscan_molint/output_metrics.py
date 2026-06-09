@@ -83,7 +83,7 @@ def output_cell(
             * 100
         )
 
-    if barcode != None:
+    if barcode is not None:
         if len(barcode) != len(channel_ID):
             raise Exception(
                 "Barcode length does not match number of channels!"

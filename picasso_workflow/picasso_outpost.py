@@ -18,7 +18,6 @@ import numpy as np
 # from numpy.lib.recfunctions import stack_arrays
 import pandas as pd
 import numba as nb
-import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 from matplotlib.colors import LogNorm
@@ -644,7 +643,7 @@ def _calculate_pairwise_shift(
             ref_indices.append(i_idx)  # Track reference localization index
 
     if len(valid_shifts_x) == 0:
-        logger.warning(f"No valid shifts. Returning Nones.")
+        logger.warning("No valid shifts. Returning Nones.")
         return None, None, None, None
     # Create 2D histogram with adaptive binning
     shift_range = [-max_shift, max_shift]
@@ -4509,15 +4508,16 @@ def _get_block_locs_at(
     step = 0
     for k in range(y_range - 1, y_range + 2):
         if 0 < k < K:
-            for l in range(x_range - 1, x_range + 2):
-                if 0 < l < L:
-                    if block_ends[k, l] - block_starts[k, l] > 0:
-                        # numba does not work if you attach arange to an empty list so the first step is different
-                        # this is because of dtype issues
+            for lx in range(x_range - 1, x_range + 2):
+                if 0 < lx < L:
+                    if block_ends[k, lx] - block_starts[k, lx] > 0:
+                        # numba does not work if you attach arange to an
+                        # empty list, so the first step is different; this
+                        # is because of dtype issues
                         if step == 0:
                             indices = np.arange(
-                                float(block_starts[k, l]),
-                                float(block_ends[k, l]),
+                                float(block_starts[k, lx]),
+                                float(block_ends[k, lx]),
                                 dtype=np.uint32,
                             )
                             step = 1
@@ -4526,8 +4526,8 @@ def _get_block_locs_at(
                                 (
                                     indices,
                                     np.arange(
-                                        float(block_starts[k, l]),
-                                        float(block_ends[k, l]),
+                                        float(block_starts[k, lx]),
+                                        float(block_ends[k, lx]),
                                         dtype=np.uint32,
                                     ),
                                 )
@@ -4643,8 +4643,6 @@ def resolution_ppac(
     autocorrelation symmetry for a 2× speedup.
     """
     from multiprocessing import cpu_count
-    from concurrent.futures import ThreadPoolExecutor
-    import gc
 
     # Warn if deprecated parameters are used
     if use_chunking:
@@ -4677,7 +4675,6 @@ def resolution_ppac(
 
     # Convert to physical coordinates once
     xy = np.column_stack([locs["x"] * pixelsize, locs["y"] * pixelsize])
-    n_points = len(xy)
 
     # Auto-detect number of threads
     if n_processes is None:
@@ -4788,7 +4785,6 @@ def _resolution_ppac_parallel_optimized(xy, rs, r_search, n_threads):
         2D autocorrelation intensity map.
     """
     from concurrent.futures import ThreadPoolExecutor
-    import functools
 
     grid_size = len(rs)
     intensities = np.zeros((grid_size, grid_size))

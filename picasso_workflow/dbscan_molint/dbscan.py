@@ -1,10 +1,5 @@
 import numpy as np
-import os
-import os.path
-import h5py
 import pandas as pd
-import sys
-import math
 
 
 from sklearn.cluster import DBSCAN
@@ -144,7 +139,6 @@ def dbscan_f(df, epsilon, minpts, sigma_linker):
     Colorcoding = Cluster_ID
     """
 
-    import h5py as _h5py
     import numpy as _np
 
     try:

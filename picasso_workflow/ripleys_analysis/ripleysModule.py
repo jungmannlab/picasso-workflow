@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 from scipy.spatial import KDTree
 from tqdm import tqdm
 
-
 # %% Class interface
 
 

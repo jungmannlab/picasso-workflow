@@ -5,6 +5,7 @@ Author: Heinrich Grabmayr
 Initial Date: Jan 22, 2025
 Description: Test the module analyse.py
 """
+
 import logging
 
 import numpy as np
@@ -12,7 +13,6 @@ import numpy as np
 from picasso_workflow.outpost_modules import mask
 from picasso import io
 import matplotlib.pyplot as plt
-
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +59,9 @@ def test_filter_mask_selects_nth_largest_by_area():
 
         expected = np.zeros((10, 10), dtype=bool)
         expected[comps[key]] = True
-        assert np.array_equal(cell_mask._binary_mask, expected), (
-            f"nth_largest={nth} selected the wrong component"
-        )
+        assert np.array_equal(
+            cell_mask._binary_mask, expected
+        ), f"nth_largest={nth} selected the wrong component"
 
 
 def test_filter_mask_default_selects_largest():

@@ -5,6 +5,7 @@ Author: Heinrich Grabmayr
 Initial Date: March 14, 2024
 Description: Test the module analyse.py
 """
+
 import logging
 import unittest
 import os
@@ -15,7 +16,6 @@ import pandas as pd
 from unittest.mock import patch, MagicMock
 
 from picasso_workflow import analyse, util
-
 
 logger = logging.getLogger(__name__)
 
@@ -1270,7 +1270,6 @@ class TestAnalyseModules(unittest.TestCase):
 
     def resolution_frc_spatial(self):
         """Is tested separately in tests/outpost_modules/test_resolution_frc.py"""
-        pass
 
     def resolution_analysis(self):
         pass
@@ -1400,7 +1399,7 @@ class TestAnalyseModules(unittest.TestCase):
                 for file in glob.glob(os.path.join(undrift_folder, pattern)):
                     try:
                         os.remove(file)
-                    except:
+                    except Exception:
                         pass
 
     @unittest.skip("")

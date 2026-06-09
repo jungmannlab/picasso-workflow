@@ -7,7 +7,6 @@ Created on Sat Nov 12 10:41:53 2022
 
 import unittest
 import numpy as np
-import dataModule as dm
 import maskModule as mm
 import ripleysModule as rm
 

@@ -181,7 +181,6 @@ class AggregationWorkflowRunner:
                     return instance
                 except FileNotFoundError:
                     logger.debug(f"Could not load runner from {runner_folder}")
-                    pass
 
         # If we have an extracted postfix but aren't continuing, use it
         if extracted_postfix is not None and not continue_previous_runner:
@@ -692,8 +691,6 @@ class AggregationWorkflowRunner:
 
 class WorkflowError(Exception):
     """Raised when a workflow cannot complete (e.g. a failed dataset)."""
-
-    pass
 
 
 class WorkflowRunner:

@@ -75,7 +75,6 @@ def _configure_openmp_for_multiprocessing():
     SLURM/cluster environments where each MPI rank uses multiprocessing.
     """
     # Configuration now done at module level - this function is a no-op
-    pass
 
 
 def _setup_multiprocessing_context():
@@ -386,9 +385,6 @@ def _log_performance_summary(
         total_frames / frame_processing_time
         if frame_processing_time > 0
         else 0
-    )
-    time_per_frame = (
-        frame_processing_time / total_frames if total_frames > 0 else 0
     )
 
     # Log comprehensive summary
@@ -1899,7 +1895,6 @@ def _plot_frame_shift_correlation_grid(
         Path to the saved plot.
     """
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Ellipse
     from scipy.stats import pearsonr
 
     n_iterations = len(iteration_history)
@@ -2000,7 +1995,7 @@ def _plot_frame_shift_correlation_grid(
                 y_data = shift_magnitudes[:, i]
 
                 # 2D histogram (hexbin)
-                hb = ax.hexbin(
+                ax.hexbin(
                     x_data,
                     y_data,
                     gridsize=40,
@@ -2075,7 +2070,7 @@ def _plot_frame_shift_correlation_grid(
     plt.savefig(filepath, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.debug(f"Saved correlation grid: shift_correlation_grid.png")
+    logger.debug("Saved correlation grid: shift_correlation_grid.png")
 
     return filepath
 
@@ -2337,7 +2332,7 @@ def _plot_shift_convergence_lines(
     plt.savefig(filepath, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.debug(f"Saved convergence lines: shift_convergence_lines.png")
+    logger.debug("Saved convergence lines: shift_convergence_lines.png")
 
     return filepath
 
@@ -2419,7 +2414,7 @@ def _plot_shift_trajectory_2d(
     # Plot 2D hexbin of initial positions (iteration 1)
     x_init = shifts_x[:, 0]
     y_init = shifts_y[:, 0]
-    hb = ax.hexbin(
+    ax.hexbin(
         x_init,
         y_init,
         gridsize=50,
@@ -2626,7 +2621,7 @@ def _plot_shift_trajectory_2d(
     )
 
     # Add colorbar for iteration progression
-    sm = cm.ScalarMappable(
+    sm = plt.cm.ScalarMappable(
         cmap=cmap, norm=mcolors.Normalize(vmin=1, vmax=n_iterations)
     )
     sm.set_array([])
@@ -2669,7 +2664,7 @@ def _plot_shift_trajectory_2d(
     plt.savefig(filepath, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.debug(f"Saved 2D trajectory plot: shift_trajectory_2d.png")
+    logger.debug("Saved 2D trajectory plot: shift_trajectory_2d.png")
 
     return filepath
 
@@ -3041,7 +3036,7 @@ def _plot_convergence_behavior_analysis(
                 "Damping ratio (residual_N+1 / residual_N)", fontsize=9
             )
             ax_hist.set_ylabel("Count", fontsize=9)
-            ax_hist.set_title(f"Damping Ratio Distribution", fontsize=9)
+            ax_hist.set_title("Damping Ratio Distribution", fontsize=9)
             ax_hist.grid(True, alpha=0.3, axis="y")
             ax_hist.legend(fontsize=7)
 
@@ -3065,7 +3060,7 @@ def _plot_convergence_behavior_analysis(
     plt.close()
 
     logger.debug(
-        f"Saved convergence behavior analysis: convergence_behavior_analysis.png"
+        "Saved convergence behavior analysis: convergence_behavior_analysis.png"
     )
 
     # Return filepath and statistics
@@ -3441,9 +3436,7 @@ def _plot_goodness_of_fit_analysis(
     plt.savefig(filepath, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.info(
-        f"Saved goodness of fit analysis: goodness_of_fit_analysis.png"
-    )
+    logger.info("Saved goodness of fit analysis: goodness_of_fit_analysis.png")
     return filepath
 
 
@@ -3563,7 +3556,7 @@ def _validate_numba_implementation():
         print(f"    Max shift limit: {max_shift_pixels} pixels")
 
         # Test with identical small dataset to isolate the difference
-        print(f"    Testing with identical subset...")
+        print("    Testing with identical subset...")
         small_frame = frame_locs[:10]  # First 10 points
         small_ref = ref_locs[:20]  # First 20 points
 
@@ -3598,7 +3591,7 @@ def _validate_numba_implementation():
                 f"    Small test diff: ({small_diff_x:.3f}, {small_diff_y:.3f}), pairs: {small_numba_pairs}"
             )
         else:
-            print(f"    Small test failed - one implementation returned None")
+            print("    Small test failed - one implementation returned None")
 
         # Compare results
         if numba_shift_x is not None and std_shift_x is not None:
@@ -3785,7 +3778,6 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         confidence, quality, performance_info)``.
     """
     from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-    import os
 
     (
         frame_indices,
@@ -3826,8 +3818,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         # Create dataset by excluding all target frames
         from scipy.spatial import cKDTree
 
-        # Use pre-built cKDTree and frame array from worker initialization if available
-        global _WORKER_KDTREE, _WORKER_FRAMES
+        # Use pre-built cKDTree and frame array from worker init if available
         if _WORKER_KDTREE is not None:
             # Worker has pre-built cKDTree - use it directly
             # Temporal filtering will be done at pair level using _WORKER_FRAMES
@@ -4049,7 +4040,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
                 quality = len(frame_locs) + len_dataset
             else:
-                logger.debug(f"shift x or y is None.")
+                logger.debug("shift x or y is None.")
                 return (frame_indices, None, None, None, None, 0.0, 0.0, None)
 
         return (
@@ -4276,9 +4267,9 @@ def _solve_drift_from_connectivity(W, s_obs, valid_frames):
     D_inv = sp.diags(1.0 / row_sums)
     W_normalized = D_inv @ W
 
-    # Build system matrix: A = I - W_normalized
-    I = sp.eye(n_frames, format="csr")
-    A = I - W_normalized
+    # Build system matrix: A = identity - W_normalized
+    identity = sp.eye(n_frames, format="csr")
+    A = identity - W_normalized
 
     # Solve for x and y components separately
     try:
@@ -4358,7 +4349,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     import psutil
     from picasso import io
     import matplotlib.pyplot as plt
-    import matplotlib.colors as mcolors
 
     # from concurrent.futures import ProcessPoolExecutor
 
@@ -4466,7 +4456,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         "outlier_detection_enabled", False
     )
     outlier_z_threshold = parameters.get("outlier_z_threshold", 3.5)
-    min_signal_to_noise = parameters.get("min_signal_to_noise", 0.5)
     windowing_enabled = parameters.get("windowing_enabled", True)
     window_size_range = parameters.get("window_size_range", (3, 20))
 
@@ -4694,7 +4683,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         if final_iteration_full_dataset and iteration == max_iterations - 1:
             # Final iteration: always use full dataset for maximum accuracy
             current_subsampling_fraction = 1.0
-            logger.debug(f"    Final iteration: using full dataset (100%)")
+            logger.debug("    Final iteration: using full dataset (100%)")
         elif progressive_subsampling:
             # Progressive subsampling: use schedule
             if iteration < len(progressive_subsampling_schedule):
@@ -4870,7 +4859,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         frame_results_dict = {} if use_matrix_solver else None
 
         # Performance monitoring
-        iteration_start_time = time.time()
         numba_computation_times = []
         standard_computation_times = []
         n_numba_computations = 0
@@ -4939,7 +4927,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
                     else:  # "pickle"
                         logger.debug(
-                            f"    Creating pool for pickle mode (ONCE for all chunks)"
+                            "    Creating pool for pickle mode (ONCE for all chunks)"
                         )
                         with _Timer("pool_init") as pool_timer:
                             pool = ctx.Pool(processes=n_processes)
@@ -4949,7 +4937,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 else:
                     # Numba mode - no KDTree
                     logger.debug(
-                        f"    Creating pool for Numba mode (ONCE for all chunks)"
+                        "    Creating pool for Numba mode (ONCE for all chunks)"
                     )
                     with _Timer("pool_init") as pool_timer:
                         pool = ctx.Pool(processes=n_processes)
@@ -5361,8 +5349,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         drift_y += frame_shifts_y
         uncertainty_x = new_uncertainty_x.copy()
         uncertainty_y = new_uncertainty_y.copy()
-        sigma_x = new_sigma_x.copy()
-        sigma_y = new_sigma_y.copy()
         confidence = new_confidence.copy()
         drift_quality = new_quality.copy()
 
@@ -5602,7 +5588,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     logger.info("  Continuing with iterative RSSO approach...")
 
                     # Don't break - continue with normal iterations
-                    pass
                 else:
                     # Solve for drift
                     solve_start_time = time.time()
@@ -5661,7 +5646,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         ] = matrix_build_time
                         iteration_history[-1]["matrix_solve_time"] = solve_time
 
-                        logger.info(f"  Matrix solution applied successfully")
+                        logger.info("  Matrix solution applied successfully")
 
                         # Optional: Run refinement iterations
                         if matrix_refinement_iterations > 0:
@@ -5859,8 +5844,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     # Create drift plots with confidence intervals
     if plot_drift:
         logger.debug("Creating drift plots...")
-        import matplotlib.pyplot as plt
-        import matplotlib.colors as mcolors
 
         # Create comprehensive drift plots showing all iterations
         fig = plt.figure(figsize=(15, 12))
@@ -6306,7 +6289,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 f"  → Coverage very high (>95%) - can reduce multiplier to ~{recommended_mult:.1f}x for speed"
             )
         else:
-            print(f"  ✓ Coverage optimal (85-95%) - multiplier well-tuned!")
+            print("  ✓ Coverage optimal (85-95%) - multiplier well-tuned!")
         print("=" * 100 + "\n")
 
         # Print frame shift evolution plot summary
@@ -6411,7 +6394,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         [s["mean_damping"] for s in pair_stats]
                     )
 
-                    print(f"\n     Overall Averages:")
+                    print("\n     Overall Averages:")
                     print(
                         f"       Sign flips (overcompensation): {avg_sign_flip:.1f}%"
                     )
@@ -6419,13 +6402,13 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     print(f"       Mean damping ratio: {avg_damping:.2f}")
 
                     # Interpretation guidance
-                    print(f"\n     Interpretation:")
+                    print("\n     Interpretation:")
                     if avg_sign_flip > 10:
                         print(
                             f"       ⚠ HIGH sign flip rate ({avg_sign_flip:.1f}%) indicates overcompensation"
                         )
                         print(
-                            f"         → Consider reducing correction aggressiveness or max_shift"
+                            "         → Consider reducing correction aggressiveness or max_shift"
                         )
                     elif avg_sign_flip > 5:
                         print(

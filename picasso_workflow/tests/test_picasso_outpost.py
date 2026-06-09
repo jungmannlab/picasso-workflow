@@ -5,6 +5,7 @@ Author: Heinrich Grabmayr
 Initial Date: March 15, 2024
 Description: Test the module picasso_outpost.py
 """
+
 import os
 import logging
 import unittest
@@ -17,7 +18,6 @@ import pandas as pd
 
 
 from picasso_workflow import picasso_outpost
-
 
 logger = logging.getLogger(__name__)
 

@@ -11,13 +11,8 @@ Initial date: March 7, 2024
 
 from __future__ import annotations
 
-from picasso import lib, io, localize, gausslq, postprocess, clusterer
-from picasso import aim, spinna
-
 # from picasso_workflow.outpost_modules import g5m
 from picasso import g5m
-from picasso import __version__ as picassoversion
-from picasso import CONFIG as pCONFIG
 import picasso
 import copy
 import gc
@@ -43,7 +38,7 @@ import numpy as np
 import pandas as pd
 import psutil
 import yaml
-from matplotlib import cm, colormaps
+from matplotlib import colormaps
 from memory_profiler import memory_usage
 from picasso import CONFIG as pCONFIG
 from picasso import __version__ as picassoversion
@@ -1707,7 +1702,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         with open(path, "r") as f:
             z_calibration = yaml.full_load(f)
 
-        N = len(self.locs)
         fs = zfit.fit_z_parallel(
             self.locs,
             self.info,
@@ -2181,7 +2175,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         elif parameters.get("ctrmass_fov_nm"):
             # Draw standard Zoom-In outline on overview image
             import matplotlib.patches as patches
-            import matplotlib.pyplot as plt
 
             fov_half = parameters.get("ctrmass_fov_nm") / 2
             x_min_zoom = x_mean_clipped - fov_half / pixelsize
@@ -2221,8 +2214,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                     edgecolor="none",
                 ),
             )
-
-        import matplotlib.pyplot as plt
 
         fig_overview.savefig(
             results["fp_scene_fullfov"], bbox_inches="tight", pad_inches=0
@@ -2611,8 +2602,6 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``(drift_x_fine, drift_y_fine, uncertainty_x_fine,
             uncertainty_y_fine, drift_quality)``.
         """
-        from scipy import stats
-        from scipy.signal import find_peaks
 
         n_frames = len(frames)
 
@@ -2825,9 +2814,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         drift_x = np.array(coarse_estimates["drift_x"])
         drift_y = np.array(coarse_estimates["drift_y"])
-        uncertainties_x = np.array(coarse_estimates["uncertainty_x"])
-        uncertainties_y = np.array(coarse_estimates["uncertainty_y"])
-        qualities = np.array(coarse_estimates["quality"])
 
         # Create filtered copy
         filtered_estimates = {
@@ -3636,7 +3622,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Plot drift rate
         ax2_twin = ax2.twinx()
-        line1 = ax2.plot(
+        ax2.plot(
             frame_indices[1:],
             drift_rate_magnitude,
             "g-",
@@ -3650,7 +3636,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             if np.max(drift_quality) > 0
             else drift_quality
         )
-        line2 = ax2_twin.bar(
+        ax2_twin.bar(
             frame_indices,
             quality_normalized,
             alpha=0.4,
@@ -5811,9 +5797,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
                 # Calculate confidence based on number of localizations and uncertainty
                 n_locs_frame = len(frame_locs)
-                n_locs_dataset = len(dataset_locs)
 
-                # Simple confidence metric based on localization count and uncertainty
+                # Simple confidence metric based on loc count and uncertainty
                 if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
                     confidence = min(
                         1.0,
@@ -6103,7 +6088,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if n_processes is None:
             n_processes = min(mp.cpu_count(), 4)  # Limit processes for memory
 
-        logger.debug(f"Computing resolution using autocorrelation analysis...")
+        logger.debug("Computing resolution using autocorrelation analysis...")
         logger.debug(
             f"  Sampling resolution: {sampling_res} nm (preserved exactly)"
         )
@@ -6134,7 +6119,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Memory estimate per chunk
         chunk_pixels = int(chunk_size_nm / sampling_res)
         max_shift_pixels = int(np.ceil(max_shift / sampling_res))
-        autocorr_size = 2 * max_shift_pixels + 1
 
         chunk_memory_gb = (chunk_pixels**2 * 4 * 8) / (
             1024**3
@@ -6232,7 +6216,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         f"      Chunk {chunk_idx}: {result['n_locs']} locs, peak: {result['autocorr'].max():.3f}"
                     )
 
-        logger.debug(f"  Parallel processing completed.")
+        logger.debug("  Parallel processing completed.")
         gc.collect()  # Clean up after multiprocessing
 
         total_locs_processed = sum(r["n_locs"] for r in chunk_results)
@@ -12986,16 +12970,10 @@ class AutoPicasso(util.AbstractModuleCollection):
 class AutoPicassoError(Exception):
     """Base error raised by :class:`AutoPicasso` analysis modules."""
 
-    pass
-
 
 class ManualInputLackingError(AutoPicassoError):
     """Raised when a manual step's required input file is missing."""
 
-    pass
-
 
 class PicassoConfigError(AutoPicassoError):
     """Raised when the picasso configuration is missing or invalid."""
-
-    pass

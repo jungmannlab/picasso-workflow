@@ -8,7 +8,6 @@ Initial date: Nov 21, 2024
 from __future__ import annotations
 
 # import logging
-from loguru import logger
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -949,7 +948,6 @@ def analyze_all_channels(
                 # ax_u[i, j].set_xticks([])
                 # ax_n[i, j].set_xticks([])
                 # due to sharex=True this is not necessary any more.
-                pass
             if j > 0:
                 ax_u[i, j].yaxis.label.set_visible(False)
                 ax_n[i, j].yaxis.label.set_visible(False)

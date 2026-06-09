@@ -12,7 +12,6 @@ import sys
 import yaml
 from pathlib import Path
 import importlib.resources
-from logging import handlers
 from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
 from picasso_workflow import standard_singledataset_workflows
 from picasso_workflow import standard_aggregation_workflows

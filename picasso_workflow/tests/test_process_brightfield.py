@@ -5,12 +5,12 @@ Author: Heinrich Grabmayr
 Initial Date: March 15, 2024
 Description: Test the module process_brightfield.py
 """
+
 import logging
 import unittest
 import numpy as np
 
 from picasso_workflow import process_brightfield as pb
-
 
 logger = logging.getLogger(__name__)
 

@@ -21,7 +21,6 @@ import os
 import traceback
 
 import numpy as np
-import pandas as pd
 import yaml
 from atlassian import Confluence as con
 from requests.exceptions import ConnectionError, HTTPError
@@ -1259,18 +1258,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         total_drift = results.get("total_drift", np.nan)
         drift_quality = results.get("mean_drift_quality", np.nan)
 
-        coarse_drift_x = results.get("coarse_drift_magnitude_x", np.nan)
-        coarse_drift_y = results.get("coarse_drift_magnitude_y", np.nan)
-        fine_drift_x = results.get("fine_drift_magnitude_x", np.nan)
-        fine_drift_y = results.get("fine_drift_magnitude_y", np.nan)
-
         # Confidence interval metrics
         mean_uncertainty_x = results.get("mean_uncertainty_x", np.nan)
         mean_uncertainty_y = results.get("mean_uncertainty_y", np.nan)
-        confidence_95_x = results.get("confidence_95_x", np.nan)
-        confidence_95_y = results.get("confidence_95_y", np.nan)
-        max_uncertainty_x = results.get("max_uncertainty_x", np.nan)
-        max_uncertainty_y = results.get("max_uncertainty_y", np.nan)
 
         # Get iterative RSSO specific metrics
         n_iterations = results.get("n_iterations", 1)
@@ -4510,7 +4500,6 @@ class ConfluenceReporter(AbstractModuleCollection):
             If True, return the report text instead of posting it. Default is
             False.
         """
-        pass
 
     @module_decorator
     def labeling_efficiency_analysis(
@@ -4556,7 +4545,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         if lestd := results.get("labeling_efficiency_std", {}):
             if not all([v == 0 for v in lestd.values()]):
                 le_std_txt = f"<li>Labeling efficiency std: {show_dict_percentages(lestd)}</li>"
-        le_std = ""
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Labeling Efficiency Evaluation</strong></p>
@@ -4611,8 +4599,6 @@ class ConfluenceReporter(AbstractModuleCollection):
 
 class UndriftError(Exception):
     """Raised when an undrift step fails."""
-
-    pass
 
 
 def confluence_call(method):
@@ -4982,5 +4968,3 @@ class ConfluenceInterface:
 
 class ConfluenceInterfaceError(Exception):
     """Raised when a :class:`ConfluenceInterface` operation fails."""
-
-    pass

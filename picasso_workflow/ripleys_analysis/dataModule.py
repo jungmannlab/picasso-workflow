@@ -68,7 +68,7 @@ class LocalizationData:
         if receptor == "all":
             plt.plot(self.allData.x, self.allData.y, ".", markersize=1)
         elif (
-            (type(receptor) == int)
+            isinstance(receptor, int)
             and (receptor >= 1)
             and (receptor <= self.nReceptors)
         ):

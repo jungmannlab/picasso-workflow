@@ -30,17 +30,17 @@ dummy_reporter_config(report_name) → dict
     Available as plain functions (not fixtures) so that test modules can call
     them directly without going through pytest's fixture injection.
 """
-import importlib.util
+
 import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Test-data directory helpers (used both as fixtures and at collection time)
 # ---------------------------------------------------------------------------
+
 
 def _get_test_data_dir():
     """Return the configured TestData directory path, or None.
@@ -53,6 +53,7 @@ def _get_test_data_dir():
     if not path:
         try:
             from picasso_workflow import CONFIG
+
             path = (CONFIG.get("TestData") or {}).get("directory")
         except Exception:
             pass
@@ -164,6 +165,7 @@ def dummy_reporter_config(report_name):
 # Synthetic movie fixture
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session")
 def synthetic_movie_5k(tmp_path_factory):
     """Return path to a 5 000-frame 128×128 OME-TIFF.
@@ -212,12 +214,10 @@ def synthetic_movie_5k(tmp_path_factory):
         frame = rng.poisson(bg_mean, (height, width)).astype(np.float32)
         active = rng.random(n_emitters) < on_fraction
         if active.any():
-            photons = rng.poisson(photons_mean, n_emitters).astype(
-                np.float32
+            photons = rng.poisson(photons_mean, n_emitters).astype(np.float32)
+            frame += (photons[active, None, None] * kernels[active]).sum(
+                axis=0
             )
-            frame += (
-                photons[active, None, None] * kernels[active]
-            ).sum(axis=0)
         np.clip(frame, 0, 65535, out=frame)
         movie[i] = frame.astype(np.uint16)
 
@@ -228,6 +228,7 @@ def synthetic_movie_5k(tmp_path_factory):
 # ---------------------------------------------------------------------------
 # Synthetic localisation fixture
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="session")
 def synthetic_locs_10k(tmp_path_factory):
@@ -240,7 +241,9 @@ def synthetic_locs_10k(tmp_path_factory):
 
     Requires picassosr to be installed (uses picasso.io.save_locs).
     """
-    pytest.importorskip("picasso", reason="picassosr required for synthetic_locs_10k")
+    pytest.importorskip(
+        "picasso", reason="picassosr required for synthetic_locs_10k"
+    )
     from picasso import io as picasso_io
 
     rng = np.random.default_rng(42)
@@ -298,6 +301,7 @@ def synthetic_locs_10k(tmp_path_factory):
 # Network data fixture
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session")
 def network_test_data():
     """Return path to a directory of real acquired datasets on the pool volumes.
@@ -322,6 +326,7 @@ def network_test_data():
     if not path:
         try:
             from picasso_workflow import CONFIG
+
             path = CONFIG.get("TestData", {}).get("directory")
         except Exception:
             pass

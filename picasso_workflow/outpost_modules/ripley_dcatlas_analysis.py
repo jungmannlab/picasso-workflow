@@ -530,7 +530,7 @@ def postprocess_ripley_matrix(ripley_matrix, radii):
     return postprocessed
 
 
-### TESTING ###
+# TESTING
 if __name__ == "__main__":
     np.random.seed(42)
     import os

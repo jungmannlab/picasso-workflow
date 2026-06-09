@@ -5,12 +5,12 @@ Author: Heinrich Grabmayr
 Initial Date: March 14, 2024
 Description: Test the module util.py
 """
+
 import logging
 import unittest
 from unittest.mock import patch
 
 from picasso_workflow import util
-
 
 logger = logging.getLogger(__name__)
 
@@ -307,9 +307,7 @@ class TestUtil(unittest.TestCase):
         # a drive-letter path is Windows regardless of slash counts
         assert pp.check_path_style("U:/a/b/c\\d") is False
         assert pp.check_path_style("/posix/a/b") is True
-        result = pp.convert_path(
-            "U:/users/honsa/data\\sub\\file.hdf5", None
-        )
+        result = pp.convert_path("U:/users/honsa/data\\sub\\file.hdf5", None)
         assert result == "/dst/pool/users/honsa/data/sub/file.hdf5"
         assert "\\" not in result
 

@@ -12,10 +12,12 @@ Description: This script defines a "single-target" workflow for analysing
     cluster.
     )
 """
+
 import os
 from picasso_workflow.metaworkflow import (
-    find_dnapaint_raw, SingleWorkflowCoordinator)
-
+    find_dnapaint_raw,
+    SingleWorkflowCoordinator,
+)
 
 # # machine the analysis will run on; must have file drives defined in .env
 # dest_machine = "hpcl8"
@@ -73,64 +75,60 @@ workflow_modules_sgl = [
     ),
     (  # 03
         "localize",
-        {"fit_method": "lsq", "box_size": 7, "fit_parallel": True}
+        {"fit_method": "lsq", "box_size": 7, "fit_parallel": True},
     ),
     (  # 04
         "undrift_aim",
         {
             "segmentation": 50,
-            "dimensions": ['x', 'y'],
+            "dimensions": ["x", "y"],
             "intersect_d": 20,
             "roi_r": 60,
-        }
+        },
     ),
     (  # 05
         "filter_locs",
         {
             "field": ["sx", "sy"],
-            "minval": [.8, .8],
+            "minval": [0.8, 0.8],
             "maxval": [1.15, 1.15],
-        }
+        },
     ),
     (  # 06
         "filter_locs",
         {
             "field": "ellipticity",
             "minval": 0,
-            "maxval": .1,
-        }
+            "maxval": 0.1,
+        },
     ),
     (  # 07
         "render",
         {
             "ctrmass_fov_nm": 1000,
             "ctrmass_pixelsize": 10,
-        }
+        },
     ),
     (  # 08
         "find_structures",
         {
             "diameter": 1.5,
-            "min_n_locs_per_frame": .01,
+            "min_n_locs_per_frame": 0.01,
             "display_pixelsize": 1,
             "n_plot_structures": 8,
             "xi": 0.01,
-        }
+        },
     ),
     (  # 09
         "summarize_dataset",
         {
-            "methods": {
-                "nena": {}
-            },
+            "methods": {"nena": {}},
         },
     ),
     (  # 10
         "dbscan",
         {
-            "radius": (
-                "$get_previous_module_result *1.5",
-                "nena, nena-nm"),
+            "radius": ("$get_previous_module_result *1.5", "nena, nena-nm"),
             "min_samples": 3,
             "continue_with_centers": False,
         },
@@ -140,12 +138,12 @@ workflow_modules_sgl = [
         {
             "min_locs": 10,
             "callback_parent": "silent",
-        }
+        },
     ),
     (  # 12
         "nneighbor",
         {
-            "dims": ['x', 'y'],
+            "dims": ["x", "y"],
             "nth_NN": 4,
             "nth_rdf": 12,
             "subsample_1stNN": 20,
@@ -170,9 +168,14 @@ if __name__ == "__main__":
     analysis_name = os.path.split(working_folder)[-1]
 
     coordinator = SingleWorkflowCoordinator(
-        src_loc_file, analysis_name, working_folder,
-        confluence_url, confluence_space, confluence_token,
+        src_loc_file,
+        analysis_name,
+        working_folder,
+        confluence_url,
+        confluence_space,
+        confluence_token,
         base_page,
-        always_save=True)
+        always_save=True,
+    )
 
     coordinator.run_analysis(workflow_modules_sgl)

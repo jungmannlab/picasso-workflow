@@ -14,7 +14,6 @@ import numpy as np
 
 # import logging
 from loguru import logger
-from concurrent.futures import ProcessPoolExecutor
 
 # logger = logging.getLogger(__name__)
 
@@ -39,7 +38,7 @@ def _get_memory_usage_mb():
         available_mb = virtual_mem.available / 1024 / 1024
 
         return process_mb, available_mb
-    except:
+    except Exception:
         return -1, -1
 
 
@@ -296,7 +295,6 @@ def _process_tile_decorr(tile_task):
         tile_locs = tile_task["locs"]
         pixelsize = tile_task["pixelsize"]
         pixelsize_render = tile_task["pixelsize_render"]
-        tile_dims = tile_task["tile_dims"]
         smoothing_sigma = tile_task.get("smoothing_sigma", None)
         r_min = tile_task["r_min"]
         r_max = tile_task["r_max"]

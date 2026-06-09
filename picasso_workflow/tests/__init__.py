@@ -38,7 +38,9 @@ def set_test_confluence_vars():
         confluence_page = confluence_page[1:-1]
         os.environ["TEST_CONFLUENCE_PAGE"] = confluence_page
     if isinstance(confluence_username, str):
-        if confluence_username.startswith('"') and confluence_username.endswith('"'):
+        if confluence_username.startswith(
+            '"'
+        ) and confluence_username.endswith('"'):
             confluence_username = confluence_username[1:-1]
             os.environ["TEST_CONFLUENCE_USERNAME"] = confluence_username
 

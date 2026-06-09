@@ -850,8 +850,9 @@ def compute_frc_averaged(
 
     # Determine rendering function
     if use_chunking:
-        render_func = (
-            lambda locs_subset, bounds: render_image_chunked_parallel(
+
+        def render_func(locs_subset, bounds):
+            return render_image_chunked_parallel(
                 locs_subset,
                 pixelsize,
                 pixelsize_render,
@@ -860,15 +861,17 @@ def compute_frc_averaged(
                 chunk_size_nm=chunk_size_nm,
                 n_processes=n_processes,
             )
-        )
+
     else:
-        render_func = lambda locs_subset, bounds: render_image_histogram(
-            locs_subset,
-            pixelsize,
-            pixelsize_render,
-            bounds=bounds,
-            smoothing_sigma=smoothing_sigma,
-        )
+
+        def render_func(locs_subset, bounds):
+            return render_image_histogram(
+                locs_subset,
+                pixelsize,
+                pixelsize_render,
+                bounds=bounds,
+                smoothing_sigma=smoothing_sigma,
+            )
 
     # Determine bounds from full dataset (without rendering)
     # This is much faster than rendering the full image
@@ -925,7 +928,6 @@ def compute_frc_averaged(
 
     # Process splits (parallel or sequential)
     if parallel_splits and n_splits > 1:
-        import os
         from concurrent.futures import ProcessPoolExecutor
 
         # Limit processes to avoid oversubscription
@@ -1026,7 +1028,7 @@ def _get_memory_usage_mb():
         available_mb = virtual_mem.available / 1024 / 1024
 
         return process_mb, available_mb
-    except:
+    except Exception:
         return -1, -1  # If psutil not available
 
 
@@ -1332,7 +1334,7 @@ def compute_frc_spatial(
     # Generate spatial tiles with pre-filtered localizations
     # This approach: filter locs for each tile BEFORE serialization
     # Memory: N_tiles × (locs_per_tile) instead of N_workers × (total_locs)
-    logger.debug(f"  Pre-filtering localizations for each tile...")
+    logger.debug("  Pre-filtering localizations for each tile...")
 
     tile_tasks = []
     for i in range(n_regions_x):
@@ -1642,7 +1644,7 @@ def create_frc_plot(frc_results, results_folder, threshold=1 / 7):
         color="r",
         linestyle="--",
         linewidth=2,
-        label=f"Threshold (1/7)",
+        label="Threshold (1/7)",
     )
 
     # Mark smoothed resolution
@@ -1650,7 +1652,6 @@ def create_frc_plot(frc_results, results_folder, threshold=1 / 7):
     # Handle both tuple and float return values
     if isinstance(resolution, tuple):
         resolution = resolution[0]
-    resolution_unsmoothed = frc_results["resolution_unsmoothed"]
     if not np.isnan(resolution):
         resolution_freq = 1.0 / resolution
         ax.axvline(

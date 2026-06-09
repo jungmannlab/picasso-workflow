@@ -68,7 +68,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Input results, unchanged.
         """
-        pass
 
     @abc.abstractmethod
     def analysis_documentation(self, i, parameters, results):
@@ -94,7 +93,6 @@ class AbstractModuleCollection(abc.ABC):
             ``Memory available [GB]``, ``GPU`` (name or ``"N/A"``) and ``GPU
             memory [GB]`` (0 if no GPU).
         """
-        pass
 
     @abc.abstractmethod
     def conditional_branch(self):
@@ -138,7 +136,6 @@ class AbstractModuleCollection(abc.ABC):
             sub-module results) and ``branch_modules`` (dict of flat-indexed
             results).
         """
-        pass
 
     ##########################################################################
     # Single-dataset workflow modules
@@ -175,7 +172,6 @@ class AbstractModuleCollection(abc.ABC):
             Results updated with ``filepath_raw`` (full path to the output raw
             file) and ``filename_raw`` (its name).
         """
-        pass
 
     @abc.abstractmethod
     def load_dataset_movie(self, i, parameters, results):
@@ -213,7 +209,6 @@ class AbstractModuleCollection(abc.ABC):
             Results updated with ``picasso version``, ``movie.shape`` (frames,
             width, height) and, if requested, ``sample_movie``.
         """
-        pass
 
     @abc.abstractmethod
     def load_dataset_localizations(self, i, parameters, results):
@@ -241,7 +236,6 @@ class AbstractModuleCollection(abc.ABC):
             Results updated with ``picasso version`` and ``nlocs`` (number of
             localizations loaded).
         """
-        pass
 
     @abc.abstractmethod
     def identify(self, i, parameters, results):
@@ -283,7 +277,6 @@ class AbstractModuleCollection(abc.ABC):
             Results updated with ``num_identifications`` and, if requested,
             ``auto_netgrad`` and ``ids_vs_frame``.
         """
-        pass
 
     @abc.abstractmethod
     def localize(self):
@@ -321,7 +314,6 @@ class AbstractModuleCollection(abc.ABC):
             Results updated with ``locs_vs_frame`` (if requested) and
             ``locs_columns`` (column names of the localizations array).
         """
-        pass
 
     @abc.abstractmethod
     def zfit(self):
@@ -346,7 +338,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results, unchanged apart from decorator-provided keys.
         """
-        pass
 
     @abc.abstractmethod
     def load_picassoconfig(self):
@@ -374,7 +365,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results, unchanged apart from decorator-provided keys.
         """
-        pass
 
     @abc.abstractmethod
     def export_brightfield(self):
@@ -408,7 +398,6 @@ class AbstractModuleCollection(abc.ABC):
             Results updated with ``labeled filepaths`` (label -> filepath) and
             ``success`` (whether the export succeeded).
         """
-        pass
 
     @abc.abstractmethod
     def render(self):
@@ -446,7 +435,6 @@ class AbstractModuleCollection(abc.ABC):
             only if ``ctrmass_fov_nm`` was provided, ``fp_scene_ctrmass``
             (center-of-mass zoom rendering).
         """
-        pass
 
     @abc.abstractmethod
     def undrift_rcc(self):
@@ -483,7 +471,6 @@ class AbstractModuleCollection(abc.ABC):
             Results updated with ``success``, ``message`` and, only if
             undrifting succeeded, ``filepath_driftfile`` and ``filepath_plot``.
         """
-        pass
 
     @abc.abstractmethod
     def undrift_rsso(self):
@@ -587,7 +574,6 @@ class AbstractModuleCollection(abc.ABC):
             Results updated with ``success``, ``fp_driftfile`` (drift txt file)
             and ``fp_fig`` (drift plot PNG).
         """
-        pass
 
     @abc.abstractmethod
     def manual(self):
@@ -615,7 +601,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def summarize_dataset(self):
@@ -656,7 +641,6 @@ class AbstractModuleCollection(abc.ABC):
             ``median-loc-precision`` : dict
                 Keys ``median_lp-px`` and ``median_lp-nm``.
         """
-        pass
 
     # @abc.abstractmethod
     # def aggregate_cluster(self):
@@ -685,7 +669,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def dbscan(self, i, parameters, results):
@@ -724,7 +707,6 @@ class AbstractModuleCollection(abc.ABC):
             Results updated with ``fp_fig_clustersizes`` (cluster-size
             distribution figure) and ``fp_centers`` (cluster centers file).
         """
-        pass
 
     @abc.abstractmethod
     def hdbscan(self):
@@ -751,7 +733,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def binding_event_analysis(self):
@@ -777,7 +758,6 @@ class AbstractModuleCollection(abc.ABC):
         palette: a comprehensive performance analysis of fluorescent dyes.
         Nat Methods (2024). https://doi.org/10.1038/s41592-024-02374-8
         """
-        pass
 
     @abc.abstractmethod
     def resolution_analysis(self):
@@ -901,7 +881,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def gaussian_mixture_cluster(self):
@@ -953,7 +932,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def nneighbor(self):
@@ -987,7 +965,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def fit_csr(self, i, parameters, results):
@@ -1035,7 +1012,6 @@ class AbstractModuleCollection(abc.ABC):
             ``wasserstein_distances_per_k``, ``mean_wasserstein_distance`` and
             ``ks_pvalues_per_k`` (Kolmogorov-Smirnov p-values per kth order).
         """
-        pass
 
     # @abs.abstractmethod
     # def radial_distribution_function(self):
@@ -1063,7 +1039,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     ##########################################################################
     # Aggregation workflow modules
@@ -1087,7 +1062,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def align_channels(self):
@@ -1121,7 +1095,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def combine_channels(self):
@@ -1141,7 +1114,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def save_datasets_aggregated(self):
@@ -1167,7 +1139,6 @@ class AbstractModuleCollection(abc.ABC):
             Results updated with ``filepaths`` (all saved file paths from the
             aggregated datasets).
         """
-        pass
 
     # @abc.abstractmethod
     # def spinna_manual(self):
@@ -1278,7 +1249,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def spinna_batch(self):
@@ -1320,12 +1290,10 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def ripleysk(self):
         """Compute Ripley's K spatial statistics for the dataset."""
-        pass
 
     # @abc.abstractmethod
     # def ripleysk_rafal(self):
@@ -1334,27 +1302,22 @@ class AbstractModuleCollection(abc.ABC):
     @abc.abstractmethod
     def ripleysk2(self):
         """Compute Ripley's K statistics (second implementation)."""
-        pass
 
     @abc.abstractmethod
     def ripleysk_average(self):
         """Average Ripley's K curves across datasets."""
-        pass
 
     @abc.abstractmethod
     def ripleysk_average2(self):
         """Average Ripley's K curves across datasets (second variant)."""
-        pass
 
     @abc.abstractmethod
     def protein_interactions(self):
         """Quantify protein-protein interactions from the localizations."""
-        pass
 
     @abc.abstractmethod
     def protein_interactions_average(self):
         """Average protein-interaction metrics across datasets."""
-        pass
 
     @abc.abstractmethod
     def create_mask(self):
@@ -1390,7 +1353,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def create_mask2(self):
@@ -1442,7 +1404,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def refine_mask_by_density(self):
@@ -1479,7 +1440,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def dbscan_molint(self):
@@ -1510,7 +1470,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def CSR_sim_in_mask(self):
@@ -1542,7 +1501,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def find_cluster_motifs(self):
@@ -1578,7 +1536,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def interaction_graph(self):
@@ -1614,7 +1571,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def plot_densities(self):
@@ -1640,7 +1596,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def find_gold(self):
@@ -1666,7 +1621,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def find_similar(self):
@@ -1696,7 +1650,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def find_structures(self):
@@ -1731,7 +1684,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def undrift_from_picked(self):
@@ -1750,7 +1702,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def filter_locs(self):
@@ -1777,7 +1728,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def filter_transient_binding(self, i, parameters, results):
@@ -1807,7 +1757,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def link_locs(self):
@@ -1827,7 +1776,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def pairwise_module_executor(self):
@@ -1862,7 +1810,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Module results (see class docstring).
         """
-        pass
 
     @abc.abstractmethod
     def random_val(self):
@@ -1890,7 +1837,6 @@ class AbstractModuleCollection(abc.ABC):
             Results updated with ``random_val`` (a value in [0, 1]) and
             ``fp_fig`` (filepath to the generated test figure).
         """
-        pass
 
     @abc.abstractmethod
     def labeling_efficiency_analysis(self):
@@ -1967,7 +1913,6 @@ class AbstractModuleCollection(abc.ABC):
 
         SPINNA outputs proportions per #molecules, so the latter are used.
         """
-        pass
 
 
 class DictSimpleTyper:
@@ -2633,8 +2578,6 @@ class ConditionEvaluator:
 
 class PriorResultError(AttributeError):
     """Raised when a ``$get_prior_result`` locator cannot be resolved."""
-
-    pass
 
 
 class ParameterTiler:

@@ -5,6 +5,7 @@ Author: Heinrich Grabmayr
 Initial Date: March 8, 2024
 Description: Test the module confluence.py
 """
+
 import logging
 import unittest
 from unittest.mock import patch, MagicMock
@@ -13,7 +14,6 @@ import inspect
 import numpy as np
 
 from picasso_workflow import confluence, util
-
 
 logger = logging.getLogger(__name__)
 
@@ -769,23 +769,24 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         import tempfile
         import shutil
         import os
+
         temp_dir = tempfile.mkdtemp()
         try:
             fp_fullfov = os.path.join(temp_dir, "fullfov.png")
             with open(fp_fullfov, "wb") as f:
                 f.write(b"PNG mock data")
-            
+
             fp_ctrmass = os.path.join(temp_dir, "ctrmass.png")
             with open(fp_ctrmass, "wb") as f:
                 f.write(b"PNG mock data")
-                
+
             fp_scene_rois = []
             for i in range(5):
                 fp_roi = os.path.join(temp_dir, f"roi_{i+1}.png")
                 with open(fp_roi, "wb") as f:
                     f.write(b"PNG mock data")
                 fp_scene_rois.append(fp_roi)
-                
+
             results = {
                 "start time": "now",
                 "duration": 4.12,
