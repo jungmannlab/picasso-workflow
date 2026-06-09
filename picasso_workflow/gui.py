@@ -8745,12 +8745,12 @@ class Window(QtWidgets.QMainWindow):
         local_buttons.addWidget(start_locally_button)
         start_locally_button.clicked.connect(self.start_locally)
 
-        # Results tab
+        # Results tab: browse a run folder, (re)generate its HTML report
+        # from the saved state, and view/open it -- no Confluence needed.
         results_tab = QtWidgets.QWidget()
         QtWidgets.QVBoxLayout(results_tab)
         self.tabs.addTab(results_tab, "Results")
-        self.tabs.setTabEnabled(3, False)  # in development
-        self.tabs.setTabToolTip(3, "Not Implemented yet")
+        self._build_results_tab(results_tab)
 
         # select files to process
         # Single Workflow only: choose how input data is provided - an
@@ -10135,6 +10135,229 @@ class Window(QtWidgets.QMainWindow):
         self.files_table.setRowCount(0)
         self._log_workflow_config_event("files_table.clear")
 
+    # ------------------------------------------------------------------
+    # Results tab: HTML report viewer
+    # ------------------------------------------------------------------
+    def _build_results_tab(self, results_tab):
+        """Populate the Results tab with the HTML report viewer.
+
+        Lets the user pick a run's result folder, (re)generate its local
+        HTML report from the saved state and view it embedded (or open it in
+        a browser), plus a per-module status overview.
+        """
+        layout = results_tab.layout()
+
+        intro = QtWidgets.QLabel(
+            "Pick a run found under the results folder to (re)generate and "
+            "view its local HTML report."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        run_row = QtWidgets.QHBoxLayout()
+        run_row.addWidget(QtWidgets.QLabel("Run:"))
+        self.run_combo = QtWidgets.QComboBox()
+        self.run_combo.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.run_combo.setToolTip(
+            "Runs (subfolders of the results folder) that contain a saved "
+            "workflow state."
+        )
+        run_row.addWidget(self.run_combo, 1)
+        rescan_button = QtWidgets.QPushButton("Rescan")
+        rescan_button.setToolTip("Rescan the results folder for runs.")
+        rescan_button.clicked.connect(self._results_scan_runs)
+        run_row.addWidget(rescan_button)
+        layout.addLayout(run_row)
+
+        button_row = QtWidgets.QHBoxLayout()
+        generate_button = QtWidgets.QPushButton(
+            "Generate / Refresh HTML report"
+        )
+        generate_button.clicked.connect(self._results_refresh)
+        button_row.addWidget(generate_button)
+        open_button = QtWidgets.QPushButton("Open in browser")
+        open_button.clicked.connect(self._results_open_in_browser)
+        button_row.addWidget(open_button)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
+
+        self.report_status = QtWidgets.QTreeWidget()
+        self.report_status.setHeaderLabels(
+            ["Module", "Status", "Duration [s]"]
+        )
+        self.report_status.setRootIsDecorated(False)
+        self.report_status.setMaximumHeight(180)
+        layout.addWidget(self.report_status)
+
+        self.report_view, self._report_view_is_web = self._make_report_view()
+        layout.addWidget(self.report_view, 1)
+        self._report_path = None
+
+        # populate the run list from the currently configured results folder
+        self._results_scan_runs()
+
+    @staticmethod
+    def _run_kind(folder):
+        """Return 'aggregation', 'single' or None for a candidate folder."""
+        if os.path.isfile(
+            os.path.join(folder, "AggregationWorkflowRunner.yaml")
+        ):
+            return "aggregation"
+        if os.path.isfile(os.path.join(folder, "WorkflowRunner.yaml")):
+            return "single"
+        return None
+
+    def _results_scan_runs(self):
+        """Populate the run dropdown from subfolders of the results folder.
+
+        Lists every immediate subfolder that holds a saved workflow state;
+        for an aggregation run its child single-dataset runs are listed too
+        (indented), so individual datasets can be viewed as well.
+        """
+        if not hasattr(self, "run_combo"):
+            return
+        previous = self.run_combo.currentData()
+        self.run_combo.clear()
+        base = self.results_folder_display.text().strip()
+        if not base or not os.path.isdir(base):
+            self.run_combo.setEnabled(False)
+            return
+        for name in sorted(os.listdir(base)):
+            folder = os.path.join(base, name)
+            kind = self._run_kind(folder)
+            if not kind:
+                continue
+            self.run_combo.addItem(name, userData=folder)
+            if kind == "aggregation":
+                for sub in sorted(os.listdir(folder)):
+                    subfolder = os.path.join(folder, sub)
+                    if self._run_kind(subfolder):
+                        self.run_combo.addItem(
+                            f"    └ {sub}", userData=subfolder
+                        )
+        self.run_combo.setEnabled(self.run_combo.count() > 0)
+        # restore the previous selection if it is still present
+        if previous is not None:
+            idx = self.run_combo.findData(previous)
+            if idx >= 0:
+                self.run_combo.setCurrentIndex(idx)
+
+    def _make_report_view(self):
+        """Return ``(view_widget, is_web)`` for the report display.
+
+        Uses an embedded ``QWebEngineView`` when QtWebEngine is available
+        (full rendering), otherwise falls back to a ``QTextBrowser`` (basic
+        HTML); either way the report can also be opened in a browser.
+        """
+        try:
+            from PyQt6.QtWebEngineWidgets import QWebEngineView
+
+            return QWebEngineView(), True
+        except Exception as e:
+            logger.debug(f"QtWebEngine unavailable, using QTextBrowser: {e}")
+            browser = QtWidgets.QTextBrowser()
+            browser.setOpenExternalLinks(True)
+            return browser, False
+
+    def _results_refresh(self):
+        """(Re)generate the HTML report for the selected run and show it."""
+        from picasso_workflow.html_reporter import regenerate_html_report
+
+        folder = self.run_combo.currentData()
+        if not folder or not os.path.isdir(folder):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No run selected",
+                "Select a run from the dropdown (set the results folder on "
+                "the Workflow Config tab, then Rescan).",
+            )
+            return
+        try:
+            path = regenerate_html_report(folder)
+        except FileNotFoundError:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No run state",
+                "No WorkflowRunner.yaml or AggregationWorkflowRunner.yaml "
+                "found in the selected folder.",
+            )
+            return
+        except Exception as e:
+            logger.error(f"Could not generate HTML report: {e}")
+            QtWidgets.QMessageBox.critical(
+                self, "Report error", f"Could not generate report:\n{e}"
+            )
+            return
+
+        self._report_path = path
+        self._results_load_status(folder)
+        self._load_report_into_view(path)
+
+    def _load_report_into_view(self, path):
+        """Display the generated report at ``path`` in the embedded view."""
+        url = QtCore.QUrl.fromLocalFile(path)
+        try:
+            if self._report_view_is_web:
+                self.report_view.load(url)
+            else:
+                self.report_view.setSource(url)
+        except Exception as e:
+            logger.error(f"Could not display report {path}: {e}")
+
+    def _results_open_in_browser(self):
+        """Open the last generated report in the system web browser."""
+        if self._report_path and os.path.isfile(self._report_path):
+            QtGui.QDesktopServices.openUrl(
+                QtCore.QUrl.fromLocalFile(self._report_path)
+            )
+        else:
+            QtWidgets.QMessageBox.information(
+                self, "No report", "Generate a report first."
+            )
+
+    def _results_load_status(self, folder):
+        """Fill the status tree with per-module (or per-child) status."""
+        from picasso_workflow.html_reporter import load_runner_state
+
+        self.report_status.clear()
+        agg_yaml = os.path.join(folder, "AggregationWorkflowRunner.yaml")
+        sgl_yaml = os.path.join(folder, "WorkflowRunner.yaml")
+        try:
+            if os.path.isfile(agg_yaml):
+                for name in sorted(os.listdir(folder)):
+                    child = os.path.join(folder, name)
+                    if not os.path.isfile(
+                        os.path.join(child, "WorkflowRunner.yaml")
+                    ):
+                        continue
+                    has_report = os.path.isfile(
+                        os.path.join(child, "report.html")
+                    )
+                    QtWidgets.QTreeWidgetItem(
+                        self.report_status,
+                        [name, "report" if has_report else "-", ""],
+                    )
+            elif os.path.isfile(sgl_yaml):
+                results = load_runner_state(sgl_yaml).get("results") or {}
+                for key in sorted(results):
+                    res = (
+                        results[key] if isinstance(results[key], dict) else {}
+                    )
+                    ok = res.get("success")
+                    status = "OK" if ok else ("FAILED" if ok is False else "?")
+                    dur = res.get("duration")
+                    dur_txt = (
+                        f"{dur:.1f}" if isinstance(dur, (int, float)) else ""
+                    )
+                    QtWidgets.QTreeWidgetItem(
+                        self.report_status, [key, status, dur_txt]
+                    )
+        except Exception as e:
+            logger.debug(f"Could not load run status from {folder}: {e}")
+
     def select_results_folder(self):
         """Open a folder selection dialog and display the selected folder."""
         current_folder = self.results_folder_display.text()
@@ -10169,6 +10392,8 @@ class Window(QtWidgets.QMainWindow):
     def set_results_folder_display(self, folder):
         # Enable widgets when a folder is selected
         self._set_widgets_enabled(True)
+        # keep the Results tab's run dropdown in sync with the folder
+        self._results_scan_runs()
 
     def on_results_folder_dropped(self, folder):
         """Handle a folder dragged & dropped onto the results folder field.

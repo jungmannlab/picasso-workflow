@@ -30,6 +30,10 @@ from picasso_workflow.confluence import (
     ConfluenceInterface,
     ConfluenceInterfaceError,
 )
+from picasso_workflow.html_reporter import (
+    HTMLReporter,
+    write_aggregation_index,
+)
 from picasso_workflow.util import (
     AbstractModuleCollection,
     ParameterCommandExecutor,
@@ -83,6 +87,8 @@ class AggregationWorkflowRunner:
         self.single_workflow_parallel = False
         self.sgl_workflow_locations = []
         self.cpage_names = []
+        self._html_reporting = False
+        self._agg_report_folder = None
         # SLURM task identity for multi-node parallelism of the single
         # workflows. Defaults to a single (rank 0) process off-cluster.
         self.rank = int(os.getenv("SLURM_PROCID") or 0)
@@ -237,6 +243,20 @@ class AggregationWorkflowRunner:
                 "parent_page_title"
             ] = report_name
             instance.cpage_names.append(report_name)
+
+        # HTML reporting: every child WorkflowRunner writes its own
+        # report.html into its own result subfolder (the HTMLReporter config
+        # propagates via reporter_config). A fixed report_dir would make the
+        # children collide, so it is dropped here; the aggregation overview
+        # index always goes into the aggregation result folder.
+        if (html_cfg := reporter_config.get("HTMLReporter")) is not None:
+            instance._html_reporting = True
+            if isinstance(html_cfg, dict) and html_cfg.get("report_dir"):
+                logger.debug(
+                    "Ignoring HTMLReporter.report_dir for the aggregation "
+                    "run; child reports use per-dataset folders."
+                )
+                html_cfg.pop("report_dir", None)
 
         instance.reporter_config = reporter_config
         instance.analysis_config = analysis_config
@@ -453,6 +473,10 @@ class AggregationWorkflowRunner:
         self.sgl_workflow_locations = sgl_folders
         self.save(self.result_folder)
 
+        # Write the HTML overview already now (even when not all singles
+        # succeed) so a partial run still has a navigable local index.
+        self._write_html_overview(sgl_folders)
+
         if not all(sgl_dataset_success):
             msg = (
                 "Not all single datasets were analysed successfully. "
@@ -513,9 +537,62 @@ class AggregationWorkflowRunner:
                 postfix=self.postfix,
             )
         self.cpage_names.append(wr.reporter_config["report_name"])
+        self._agg_report_folder = wr.result_folder
         wr.run()
         self.all_results["aggregation"] = wr.results
         self.save(self.result_folder)
+
+        # Refresh the HTML overview now that the aggregation report exists.
+        self._write_html_overview(sgl_folders, self._agg_report_folder)
+
+    def _write_html_overview(
+        self, sgl_folders: list, agg_folder: str | None = None
+    ) -> None:
+        """Write the top-level ``index.html`` linking the child reports.
+
+        No-op unless HTML reporting is configured. Links to each
+        single-dataset ``report.html`` and (when available) the aggregation
+        ``report.html``, relative to the aggregation result folder.
+
+        Parameters
+        ----------
+        sgl_folders : list of str
+            The single-dataset result folders (each holds a ``report.html``).
+        agg_folder : str, optional
+            The aggregation result folder, if the aggregation step has run.
+        """
+        if not self._html_reporting:
+            return
+
+        child_reports = []
+        for i, folder in enumerate(sgl_folders):
+            if not folder:
+                continue
+            report = os.path.join(folder, "report.html")
+            href = os.path.relpath(report, self.result_folder)
+            label = os.path.basename(folder.rstrip(os.sep)) or f"dataset {i}"
+            child_reports.append((label, href, os.path.isfile(report)))
+        if agg_folder:
+            report = os.path.join(agg_folder, "report.html")
+            href = os.path.relpath(report, self.result_folder)
+            child_reports.append(("Aggregation", href, os.path.isfile(report)))
+
+        rows = [
+            ("Report", self.reporter_config.get("report_name", "")),
+            ("Result folder", self.result_folder),
+            ("Single datasets", len(sgl_folders)),
+            ("Reports found", sum(1 for _, _, ok in child_reports if ok)),
+        ]
+        try:
+            write_aggregation_index(
+                self.result_folder,
+                self.reporter_config.get("report_name", "Aggregation report"),
+                rows,
+                child_reports,
+                config=self.aggregation_workflow,
+            )
+        except Exception as e:  # reporting must never abort the analysis
+            logger.error(f"Could not write HTML aggregation index: {e}")
 
     @staticmethod
     def _single_marker_path(folder: str) -> str:
@@ -848,20 +925,50 @@ class WorkflowRunner:
         self.autopicasso = AutoPicasso(self.result_folder, analysis_config)
 
     def _initialize_reporter(self, reporter_config: dict) -> None:
-        """Initialize the reporter that documents the analysis.
+        """Initialize the reporter(s) that document the analysis.
+
+        Supports two reporter backends, either or both of which may be
+        configured under ``reporter_config``:
+
+        - ``ConfluenceReporter`` -- live Confluence reporting (its sub-dict
+          holds the connection kwargs).
+        - ``HTMLReporter`` -- a local navigable ``report.html`` (no Confluence
+          connection or credentials). Its sub-dict may set ``report_dir``;
+          otherwise the report is written into the run's result folder.
+
+        Configured reporters are collected in ``self.reporters`` and invoked
+        in turn for every module. ``self.confluencereporter`` is retained as
+        an alias for the Confluence reporter when present.
 
         Parameters
         ----------
         reporter_config : dict
-            Reporter configuration; a ``ConfluenceReporter`` sub-dict, if
-            present, configures the live Confluence reporter.
+            Reporter configuration.
         """
         logger.debug("Initializing Reporter.")
         self.report_name = reporter_config["report_name"]
+        self.reporters = []
+        self.confluencereporter = None
         if init_kwargs := reporter_config.get("ConfluenceReporter"):
             init_kwargs["report_name"] = self.report_name
             # logger.debug(init_kwargs)
             self.confluencereporter = ConfluenceReporter(**init_kwargs)
+            self.reporters.append(self.confluencereporter)
+        if (html_kwargs := reporter_config.get("HTMLReporter")) is not None:
+            report_dir = html_kwargs.get("report_dir")
+            if not report_dir:
+                # _initialize_analysis sets result_folder but pops
+                # result_location, and the two entry points call them in
+                # different orders -- prefer whichever is available.
+                if getattr(self, "result_folder", None):
+                    report_dir = self.result_folder
+                else:
+                    report_dir = os.path.join(
+                        self.analysis_config["result_location"],
+                        self.report_name,
+                    )
+            self.htmlreporter = HTMLReporter(report_dir, self.report_name)
+            self.reporters.append(self.htmlreporter)
 
     def run(self) -> bool:
         """Run the analysis of the workflow modules in order.
@@ -1100,13 +1207,15 @@ class WorkflowRunner:
             logger.error(e)
             logger.error(traceback.format_exc())
             analyse_error = copy.copy(e)
-            self.confluencereporter.report_error(e, fun_name)
+            for reporter in self.reporters:
+                reporter.report_error(e, fun_name)
             # raise e
         except Exception as e:
             logger.error(e)
             logger.error(traceback.format_exc())
             analyse_error = copy.copy(e)
-            self.confluencereporter.report_error(e, fun_name)
+            for reporter in self.reporters:
+                reporter.report_error(e, fun_name)
             # raise e
 
         # If the analysis step crashed, self.results[key] was never
@@ -1118,11 +1227,11 @@ class WorkflowRunner:
             raise analyse_error
 
         # logger.debug(f"RESULTS: {self.results[key]}")
-        fun_cr = getattr(self.confluencereporter, fun_name)
-        try:
-            fun_cr(i, parameters, self.results[key])
-        except ConfluenceInterfaceError as e:
-            logger.error(e)
-            logger.error(traceback.format_exc())
+        for reporter in self.reporters:
+            try:
+                getattr(reporter, fun_name)(i, parameters, self.results[key])
+            except ConfluenceInterfaceError as e:
+                logger.error(e)
+                logger.error(traceback.format_exc())
 
         return self.results[key]["success"]
