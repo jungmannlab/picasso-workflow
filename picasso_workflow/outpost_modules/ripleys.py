@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-"""
-Module Name: ripleys.py
+"""Ripley's K analysis, especially for the DC-Atlas paper.
+
 Author: Rafal Kowalewski
-Initial Date: Nov 21, 2024
-Description: This module provides functionality for Ripley's K analysis,
-    especially in the context of the DC Atlas paper.
+Initial date: Nov 21, 2024
 """
+
+from __future__ import annotations
+
 # import logging
 from loguru import logger
 import numpy as np
@@ -13,7 +14,6 @@ import matplotlib.pyplot as plt
 
 from scipy.spatial import KDTree
 from scipy.ndimage import zoom, gaussian_filter, label
-
 
 # logger = logging.getLogger(__name__)
 
@@ -171,35 +171,39 @@ def fraction_types(
     relocate_self=True,
     fraction_exclude=None,
 ):
-    """Calculates the mean fraction of types within a given radius
-    around type_self spots. This is done for original data, and data in which
-    type identities are shuffled as a control
-    Args:
-        Xall : 2D array (2-3, N)
-            x, y (, z) positions of spots
-        types : 1D int
-            spot types (represented as integers)
-        type_self : int
-            spot type to use as center
-        r : 1D array
-            the radii at which to evaluate
-        nshuffle : int
-            the number of times to shuffle type identities
-        shuffle_self : bool
-            whether to shuffle only other types or also the self type
-        relocate_self : bool
-            whether to relocate centerpoints to 'type_self' after
-            shuffling.
-        fraction_exclude : int or None
-            the type to exclude from normalization (e.g. the
-            'real' (not shuffled and relocated) type_self)
-    Returns:
-        fract_types : dict of 1D array
-            the fractions of various types within the ball radii, for
-            each value of r
-        fract_types_ctrl : dict of 2D array
-            the fractions of various types within the ball radii, for
-            each value of r, and for each iteration of shuffling
+    """Mean fraction of types within a radius around ``type_self`` spots.
+
+    Computed for the original data and for data with shuffled type identities
+    as a control.
+
+    Parameters
+    ----------
+    Xall : 2D array
+        x, y (, z) positions of spots, shape ``(2-3, N)``.
+    types : 1D int array
+        Spot types (as integers).
+    type_self : int
+        Spot type to use as the center.
+    r : 1D array
+        The radii at which to evaluate.
+    nshuffle : int, optional
+        Number of times to shuffle type identities. Default is 20.
+    shuffle_self : bool, optional
+        Whether to shuffle the self type too (vs only other types). Default
+        is True.
+    relocate_self : bool, optional
+        Whether to relocate centerpoints to ``type_self`` after shuffling.
+        Default is True.
+    fraction_exclude : int or None, optional
+        A type to exclude from normalization (e.g. the real, non-shuffled
+        ``type_self``).
+
+    Returns
+    -------
+    fract_types : dict of 1D array
+        Per-type fractions within the ball radii, for each radius.
+    fract_types_ctrl : dict of 2D array
+        As above, additionally per shuffling iteration.
     """
     types_present = np.unique(types)
     idx_self = np.argwhere(types == type_self).flatten()
@@ -268,15 +272,26 @@ def fraction_types(
 def type_fractions(
     balls_indices, types, types_present, type_self=None, fraction_exclude=None
 ):
-    """Counts types and calculates their fraction
-    Args:
-        balls_indices : list of lists of int
-            the indices of types for each origin of balls
-        types : 1D array of int
-            the types of the spots indexed
-        fraction_exclude : int or None
-            the type to exclude from normalization (e.g. the
-            'real' (not shuffled and relocated) type_self)
+    """Count types per ball and calculate their fractions.
+
+    Parameters
+    ----------
+    balls_indices : list of list of int
+        The indices of types for each ball origin.
+    types : 1D array of int
+        The types of the indexed spots.
+    types_present : array-like
+        The set of types to report fractions for.
+    type_self : int or array-like, optional
+        The center spot type(s), excluded from the count.
+    fraction_exclude : int or None, optional
+        A type to exclude from normalization (e.g. the real, non-shuffled
+        ``type_self``).
+
+    Returns
+    -------
+    dict
+        Per-type fractions within the balls.
     """
     if fraction_exclude is None or fraction_exclude is False:
         total_neighbors = sum(
@@ -388,16 +403,19 @@ def simulate_CSR(n_points, mask, n_simulations, pixelsize):
 
 
 def randomize_data(X, randomization_radius):
-    """Create uniform random data in a circle of radius randomization_radius,
-    2D data is assumed.
-    Args:
-        X : np.array
-            x and y values of localizations [nm]
-        randomization_radius : float
-            the radius to randomize data points by
-    Returns:
-        rnd : np.array of same shape as X
-            the randomized dataset
+    """Randomize 2D data within a circle of the given radius.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        x and y values of localizations, in nm.
+    randomization_radius : float
+        The radius to randomize data points by.
+
+    Returns
+    -------
+    rnd : np.ndarray
+        The randomized dataset (same shape as ``X``).
     """
     N = X.shape[0]
     phase_rnd = np.exp(1j * 2 * np.pi * np.random.random(N))
@@ -412,18 +430,21 @@ def randomize_data(X, randomization_radius):
 
 
 def randomize_data_ntimes(X, randomization_radius, n_randomizations):
-    """Randomize data multiple times, to get normalization baseline.
+    """Randomize data multiple times for a normalization baseline.
 
-    Args:
-        X : np.array
-            x and y values of localizations [nm]
-        randomization_radius : float
-            the radius to randomize data points by
-        n_randomizations : int
-            the number of separate randomizations to perform
-    Returns:
-        rnd_data : list of np.array of same shape as X
-            the randomized datasets
+    Parameters
+    ----------
+    X : np.ndarray
+        x and y values of localizations, in nm.
+    randomization_radius : float
+        The radius to randomize data points by.
+    n_randomizations : int
+        The number of separate randomizations to perform.
+
+    Returns
+    -------
+    rnd_data : list of np.ndarray
+        The randomized datasets (each the same shape as ``X``).
     """
     rnd_data = [
         randomize_data(X, randomization_radius) for _ in n_randomizations
@@ -618,36 +639,42 @@ def analyze_2_channels(
     showControlEnvelope=True,
     aggfun="mean",
 ):
-    """Runs the analysis of any two channels of the dataset (2 protein
-    species).
-    Args:
-        metric : str
-            the metric to calculate from the data
-            "RK": Ripley's K
-            "RH": Ripley's H
-            "RDF": Radial Distribution function
-            "1NN": first nearest neighbor distance distribution
-            "OVP": overpopulation: The number of points there are more on
-                between r_i and r_i+1 than expected from the density
-                between r_-2 and r_-1, for each point, averaged over all points
-        controltype : str
-            the method of creating controls
-            "CSRbin": draw random points from a previously generated mask,
-                using binary mask information -> CSR
-            "CSRdens": draw random points from a previously generated mask,
-                with weighting density (of all targets combined)
-            "RND": randomization of experimental data by uniformly relocating
-                datapoints by a vector on a circle with randomization_radius
-        normalization : str
-            the method of normalizing experimental data
-            "zscore" (units of  95% ci from mean of conrols)
-            "diff" (difference to mean of controls)
-            "deltaAprepeak" (only positive difference to mean of controls,
-                before peak of mean of controls)
-            "deltaAprepeakNorm" (only positive difference to mean of controls,
-                before peak of mean of controls, divided by number of X2 spots)
-            "deltaAprepeakPerc" (same as deltaAprepeakNorm, but in percent)
-            "to_max_r" (divide by value of curve at maximum r)
+    """Analyse any two channels of the dataset (two protein species).
+
+    Parameters
+    ----------
+    exp_X1, exp_X2 : np.ndarray
+        Coordinates of the two channels' spots (equal arrays => univariate).
+    mask, mask_pixel_size, area : object
+        The cell mask, its pixel size and the cell area (for CSR controls).
+    radii : array-like
+        The radii at which to evaluate.
+    n_simulations : int
+        Number of control simulations.
+    ax_u, ax_n : matplotlib.axes.Axes
+        Axes for the unnormalized and normalized curves.
+    name1, name2 : str, optional
+        Channel names for labelling.
+    controltype : str, optional
+        How controls are created: ``"CSRbin"`` (binary-mask CSR),
+        ``"CSRdens"`` (density-weighted mask CSR) or ``"RND"`` (uniformly
+        relocate experimental points within ``randomization_radius``).
+    metric : str, optional
+        Metric to compute: ``"RK"`` (Ripley's K), ``"RH"`` (Ripley's H),
+        ``"RDF"`` (radial distribution function), ``"1NN"`` (first
+        nearest-neighbour distances) or ``"OVP"`` (overpopulation).
+    normalization : str, optional
+        How to normalize: ``"zscore"`` (95% CI units from the control mean),
+        ``"diff"`` (difference to the control mean), ``"deltaAprepeak"`` /
+        ``"deltaAprepeakNorm"`` / ``"deltaAprepeakPerc"`` (positive
+        pre-peak difference, optionally normalized) or ``"to_max_r"``
+        (divide by the curve value at the maximum radius).
+    randomization_radius : float, optional
+        Relocation radius for ``controltype="RND"``.
+    showControlEnvelope : bool, optional
+        Whether to draw the control envelope. Default is True.
+    aggfun : str, optional
+        Aggregation function for the integral. Default is ``"mean"``.
     """
     if np.array_equal(exp_X1, exp_X2):
         n_points = len(exp_X1)
@@ -840,55 +867,43 @@ def analyze_all_channels(
     aggfun="mean",
     showControlEnvelope=True,
 ):
-    """Do the neighborhood analysis of all channels with each other
-    and generate a mean value matrix. This has been initially written for
-    Ripley's K analysis, but can also be used for the radial distribution
-    function.
-    Args:
-        mol_coords : list of np.rec.arrays
-            the molecular coordinates of target types
-        mask : 2D np array - outpost_modules.mask.CellMask
-            the binary or density mask. Only needed if controltype is "CSR"
-        mask_pixel_size : float
-            the pixel size of the mask, in nm. Only needed if controltype is "CSR"
-        area : float
-            the area, in square nm (?). Only needed if metric is "RK"
-        radii : np array 1D
-            the radii to probe at
-        n_simulations : int
-            the number of controls to do
-        do_plot : bool
-            whether to create a plot of all the metric curves in a matrix subplot
-        names : list of str
-            the names of the molecular types
-        randomization_radius : float
-            defines the maximum length of the randomization vectors if controltype
-            is "RND"
-        metric : str
-            the metric to calculate from the data
-            "RK": Ripley's K
-            "RH": Ripley's H
-            "RDF": Radial Distribution function
-            "1NN": first nearest neighbor distance distribution
-        controltype : str
-            the method of creating controls
-            "CSRbin": draw random points from a previously generated mask,
-                using binary mask information -> CSR
-            "CSRdens": draw random points from a previously generated mask,
-                with weighting density (of all targets combined)
-            "RND": randomization of experimental data by uniformly relocating
-                datapoints by a vector on a circle with randomization_radius
-        normalization : str
-            the method of normalizing experimental data
-            "zscore" (units of  95% ci from mean of conrols)
-            "diff" (difference to mean of controls)
-            "deltaAprepeak" (only positive difference to mean of controls,
-                before peak of mean of controls)
-        aggfun : str
-            the aggregation of normalized curves to values to put into the
-            matrix
-            "mean", "sum", "integral"
-            default: "mean"
+    """Run the pairwise neighbourhood analysis of all channels.
+
+    Generates a mean-value matrix. Initially written for Ripley's K but also
+    usable for the radial distribution function.
+
+    Parameters
+    ----------
+    mol_coords : list of np.rec.array
+        Molecular coordinates of the target types.
+    mask : outpost_modules.mask.CellMask or 2D np.ndarray
+        The binary or density mask (only needed for ``controltype='CSR'``).
+    mask_pixel_size : float
+        Mask pixel size in nm (only needed for ``controltype='CSR'``).
+    area : float
+        Cell area in nm^2 (only needed for ``metric='RK'``).
+    radii : 1D np.ndarray
+        The radii to probe at.
+    n_simulations : int
+        Number of controls to run.
+    do_plot : bool, optional
+        Whether to plot all metric curves in a subplot matrix. Default True.
+    names : list of str, optional
+        Names of the molecular types.
+    controltype : str, optional
+        Control method: ``"CSRbin"``, ``"CSRdens"`` or ``"RND"`` (see
+        :func:`analyze_2_channels`).
+    metric : str, optional
+        Metric: ``"RK"``, ``"RH"``, ``"RDF"`` or ``"1NN"``.
+    randomization_radius : float, optional
+        Maximum randomization-vector length for ``controltype='RND'``.
+    normalization : str, optional
+        Normalization method (see :func:`analyze_2_channels`).
+    aggfun : str, optional
+        How normalized curves are aggregated into matrix values:
+        ``"mean"``, ``"sum"`` or ``"integral"``. Default is ``"mean"``.
+    showControlEnvelope : bool, optional
+        Whether to draw the control envelope. Default is True.
     """
     n_targets = len(mol_coords)
     curves = np.zeros((n_targets, n_targets, len(radii)))
@@ -957,36 +972,41 @@ def typefraction_all_channels(
     normalize_to_bulkfraction=False,
     showControlEnvelope=None,
 ):
-    """
-    Args:
-        mol_coords : list of np.rec.arrays
-            the molecular coordinates of target types
-        radii : np array 1D
-            the radii to probe at
-        n_simulations : int
-            the number of controls to do
-        do_plot : bool
-            whether to create a plot of all the metric curves in a
-            matrix subplot
-        names : list of str, len N
-            the names of the molecular types
-        shuffle_self : bool
-            whether to shuffle only other types or also the self type
-        relocate_self : bool
-            whether to relocate centerpoints to 'type_self' after
-            shuffling.
-        fraction_exclude_self : bool
-            Whether to exclude self type from normalization when caluclating
-            type fractions
-        normalize_to_bulkfraction : bool
-            if False, normalize to the controls,
-            if True, normalize to the fraction at largest r. Sets
-                n_simulations to 0
-    Returns:
-        curves : 3D array (N, N, len(radii))
-            the fraction curves
-        curves_norm : 3D array
-            the normalized fraction curves
+    """Compute pairwise type-fraction curves for all channels.
+
+    Parameters
+    ----------
+    mol_coords : list of np.rec.array
+        Molecular coordinates of the target types.
+    radii : 1D np.ndarray
+        The radii to probe at.
+    n_simulations : int
+        Number of controls to run.
+    do_plot : bool, optional
+        Whether to plot all curves in a subplot matrix. Default is True.
+    names : list of str, optional
+        Names of the molecular types.
+    shuffle_self : bool, optional
+        Whether to shuffle the self type too (vs only other types). Default
+        is True.
+    relocate_self : bool, optional
+        Whether to relocate centerpoints to ``type_self`` after shuffling.
+        Default is False.
+    fraction_exclude_self : bool, optional
+        Whether to exclude the self type from normalization. Default is False.
+    normalize_to_bulkfraction : bool, optional
+        If False, normalize to the controls; if True, normalize to the
+        fraction at the largest radius (and set ``n_simulations`` to 0).
+        Default is False.
+    showControlEnvelope : bool or None, optional
+        Whether to draw the control envelope.
+
+    Returns
+    -------
+    curves : 3D array
+        The fraction curves, shape ``(N, N, len(radii))``.
+    curves_norm : 3D array
+        The normalized fraction curves.
     """
     if normalize_to_bulkfraction:
         n_simulations = 0
@@ -1118,14 +1138,22 @@ def analyze(mols, radii):
 
 
 def postprocess_ripley_matrix(ripley_matrix, radii):
-    """Set values to zero if they lie within the 95% CI of the CSR
-    simulations. Prior normalization sets 95% CI to +/- 1.
-    Args:
-        ripley_matrix : 2D np.array N x N
-            matrix of normalized ripley's mean values between all
-            N pairs of target molecules.
-        radii : 1D np.array
-            the radii probed [nm]
+    """Zero out matrix entries within the 95% CI of the CSR simulations.
+
+    Prior normalization sets the 95% CI to ±1.
+
+    Parameters
+    ----------
+    ripley_matrix : 2D np.ndarray
+        ``N x N`` matrix of normalized Ripley mean values between all pairs of
+        target molecules.
+    radii : 1D np.ndarray
+        The probed radii, in nm.
+
+    Returns
+    -------
+    2D np.ndarray
+        The matrix with insignificant entries set to zero.
     """
     postprocessed = ripley_matrix.copy()
     ci = 1

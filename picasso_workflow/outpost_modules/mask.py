@@ -1,10 +1,12 @@
 #!/usr/bin/env python
-"""
-Module Name: mask.py
+"""A mask class for cell-masking operations.
+
 Author: Heinrich Grabmayr
-Initial Date: Dec 13, 2024
-Description: This module provides a mask class for cell masking operations.
+Initial date: Dec 13, 2024
 """
+
+from __future__ import annotations
+
 # import logging
 from loguru import logger
 import numpy as np
@@ -163,14 +165,18 @@ class CellMask:
         return self.density_mask * total_spots / pixel_area
 
     def picassolocs_to_maskbins(self, locs):
-        """Convert picasso localizations to bin locations in the mask
-        Args:
-            locs : np.rec.array (len N)
-                the input localizations, must comprise 'x', 'y'
-        Returns:
-            mask_coords : np.array, int32 (2, N)
-                the coordinates within the mask that correspond to the
-                localization position, with out-of-bounds positions set to -1
+        """Convert picasso localizations to bin locations in the mask.
+
+        Parameters
+        ----------
+        locs : np.rec.array
+            The input localizations (length N); must contain ``x`` and ``y``.
+
+        Returns
+        -------
+        mask_coords : np.ndarray
+            Int32 array of shape ``(2, N)`` of mask coordinates for each
+            localization, with out-of-bounds positions set to -1.
         """
         mol_coords = picassolocs_to_coords(locs, self._pixelsize)
         mol_coords[:, 0] -= self._offset[0]
@@ -241,14 +247,15 @@ class CellMask:
         return area
 
     def filter_mask(self, nth_largest=0, fill_holes=True):
-        """Select the nth-largest connected area in the mask, and fill
-        potential holes in this area.
-        Args:
-            nth_largest : int
-                select the nth largest cell:
-                0 - largest cell; 1 - scond to largest; etc
-            fill_holes : bool
-                whether to fill holes in the mask
+        """Select the nth-largest connected area and fill its holes.
+
+        Parameters
+        ----------
+        nth_largest : int, optional
+            Which connected cell to select: 0 = largest, 1 = second-largest,
+            etc. Default is 0.
+        fill_holes : bool, optional
+            Whether to fill holes in the mask. Default is True.
         """
         binary_mask = self.binary_mask
         # print('binary mask shape in', binary_mask.shape)
@@ -315,12 +322,19 @@ class CellMask:
         self._recalc_density_mask_from_binary()
 
     def apply_to_locs(self, locs):
-        """Applies the binary mask to localizations: locs
-        outside of the masked area are dropped
+        """Apply the binary mask to localizations.
 
-        Args:
-            locs : np.rec.array
-                localizations, must comprise 'x' and 'y'
+        Localizations outside the masked area are dropped.
+
+        Parameters
+        ----------
+        locs : np.rec.array
+            Localizations; must contain ``x`` and ``y``.
+
+        Returns
+        -------
+        np.rec.array
+            The localizations inside the masked area.
         """
         mask_coords = self.picassolocs_to_maskbins(locs)
         # eliminate out of bound entries

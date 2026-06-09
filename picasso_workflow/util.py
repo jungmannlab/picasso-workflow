@@ -1047,19 +1047,21 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def save_single_dataset(self):
-        """Saves the locs and info of a single dataset; makes loading
-        for the aggregation workflow more straightforward.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                        filename : str
-                            the name of the dataset
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Save the locs and info of a single dataset.
+
+        Makes loading for the aggregation workflow more straightforward.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``filename`` : str
+                The name of the dataset.
+        results : dict
+            Module results (see class docstring).
         """
         pass
 

@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-"""
-Module Name: render.py
+"""Wrap ``picasso.gui.render`` and ``picasso.render`` for matplotlib plotting.
+
 Author: Heinrich Grabmayr
-Initial Date: Jan 22, 2025
-Description: wrapping picasso.gui.render and pricasso.render
-    for matplotlib plotting
+Initial date: Jan 22, 2025
 """
+
+from __future__ import annotations
+
 # import logging
 from loguru import logger
 
@@ -13,7 +14,6 @@ from picasso import render, lib
 import matplotlib.pyplot as plt
 import numpy as np
 import colorsys
-
 
 # logger = logging.getLogger(__name__)
 
@@ -376,12 +376,33 @@ def plot_scene(
     y_offset=0,
     title="",
 ):
-    """Plot a scene in the locs
-    Args:
-        render_kwargs : dict, default None
-           optional keys:
-            oversampling, viewport, blur_method, min_blur_width, ang,
-            n_group_colors, cmap
+    """Render and plot a scene from the localizations.
+
+    Parameters
+    ----------
+    channel_locs : recarray or list of recarray
+        The per-channel localizations to render.
+    image_px_size : float
+        Rendered (display) pixel size in nm.
+    cam_px_size : float
+        Camera pixel size in nm.
+    fp : str, optional
+        If given, the figure is saved to this filepath.
+    render_kwargs : dict, optional
+        Overrides for the default render kwargs; optional keys
+        ``oversampling``, ``viewport``, ``blur_method``, ``min_blur_width``,
+        ``ang``, ``n_group_colors`` and ``cmap``.
+    x_offset, y_offset : float, optional
+        Offsets applied to the scene. Default 0.
+    title : str, optional
+        Figure title.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure.
+    ax : matplotlib.axes.Axes
+        The axes.
     """
     if not isinstance(channel_locs, list):
         channel_locs = [channel_locs]

@@ -1,24 +1,26 @@
 #!/usr/bin/env python
-"""
+"""Predefined standard workflows for analyzing single datasets.
+
 Module Name: standard_singledataset_workflows.py
 Author: Heinrich Grabmayr
 Initial Date: March 20, 2024
-Description: This module provides predefined standard workflows for
-    analyzing single datasets
 """
+
+from __future__ import annotations
 
 
 def minimal(filepath, box_size=7):
-    """Provides workflow modules for a minimal workflow, consisting of
-    - load_dataset
-    - identify
-    - localize
-    - undrift_rcc
-    Args:
-        filepath : str
-            the name of the file to analyze
-        box_size : uneven int
-            the analysis box size
+    """Provide the modules for a minimal single-dataset workflow.
+
+    The workflow consists of ``load_dataset``, ``identify``, ``localize`` and
+    ``undrift_rcc``.
+
+    Parameters
+    ----------
+    filepath : str
+        The name of the file to analyze.
+    box_size : int
+        The (odd) analysis box size.
     """
     workflow_modules = [
         (
