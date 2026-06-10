@@ -65,6 +65,12 @@ def test_results_tab_present_and_enabled(window):
     assert hasattr(window, "run_combo")
 
 
+def test_documentation_toggles_default_state(window):
+    # Confluence on by default (preserves prior behaviour), HTML off
+    assert window.document_confluence_checkbox.isChecked() is True
+    assert window.document_html_checkbox.isChecked() is False
+
+
 def test_run_dropdown_lists_runs_under_results_folder(window, tmp_path):
     base = tmp_path / "results"
     _write_run(base / "run_a_240101-1200")
@@ -81,6 +87,29 @@ def test_run_dropdown_lists_runs_under_results_folder(window, tmp_path):
     assert str(base / "run_b_240101-1300") in paths
     # a plain folder without runner state is not listed
     assert str(base / "not_a_run") not in paths
+
+
+def test_run_dropdown_finds_runs_nested_in_wrapper(window, tmp_path):
+    # mirrors the real layout: runs live inside an AnalysisResults-* wrapper
+    base = tmp_path / "260601_t"
+    wrapper = base / "AnalysisResults-260601_t"
+    _write_run(wrapper / "260601_t_260602-0945")
+    _write_run(wrapper / "260601_t_260603-0919")
+    (base / "logs").mkdir(parents=True, exist_ok=True)
+
+    window.results_folder_display.setText(str(base))
+
+    labels = {
+        window.run_combo.itemText(i) for i in range(window.run_combo.count())
+    }
+    paths = {
+        window.run_combo.itemData(i) for i in range(window.run_combo.count())
+    }
+    # found despite the intermediate wrapper folder
+    assert str(wrapper / "260601_t_260602-0945") in paths
+    assert str(wrapper / "260601_t_260603-0919") in paths
+    # unique basenames -> short labels
+    assert "260601_t_260602-0945" in labels
 
 
 def test_results_tab_generates_and_shows_report(window, tmp_path):

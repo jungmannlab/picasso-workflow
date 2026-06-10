@@ -8474,10 +8474,37 @@ class Window(QtWidgets.QMainWindow):
         docconfig_layout = QtWidgets.QGridLayout(docconfig_tab)
         self.tabs.addTab(docconfig_tab, "Documentation Config")
 
+        # Documentation backend toggles
+        self.document_confluence_checkbox = QtWidgets.QCheckBox(
+            "Document to Confluence"
+        )
+        self.document_confluence_checkbox.setChecked(True)
+        self.document_confluence_checkbox.setToolTip(
+            "Upload the analysis report to Confluence. Uncheck to skip "
+            "Confluence entirely (no credentials or connection needed)."
+        )
+        docconfig_layout.addWidget(
+            self.document_confluence_checkbox, 0, 0, 1, 2
+        )
+
+        self.document_html_checkbox = QtWidgets.QCheckBox(
+            "Generate local HTML report"
+        )
+        self.document_html_checkbox.setChecked(False)
+        self.document_html_checkbox.setToolTip(
+            "Write a navigable report.html (plus assets) into each run's "
+            "result folder. Enabled automatically when Confluence is off."
+        )
+        docconfig_layout.addWidget(self.document_html_checkbox, 1, 0, 1, 2)
+
         # Confluence configuration group
         confluence_group = QtWidgets.QGroupBox("Confluence Settings")
         confluence_layout = QtWidgets.QGridLayout(confluence_group)
-        docconfig_layout.addWidget(confluence_group, 0, 0, 1, 2)
+        docconfig_layout.addWidget(confluence_group, 2, 0, 1, 2)
+        # grey out the Confluence fields when Confluence documentation is off
+        self.document_confluence_checkbox.toggled.connect(
+            confluence_group.setEnabled
+        )
 
         # Get Confluence config with safe defaults
         confluence_config = CONFIG.get("Confluence", {})
@@ -8520,20 +8547,17 @@ class Window(QtWidgets.QMainWindow):
         self.confluence_space_edit.setText(confluence_config.get("Space", ""))
         confluence_layout.addWidget(self.confluence_space_edit, 2, 1)
 
-        # Confluence Token
-        confluence_layout.addWidget(QtWidgets.QLabel("Token:"), 3, 0)
-        self.confluence_token_edit = QtWidgets.QLineEdit()
-        self.confluence_token_edit.setPlaceholderText(
-            "API token (or set CONFLUENCE_BEARER env var)"
+        # Confluence Token: deliberately NOT an input field. The token is a
+        # secret and is read only from the CONFLUENCE_TOKEN environment
+        # variable at run time, so it is never typed into the GUI nor written
+        # into the generated start_workflow.py.
+        token_note = QtWidgets.QLabel(
+            "Token: read from the CONFLUENCE_TOKEN environment variable "
+            "(never stored in config or scripts)."
         )
-        self.confluence_token_edit.setEchoMode(
-            QtWidgets.QLineEdit.EchoMode.Password
-        )
-        self.confluence_token_edit.setToolTip(
-            "If empty, host will load from environment variable"
-        )
-        self.confluence_token_edit.setText(confluence_config.get("Token", ""))
-        confluence_layout.addWidget(self.confluence_token_edit, 3, 1)
+        token_note.setWordWrap(True)
+        token_note.setStyleSheet("color: #666;")
+        confluence_layout.addWidget(token_note, 3, 0, 1, 2)
 
         # Parent Page
         confluence_layout.addWidget(QtWidgets.QLabel("Parent Page:"), 4, 0)
@@ -8550,7 +8574,7 @@ class Window(QtWidgets.QMainWindow):
         confluence_layout.addWidget(self.confluence_parent_page_edit, 4, 1)
 
         # Add stretch to push widgets to the top
-        docconfig_layout.setRowStretch(1, 1)
+        docconfig_layout.setRowStretch(3, 1)
 
         # Run tab
         run_tab = QtWidgets.QWidget()
@@ -10210,12 +10234,43 @@ class Window(QtWidgets.QMainWindow):
             return "single"
         return None
 
-    def _results_scan_runs(self):
-        """Populate the run dropdown from subfolders of the results folder.
+    def _find_runs(self, base, maxdepth=4):
+        """Find run folders at or below ``base`` (bounded, depth-first).
 
-        Lists every immediate subfolder that holds a saved workflow state;
-        for an aggregation run its child single-dataset runs are listed too
-        (indented), so individual datasets can be viewed as well.
+        A run folder is one holding a saved workflow state. The search
+        descends through intermediate folders (e.g. an ``AnalysisResults-*``
+        wrapper) but does not descend into a run once found -- so an
+        aggregation run is listed without flooding the list with its module
+        subfolders or per-dataset children (those are reachable from the
+        aggregation report's links).
+        """
+        skip = {"assets", "__pycache__", "logs", ".git", ".ipynb_checkpoints"}
+        runs = []
+
+        def walk(folder, depth):
+            try:
+                entries = sorted(os.listdir(folder))
+            except OSError:
+                return
+            for name in entries:
+                if name in skip:
+                    continue
+                sub = os.path.join(folder, name)
+                if not os.path.isdir(sub):
+                    continue
+                if self._run_kind(sub):
+                    runs.append(sub)  # a run; do not descend into it
+                elif depth < maxdepth:
+                    walk(sub, depth + 1)
+
+        walk(base, 1)
+        return sorted(runs)
+
+    def _results_scan_runs(self):
+        """Populate the run dropdown with runs found under the results folder.
+
+        Searches subfolders (recursively, bounded) for saved workflow state,
+        so runs nested inside an ``AnalysisResults-*`` wrapper are found too.
         """
         if not hasattr(self, "run_combo"):
             return
@@ -10225,19 +10280,19 @@ class Window(QtWidgets.QMainWindow):
         if not base or not os.path.isdir(base):
             self.run_combo.setEnabled(False)
             return
-        for name in sorted(os.listdir(base)):
-            folder = os.path.join(base, name)
-            kind = self._run_kind(folder)
-            if not kind:
-                continue
-            self.run_combo.addItem(name, userData=folder)
-            if kind == "aggregation":
-                for sub in sorted(os.listdir(folder)):
-                    subfolder = os.path.join(folder, sub)
-                    if self._run_kind(subfolder):
-                        self.run_combo.addItem(
-                            f"    └ {sub}", userData=subfolder
-                        )
+
+        runs = self._find_runs(base)
+        # Prefer short basenames as labels; fall back to the relative path
+        # when basenames would collide.
+        basenames = [os.path.basename(r) for r in runs]
+        for run in runs:
+            name = os.path.basename(run)
+            label = (
+                name
+                if basenames.count(name) == 1
+                else os.path.relpath(run, base)
+            )
+            self.run_combo.addItem(label, userData=run)
         self.run_combo.setEnabled(self.run_combo.count() > 0)
         # restore the previous selection if it is still present
         if previous is not None:
@@ -11860,11 +11915,9 @@ class Window(QtWidgets.QMainWindow):
             cf_space = "os.getenv('CONFLUENCE_SPACE')"
         else:
             cf_space = f'"{cf_space}"'
-        cf_token = self.confluence_token_edit.text()
-        if cf_token == "":
-            cf_token = "os.getenv('CONFLUENCE_BEARER')"
-        else:
-            cf_token = f'"{cf_token}"'
+        # The token is a secret: never bake it into the generated script,
+        # always read it from the environment at run time.
+        cf_token = "os.getenv('CONFLUENCE_TOKEN')"
         cf_ppage = self.confluence_parent_page_edit.text()
         if cf_ppage == "":
             cf_ppage = "os.getenv('CONFLUENCE_BASE_PAGE')"
@@ -11975,6 +12028,8 @@ class Window(QtWidgets.QMainWindow):
 
         # Add coordinator creation based on workflow type
         always_save = self.always_save.isChecked()
+        document_confluence = self.document_confluence_checkbox.isChecked()
+        document_html = self.document_html_checkbox.isChecked()
         if workflow_type_index == 0:  # Single Workflow
             # script_lines.extend([
             #     "    # Create single workflow runner",
@@ -12008,6 +12063,8 @@ class Window(QtWidgets.QMainWindow):
                     "        base_page=base_page,",
                     f"        dest_machine='{login_node}',",
                     f"        always_save={always_save},",
+                    f"        document_confluence={document_confluence},",
+                    f"        document_html={document_html},",
                     "    )",
                     "",
                     "    # Run workflow",
@@ -12025,6 +12082,8 @@ class Window(QtWidgets.QMainWindow):
                     "        base_page=base_page,",
                     f"        dest_machine='{login_node}',",
                     f"        always_save={always_save},",
+                    f"        document_confluence={document_confluence},",
+                    f"        document_html={document_html},",
                     "    )",
                     "",
                     "    # Run analysis",
@@ -12042,6 +12101,8 @@ class Window(QtWidgets.QMainWindow):
                     "        confluence_username=confluence_username,",
                     f"        dest_machine='{login_node}',",
                     f"        always_save={always_save},",
+                    f"        document_confluence={document_confluence},",
+                    f"        document_html={document_html},",
                     "    )",
                     "",
                     "    # Run investigation",

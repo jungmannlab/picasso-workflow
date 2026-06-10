@@ -89,15 +89,15 @@ _RESULTS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
 )
 
-# Names of the environment variables required for live Confluence tests.
-_CONFLUENCE_ENV_VARS = (
-    "TEST_CONFLUENCE_URL",
-    "TEST_CONFLUENCE_TOKEN",
-    "TEST_CONFLUENCE_SPACE",
-    "TEST_CONFLUENCE_PAGE",
-    "TEST_CONFLUENCE_USERNAME",
+# Live-Confluence tests need the test token; non-secret connection settings
+# come from the ConfluenceTest config section (resolver). Without a token the
+# tests are skipped.
+from picasso_workflow.confluence import (  # noqa: E402
+    resolve_confluence_credentials,
 )
-_CONFLUENCE_AVAILABLE = all(os.getenv(v) for v in _CONFLUENCE_ENV_VARS)
+
+_TEST_CREDS = resolve_confluence_credentials("ConfluenceTest")
+_CONFLUENCE_AVAILABLE = bool(_TEST_CREDS.get("token"))
 
 # Shared helpers live in conftest.py so that test_real_data_integration.py
 # can also use them without importing this module.
@@ -246,9 +246,7 @@ def test_03_undrift_rcc(synthetic_movie_5k, tmp_path):
 
 @pytest.mark.skipif(
     not _CONFLUENCE_AVAILABLE,
-    reason=(
-        "Confluence env vars not set " f"({', '.join(_CONFLUENCE_ENV_VARS)})"
-    ),
+    reason="Confluence test token not set (TEST_CONFLUENCE_TOKEN)",
 )
 class Test_B_ConfluenceIntegration(unittest.TestCase):
     """Run a minimal workflow with a live ConfluenceReporter.
@@ -262,11 +260,11 @@ class Test_B_ConfluenceIntegration(unittest.TestCase):
         self._reporter_config_base = {
             "report_name": "",
             "ConfluenceReporter": {
-                "base_url": os.getenv("TEST_CONFLUENCE_URL"),
-                "username": os.getenv("TEST_CONFLUENCE_USERNAME"),
-                "space_key": os.getenv("TEST_CONFLUENCE_SPACE"),
-                "parent_page_title": os.getenv("TEST_CONFLUENCE_PAGE"),
-                "token": os.getenv("TEST_CONFLUENCE_TOKEN"),
+                "base_url": _TEST_CREDS["base_url"],
+                "username": _TEST_CREDS["username"],
+                "space_key": _TEST_CREDS["space_key"],
+                "parent_page_title": _TEST_CREDS["parent_page_title"],
+                "token": _TEST_CREDS["token"],
             },
         }
 
@@ -358,7 +356,7 @@ def _smoke_workflow_from_template(path):
 
 
 def _smoke_template_cases():
-    """Return (name, smoke_modules) pairs for all suitable snapshotted templates."""
+    """Return (name, smoke_modules) pairs for suitable snapshot templates."""
     if not os.path.isdir(_TEMPLATES_DIR):
         return []
     cases = []

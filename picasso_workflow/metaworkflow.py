@@ -522,6 +522,8 @@ class AbstractWorkflowCoordinator(abc.ABC):
         always_save=False,
         profile_space=None,
         profile_basepage=None,
+        document_confluence=True,
+        document_html=False,
     ):
         self.root_folder = os.path.join(
             working_folder, f"AnalysisResults-{analysis_name}"
@@ -533,10 +535,19 @@ class AbstractWorkflowCoordinator(abc.ABC):
         self.confluence_token = confluence_token
         self.confluence_username = confluence_username
 
+        # Documentation backends. If Confluence is off, default HTML on so a
+        # run always produces some documentation.
+        self.document_confluence = document_confluence
+        self.document_html = document_html
+        if not self.document_confluence and not self.document_html:
+            self.document_html = True
+
         logger.debug(f"confluence_url: {confluence_url}")
         logger.debug(f"confluence_space: {confluence_space}")
         logger.debug(f"confluence_token: {confluence_token}")
         logger.debug(f"confluence_username: {confluence_username}")
+        logger.debug(f"document_confluence: {self.document_confluence}")
+        logger.debug(f"document_html: {self.document_html}")
 
         self.always_save = always_save
 
@@ -555,6 +566,17 @@ class AbstractWorkflowCoordinator(abc.ABC):
             logger.debug(
                 f"No SLRUM env vars found. Assigned this node rank {self.rank}, size {self.size}."
             )
+
+        if not self.document_confluence:
+            # No network: a no-op interface lets all self.ci.* calls run
+            # harmlessly. Reports are produced locally via the HTMLReporter
+            # configured in get_configs().
+            logger.debug(
+                "Confluence documentation disabled; using a no-op interface."
+            )
+            self.ci = confluence.NullConfluenceInterface()
+            self.profiler = None
+            return
 
         if self.rank == 0:
             ci = confluence.ConfluenceInterface(
@@ -695,16 +717,18 @@ class AbstractWorkflowCoordinator(abc.ABC):
             result_location = os.path.join(root_folder, cell_type, cell_name)
         os.makedirs(result_location, exist_ok=True)
 
-        reporter_config = {
-            "report_name": report_name,
-            "ConfluenceReporter": {
+        reporter_config = {"report_name": report_name}
+        if self.document_confluence:
+            reporter_config["ConfluenceReporter"] = {
                 "base_url": self.confluence_url,
                 "space_key": self.confluence_space,
                 "parent_page_title": report_name,
                 "username": self.confluence_username,
                 "token": self.confluence_token,
-            },
-        }
+            }
+        if self.document_html:
+            # report_dir defaults to each run's own result folder
+            reporter_config["HTMLReporter"] = {}
 
         # if camera_info is None:
         #     camera_info = {
@@ -820,6 +844,8 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         always_save=False,
         profile_space=None,
         profile_basepage=None,
+        document_confluence=True,
+        document_html=False,
     ):
         if src_loc_file is None:
             # "no input files" mode: run the workflow exactly once, with
@@ -848,6 +874,8 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             always_save=always_save,
             profile_space=profile_space,
             profile_basepage=profile_basepage,
+            document_confluence=document_confluence,
+            document_html=document_html,
         )
 
     def prepare_analysis(
@@ -987,6 +1015,8 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         always_save=False,
         profile_space=None,
         profile_basepage=None,
+        document_confluence=True,
+        document_html=False,
     ):
         # src_loc_file is a picasso-info like yaml file, representing a list of
         # dicts, with keys "#tags" and #filepath
@@ -1014,6 +1044,8 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             always_save=always_save,
             profile_space=profile_space,
             profile_basepage=profile_basepage,
+            document_confluence=document_confluence,
+            document_html=document_html,
         )
 
     def prepare_analysis(
@@ -1228,6 +1260,8 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         underscores=[1, 0, 0, 0],
         profile_space=None,
         profile_basepage=None,
+        document_confluence=True,
+        document_html=False,
     ):
         """Initialize the investigation coordinator.
 
@@ -1272,6 +1306,8 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             always_save=always_save,
             profile_space=profile_space,
             profile_basepage=profile_basepage,
+            document_confluence=document_confluence,
+            document_html=document_html,
         )
 
     def prepare_sglcell_analysis(self, get_workflow_modules) -> list[dict]:

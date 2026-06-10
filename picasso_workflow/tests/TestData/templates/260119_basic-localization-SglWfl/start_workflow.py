@@ -33,7 +33,7 @@ from picasso_workflow.metaworkflow import (
 #      "CONFLUENCE_BASE_PAGE",
 #      "test reporting", [EnvironmentVariableTarget]::User)
 confluence_url = os.getenv("CONFLUENCE_URL")
-confluence_token = os.getenv("CONFLUENCE_BEARER")
+confluence_token = os.getenv("CONFLUENCE_TOKEN")
 confluence_space = os.getenv("CONFLUENCE_SPACE")
 base_page = os.getenv("CONFLUENCE_BASE_PAGE")
 

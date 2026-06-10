@@ -12,7 +12,7 @@ from picasso_workflow.metaworkflow import AggregationWorkflowCoordinator
 
 # Confluence configuration (set via environment variables)
 confluence_url = "https://mibwiki.biochem.mpg.de"
-confluence_token = os.getenv("CONFLUENCE_BEARER")
+confluence_token = os.getenv("CONFLUENCE_TOKEN")
 confluence_space = "~hgrabmayr"
 base_page = "pw-GUI-test"
 

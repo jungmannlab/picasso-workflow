@@ -205,6 +205,51 @@ New-Item -ItemType Directory -Force "C:\ProgramData\picasso_workflow"
 # then copy or create config.yaml there
 ```
 
+### Confluence credentials
+
+Confluence credentials are split into **non-secret connection settings** and
+the **secret token**, and the same scheme covers all three use cases (the
+pytest suite, CI, and GUI-launched workflows):
+
+- **Non-secret settings** (`URL`, `Space`, `DefaultPage`, `Username`) live in
+  `config.yaml`, in two sections:
+  - `Confluence` — operational target (real workflow runs / the GUI).
+  - `ConfluenceTest` — target for the pytest suite (a dedicated test space, so
+    tests never write to your operational space).
+
+  Override them per machine in your per-user `config.yaml`, or per field with
+  the matching environment variables: operational
+  `CONFLUENCE_URL` / `CONFLUENCE_SPACE` / `CONFLUENCE_BASE_PAGE` /
+  `CONFLUENCE_USERNAME`; tests `TEST_CONFLUENCE_URL` / `TEST_CONFLUENCE_SPACE` /
+  `TEST_CONFLUENCE_PAGE` / `TEST_CONFLUENCE_USERNAME`.
+
+- **The token is *only* ever an environment variable** — never stored in
+  `config.yaml`, a generated `start_workflow.py`, results files, or logs:
+  - operational: `CONFLUENCE_TOKEN` (legacy alias `CONFLUENCE_BEARER`)
+  - tests: `TEST_CONFLUENCE_TOKEN`
+
+  All of them resolve through one helper,
+  `picasso_workflow.confluence.resolve_confluence_credentials(profile)`.
+
+**Where to set the token per use case**
+
+- **Local (laptop)** — export in your shell (or `picasso_workflow/.env`, which
+  is loaded automatically at import by python-dotenv).
+- **Cluster** — set it so both the login node *and* SLURM jobs see it. Two
+  robust options:
+  - a `.env` next to the installed package (loaded at `import picasso_workflow`,
+    so it works identically in interactive shells and batch jobs), or
+  - an `export` sourced unconditionally from `~/.bashrc` (above any
+    non-interactive guard). `tools/cluster_tests/submit_all.sh` submits with
+    `--export=ALL` and the sbatch scripts `source ~/.bashrc`, so both paths
+    propagate into jobs.
+- **CI** — the runner provides only the token env var; the non-secret test
+  settings come from the bundled `ConfluenceTest` section.
+
+The GUI's Documentation Config tab shows the non-secret fields (prefilled from
+`config.yaml`) but **has no token field** — it always reads `CONFLUENCE_TOKEN`
+from the environment at run time.
+
 ### macOS deployment — single-user app bundle
 
 On macOS the standard way to make a Python GUI launchable from Finder (or
@@ -355,16 +400,21 @@ needed. The tests are skipped automatically if `picassosr` is not installed.
 
 The `test_03_undrift_rcc` test uses a **session-scoped synthetic movie** (5 000 frames, 128 × 128 px, ~20 Gaussian emitters on Poisson background) generated in `conftest.py`. It does not require any external data files.
 
-**Confluence integration** (optional, skipped when env vars are absent):
+**Confluence integration** (optional, skipped when the test token is absent):
+
+The live Confluence test needs only the **token** as an environment variable;
+the non-secret connection settings come from the `ConfluenceTest` section of
+`config.yaml` (see [Confluence credentials](#confluence-credentials)).
 
 ```bash
-export TEST_CONFLUENCE_URL=https://your-confluence-instance
-export TEST_CONFLUENCE_USERNAME=your-username
-export TEST_CONFLUENCE_TOKEN=your-api-token
-export TEST_CONFLUENCE_SPACE=SPACE_KEY
-export TEST_CONFLUENCE_PAGE=Parent Page Title
+export TEST_CONFLUENCE_TOKEN=your-test-api-token
 pytest -m integration
 ```
+
+If your test instance differs from the bundled `ConfluenceTest` defaults, set
+it once in your per-user `config.yaml`, or override individual fields with
+`TEST_CONFLUENCE_URL` / `TEST_CONFLUENCE_SPACE` / `TEST_CONFLUENCE_PAGE` /
+`TEST_CONFLUENCE_USERNAME`.
 
 ### Tier 4 — Real acquired-data tests
 

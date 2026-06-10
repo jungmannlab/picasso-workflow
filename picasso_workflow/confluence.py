@@ -214,6 +214,103 @@ def module_decorator(method):
     return module_wrapper
 
 
+# ---------------------------------------------------------------------------
+# Unified Confluence credential resolution
+# ---------------------------------------------------------------------------
+
+# Two credential profiles. Non-secret fields come from a ``config.yaml``
+# section (overridable by an env var); the token comes ONLY from an env var
+# and is never read from config. ``parent_page_title`` maps to the config's
+# ``DefaultPage`` key.
+_CONFLUENCE_PROFILES = {
+    "Confluence": {
+        "section": "Confluence",
+        "fields": {
+            # field: (config key, env override)
+            "base_url": ("URL", "CONFLUENCE_URL"),
+            "space_key": ("Space", "CONFLUENCE_SPACE"),
+            "parent_page_title": ("DefaultPage", "CONFLUENCE_BASE_PAGE"),
+            "username": ("Username", "CONFLUENCE_USERNAME"),
+        },
+        # token env vars, in priority order (legacy alias last)
+        "token_env": ("CONFLUENCE_TOKEN", "CONFLUENCE_BEARER"),
+    },
+    "ConfluenceTest": {
+        "section": "ConfluenceTest",
+        "fields": {
+            "base_url": ("URL", "TEST_CONFLUENCE_URL"),
+            "space_key": ("Space", "TEST_CONFLUENCE_SPACE"),
+            "parent_page_title": ("DefaultPage", "TEST_CONFLUENCE_PAGE"),
+            "username": ("Username", "TEST_CONFLUENCE_USERNAME"),
+        },
+        "token_env": ("TEST_CONFLUENCE_TOKEN",),
+    },
+}
+
+
+def _strip_surrounding_quotes(value):
+    """Strip a single pair of matching surrounding quotes from a string.
+
+    The CI runner appends ``.env`` lines verbatim to ``$GITHUB_ENV``, which
+    leaves values wrapped in quotes; stripping them here keeps the rest of
+    the code quote-agnostic.
+    """
+    if (
+        isinstance(value, str)
+        and len(value) >= 2
+        and value[0] == value[-1]
+        and value[0] in "\"'"
+    ):
+        return value[1:-1]
+    return value
+
+
+def resolve_confluence_credentials(profile="Confluence", config=None):
+    """Resolve Confluence credentials for a profile.
+
+    Non-secret fields (``base_url``, ``space_key``, ``parent_page_title``,
+    ``username``) come from the profile's ``config.yaml`` section, each
+    overridable by its environment variable (env wins). The token comes only
+    from an environment variable -- never from config -- and is ``None`` if
+    unset. Surrounding quotes are stripped from env values.
+
+    Parameters
+    ----------
+    profile : str, optional
+        ``"Confluence"`` (operational) or ``"ConfluenceTest"`` (tests).
+        Default is ``"Confluence"``.
+    config : dict, optional
+        The merged configuration. Defaults to the package-wide ``CONFIG``
+        (imported lazily to avoid an import cycle).
+
+    Returns
+    -------
+    dict
+        ``{base_url, space_key, parent_page_title, username, token}``.
+    """
+    spec = _CONFLUENCE_PROFILES[profile]
+    if config is None:
+        from picasso_workflow import CONFIG as config
+    section = (config or {}).get(spec["section"], {}) or {}
+
+    creds = {}
+    for field, (config_key, env_name) in spec["fields"].items():
+        env_value = os.environ.get(env_name)
+        if env_value is not None:
+            creds[field] = _strip_surrounding_quotes(env_value)
+        else:
+            creds[field] = section.get(config_key)
+
+    token = None
+    for env_name in spec["token_env"]:
+        raw = os.environ.get(env_name)
+        if raw:
+            token = _strip_surrounding_quotes(raw)
+            break
+    creds["token"] = token
+    return creds
+
+
 class ConfluenceReporter(AbstractModuleCollection):
     """Upload reports of automated picasso evaluations to Confluence.
 
@@ -4680,7 +4777,8 @@ class ConfluenceInterface:
 
         logger.debug(f"confluence_url: {self.base_url}")
         logger.debug(f"confluence_space: {self.space_key}")
-        logger.debug(f"confluence_token: {self.bearer_token}")
+        # never log the token value itself
+        logger.debug(f"confluence_token set: {bool(self.bearer_token)}")
         logger.debug(f"confluence_username: {self.username}")
 
         self.connect()
@@ -4701,13 +4799,16 @@ class ConfluenceInterface:
             self.confluence = con(url=self.base_url, token=self.bearer_token)
 
     def get_bearer_token(self):
-        """Set this by setting the environment variable in the windows command
-        line on the server:
-        $ setx CONFLUENCE_BEARER <your_confluence_api_token>
-        The confluence api token can be generated and copied in the personal
-        details of confluence.
+        """Return the operational Confluence token from the environment.
+
+        Reads ``CONFLUENCE_TOKEN`` (the canonical name), falling back to the
+        legacy ``CONFLUENCE_BEARER`` for backwards compatibility. The token is
+        generated in the personal details of Confluence and is only ever
+        supplied via the environment, never stored in config files.
         """
-        return os.environ.get("CONFLUENCE_TOKEN")
+        return os.environ.get("CONFLUENCE_TOKEN") or os.environ.get(
+            "CONFLUENCE_BEARER"
+        )
 
     @confluence_call
     def get_page_properties(self, page_title="", page_id=""):
@@ -4968,3 +5069,57 @@ class ConfluenceInterface:
 
 class ConfluenceInterfaceError(Exception):
     """Raised when a :class:`ConfluenceInterface` operation fails."""
+
+
+class NullConfluenceInterface:
+    """No-op stand-in for :class:`ConfluenceInterface`.
+
+    Mirrors the interface's method surface but performs no network calls, so
+    coordinator code that talks to ``self.ci`` can run unchanged when
+    Confluence documentation is disabled. Methods return benign values.
+    """
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def connect(self):
+        pass
+
+    def get_page_properties(self, page_title="", page_id=""):
+        return "local", page_title or page_id
+
+    def get_page_version(self, page_title="", page_id=""):
+        return 1
+
+    def get_page_body(self, page_title="", page_id=""):
+        return ""
+
+    def create_page(self, page_title, body_text="", parent_id="rootparent"):
+        return "local"
+
+    def delete_page(self, page_id, recursive=False):
+        pass
+
+    def upload_attachment(self, page_id, filename):
+        return os.path.basename(str(filename))
+
+    def get_attachment_id(self, page_id, filename):
+        return os.path.basename(str(filename))
+
+    def delete_attachment(self, page_id, attachment_id):
+        pass
+
+    def update_page_content(
+        self, page_name, page_id, body_update, replace=False
+    ):
+        return None
+
+    def update_page_content_with_movie_attachment(
+        self, page_name, page_id, filename
+    ):
+        return None
+
+    def update_page_content_with_image_attachment(
+        self, page_name, page_id, filename
+    ):
+        return None

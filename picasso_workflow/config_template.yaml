@@ -14,10 +14,18 @@ TestData:
   # Override in ~/.config/picasso_workflow/config.yaml (not here).
   # Alternatively set the environment variable PW_TEST_DATA_DIR.
   directory: null
-Confluence:
+# Non-secret Confluence connection settings only. The token is supplied via an
+# environment variable, never stored here (operational: CONFLUENCE_TOKEN,
+# legacy alias CONFLUENCE_BEARER; tests: TEST_CONFLUENCE_TOKEN).
+Confluence: # operational target
   URL: ""
   Space: "~user"
   DefaultPage: ""
+ConfluenceTest: # target for the pytest suite
+  URL: ""
+  Space: "~user"
+  DefaultPage: ""
+  Username: ""
 SlurmDefault:
   nodes: 2
   cores: 12
