@@ -34,9 +34,9 @@ Description: This module shows an example of how to use an aggregation
         python 240318_aggregation_workflow.py
     - see your confluence page for the results.
 """
+
 import os
 from picasso_workflow import AggregationWorkflowRunner
-
 
 # the URL of your confluence instance
 confluence_url = ""

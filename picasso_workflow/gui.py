@@ -7138,10 +7138,6 @@ class SlurmCommunicator:
         job on a SLURM cluster.
         """
         cluster_env = CONFIG.get("ClusterEnvironment", {}).get(host_cluster)
-        pw_module = cluster_env.get("pw_module", "picasso-workflow-gui")
-        anaconda_module = cluster_env.get(
-            "anaconda_module", "anaconda/3/2023.03"
-        )
         conda_env = cluster_env.get("conda_env", "picasso-workflow")
 
         commands = []

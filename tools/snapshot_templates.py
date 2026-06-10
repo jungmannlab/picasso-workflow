@@ -21,15 +21,16 @@ The script reads config.yaml in the following priority order:
   2. Package default: picasso_workflow/config.yaml  (next to this script's
                        parent directory)
 """
+
 import os
 import shutil
 import sys
 import yaml
 
-
 # ---------------------------------------------------------------------------
 # Locate config.yaml
 # ---------------------------------------------------------------------------
+
 
 def _user_config_path():
     if sys.platform == "win32":
@@ -60,6 +61,7 @@ def _find_config():
 # Destination directory
 # ---------------------------------------------------------------------------
 
+
 def _dest_dir():
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(
@@ -70,6 +72,7 @@ def _dest_dir():
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     config_path = _find_config()
@@ -114,9 +117,7 @@ def main():
 
     print(f"\nDone: {ok} copied, {skipped} skipped, {errors} errors.")
     if ok:
-        print(
-            f"\nCommit the new/updated files under:\n  {dest_root}"
-        )
+        print(f"\nCommit the new/updated files under:\n  {dest_root}")
 
 
 if __name__ == "__main__":

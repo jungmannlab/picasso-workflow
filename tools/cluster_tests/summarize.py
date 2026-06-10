@@ -40,6 +40,7 @@ Usage
 Exit status is 0 when the overall verdict is PASS, 1 otherwise, so the
 summary SLURM job's own state reflects the run result.
 """
+
 from __future__ import annotations
 
 import datetime as _dt
@@ -51,7 +52,6 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
-
 
 # Loguru lines look like "... | ERROR -> message"; match the level field
 # rather than the free-text message to avoid false positives.

@@ -20,7 +20,6 @@ from picasso import io
 import traceback
 from picasso_workflow.analyse import AutoPicasso
 
-
 # Add the package to path if needed
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
