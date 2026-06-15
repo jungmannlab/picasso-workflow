@@ -9,6 +9,7 @@ Initial Date: August 4, 2024
 from __future__ import annotations
 
 from picasso_workflow import util, CONFIG
+from picasso_workflow.modulespec import MODULE_REGISTRY, Scope
 from loguru import logger
 import subprocess
 import os
@@ -8992,6 +8993,9 @@ class Window(QtWidgets.QMainWindow):
         # Set initial tab states based on default workflow type
         self._on_workflow_type_changed(self.workflow_type.currentIndex())
 
+        # Scope-filter the module palette for the initial tab.
+        self._refresh_module_palette()
+
         # buttons for workflow manipulation
         workflow_buttons = QtWidgets.QHBoxLayout()
         self.workflow_buttons_widget = QtWidgets.QWidget()
@@ -11205,7 +11209,12 @@ class Window(QtWidgets.QMainWindow):
         return str(param_value), ""
 
     def add_module(self):
-        """Add the currently selected module to the workflow."""
+        """Add the selected module after the currently selected workflow item.
+
+        The module is inserted directly after the row selected in the workflow
+        list (so a workflow can be built up in place), or appended to the end
+        when nothing is selected. The inserted item becomes the new selection.
+        """
         module_name = self.module_combobox.currentText()
 
         # Capture current parameter values
@@ -11218,35 +11227,118 @@ class Window(QtWidgets.QMainWindow):
             if value is not None:
                 param_values[param_name] = value
 
-        # Add to the appropriate workflow list based on selected tab
-        # Store as tuple: (module_name, {param: value})
+        # Add to the appropriate workflow list based on selected tab.
         current_tab_index = self.workflow_tabs.currentIndex()
         if current_tab_index == 0:  # Single Dataset Workflow
-            self.single_workflow_modules.append((module_name, param_values))
-            index = len(self.single_workflow_modules) - 1
-            self.single_workflow_list.addItem(f"{index:02d}: {module_name}")
-            self._log_workflow_config_event(
-                "modules.add",
-                tab="single",
-                index=index,
-                module=module_name,
-                params=param_values,
-            )
+            list_widget = self.single_workflow_list
+            modules = self.single_workflow_modules
+            tab = "single"
         elif current_tab_index == 1:  # Aggregation Workflow
-            self.aggregation_workflow_modules.append(
-                (module_name, param_values)
+            list_widget = self.aggregation_workflow_list
+            modules = self.aggregation_workflow_modules
+            tab = "aggregation"
+        else:  # e.g. Investigation tab -- no module list to add to
+            return
+
+        # Insert after the current selection (append when nothing selected).
+        current_row = list_widget.currentRow()
+        insert_idx = current_row + 1 if current_row >= 0 else len(modules)
+        modules.insert(insert_idx, (module_name, param_values))
+
+        # Mutate the list widget with signals blocked, then point the editing
+        # state at the new row and select it (without a stale save/reload).
+        list_widget.blockSignals(True)
+        list_widget.insertItem(insert_idx, f"{insert_idx:02d}: {module_name}")
+        self._renumber_workflow_items(list_widget, modules)
+        self.editing_workflow_index = insert_idx
+        self.editing_workflow_tab = current_tab_index
+        list_widget.setCurrentRow(insert_idx)
+        list_widget.blockSignals(False)
+
+        self._log_workflow_config_event(
+            "modules.add",
+            tab=tab,
+            index=insert_idx,
+            module=module_name,
+            params=param_values,
+        )
+        # The insertion point moved; refresh which modules are addable next.
+        self._refresh_module_palette()
+
+    # ------------------------------------------------------------------
+    # Scope-aware module palette (uses MODULE_REGISTRY)
+    # ------------------------------------------------------------------
+    def _current_scope(self):
+        """Return the :class:`Scope` of the active workflow tab, or None.
+
+        None for tabs without a capability scope (e.g. Investigation), where
+        the palette is left unfiltered.
+        """
+        idx = self.workflow_tabs.currentIndex()
+        if idx == 0:
+            return Scope.SINGLE
+        if idx == 1:
+            return Scope.AGGREGATION
+        return None
+
+    def _current_workflow_widgets(self):
+        """Return ``(list_widget, modules)`` for the active workflow tab."""
+        if self.workflow_tabs.currentIndex() == 1:
+            return (
+                self.aggregation_workflow_list,
+                self.aggregation_workflow_modules,
             )
-            index = len(self.aggregation_workflow_modules) - 1
-            self.aggregation_workflow_list.addItem(
-                f"{index:02d}: {module_name}"
-            )
-            self._log_workflow_config_event(
-                "modules.add",
-                tab="aggregation",
-                index=index,
-                module=module_name,
-                params=param_values,
-            )
+        return self.single_workflow_list, self.single_workflow_modules
+
+    def _available_capabilities(self, modules, upto_idx):
+        """Capabilities provided by ``modules[:upto_idx]`` per the registry."""
+        available = set()
+        for module_name, _ in modules[:upto_idx]:
+            spec = MODULE_REGISTRY.get(module_name)
+            if spec is not None:
+                available |= spec.provides
+        return available
+
+    def _refresh_module_palette(self):
+        """Rebuild the module dropdown for the current scope and insert point.
+
+        Shows only modules valid in the active workflow's scope, and greys out
+        (disables) those whose required inputs are not yet available at the
+        point where a new module would be inserted (after the current
+        selection). Modules not in the registry are always shown and enabled.
+        """
+        scope = self._current_scope()
+        if scope is None:
+            return  # leave the palette untouched on scope-less tabs
+
+        list_widget, modules = self._current_workflow_widgets()
+        current_row = list_widget.currentRow()
+        insert_idx = current_row + 1 if current_row >= 0 else len(modules)
+        available = self._available_capabilities(modules, insert_idx)
+
+        previous = self.module_combobox.currentText()
+        self.module_combobox.blockSignals(True)
+        try:
+            self.module_combobox.clear()
+            self.module_combobox.addItem("Select module")
+            model = self.module_combobox.model()
+            for name in self.module_descriptor.get_module_names():
+                spec = MODULE_REGISTRY.get(name)
+                if spec is not None and scope not in spec.scopes:
+                    continue  # hide scope-inappropriate modules
+                self.module_combobox.addItem(name)
+                if spec is not None and not spec.requires <= available:
+                    item = model.item(self.module_combobox.count() - 1)
+                    item.setEnabled(False)
+                    item.setToolTip(
+                        "Inputs not yet available here: "
+                        + ", ".join(sorted(spec.requires - available))
+                    )
+            # Restore the previous selection if it is still present.
+            idx = self.module_combobox.findText(previous)
+            self.module_combobox.setCurrentIndex(idx if idx >= 0 else 0)
+        finally:
+            self.module_combobox.blockSignals(False)
 
     def _renumber_workflow_items(self, list_widget, modules):
         """Update QListWidget items with correct numbering after reordering."""
@@ -11315,6 +11407,9 @@ class Window(QtWidgets.QMainWindow):
                         # Always unblock signals, even if exception occurs
                         self.module_combobox.blockSignals(False)
 
+        # Reflect what is addable after the newly selected insertion point.
+        self._refresh_module_palette()
+
     def _populate_stored_parameters(self, param_values):
         """Populate parameter widgets with stored values from a workflow module.
 
@@ -11348,6 +11443,10 @@ class Window(QtWidgets.QMainWindow):
         """Handle workflow tab change - display selected module if any."""
         # Save current parameters before switching tabs
         self._update_editing_workflow_item()
+
+        # Re-scope the palette to the new tab before the lookups below, so the
+        # selected module is found among the now scope-appropriate items.
+        self._refresh_module_palette()
 
         if tab_index == 0:  # Single Dataset Workflow
             current_row = self.single_workflow_list.currentRow()
@@ -11548,6 +11647,8 @@ class Window(QtWidgets.QMainWindow):
         list_widget.blockSignals(True)
         list_widget.setCurrentRow(to_row)
         list_widget.blockSignals(False)
+        # Selection was moved with signals blocked; refresh palette explicitly.
+        self._refresh_module_palette()
 
     def _remove_module(self, list_widget, modules, row):
         """Remove the module at row, keeping remaining parameters intact.
@@ -11574,6 +11675,8 @@ class Window(QtWidgets.QMainWindow):
         if modules:
             new_row = min(row, len(modules) - 1)
             list_widget.setCurrentRow(new_row)
+        # Cover the now-empty case (no selection event fires to refresh).
+        self._refresh_module_palette()
 
     def move_up(self):
         """Move the selected module up in the workflow order."""

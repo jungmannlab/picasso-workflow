@@ -34,6 +34,7 @@ from picasso_workflow.html_reporter import (
     HTMLReporter,
     write_aggregation_index,
 )
+from picasso_workflow.modulespec import Scope, validate_workflow
 from picasso_workflow.util import (
     AbstractModuleCollection,
     ParameterCommandExecutor,
@@ -56,6 +57,38 @@ def python_tuple_constructor(loader, node):
 yaml.constructor.SafeConstructor.add_constructor(
     "tag:yaml.org,2002:python/tuple", python_tuple_constructor
 )
+
+
+def _log_workflow_validation(steps, scope, label):
+    """Run pre-flight workflow validation and log findings (warn-only).
+
+    Phase-2 integration of :func:`picasso_workflow.modulespec.validate_workflow`:
+    issues are logged as warnings but never block execution. Wrapped so a bug
+    in the (still-maturing) annotation layer can never abort a real run.
+
+    Parameters
+    ----------
+    steps : iterable
+        Workflow steps as ``(module_name, parameters)`` tuples.
+    scope : Scope
+        The workflow scope to validate against.
+    label : str
+        Human-readable label for the log messages (which workflow this is).
+    """
+    try:
+        errors = validate_workflow(steps, scope)
+    except Exception as e:  # never let validation break a run
+        logger.debug(f"{label}: workflow validation skipped ({e!r}).")
+        return
+    if errors:
+        logger.warning(
+            f"{label}: pre-flight validation found {len(errors)} issue(s) "
+            "(warn-only, not blocking):"
+        )
+        for err in errors:
+            logger.warning(f"  {err}")
+    else:
+        logger.debug(f"{label}: pre-flight validation passed.")
 
 
 # logger = logging.getLogger(__name__)
@@ -353,6 +386,20 @@ class AggregationWorkflowRunner:
             succeeded. Rank 0 (and single-task runs) return None after the
             aggregation step; failures are raised as :class:`WorkflowError`.
         """
+        # pre-flight: validate both sub-workflows (warn-only, non-blocking).
+        # single_dataset_modules run per dataset (single scope);
+        # aggregation_modules run on the pooled results (aggregation scope).
+        _log_workflow_validation(
+            self.aggregation_workflow.get("single_dataset_modules", []),
+            Scope.SINGLE,
+            "aggregation: single-dataset modules",
+        )
+        _log_workflow_validation(
+            self.aggregation_workflow.get("aggregation_modules", []),
+            Scope.AGGREGATION,
+            "aggregation: aggregation modules",
+        )
+
         # Only rank 0 persists the (shared) aggregation state; worker ranks
         # would race on the same AggregationWorkflowRunner.yaml.
         if self.rank == 0:
@@ -981,6 +1028,11 @@ class WorkflowRunner:
         bool
             Whether all modules ran through successfully.
         """
+        # pre-flight: validate dependencies/scope (warn-only, non-blocking)
+        _log_workflow_validation(
+            self.workflow_modules, Scope.SINGLE, "single-dataset workflow"
+        )
+
         # first, check whether all modules are actually implemented
         available_modules = inspect.getmembers(AbstractModuleCollection)
         available_modules = [
