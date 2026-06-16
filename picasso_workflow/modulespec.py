@@ -552,7 +552,7 @@ _SPECS = [
         provides=["mask"],
         role="mask",
         relation=E,
-        scopes=_SINGLE,
+        scopes=_BOTH,
         summary="Calculate a cell mask (Susanne's original DC-Atlas implementation).",
     ),
     _s(
@@ -561,7 +561,7 @@ _SPECS = [
         provides=["mask"],
         role="mask",
         relation=E,
-        scopes=_SINGLE,
+        scopes=_BOTH,
         summary="Calculate a cell mask (Rafal's DC-Atlas v3 implementation).",
     ),
     _s(
@@ -570,7 +570,7 @@ _SPECS = [
         optional=["density"],
         provides=["mask", "report_items"],
         relation=E,
-        scopes=_SINGLE,
+        scopes=_BOTH,
         summary="Analyse and refine a previously created mask by density.",
     ),
     _s(
@@ -587,7 +587,7 @@ _SPECS = [
         requires=["mask"],
         provides=["clusters", "report_items"],
         relation=E,
-        scopes=_SINGLE,
+        scopes=_BOTH,
         summary="Simulate CSR within a density mask and run DBSCAN on it.",
     ),
     _s(

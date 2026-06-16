@@ -4716,6 +4716,12 @@ class UndriftError(Exception):
 _STALE_STATE_RETRIES = 5
 _STALE_STATE_BACKOFF = 0.5
 
+# Confluence is eventually consistent: a just-created page is not immediately
+# queryable by title/id. Retry a page lookup this many times (with backoff)
+# before concluding the page really does not exist.
+_PAGE_LOOKUP_RETRIES = 6
+_PAGE_LOOKUP_BACKOFF = 0.5
+
 
 def _is_stale_state_conflict(error):
     """Return True for a Confluence optimistic-locking version conflict.
@@ -4888,20 +4894,39 @@ class ConfluenceInterface:
         title : str
             The page title.
         """
-        if page_title != "":
-            page = self.confluence.get_page_by_title(
-                space=self.space_key, title=page_title
-            )
-        elif page_id != "":
-            page = self.confluence.get_page_by_id(page_id=page_id)
-        else:
+        if page_title == "" and page_id == "":
             logger.error("One of page_title and page_id must be given.")
             raise ConfluenceInterfaceError(
                 "Cannot get page properties. "
                 + "One of page_title and page_id must be given."
             )
 
-        return page["id"], page["title"]
+        # A just-created page may not be queryable yet (eventual
+        # consistency); retry the lookup with backoff before giving up.
+        ident = page_title or page_id
+        for attempt in range(_PAGE_LOOKUP_RETRIES + 1):
+            if page_title != "":
+                page = self.confluence.get_page_by_title(
+                    space=self.space_key, title=page_title
+                )
+            else:
+                page = self.confluence.get_page_by_id(page_id=page_id)
+
+            if page is not None:
+                return page["id"], page["title"]
+
+            if attempt < _PAGE_LOOKUP_RETRIES:
+                wait = min(_PAGE_LOOKUP_BACKOFF * 2**attempt, 8.0)
+                logger.warning(
+                    f"Page '{ident}' not found yet (attempt "
+                    f"{attempt + 1}/{_PAGE_LOOKUP_RETRIES + 1}); it may be "
+                    f"newly created. Retrying in {wait:.1f}s."
+                )
+                time.sleep(wait)
+
+        raise ConfluenceInterfaceError(
+            f"Page '{ident}' not found on {self.base_url}."
+        )
 
     @confluence_call
     def get_page_version(self, page_title="", page_id=""):

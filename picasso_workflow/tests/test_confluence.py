@@ -1456,3 +1456,53 @@ def test_confluence_call_raises_after_exhausting_retries(monkeypatch):
     with pytest.raises(confluence.ConfluenceInterfaceError):
         d.write()
     assert d.calls == confluence._STALE_STATE_RETRIES + 1
+
+
+# ---------------------------------------------------------------------------
+# Eventual-consistency page-lookup retry -- no network needed.
+# ---------------------------------------------------------------------------
+
+
+def test_get_page_properties_retries_until_page_appears(monkeypatch):
+    """A newly created page found only after a few lookups still resolves."""
+    monkeypatch.setattr(confluence, "_PAGE_LOOKUP_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+
+    calls = {"n": 0}
+
+    def fake_get_page_by_title(space, title):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return None
+        return {"id": "123", "title": title}
+
+    ci = MagicMock()
+    ci.space_key = "SPC"
+    ci.base_url = "http://example/wiki"
+    ci.confluence.get_page_by_title.side_effect = fake_get_page_by_title
+
+    result = confluence.ConfluenceInterface.get_page_properties(
+        ci, page_title="newpage"
+    )
+    assert result == ("123", "newpage")
+    assert calls["n"] == 3
+
+
+def test_get_page_properties_raises_clear_error_when_absent(monkeypatch):
+    """A page that never appears raises ConfluenceInterfaceError, not None."""
+    monkeypatch.setattr(confluence, "_PAGE_LOOKUP_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+
+    ci = MagicMock()
+    ci.space_key = "SPC"
+    ci.base_url = "http://example/wiki"
+    ci.confluence.get_page_by_title.return_value = None
+
+    with pytest.raises(confluence.ConfluenceInterfaceError):
+        confluence.ConfluenceInterface.get_page_properties(
+            ci, page_title="missing"
+        )
+    assert (
+        ci.confluence.get_page_by_title.call_count
+        == confluence._PAGE_LOOKUP_RETRIES + 1
+    )
