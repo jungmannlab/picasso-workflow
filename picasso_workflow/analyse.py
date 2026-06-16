@@ -30,6 +30,7 @@ from datetime import datetime
 from functools import wraps
 
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 # from tqdm import tqdm
 import numpy as np
@@ -1941,9 +1942,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 y_mean_clipped = (y_min + y_max) / 2.0
 
         if selected_rois:
-            import matplotlib.patches as patches
-            import matplotlib.pyplot as plt
-
             for idx, (_, _, t_xmin, t_xmax, t_ymin, t_ymax) in enumerate(
                 selected_rois
             ):
@@ -1982,9 +1980,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
         elif parameters.get("ctrmass_fov_nm"):
             # Draw standard Zoom-In outline on overview image
-            import matplotlib.patches as patches
-            import matplotlib.pyplot as plt
-
             fov_half = parameters.get("ctrmass_fov_nm") / 2
             x_min_zoom = x_mean_clipped - fov_half / pixelsize
             x_max_zoom = x_mean_clipped + fov_half / pixelsize
@@ -2023,8 +2018,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                     edgecolor="none",
                 ),
             )
-
-        import matplotlib.pyplot as plt
 
         fig_overview.savefig(
             results["fp_scene_fullfov"], bbox_inches="tight", pad_inches=0
