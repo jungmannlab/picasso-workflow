@@ -226,9 +226,9 @@ def scale_contrast(images):
     all_nonzero = images[images > 0].ravel()
     if len(all_nonzero) == 0:
         return images
-    # Saturate only the top 5% of non-background pixels so that typical
-    # sparse data is not overexposed regardless of absolute loc density.
-    upper = np.percentile(all_nonzero, 95)
+    # Map the 80th percentile of non-background pixels to full white,
+    # saturating the top 20% and scaling everything else proportionally brighter.
+    upper = np.percentile(all_nonzero, 80)
     images = images / upper
     images[~np.isfinite(images)] = 0
     images = np.minimum(images, 1.0)
@@ -297,6 +297,7 @@ def plot_scene(
     x_offset=0,
     y_offset=0,
     title="",
+    figsize=None,
 ):
     """Plot a scene in the locs
     Args:
@@ -304,6 +305,9 @@ def plot_scene(
            optional keys:
             oversampling, viewport, blur_method, min_blur_width, ang,
             n_group_colors, cmap
+        figsize : tuple, default None
+            (width, height) in inches passed to plt.subplots; None uses
+            matplotlib's default (6.4 x 4.8).
     """
     if not isinstance(channel_locs, list):
         channel_locs = [channel_locs]
@@ -320,7 +324,7 @@ def plot_scene(
             for locs in channel_locs
         ]
         logger.debug(f"#locs: {nlocs}; #groups{ngroups}")
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=figsize)
         if fp is not None:
             fig.savefig(fp)
         return fig, ax
@@ -334,7 +338,7 @@ def plot_scene(
 
     bgra = render_scene(kwargs, channel_locs)
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=figsize)
     ax.imshow(
         bgra,
         aspect="equal",

@@ -1777,7 +1777,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         cmap_choice = parameters.get("colormap", "magma")
 
         # render whole field of view
-        fullfov_pixelsize = parameters.get("fullfov_pixelsize", pixelsize)
+        fullfov_pixelsize = parameters.get("fullfov_pixelsize", pixelsize / 4)
 
         # Normalize localizations to a list
         locs_list = (
@@ -1910,7 +1910,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             pixelsize,
             fp=None,
             render_kwargs={"cmap": cmap_choice},
+            figsize=(9.6, 7.2),
         )
+        # annotation borders at the image edge don't widen the tight bbox.
+        _overview_xlim = ax_overview.get_xlim()
+        _overview_ylim = ax_overview.get_ylim()
 
         # Save unmarked copy of the overview image
         results["fp_scene_fullfov_unmarked"] = os.path.join(
@@ -2019,6 +2023,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ),
             )
 
+        ax_overview.set_xlim(_overview_xlim)
+        ax_overview.set_ylim(_overview_ylim)
         fig_overview.savefig(
             results["fp_scene_fullfov"], bbox_inches="tight", pad_inches=0
         )
