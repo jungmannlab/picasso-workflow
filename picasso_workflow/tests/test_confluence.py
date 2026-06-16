@@ -1382,3 +1382,77 @@ class Test_C_ConfluenceReporter(Test_B_ConfluenceReporter):
 
         pgid, pgtitle = self.cr.ci.get_page_properties(report_name)
         self.cr.ci.delete_page(pgid)
+
+
+# ---------------------------------------------------------------------------
+# Optimistic-locking (StaleState) retry handling -- no network needed.
+# ---------------------------------------------------------------------------
+
+
+def test_is_stale_state_conflict_detection():
+    """Recognize StaleState/Conflict text and HTTP 409, reject the rest."""
+    from requests.exceptions import HTTPError
+
+    stale = HTTPError(
+        "ConflictException ... StaleStateException: Batch update returned "
+        "unexpected row count from update [0]"
+    )
+    assert confluence._is_stale_state_conflict(stale)
+
+    resp = MagicMock(status_code=409)
+    assert confluence._is_stale_state_conflict(HTTPError("x", response=resp))
+
+    assert not confluence._is_stale_state_conflict(HTTPError("plain 500"))
+
+
+def test_confluence_call_retries_on_stale_state(monkeypatch):
+    """A version conflict is retried, then succeeds."""
+    from requests.exceptions import HTTPError
+
+    monkeypatch.setattr(confluence, "_STALE_STATE_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+    stale = HTTPError("StaleStateException: row count [0]")
+
+    class Dummy:
+        def __init__(self):
+            self.calls = 0
+
+        def connect(self):
+            pass
+
+        @confluence.confluence_call
+        def write(self):
+            self.calls += 1
+            if self.calls < 3:
+                raise stale
+            return "ok"
+
+    d = Dummy()
+    assert d.write() == "ok"
+    assert d.calls == 3
+
+
+def test_confluence_call_raises_after_exhausting_retries(monkeypatch):
+    """Persistent conflicts raise ConfluenceInterfaceError after retries."""
+    from requests.exceptions import HTTPError
+
+    monkeypatch.setattr(confluence, "_STALE_STATE_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+    stale = HTTPError("StaleStateException: row count [0]")
+
+    class Dummy:
+        def __init__(self):
+            self.calls = 0
+
+        def connect(self):
+            pass
+
+        @confluence.confluence_call
+        def write(self):
+            self.calls += 1
+            raise stale
+
+    d = Dummy()
+    with pytest.raises(confluence.ConfluenceInterfaceError):
+        d.write()
+    assert d.calls == confluence._STALE_STATE_RETRIES + 1

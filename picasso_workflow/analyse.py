@@ -7409,6 +7409,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         density_results = []
         nn_fps = []
         fp_figs = []
+        warnings_list = []
         for i, (tag, locs) in enumerate(zip(tags, locs_list)):
             fig, ax = plt.subplots(nrows=2)
             # points = np.array(
@@ -7423,6 +7424,38 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             # logger.debug(points)
             # logger.debug(points.shape)
+            # Nearest-neighbour distances up to the nth neighbour need at
+            # least nth + 1 localizations; skip gracefully otherwise.
+            min_pts = max(
+                2,
+                parameters["nth_NN"] + 1,
+                parameters["nth_rdf"] + 1,
+            )
+            if points.shape[0] < min_pts:
+                msg = (
+                    f"Channel '{tag}' has {points.shape[0]} localization(s); "
+                    f"skipping nearest-neighbour analysis (needs at least "
+                    f"{min_pts})."
+                )
+                logger.warning(msg)
+                warnings_list.append(msg)
+                ax[0].set_title(f"{tag}: too few localizations")
+                ax[1].set_title(f"{tag} Nearest Neighbor Histogram")
+                rcode = generate_random_code(6)
+                fp_fig = os.path.join(
+                    results["folder"], f"{tag}_nndist_{rcode}.png"
+                )
+                plt.tight_layout()
+                fig.savefig(fp_fig)
+                out_path = os.path.join(
+                    results["folder"], f"{tag}_nneighbors.txt"
+                )
+                np.savetxt(out_path, np.empty((0, 0)), newline="\r\n")
+                density_results.append(np.nan)
+                nn_fps.append(out_path)
+                fp_figs.append(fp_fig)
+                continue
+
             if len(locs) < 10000:
                 alldist = distance.cdist(points, points)
                 logger.debug("found all distances")
@@ -7525,6 +7558,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["density_rdf"] = density_results
             results["nneighbors"] = nn_fps
             results["fp_fig"] = fp_figs
+
+        if warnings_list:
+            results["warnings"] = warnings_list
 
         return parameters, results
 

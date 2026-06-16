@@ -18,6 +18,7 @@ import html
 # import logging
 from loguru import logger
 import os
+import time
 import traceback
 
 import numpy as np
@@ -2125,6 +2126,18 @@ class ConfluenceReporter(AbstractModuleCollection):
         {parameter_text}
         {result_text}
         """
+        if warnings := results.get("warnings"):
+            warning_items = "".join(
+                f"<li>{html.escape(str(w))}</li>" for w in warnings
+            )
+            text += f"""
+            <ac:structured-macro ac:name="warning">
+            <ac:rich-text-body>
+            <p><strong>Warnings</strong></p>
+            <ul>{warning_items}</ul>
+            </ac:rich-text-body>
+            </ac:structured-macro>
+            """
         if fp_fig := results.get("fp_fig"):
             # try:
             #     self.ci.upload_attachment(self.report_page_id, fp_fig)
@@ -4698,11 +4711,45 @@ class UndriftError(Exception):
     """Raised when an undrift step fails."""
 
 
+# Number of times to retry a Confluence write that fails with an
+# optimistic-locking (StaleState) version conflict, and the base backoff.
+_STALE_STATE_RETRIES = 5
+_STALE_STATE_BACKOFF = 0.5
+
+
+def _is_stale_state_conflict(error):
+    """Return True for a Confluence optimistic-locking version conflict.
+
+    Confluence rejects a page update whose cached version is stale with an
+    HTTP 409 wrapping a Hibernate ``StaleStateException`` /
+    ``ConflictException``. The update matched zero rows, so it did *not*
+    take effect and is safe to retry after re-fetching the page version.
+
+    Parameters
+    ----------
+    error : Exception
+        The exception raised by the Confluence API call.
+
+    Returns
+    -------
+    bool
+        Whether the error is a retryable version conflict.
+    """
+    text = str(error)
+    if "StaleStateException" in text or "ConflictException" in text:
+        return True
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None) == 409
+
+
 def confluence_call(method):
-    """Retry a Confluence API call once after reconnecting on failure.
+    """Retry a Confluence API call on transient connection/version failures.
 
     The Confluence connection is sometimes lost; wrapping an interface method
-    with this decorator reconnects and calls it again in that case.
+    with this decorator reconnects and calls it again in that case. It also
+    retries (with exponential backoff) on optimistic-locking version
+    conflicts: each retry re-issues the call, which re-fetches the page's
+    current version before writing.
 
     Parameters
     ----------
@@ -4716,21 +4763,36 @@ def confluence_call(method):
     """
 
     def confluence_call_wrapper(self, *args, **kwargs):
-        try:
-            # call the confluence api
-            status = method(self, *args, **kwargs)
-        except ConnectionError as e:
-            logger.exception(e)
-            self.connect()
-            status = method(self, *args, **kwargs)
-        except HTTPError as e:
-            if "unauthorized" in str(e).lower():
-                raise e
-            raise ConfluenceInterfaceError(
-                f"Calling {method.__name__} failed with HTTPError: {str(e)}"
-            )
-
-        return status
+        attempt = 0
+        while True:
+            try:
+                # call the confluence api
+                return method(self, *args, **kwargs)
+            except ConnectionError as e:
+                logger.exception(e)
+                self.connect()
+                return method(self, *args, **kwargs)
+            except HTTPError as e:
+                if "unauthorized" in str(e).lower():
+                    raise e
+                if (
+                    _is_stale_state_conflict(e)
+                    and attempt < _STALE_STATE_RETRIES
+                ):
+                    attempt += 1
+                    wait = min(_STALE_STATE_BACKOFF * 2 ** (attempt - 1), 8.0)
+                    logger.warning(
+                        f"{method.__name__} hit a Confluence version "
+                        f"conflict (attempt {attempt}/{_STALE_STATE_RETRIES}"
+                        f"); refetching page version and retrying in "
+                        f"{wait:.1f}s."
+                    )
+                    time.sleep(wait)
+                    continue
+                raise ConfluenceInterfaceError(
+                    f"Calling {method.__name__} failed with HTTPError: "
+                    f"{str(e)}"
+                )
 
     return confluence_call_wrapper
 

@@ -38,6 +38,9 @@ from picasso_workflow.confluence import ConfluenceReporter, _yaml_safe
 
 _CDATA_RE = re.compile(r"<!\[CDATA\[(.*?)\]\]>", re.DOTALL)
 
+# Confluence admonition macros rendered as styled callout boxes in HTML.
+_ADMONITIONS = ("warning", "note", "info", "tip")
+
 
 class _StorageToHTML(HTMLParser):
     """Convert a Confluence storage-format fragment to plain HTML.
@@ -114,6 +117,9 @@ class _StorageToHTML(HTMLParser):
                     f'<details class="cl-expand"><summary>{title}</summary>'
                     '<div class="cl-expand-body">'
                 )
+            elif self._macros and self._macros[-1]["name"] in _ADMONITIONS:
+                name = self._macros[-1]["name"]
+                self._write(f'<div class="cl-admonition cl-{name}">')
             return
         if tag == "ac:plain-text-body":
             if self._macros and self._macros[-1]["name"] == "code":
@@ -173,6 +179,8 @@ class _StorageToHTML(HTMLParser):
         if tag == "ac:rich-text-body":
             if self._macros and self._macros[-1]["name"] == "expand":
                 self._write("</div></details>")
+            elif self._macros and self._macros[-1]["name"] in _ADMONITIONS:
+                self._write("</div>")
             return
         if tag == "ac:plain-text-body":
             if self._macros and self._macros[-1]["name"] == "code":
@@ -286,6 +294,12 @@ th, td {{ text-align:left; vertical-align:top; padding:0.2rem 0.5rem; }}
 details.cl-expand {{ margin:0.5rem 0; }}
 details.cl-expand > summary {{ cursor:pointer; color:var(--accent); }}
 .cl-meta {{ color:var(--muted); font-size:0.85rem; }}
+.cl-admonition {{ margin:0.75rem 0; padding:0.5rem 0.9rem; border-left:4px
+  solid var(--border); border-radius:4px; background:#fafafa; }}
+.cl-admonition.cl-warning {{ border-left-color:#e0a800; background:#fff8e6; }}
+.cl-admonition.cl-note {{ border-left-color:#6c757d; background:#f1f3f5; }}
+.cl-admonition.cl-info {{ border-left-color:#2a6; background:#eafaf1; }}
+.cl-admonition.cl-tip {{ border-left-color:#2a6; background:#eafaf1; }}
 </style>
 </head>
 <body>

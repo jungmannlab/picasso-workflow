@@ -68,6 +68,22 @@ def test_storage_to_html_layout_image_expand_code():
     assert "CDATA" not in out
 
 
+def test_storage_to_html_warning_admonition():
+    """The Confluence warning macro becomes a styled callout box."""
+    frag = (
+        '<ac:structured-macro ac:name="warning">'
+        "<ac:rich-text-body><p><strong>Warnings</strong></p>"
+        "<ul><li>Channel 'gold' has 0 localization(s); skipping "
+        "nearest-neighbour analysis.</li></ul>"
+        "</ac:rich-text-body></ac:structured-macro>"
+    )
+    out = storage_to_html(frag)
+
+    assert '<div class="cl-admonition cl-warning">' in out
+    assert "has 0 localization(s)" in out
+    assert "<ac:" not in out
+
+
 def test_storage_to_html_multimedia():
     frag = (
         '<ac:structured-macro ac:name="multimedia" ac:schema-version="1">'
