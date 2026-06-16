@@ -4956,12 +4956,21 @@ class ConfluenceInterface:
             filename=filename, page_id=page_id, space=self.space_key
         )
 
+        target_name = os.path.basename(str(filename))
         attachments_container = self.confluence.get_attachments_from_content(
             page_id=page_id, start=0, limit=500
         )
+        attachment_id = None
         for attachment in attachments_container["results"]:
-            attachment_id = attachment["id"]
-            break
+            if attachment["title"] == target_name:
+                attachment_id = attachment["id"]
+                break
+
+        if attachment_id is None:
+            logger.warning(
+                f"Uploaded '{target_name}' to page {page_id}, but no "
+                "matching attachment was found when querying the page."
+            )
 
         return attachment_id
 
