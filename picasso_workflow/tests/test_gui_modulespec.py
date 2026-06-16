@@ -117,6 +117,71 @@ def test_add_module_inserts_after_selection(window):
     assert window.single_workflow_list.currentRow() == 1
 
 
+def test_button_is_save_when_editing_existing_module(window):
+    window.workflow_tabs.setCurrentIndex(0)
+    window.single_workflow_modules.clear()
+    window.single_workflow_list.clear()
+    window._refresh_module_palette()
+
+    # No selection yet -> Add mode.
+    assert window.add_module_button.text() == "Add module"
+
+    # Add a module; it becomes the selection (an existing, editable item).
+    _select_palette(window, "load_dataset_movie")
+    window.add_module()
+    assert window.editing_workflow_index == 0
+    assert window.add_module_button.text() == "Save module"
+
+    # Clicking the button in this state must SAVE (no duplicate), not add.
+    window._on_module_button()
+    assert [m[0] for m in window.single_workflow_modules] == [
+        "load_dataset_movie"
+    ]
+
+
+def test_manual_module_pick_resets_to_add_mode(window):
+    window.workflow_tabs.setCurrentIndex(0)
+    window.single_workflow_modules.clear()
+    window.single_workflow_list.clear()
+    window._refresh_module_palette()
+
+    _select_palette(window, "load_dataset_movie")
+    window.add_module()
+    assert window.add_module_button.text() == "Save module"
+
+    # Manually choosing a module from the palette means "compose new" -> Add.
+    cb = window.module_combobox
+    idx = cb.findText("dummy_module")
+    assert idx >= 0
+    cb.setCurrentText("dummy_module")  # fires on_module_changed (unblocked)
+    assert window.editing_workflow_index == -1
+    assert window.add_module_button.text() == "Add module"
+
+    # And now the button adds rather than saves.
+    window.add_module()
+    assert [m[0] for m in window.single_workflow_modules] == [
+        "load_dataset_movie",
+        "dummy_module",
+    ]
+
+
+def test_selecting_existing_row_enters_save_mode(window):
+    window.workflow_tabs.setCurrentIndex(0)
+    window.single_workflow_modules.clear()
+    window.single_workflow_list.clear()
+    window._refresh_module_palette()
+
+    _select_palette(window, "load_dataset_movie")
+    window.add_module()
+    _select_palette(window, "dummy_module")
+    window.add_module()  # -> [movie, dummy], two items
+
+    # Re-select the first row: editing an existing item -> Save mode.
+    window.single_workflow_list.setCurrentRow(0)
+    assert window.editing_workflow_index == 0
+    assert window.add_module_button.text() == "Save module"
+
+
 if __name__ == "__main__":
     import sys
 

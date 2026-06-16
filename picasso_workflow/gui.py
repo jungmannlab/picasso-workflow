@@ -8948,10 +8948,11 @@ class Window(QtWidgets.QMainWindow):
         parameters_scroll.setMinimumHeight(100)
         parameters_scroll.setMaximumHeight(300)
         current_layout.addWidget(parameters_scroll)
-        # button to add the selected module
+        # button to add the selected module (or save edits to the selected
+        # existing module -- label/behaviour switch via _on_module_button)
         self.add_module_button = QtWidgets.QPushButton("Add module")
         current_layout.addWidget(self.add_module_button)
-        self.add_module_button.clicked.connect(self.add_module)
+        self.add_module_button.clicked.connect(self._on_module_button)
         self.add_module_button.setEnabled(False)
 
         # widget showing the workflow
@@ -11307,6 +11308,10 @@ class Window(QtWidgets.QMainWindow):
         point where a new module would be inserted (after the current
         selection). Modules not in the registry are always shown and enabled.
         """
+        # The insertion/editing context may have changed; keep the action
+        # button's label (Add vs Save) in sync with it.
+        self._update_module_button_mode()
+
         scope = self._current_scope()
         if scope is None:
             return  # leave the palette untouched on scope-less tabs
@@ -11340,6 +11345,36 @@ class Window(QtWidgets.QMainWindow):
         finally:
             self.module_combobox.blockSignals(False)
 
+    def _editing_existing_module(self):
+        """True when an existing workflow item is selected for editing."""
+        return (
+            self.editing_workflow_index >= 0 and self.editing_workflow_tab >= 0
+        )
+
+    def _update_module_button_mode(self):
+        """Label the action button "Save module" while editing, else "Add"."""
+        self.add_module_button.setText(
+            "Save module" if self._editing_existing_module() else "Add module"
+        )
+
+    def _on_module_button(self):
+        """Dispatch the action button: save edits, or add a new module.
+
+        When an existing workflow item is selected, clicking the button saves
+        the (possibly edited) parameters back to that item instead of adding a
+        duplicate. Otherwise it adds the composed module after the selection.
+        """
+        if self._editing_existing_module():
+            self.save_module()
+        else:
+            self.add_module()
+
+    def save_module(self):
+        """Persist edits to the currently selected workflow module in place."""
+        # Parameters are captured and written back (only if changed) for the
+        # item tracked by editing_workflow_index/_tab.
+        self._update_editing_workflow_item()
+
     def _renumber_workflow_items(self, list_widget, modules):
         """Update QListWidget items with correct numbering after reordering."""
         for i in range(len(modules)):
@@ -11354,6 +11389,8 @@ class Window(QtWidgets.QMainWindow):
             # Clear editing state when nothing is selected
             self.editing_workflow_index = -1
             self.editing_workflow_tab = -1
+            # Back to "Add" mode and append-at-end availability.
+            self._refresh_module_palette()
             return
 
         # Save current parameters before loading new selection
@@ -13254,6 +13291,8 @@ class Window(QtWidgets.QMainWindow):
         if not self.module_combobox.signalsBlocked():
             self.editing_workflow_index = -1
             self.editing_workflow_tab = -1
+            # Manual pick means "compose a new module" -> Add mode.
+            self._update_module_button_mode()
 
         if text == "Select module":
             self.current_module_desc.setText("No module selected")
