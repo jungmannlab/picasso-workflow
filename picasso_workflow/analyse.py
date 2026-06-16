@@ -1777,7 +1777,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         cmap_choice = parameters.get("colormap", "magma")
 
         # render whole field of view
-        fullfov_pixelsize = parameters.get("fullfov_pixelsize", pixelsize / 4)
+        fullfov_pixelsize = parameters.get("fullfov_pixelsize", pixelsize / 10)
 
         # Normalize localizations to a list
         locs_list = (
@@ -1800,7 +1800,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             all_x = np.concatenate([lcs["x"] for lcs in locs_list])
             all_y = np.concatenate([lcs["y"] for lcs in locs_list])
 
-            roi_size = parameters.get("ctrmass_fov_nm", 10000.0) / pixelsize
+            roi_size = parameters.get("ctrmass_fov_nm", 20000.0) / pixelsize
             if roi_size <= 0:
                 roi_size = 100.0  # fallback
 
@@ -1858,7 +1858,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     roi_centers.append((cx, cy))
 
             # Form ROIs and render them
-            tile_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
+            tile_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize / 2)
             for idx, (cx, cy) in enumerate(roi_centers):
                 tile_x_min = cx - roi_size / 2
                 tile_x_max = cx + roi_size / 2
@@ -1910,7 +1910,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             pixelsize,
             fp=None,
             render_kwargs={"cmap": cmap_choice},
-            figsize=(9.6, 7.2),
+            figsize=(12.8, 9.6),
         )
         # annotation borders at the image edge don't widen the tight bbox.
         _overview_xlim = ax_overview.get_xlim()
@@ -1925,6 +1925,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             bbox_inches="tight",
             pad_inches=0,
         )
+
+       
+        _image_bbox_inches = fig_overview.get_tightbbox(
+            fig_overview.canvas.get_renderer()
+        ).transformed(fig_overview.dpi_scale_trans.inverted())
 
         # Draw outlines of selected ROIs if present, or Zoom-In outline if Zoom-In is displayed
         x_mean_clipped = x_mean
@@ -2026,14 +2031,16 @@ class AutoPicasso(util.AbstractModuleCollection):
         ax_overview.set_xlim(_overview_xlim)
         ax_overview.set_ylim(_overview_ylim)
         fig_overview.savefig(
-            results["fp_scene_fullfov"], bbox_inches="tight", pad_inches=0
+            results["fp_scene_fullfov"],
+            bbox_inches=_image_bbox_inches,
+            pad_inches=0,
         )
         plt.close(fig_overview)
 
         # render zoom into the center of mass
         if parameters.get("ctrmass_fov_nm"):
-            ctrmass_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize)
-            fov_half = parameters.get("ctrmass_fov_nm") / 2
+            ctrmass_pixelsize = parameters.get("ctrmass_pixelsize", pixelsize / 2)
+            fov_half = parameters.get("ctrmass_fov_nm")
             x_min_zoom = x_mean_clipped - fov_half / pixelsize
             x_max_zoom = x_mean_clipped + fov_half / pixelsize
             y_min_zoom = y_mean_clipped - fov_half / pixelsize
