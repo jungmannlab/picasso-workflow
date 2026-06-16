@@ -1886,13 +1886,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                 roi_fp = os.path.join(
                     results["folder"], f"locs_active_roi_{idx + 1}_{rcode}.png"
                 )
-                render.plot_scene(
+                fig_roi, _ = render.plot_scene(
                     render_locs,
                     tile_pixelsize,
                     pixelsize,
                     fp=roi_fp,
                     render_kwargs=tile_kwargs,
                 )
+                plt.close(fig_roi)
                 roi_files.append(roi_fp)
 
         results["fp_scene_rois"] = roi_files
@@ -2054,13 +2055,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["fp_scene_ctrmass"] = os.path.join(
                 results["folder"], f"locs_ctrmass_{rcode}.png"
             )
-            render.plot_scene(
+            fig_ctrmass, _ = render.plot_scene(
                 render_locs,
                 ctrmass_pixelsize,
                 pixelsize,
                 fp=results["fp_scene_ctrmass"],
                 render_kwargs=render_kwargs,
             )
+            plt.close(fig_ctrmass)
 
         return parameters, results
 

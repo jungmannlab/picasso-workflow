@@ -97,14 +97,14 @@ def render_single_channel(kwargs, locs, n_group_colors=8, cmap="magma"):
 
     # paint locs using the colormap of choice (Display Settings
     # Dialog)
-    cmap = np.uint8(np.round(255 * plt.get_cmap(cmap)(np.arange(256))))
+    cmap = np.uint8(np.round(255 * plt.colormaps[cmap](np.arange(256))))
 
-    # return a 4 channel (rgb and alpha) array
+    # return a 4 channel (rgba) array
     Y, X = image.shape
     bgra = np.zeros((Y, X, 4), dtype=np.uint8, order="C")
-    bgra[..., 0] = cmap[:, 2][image]
-    bgra[..., 1] = cmap[:, 1][image]
-    bgra[..., 2] = cmap[:, 0][image]
+    bgra[..., 0] = cmap[:, 0][image]  # R
+    bgra[..., 1] = cmap[:, 1][image]  # G
+    bgra[..., 2] = cmap[:, 2][image]  # B
 
     return bgra
 
@@ -214,27 +214,21 @@ def scale_contrast(images):
 
     Parameters
     ----------
-    images : list of np.arrays
+    images : list of np.arrays or np.ndarray
         Arrays with rendered locs (grayscale)
 
     Returns
     -------
-    list of np.arrays
-        Scaled images
+    np.ndarray
+        Scaled images in [0, 1]
     """
-
-    upper = (
-        min(
-            [
-                _.max()
-                for _ in images  # if no locs were clustered
-                if _.max() != 0  # the maximum value in image is 0.0
-            ]
-        )
-        / 40
-    )
-    # upper = INITIAL_REL_MAXIMUM * max_
-
+    images = np.asarray(images)
+    all_nonzero = images[images > 0].ravel()
+    if len(all_nonzero) == 0:
+        return images
+    # Saturate only the top 5% of non-background pixels so that typical
+    # sparse data is not overexposed regardless of absolute loc density.
+    upper = np.percentile(all_nonzero, 95)
     images = images / upper
     images[~np.isfinite(images)] = 0
     images = np.minimum(images, 1.0)
