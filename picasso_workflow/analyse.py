@@ -30,7 +30,6 @@ from datetime import datetime
 from functools import wraps
 
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 
 # from tqdm import tqdm
 import numpy as np
@@ -1910,7 +1909,6 @@ class AutoPicasso(util.AbstractModuleCollection):
             pixelsize,
             fp=None,
             render_kwargs={"cmap": cmap_choice},
-            figsize=(12.8, 9.6),
         )
         # annotation borders at the image edge don't widen the tight bbox.
         _overview_xlim = ax_overview.get_xlim()
@@ -1922,14 +1920,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         fig_overview.savefig(
             results["fp_scene_fullfov_unmarked"],
-            bbox_inches="tight",
             pad_inches=0,
         )
-
-       
-        _image_bbox_inches = fig_overview.get_tightbbox(
-            fig_overview.canvas.get_renderer()
-        ).transformed(fig_overview.dpi_scale_trans.inverted())
 
         # Draw outlines of selected ROIs if present, or Zoom-In outline if Zoom-In is displayed
         x_mean_clipped = x_mean
@@ -1962,15 +1954,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 width_um = x_max_um - x_min_um
                 height_um = y_max_um - y_min_um
 
-                rect = patches.Rectangle(
-                    (x_min_um, y_min_um),
-                    width_um,
-                    height_um,
+                ax_overview.plot(
+                    [x_min_um, x_max_um, x_max_um, x_min_um, x_min_um],
+                    [y_min_um, y_min_um, y_max_um, y_max_um, y_min_um],
+                    color="red",
                     linewidth=1.5,
-                    edgecolor="red",
-                    facecolor="none",
+                    clip_on=True,
                 )
-                ax_overview.add_patch(rect)
 
                 # Add text label for each active site
                 ax_overview.text(
@@ -2003,15 +1993,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             width_um = x_max_um - x_min_um
             height_um = y_max_um - y_min_um
 
-            rect = patches.Rectangle(
-                (x_min_um, y_min_um),
-                width_um,
-                height_um,
+            ax_overview.plot(
+                [x_min_um, x_max_um, x_max_um, x_min_um, x_min_um],
+                [y_min_um, y_min_um, y_max_um, y_max_um, y_min_um],
+                color="red",
                 linewidth=1.5,
-                edgecolor="red",
-                facecolor="none",
+                clip_on=True,
             )
-            ax_overview.add_patch(rect)
 
             ax_overview.text(
                 x_min_um + 0.03 * width_um,
@@ -2032,7 +2020,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         ax_overview.set_ylim(_overview_ylim)
         fig_overview.savefig(
             results["fp_scene_fullfov"],
-            bbox_inches=_image_bbox_inches,
             pad_inches=0,
         )
         plt.close(fig_overview)

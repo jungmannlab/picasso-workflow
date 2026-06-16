@@ -298,6 +298,7 @@ def plot_scene(
     y_offset=0,
     title="",
     figsize=None,
+    dpi=100,
 ):
     """Plot a scene in the locs
     Args:
@@ -306,8 +307,10 @@ def plot_scene(
             oversampling, viewport, blur_method, min_blur_width, ang,
             n_group_colors, cmap
         figsize : tuple, default None
-            (width, height) in inches passed to plt.subplots; None uses
-            matplotlib's default (6.4 x 4.8).
+            (width, height) in inches; None uses matplotlib's default (6.4 x 4.8).
+        dpi : int, default 100
+            Output pixel density. Output pixels = figsize * dpi.
+            Increase to get a larger saved image without changing layout.
     """
     if not isinstance(channel_locs, list):
         channel_locs = [channel_locs]
@@ -324,9 +327,9 @@ def plot_scene(
             for locs in channel_locs
         ]
         logger.debug(f"#locs: {nlocs}; #groups{ngroups}")
-        fig, ax = plt.subplots(figsize=figsize)
+        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
         if fp is not None:
-            fig.savefig(fp)
+            fig.savefig(fp, dpi=dpi)
         return fig, ax
     # overwrite default kwargs with input kwargs
     if render_kwargs is not None:
@@ -337,20 +340,38 @@ def plot_scene(
     logger.debug(f"rendering locs with offset {(x_offset, y_offset)} nm")
 
     bgra = render_scene(kwargs, channel_locs)
+    H, W = bgra.shape[:2]
 
-    fig, ax = plt.subplots(figsize=figsize)
+    # Auto-size the figure so every rendered pixel maps 1:1 to an output pixel.
+    # This avoids any resampling by matplotlib and gives true STORM resolution.
+    # An explicit figsize overrides this (useful for thumbnails / ROI images).
+    if figsize is None:
+        fig_w, fig_h = W / dpi, H / dpi
+        use_auto = True
+    else:
+        fig_w, fig_h = figsize
+        use_auto = False
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
+    if use_auto:
+        fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+
     ax.imshow(
         bgra,
-        aspect="equal",
+        aspect="auto" if use_auto else "equal",
+        interpolation="none",
         origin="upper",
         extent=[
             x_offset / 1000,
-            (bgra.shape[1] * image_px_size + x_offset) / 1000,
-            (bgra.shape[0] * image_px_size + y_offset) / 1000,
+            (W * image_px_size + x_offset) / 1000,
+            (H * image_px_size + y_offset) / 1000,
             y_offset / 1000,
         ],
     )
     ax.axis("off")
     if fp is not None:
-        fig.savefig(fp, bbox_inches="tight", pad_inches=0)
+        if use_auto:
+            fig.savefig(fp, pad_inches=0, dpi=dpi)
+        else:
+            fig.savefig(fp, bbox_inches="tight", pad_inches=0, dpi=dpi)
     return fig, ax
