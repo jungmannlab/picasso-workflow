@@ -5,6 +5,7 @@ Author: Heinrich Grabmayr
 Initial Date: March 14, 2024
 Description: Test the module analyse.py
 """
+
 import logging
 import unittest
 import os
@@ -15,7 +16,6 @@ import pandas as pd
 from unittest.mock import patch, MagicMock
 
 from picasso_workflow import analyse, util
-
 
 logger = logging.getLogger(__name__)
 
@@ -433,7 +433,8 @@ class TestAnalyseModules(unittest.TestCase):
     #     assert results["duration"] > -1
 
     @patch(
-        "picasso_workflow.analyse.postprocess.compute_local_density", MagicMock
+        "picasso_workflow.analyse.postprocess.compute_local_density",
+        MagicMock(),
     )
     def density(self):
         self.ap.info = []
@@ -555,7 +556,9 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.lib.plot_subclustering_check")
     @patch("picasso_workflow.analyse.clusterer.test_subclustering")
     @patch("picasso_workflow.analyse.g5m.g5m")
-    def gaussian_mixture_cluster(self, mock_gmms, mock_test_subclustering, mock_plot):
+    def gaussian_mixture_cluster(
+        self, mock_gmms, mock_test_subclustering, mock_plot
+    ):
         self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
         locs_dtype = [
             ("frame", "u4"),
@@ -727,9 +730,7 @@ class TestAnalyseModules(unittest.TestCase):
         info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
         locs_dtype = [("frame", "u4"), ("x", "f4"), ("y", "f4")]
         locs = pd.DataFrame(
-            np.rec.array(
-                [(i, 0.0, 0.0) for i in range(5)], dtype=locs_dtype
-            )
+            np.rec.array([(i, 0.0, 0.0) for i in range(5)], dtype=locs_dtype)
         )
         self.ap.channel_locs = [locs]
         self.ap.channel_info = [info]
@@ -878,8 +879,7 @@ class TestAnalyseModules(unittest.TestCase):
             == "/dst/pool-a/structs.yaml"
         )
         assert (
-            written_cfg["exp_data_OTHER"].iloc[0]
-            == "/dst/pool-b/other.hdf5"
+            written_cfg["exp_data_OTHER"].iloc[0] == "/dst/pool-b/other.hdf5"
         )
         assert (
             written_cfg["mask_filename_OTHER"].iloc[0]
@@ -1137,8 +1137,8 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_filter_transient_binding")
         )
 
-    @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
-    @patch("picasso_workflow.analyse.postprocess.link", MagicMock)
+    @patch("picasso_workflow.analyse.io.save_locs", MagicMock())
+    @patch("picasso_workflow.analyse.postprocess.link", MagicMock())
     def link_locs(self):
         parameters = {"d_max": 2, "tolerance": 3}
 
@@ -1269,9 +1269,7 @@ class TestAnalyseModules(unittest.TestCase):
         )
 
     def resolution_frc_spatial(self):
-        """Is tested separately in tests/outpost_modules/test_resolution_frc.py
-        """
-        pass
+        """Is tested separately in tests/outpost_modules/test_resolution_frc.py"""
 
     def resolution_analysis(self):
         pass
@@ -1390,13 +1388,18 @@ class TestAnalyseModules(unittest.TestCase):
 
         # Clean up plots
         import glob
+
         undrift_folder = os.path.join(self.results_folder, "00_undrift_rsso")
         if os.path.exists(undrift_folder):
-            for pattern in ["drift_*.png", "convergence_*.png", "robustness_*.png"]:
+            for pattern in [
+                "drift_*.png",
+                "convergence_*.png",
+                "robustness_*.png",
+            ]:
                 for file in glob.glob(os.path.join(undrift_folder, pattern)):
                     try:
                         os.remove(file)
-                    except:
+                    except Exception:
                         pass
 
     @unittest.skip("")

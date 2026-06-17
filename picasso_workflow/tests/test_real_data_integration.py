@@ -31,6 +31,7 @@ Specific sub-tests document their requirements in their docstrings.
         3d_acquisition/
             3d_acquisition_MMStack_Pos0.ome.tif     # 3D movie (for zfit)
 """
+
 import importlib.util
 import logging
 import os
@@ -48,7 +49,6 @@ from picasso_workflow.tests.conftest import (  # noqa: E402
     _try_call_get_workflow,
 )
 
-
 logger = logging.getLogger(__name__)
 
 pytestmark = [pytest.mark.integration, pytest.mark.real_data]
@@ -59,6 +59,7 @@ _MOVIE_EXTENSIONS = (".ome.tif", ".tif", ".tiff", ".czi", ".raw")
 # ---------------------------------------------------------------------------
 # Discovery helpers
 # ---------------------------------------------------------------------------
+
 
 def _find_movies(base_dir, max_files=5):
     """Return up to max_files movie file paths found under base_dir."""
@@ -75,6 +76,7 @@ def _find_movies(base_dir, max_files=5):
 # ---------------------------------------------------------------------------
 # load_picassoconfig
 # ---------------------------------------------------------------------------
+
 
 def test_load_picassoconfig(tmp_path):
     """Verify that the picasso config referenced in config.yaml is accessible
@@ -111,6 +113,7 @@ def test_load_picassoconfig(tmp_path):
 # ---------------------------------------------------------------------------
 # Minimal 2D pipeline on real movies
 # ---------------------------------------------------------------------------
+
 
 def test_minimal_pipeline_on_real_data(network_test_data, tmp_path):
     """Run load → identify (auto net_gradient) → localize on real movies.
@@ -172,15 +175,15 @@ def test_minimal_pipeline_on_real_data(network_test_data, tmp_path):
         print("result")
         print(result)
         logger.debug(result)
-        print('runner')
+        print("runner")
         print(wr)
         print(wr.__dict__)
-        print('locs')
+        print("locs")
         print(wr.autopicasso.locs)
         print(wr.results["01_identify"]["num_identifications"])
-        assert result.get("success"), (
-            f"localize did not succeed for {movie_path}"
-        )
+        assert result.get(
+            "success"
+        ), f"localize did not succeed for {movie_path}"
         n_locs = wr.results["01_identify"].get("num_identifications", 0)
         print("n_locs from results", n_locs)
         n_locs = len(wr.autopicasso.locs.index)
@@ -195,6 +198,7 @@ def test_minimal_pipeline_on_real_data(network_test_data, tmp_path):
 # ---------------------------------------------------------------------------
 # Full pipeline with undrift on real data
 # ---------------------------------------------------------------------------
+
 
 def test_full_pipeline_undrift_on_real_data(network_test_data, tmp_path):
     """Run load → identify → localize → undrift_rcc → save on the first
@@ -264,14 +268,15 @@ def test_full_pipeline_undrift_on_real_data(network_test_data, tmp_path):
         )
         wr.run()
 
-    assert wr.results.get("04_save_single_dataset", {}).get("success"), (
-        "Full pipeline did not complete successfully"
-    )
+    assert wr.results.get("04_save_single_dataset", {}).get(
+        "success"
+    ), "Full pipeline did not complete successfully"
 
 
 # ---------------------------------------------------------------------------
 # Discovered start_workflow.py tests
 # ---------------------------------------------------------------------------
+
 
 def _import_workflow_script(script_path):
     """Import a start_workflow.py file and return the module object."""
@@ -330,9 +335,9 @@ def test_validate_discovered_workflow(workflow_script):
             "absent or raised"
         )
 
-    assert isinstance(workflow_modules, (list, tuple)) and workflow_modules, (
-        f"{name}: workflow modules is not a non-empty list"
-    )
+    assert (
+        isinstance(workflow_modules, (list, tuple)) and workflow_modules
+    ), f"{name}: workflow modules is not a non-empty list"
     for entry in workflow_modules:
         assert (
             isinstance(entry, (list, tuple))

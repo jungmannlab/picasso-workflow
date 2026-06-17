@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 from scipy.spatial import KDTree
 from tqdm import tqdm
 
-
 # %% Class interface
 
 
@@ -296,7 +295,7 @@ class RipleysInterface:
             rd_valid = (~np.isnan(rdata)) & (~np.isinf(rdata))
             if np.sum(rd_valid) > 0:
                 rs = self.radii[rd_valid]
-                integral = np.trapz(rdata[rd_valid], rs)
+                integral = np.trapezoid(rdata[rd_valid], rs)
             else:
                 integral = np.nan
         else:
@@ -311,7 +310,7 @@ class RipleysInterface:
                 f_limits[1],
             ]
             x = [interval[0], rs, interval[1]]
-            integral = np.trapz(f, x)
+            integral = np.trapezoid(f, x)
         return integral
 
     def plot(

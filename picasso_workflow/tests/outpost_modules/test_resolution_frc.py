@@ -23,12 +23,14 @@ class TestResolutionFRC(unittest.TestCase):
         n_locs = 1000
 
         # Create structured array format
-        self.locs = pd.DataFrame({
-            'frame': np.random.randint(0, 100, n_locs),
-            'x': np.random.uniform(0, 100, n_locs),  # in camera pixels
-            'y': np.random.uniform(0, 100, n_locs),
-            'photons': np.random.uniform(500, 2000, n_locs),
-        })
+        self.locs = pd.DataFrame(
+            {
+                "frame": np.random.randint(0, 100, n_locs),
+                "x": np.random.uniform(0, 100, n_locs),  # in camera pixels
+                "y": np.random.uniform(0, 100, n_locs),
+                "photons": np.random.uniform(500, 2000, n_locs),
+            }
+        )
 
         self.pixelsize = 130.0  # nm
         self.pixelsize_render = 10.0  # nm
@@ -47,17 +49,17 @@ class TestResolutionFRC(unittest.TestCase):
         self.assertEqual(len(locs_1) + len(locs_2), len(self.locs))
 
         # Test reproducibility with same seed
-        locs_1_repeat, locs_2_repeat = resolution_frc.split_localizations_random(
-            self.locs, seed=42
+        locs_1_repeat, locs_2_repeat = (
+            resolution_frc.split_localizations_random(self.locs, seed=42)
         )
-        np.testing.assert_array_equal(locs_1['x'].values, locs_1_repeat['x'].values)
+        np.testing.assert_array_equal(
+            locs_1["x"].values, locs_1_repeat["x"].values
+        )
 
     def test_02_render_image_histogram_basic(self):
         """Test basic histogram rendering"""
         image, bounds = resolution_frc.render_image_histogram(
-            self.locs,
-            self.pixelsize,
-            self.pixelsize_render
+            self.locs, self.pixelsize, self.pixelsize_render
         )
 
         # Check that image is 2D
@@ -76,10 +78,7 @@ class TestResolutionFRC(unittest.TestCase):
         """Test rendering with specified bounds"""
         bounds = (0, 10000, 0, 10000)  # nm
         image, bounds_out = resolution_frc.render_image_histogram(
-            self.locs,
-            self.pixelsize,
-            self.pixelsize_render,
-            bounds=bounds
+            self.locs, self.pixelsize, self.pixelsize_render, bounds=bounds
         )
 
         # Check that output bounds match input
@@ -88,16 +87,14 @@ class TestResolutionFRC(unittest.TestCase):
     def test_04_render_image_histogram_with_smoothing(self):
         """Test rendering with Gaussian smoothing"""
         image_no_smooth, _ = resolution_frc.render_image_histogram(
-            self.locs,
-            self.pixelsize,
-            self.pixelsize_render
+            self.locs, self.pixelsize, self.pixelsize_render
         )
 
         image_smooth, _ = resolution_frc.render_image_histogram(
             self.locs,
             self.pixelsize,
             self.pixelsize_render,
-            smoothing_sigma=1.0
+            smoothing_sigma=1.0,
         )
 
         # Smoothed image should be different
@@ -133,8 +130,10 @@ class TestResolutionFRC(unittest.TestCase):
         fft_1 = resolution_frc.compute_fft(image_1)
         fft_2 = resolution_frc.compute_fft(image_2)
 
-        frc_values, spatial_frequencies = resolution_frc.compute_frc_curve_vectorized(
-            fft_1, fft_2, self.pixelsize_render
+        frc_values, spatial_frequencies = (
+            resolution_frc.compute_frc_curve_vectorized(
+                fft_1, fft_2, self.pixelsize_render
+            )
         )
 
         # Check output shapes
@@ -163,8 +162,10 @@ class TestResolutionFRC(unittest.TestCase):
         )
 
         # Compute limited curve
-        frc_limited, freq_limited = resolution_frc.compute_frc_curve_vectorized(
-            fft_1, fft_2, self.pixelsize_render, max_frc_range_nm=100.0
+        frc_limited, freq_limited = (
+            resolution_frc.compute_frc_curve_vectorized(
+                fft_1, fft_2, self.pixelsize_render, max_frc_range_nm=100.0
+            )
         )
 
         # Limited curve should be shorter or equal
@@ -200,7 +201,7 @@ class TestResolutionFRC(unittest.TestCase):
         frc_values = np.ones_like(spatial_frequencies) * 0.5  # > 1/7
 
         resolution, cutoff_frequency = resolution_frc.extract_resolution(
-            frc_values, spatial_frequencies, threshold=1/7
+            frc_values, spatial_frequencies, threshold=1 / 7
         )
 
         # Should return NaN when no crossing
@@ -226,41 +227,41 @@ class TestResolutionFRC(unittest.TestCase):
         np.random.seed(42)
         # Create localizations in a grid pattern (should have good resolution)
         x_grid, y_grid = np.meshgrid(
-            np.linspace(10, 90, 20),
-            np.linspace(10, 90, 20)
+            np.linspace(10, 90, 20), np.linspace(10, 90, 20)
         )
         x_locs = x_grid.ravel() + np.random.rand(400) * 0.5
         y_locs = y_grid.ravel() + np.random.rand(400) * 0.5
 
-        locs = pd.DataFrame({
-            'frame': np.random.randint(0, 100, len(x_locs)),
-            'x': x_locs,
-            'y': y_locs,
-            'photons': np.random.uniform(500, 2000, len(x_locs)),
-        })
+        locs = pd.DataFrame(
+            {
+                "frame": np.random.randint(0, 100, len(x_locs)),
+                "x": x_locs,
+                "y": y_locs,
+                "photons": np.random.uniform(500, 2000, len(x_locs)),
+            }
+        )
 
         results = resolution_frc.compute_frc_resolution(
-            locs,
-            pixelsize=130.0,
-            pixelsize_render=10.0,
-            seed=42
+            locs, pixelsize=130.0, pixelsize_render=10.0, seed=42
         )
 
         # Check required keys in results
-        self.assertIn('resolution', results)
-        self.assertIn('cutoff_frequency', results)
-        self.assertIn('frc_curve', results)
-        self.assertIn('spatial_frequencies', results)
-        self.assertIn('image_1', results)
-        self.assertIn('image_2', results)
-        self.assertIn('bounds', results)
+        self.assertIn("resolution", results)
+        self.assertIn("cutoff_frequency", results)
+        self.assertIn("frc_curve", results)
+        self.assertIn("spatial_frequencies", results)
+        self.assertIn("image_1", results)
+        self.assertIn("image_2", results)
+        self.assertIn("bounds", results)
 
         # Check that arrays have correct shapes
-        self.assertEqual(len(results['frc_curve']), len(results['spatial_frequencies']))
+        self.assertEqual(
+            len(results["frc_curve"]), len(results["spatial_frequencies"])
+        )
 
         # Images should be 2D
-        self.assertEqual(len(results['image_1'].shape), 2)
-        self.assertEqual(len(results['image_2'].shape), 2)
+        self.assertEqual(len(results["image_1"].shape), 2)
+        self.assertEqual(len(results["image_2"].shape), 2)
 
     def test_12_compute_frc_resolution_with_smoothing(self):
         """Test FRC pipeline with Gaussian smoothing"""
@@ -269,13 +270,13 @@ class TestResolutionFRC(unittest.TestCase):
             pixelsize=self.pixelsize,
             pixelsize_render=self.pixelsize_render,
             smoothing_sigma=1.0,
-            seed=42
+            seed=42,
         )
 
-        self.assertIn('resolution', results)
+        self.assertIn("resolution", results)
         # With smoothing, resolution might be different
         self.assertTrue(
-            np.isnan(results['resolution']) or results['resolution'] > 0
+            np.isnan(results["resolution"]) or results["resolution"] > 0
         )
 
     def test_13_compute_frc_averaged_basic(self):
@@ -287,23 +288,23 @@ class TestResolutionFRC(unittest.TestCase):
             pixelsize_render=self.pixelsize_render,
             n_splits=3,
             use_chunking=False,
-            parallel_splits=False
+            parallel_splits=False,
         )
 
         # Check required keys
-        self.assertIn('resolution', results)
-        self.assertIn('resolution_std', results)
-        self.assertIn('resolutions_per_split', results)
-        self.assertIn('frc_curve_mean', results)
-        self.assertIn('frc_curve_std', results)
-        self.assertIn('spatial_frequencies', results)
-        self.assertIn('n_splits', results)
+        self.assertIn("resolution", results)
+        self.assertIn("resolution_std", results)
+        self.assertIn("resolutions_per_split", results)
+        self.assertIn("frc_curve_mean", results)
+        self.assertIn("frc_curve_std", results)
+        self.assertIn("spatial_frequencies", results)
+        self.assertIn("n_splits", results)
 
         # Check that we got results for all splits
-        self.assertEqual(len(results['resolutions_per_split']), 3)
+        self.assertEqual(len(results["resolutions_per_split"]), 3)
 
         # Standard deviation should be non-negative
-        self.assertGreaterEqual(results['resolution_std'], 0)
+        self.assertGreaterEqual(results["resolution_std"], 0)
 
     def test_14_split_localizations_preserves_data(self):
         """Test that splitting preserves localization data"""
@@ -312,27 +313,31 @@ class TestResolutionFRC(unittest.TestCase):
         )
 
         # Check that frames are preserved
-        all_frames = set(self.locs['frame'])
-        split1_frames = set(locs_1['frame'])
-        split2_frames = set(locs_2['frame'])
+        all_frames = set(self.locs["frame"])
+        split1_frames = set(locs_1["frame"])
+        split2_frames = set(locs_2["frame"])
 
         # Union of splits should equal original
-        self.assertTrue(split1_frames.union(split2_frames).issubset(all_frames))
+        self.assertTrue(
+            split1_frames.union(split2_frames).issubset(all_frames)
+        )
 
     def test_15_render_image_empty_locs(self):
         """Test rendering with empty localizations"""
-        empty_locs = pd.DataFrame({
-            'frame': [],
-            'x': [],
-            'y': [],
-            'photons': [],
-        })
+        empty_locs = pd.DataFrame(
+            {
+                "frame": [],
+                "x": [],
+                "y": [],
+                "photons": [],
+            }
+        )
 
         image, bounds = resolution_frc.render_image_histogram(
             empty_locs,
             self.pixelsize,
             self.pixelsize_render,
-            bounds=(0, 1000, 0, 1000)
+            bounds=(0, 1000, 0, 1000),
         )
 
         # Should return an image (likely zeros)
@@ -378,7 +383,9 @@ class TestResolutionFRCEdgeCases(unittest.TestCase):
         # Create FRC that crosses threshold between two points
         spatial_frequencies = np.array([0.001, 0.002, 0.003, 0.004])
         threshold = 0.2
-        frc_values = np.array([0.8, 0.3, 0.1, 0.05])  # Crosses between index 1 and 2
+        frc_values = np.array(
+            [0.8, 0.3, 0.1, 0.05]
+        )  # Crosses between index 1 and 2
 
         resolution, cutoff_freq = resolution_frc.extract_resolution(
             frc_values, spatial_frequencies, threshold
@@ -394,8 +401,10 @@ class TestResolutionFRCEdgeCases(unittest.TestCase):
         image = np.random.rand(8, 8) + 1.0
         fft = resolution_frc.compute_fft(image)
 
-        frc_values, spatial_frequencies = resolution_frc.compute_frc_curve_vectorized(
-            fft, fft, pixelsize_render=10.0
+        frc_values, spatial_frequencies = (
+            resolution_frc.compute_frc_curve_vectorized(
+                fft, fft, pixelsize_render=10.0
+            )
         )
 
         # Should still produce results
@@ -404,17 +413,17 @@ class TestResolutionFRCEdgeCases(unittest.TestCase):
 
     def test_03_render_with_single_localization(self):
         """Test rendering with only one localization"""
-        locs = pd.DataFrame({
-            'frame': [0],
-            'x': [50.0],
-            'y': [50.0],
-            'photons': [1000.0],
-        })
+        locs = pd.DataFrame(
+            {
+                "frame": [0],
+                "x": [50.0],
+                "y": [50.0],
+                "photons": [1000.0],
+            }
+        )
 
         image, bounds = resolution_frc.render_image_histogram(
-            locs,
-            pixelsize=130.0,
-            pixelsize_render=10.0
+            locs, pixelsize=130.0, pixelsize_render=10.0
         )
 
         # Should create an image with one pixel lit
@@ -422,5 +431,5 @@ class TestResolutionFRCEdgeCases(unittest.TestCase):
         self.assertEqual(image.max(), 1.0)  # One localization -> one count
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

@@ -1,14 +1,21 @@
 #!/usr/bin/env python
-"""
-Module Name: workflow.py
+"""Orchestrate picasso analysis and Confluence reporting.
+
+Implements :class:`WorkflowRunner`, which runs a single-dataset workflow as a
+sequence of modules and publishes each module's results to Confluence, and
+:class:`AggregationWorkflowRunner`, which splits the work into per-dataset
+sub-workflows (optionally across SLURM ranks) and then aggregates them.
+
 Author: Heinrich Grabmayr
-Initial Date: March 7, 2024
-Description: This module implements the class ReportingAnalyzer,
-    which orchestrates picasso analysis and confluence reporting
+Initial date: March 7, 2024
 """
+
+from __future__ import annotations
+
 import os
 import time
 from datetime import datetime
+
 # import logging
 from loguru import logger
 import inspect
@@ -23,6 +30,11 @@ from picasso_workflow.confluence import (
     ConfluenceInterface,
     ConfluenceInterfaceError,
 )
+from picasso_workflow.html_reporter import (
+    HTMLReporter,
+    write_aggregation_index,
+)
+from picasso_workflow.modulespec import Scope, validate_workflow
 from picasso_workflow.util import (
     AbstractModuleCollection,
     ParameterCommandExecutor,
@@ -32,8 +44,12 @@ from picasso_workflow.util import (
 
 
 # For loading yaml files
-# Custom constructor for handling 'tag:yaml.org,2002:python/tuple'
 def python_tuple_constructor(loader, node):
+    """Construct a tuple from a ``tag:yaml.org,2002:python/tuple`` YAML node.
+
+    Registered on the safe loader so workflow configs that serialise tuples
+    round-trip back to tuples instead of failing to load.
+    """
     return tuple(loader.construct_sequence(node))
 
 
@@ -43,23 +59,58 @@ yaml.constructor.SafeConstructor.add_constructor(
 )
 
 
+def _log_workflow_validation(steps, scope, label):
+    """Run pre-flight workflow validation and log findings (warn-only).
+
+    Phase-2 integration of :func:`picasso_workflow.modulespec.validate_workflow`:
+    issues are logged as warnings but never block execution. Wrapped so a bug
+    in the (still-maturing) annotation layer can never abort a real run.
+
+    Parameters
+    ----------
+    steps : iterable
+        Workflow steps as ``(module_name, parameters)`` tuples.
+    scope : Scope
+        The workflow scope to validate against.
+    label : str
+        Human-readable label for the log messages (which workflow this is).
+    """
+    try:
+        errors = validate_workflow(steps, scope)
+    except Exception as e:  # never let validation break a run
+        logger.debug(f"{label}: workflow validation skipped ({e!r}).")
+        return
+    if errors:
+        logger.warning(
+            f"{label}: pre-flight validation found {len(errors)} issue(s) "
+            "(warn-only, not blocking):"
+        )
+        for err in errors:
+            logger.warning(f"  {err}")
+    else:
+        logger.debug(f"{label}: pre-flight validation passed.")
+
+
 # logger = logging.getLogger(__name__)
 
 
 class AggregationWorkflowRunner:
-    """Often, workflows have to be separated into separate
-    'sub' workflows, e.g. when multiple DNA-PAINT datasets
-    are to be evaluated, and then aggregated. This is what this
-    class aims to do
+    """Run several single-dataset workflows and aggregate their results.
+
+    Many analyses split into per-dataset sub-workflows (e.g. when multiple
+    DNA-PAINT datasets are evaluated individually) whose results are then
+    combined in an aggregation step. This class coordinates that pattern,
+    optionally distributing the single-dataset workflows across SLURM ranks.
     """
 
-    def __init__(self, postfix=None):
-        """
-        Args:
-            postfix : str, default None
-                The postfix to use (for loading prior analyses).
-                Format: %y%m%d-%H%M.
-                If None, a new postfix is generated
+    def __init__(self, postfix: str | None = None):
+        """Initialize the runner.
+
+        Parameters
+        ----------
+        postfix : str, optional
+            Postfix used to load prior analyses, formatted ``%y%m%d-%H%M``.
+            If None, a new postfix is generated from the current time.
         """
         if postfix:
             self.postfix = postfix
@@ -69,6 +120,8 @@ class AggregationWorkflowRunner:
         self.single_workflow_parallel = False
         self.sgl_workflow_locations = []
         self.cpage_names = []
+        self._html_reporting = False
+        self._agg_report_folder = None
         # SLURM task identity for multi-node parallelism of the single
         # workflows. Defaults to a single (rank 0) process off-cluster.
         self.rank = int(os.getenv("SLURM_PROCID") or 0)
@@ -77,46 +130,57 @@ class AggregationWorkflowRunner:
     @classmethod
     def config_from_dicts(
         cls,
-        reporter_config,
-        analysis_config,
-        aggregation_workflow,
-        postfix=None,
-        continue_previous_runner=False,
-        single_workflow_parallel=False,
-        rank=None,
-        size=None,
-    ):
-        """To keep flexibility for initialization methods, this is not
-        done in __init__. This way in the future, we can instantiate
-        by providing config file names, retrieving config and parameters
-        via a web API, or such.
-        Args:
-            reporter_config : dict
-                configuration of the reporter, for now Confluence reporter
-            analysis_config : dict
-                general analysis configuration
-            aggregation_workflow : dict
-                the workflow modules to run, which need to be separated into
-                individual runs. Keys:
-                single_dataset_tileparameters : dict
-                    describes the parameters that need to be adjusted for every
-                    individual single data set analysis
-                single_dataset_modules : list of tuples
-                    (workflow_modules of WorkflowRunner)
-                    describes the modules run for the analysis of the
-                    individual datasets
-                aggregation_modules : list of tuples
-                    (workflow_modules of WorkflowRunner)
-                    describes the modules run for the aggregation analysis
-                    (e.g. labeling efficiency, RESI, ..)
-            postfix : str
-                The postfix to use (for loading prior analyses).
-                Format: %y%m%d-%H%M.
-                If None, a new postfix is generated
-            continue_previous_runner : bool, default False
-                continue a previous analysis that aborted (e.g. because of a
-                manual step). If no previous analysis exists in that folder,
-                create a new one.
+        reporter_config: dict,
+        analysis_config: dict,
+        aggregation_workflow: dict,
+        postfix: str | None = None,
+        continue_previous_runner: bool = False,
+        single_workflow_parallel: bool = False,
+        rank: int | None = None,
+        size: int | None = None,
+    ) -> "AggregationWorkflowRunner":
+        """Build a configured runner from plain config dicts.
+
+        Initialization is kept out of ``__init__`` to preserve flexibility for
+        alternative entry points in the future (config file names, a web API,
+        etc.).
+
+        Parameters
+        ----------
+        reporter_config : dict
+            Configuration of the reporter (currently the Confluence reporter).
+        analysis_config : dict
+            General analysis configuration.
+        aggregation_workflow : dict
+            The workflow modules to run, split into individual runs, with keys:
+
+            ``single_dataset_tileparameters`` : dict
+                Parameters that must be adjusted for every individual
+                single-dataset analysis.
+            ``single_dataset_modules`` : list of tuple
+                ``workflow_modules`` of :class:`WorkflowRunner` describing the
+                per-dataset analysis.
+            ``aggregation_modules`` : list of tuple
+                ``workflow_modules`` of :class:`WorkflowRunner` describing the
+                aggregation analysis (e.g. labeling efficiency, RESI).
+        postfix : str, optional
+            Postfix used to load prior analyses, formatted ``%y%m%d-%H%M``.
+            If None, a new postfix is generated.
+        continue_previous_runner : bool, optional
+            Continue a previous analysis that aborted (e.g. at a manual step).
+            If no previous analysis exists in that folder, a new one is
+            created. Default is False.
+        single_workflow_parallel : bool, optional
+            Whether the single-dataset workflows run in parallel. Default is
+            False.
+        rank, size : int, optional
+            SLURM task identity overriding the environment-derived values, used
+            to control how single workflows are distributed across ranks.
+
+        Returns
+        -------
+        AggregationWorkflowRunner
+            The configured runner instance.
         """
         # check whether the report_name has a postfix-format already
         # Check if report_name already has a postfix pattern
@@ -156,7 +220,6 @@ class AggregationWorkflowRunner:
                     return instance
                 except FileNotFoundError:
                     logger.debug(f"Could not load runner from {runner_folder}")
-                    pass
 
         # If we have an extracted postfix but aren't continuing, use it
         if extracted_postfix is not None and not continue_previous_runner:
@@ -167,10 +230,8 @@ class AggregationWorkflowRunner:
                 "single_dataset_tileparameters"
             )
         ) is None:
-            raise KeyError(
-                """aggregation_workflow missing
-                "single_dataset_tileparameters"."""
-            )
+            raise KeyError("""aggregation_workflow missing
+                "single_dataset_tileparameters".""")
         instance = cls(postfix)
         # The coordinator may override the SLURM-derived rank/size to control
         # how the single workflows are distributed (e.g. run all locally when
@@ -216,6 +277,20 @@ class AggregationWorkflowRunner:
             ] = report_name
             instance.cpage_names.append(report_name)
 
+        # HTML reporting: every child WorkflowRunner writes its own
+        # report.html into its own result subfolder (the HTMLReporter config
+        # propagates via reporter_config). A fixed report_dir would make the
+        # children collide, so it is dropped here; the aggregation overview
+        # index always goes into the aggregation result folder.
+        if (html_cfg := reporter_config.get("HTMLReporter")) is not None:
+            instance._html_reporting = True
+            if isinstance(html_cfg, dict) and html_cfg.get("report_dir"):
+                logger.debug(
+                    "Ignoring HTMLReporter.report_dir for the aggregation "
+                    "run; child reports use per-dataset folders."
+                )
+                html_cfg.pop("report_dir", None)
+
         instance.reporter_config = reporter_config
         instance.analysis_config = analysis_config
         # reporter_config['report_name'] = report_name
@@ -229,17 +304,23 @@ class AggregationWorkflowRunner:
         return instance
 
     @classmethod
-    def _check_previous_runner(cls, folder, report_name):
-        """Check for a previous runner instance in the given location
-        Args:
-            folder : str
-                the folder to look in
-            report_name : str
-                the name of the report
-        Returns:
-            postfix : str
-                the postfix of the latest previous runner in that location
-                if none are found, postfix is None
+    def _check_previous_runner(
+        cls, folder: str, report_name: str
+    ) -> str | None:
+        """Find the postfix of the latest previous runner in a location.
+
+        Parameters
+        ----------
+        folder : str
+            The folder to look in.
+        report_name : str
+            The name of the report.
+
+        Returns
+        -------
+        str or None
+            The postfix of the latest previous runner in that location, or
+            None if none are found.
         """
         dirs = [
             it
@@ -264,8 +345,26 @@ class AggregationWorkflowRunner:
         return latest_postfix
 
     def _initialize_confluence_interface(
-        self, base_url, space_key, parent_page_title, username=None, token=None
-    ):
+        self,
+        base_url: str,
+        space_key: str,
+        parent_page_title: str,
+        username: str | None = None,
+        token: str | None = None,
+    ) -> None:
+        """Create the Confluence interface used to publish the overview page.
+
+        Parameters
+        ----------
+        base_url : str
+            Base URL of the Confluence instance.
+        space_key : str
+            Key of the Confluence space to write into.
+        parent_page_title : str
+            Title of the page under which new pages are nested.
+        username, token : str, optional
+            Confluence credentials.
+        """
         self.ci = ConfluenceInterface(
             base_url=base_url,
             space_key=space_key,
@@ -274,8 +373,33 @@ class AggregationWorkflowRunner:
             token=token,
         )
 
-    def run(self):
-        """individualize the aggregation workflow and run."""
+    def run(self) -> bool | None:
+        """Individualize the aggregation workflow and run it.
+
+        Runs every single-dataset workflow (distributed across ranks when
+        running under SLURM), then aggregates on rank 0.
+
+        Returns
+        -------
+        bool or None
+            On worker ranks, whether this rank's single datasets all
+            succeeded. Rank 0 (and single-task runs) return None after the
+            aggregation step; failures are raised as :class:`WorkflowError`.
+        """
+        # pre-flight: validate both sub-workflows (warn-only, non-blocking).
+        # single_dataset_modules run per dataset (single scope);
+        # aggregation_modules run on the pooled results (aggregation scope).
+        _log_workflow_validation(
+            self.aggregation_workflow.get("single_dataset_modules", []),
+            Scope.SINGLE,
+            "aggregation: single-dataset modules",
+        )
+        _log_workflow_validation(
+            self.aggregation_workflow.get("aggregation_modules", []),
+            Scope.AGGREGATION,
+            "aggregation: aggregation modules",
+        )
+
         # Only rank 0 persists the (shared) aggregation state; worker ranks
         # would race on the same AggregationWorkflowRunner.yaml.
         if self.rank == 0:
@@ -396,6 +520,10 @@ class AggregationWorkflowRunner:
         self.sgl_workflow_locations = sgl_folders
         self.save(self.result_folder)
 
+        # Write the HTML overview already now (even when not all singles
+        # succeed) so a partial run still has a navigable local index.
+        self._write_html_overview(sgl_folders)
+
         if not all(sgl_dataset_success):
             msg = (
                 "Not all single datasets were analysed successfully. "
@@ -456,18 +584,81 @@ class AggregationWorkflowRunner:
                 postfix=self.postfix,
             )
         self.cpage_names.append(wr.reporter_config["report_name"])
+        self._agg_report_folder = wr.result_folder
         wr.run()
         self.all_results["aggregation"] = wr.results
         self.save(self.result_folder)
 
+        # Refresh the HTML overview now that the aggregation report exists.
+        self._write_html_overview(sgl_folders, self._agg_report_folder)
+
+    def _write_html_overview(
+        self, sgl_folders: list, agg_folder: str | None = None
+    ) -> None:
+        """Write the top-level ``index.html`` linking the child reports.
+
+        No-op unless HTML reporting is configured. Links to each
+        single-dataset ``report.html`` and (when available) the aggregation
+        ``report.html``, relative to the aggregation result folder.
+
+        Parameters
+        ----------
+        sgl_folders : list of str
+            The single-dataset result folders (each holds a ``report.html``).
+        agg_folder : str, optional
+            The aggregation result folder, if the aggregation step has run.
+        """
+        if not self._html_reporting:
+            return
+
+        child_reports = []
+        for i, folder in enumerate(sgl_folders):
+            if not folder:
+                continue
+            report = os.path.join(folder, "report.html")
+            href = os.path.relpath(report, self.result_folder)
+            label = os.path.basename(folder.rstrip(os.sep)) or f"dataset {i}"
+            child_reports.append((label, href, os.path.isfile(report)))
+        if agg_folder:
+            report = os.path.join(agg_folder, "report.html")
+            href = os.path.relpath(report, self.result_folder)
+            child_reports.append(("Aggregation", href, os.path.isfile(report)))
+
+        rows = [
+            ("Report", self.reporter_config.get("report_name", "")),
+            ("Result folder", self.result_folder),
+            ("Single datasets", len(sgl_folders)),
+            ("Reports found", sum(1 for _, _, ok in child_reports if ok)),
+        ]
+        try:
+            write_aggregation_index(
+                self.result_folder,
+                self.reporter_config.get("report_name", "Aggregation report"),
+                rows,
+                child_reports,
+                config=self.aggregation_workflow,
+            )
+        except Exception as e:  # reporting must never abort the analysis
+            logger.error(f"Could not write HTML aggregation index: {e}")
+
     @staticmethod
-    def _single_marker_path(folder):
+    def _single_marker_path(folder: str) -> str:
+        """Return the completion-marker path for a single-dataset folder."""
         return os.path.join(folder, "_pwf_single_done.txt")
 
-    def _write_single_marker(self, folder, success):
-        """Drop a completion marker so rank 0 knows this single dataset is
-        finished (and whether it succeeded). Written atomically via a
-        rank-specific temp file + os.replace."""
+    def _write_single_marker(self, folder: str, success: bool) -> None:
+        """Drop a completion marker for a finished single dataset.
+
+        Lets rank 0 know the dataset is finished and whether it succeeded.
+        Written atomically via a rank-specific temp file + ``os.replace``.
+
+        Parameters
+        ----------
+        folder : str
+            The single-dataset result folder to write the marker into.
+        success : bool
+            Whether the single-dataset workflow succeeded.
+        """
         try:
             os.makedirs(folder, exist_ok=True)
             marker = self._single_marker_path(folder)
@@ -480,7 +671,19 @@ class AggregationWorkflowRunner:
                 f"Could not write single-dataset marker in {folder}: {e}"
             )
 
-    def _read_single_marker(self, folder):
+    def _read_single_marker(self, folder: str) -> str | None:
+        """Return a single dataset's marker contents, or None if absent.
+
+        Parameters
+        ----------
+        folder : str
+            The single-dataset result folder to read the marker from.
+
+        Returns
+        -------
+        str or None
+            ``"success"`` / ``"failed"`` if the marker exists, else None.
+        """
         try:
             with open(self._single_marker_path(folder)) as f:
                 return f.read().strip()
@@ -488,14 +691,31 @@ class AggregationWorkflowRunner:
             return None
 
     def _wait_for_single_markers(
-        self, folders, timeout=7 * 24 * 3600, poll=15
-    ):
+        self,
+        folders: list[str],
+        timeout: float = 7 * 24 * 3600,
+        poll: float = 15,
+    ) -> None:
         """Block until every single-dataset folder has a completion marker.
 
         Used by rank 0 before aggregating, to gather the datasets handled by
         other ranks via the shared filesystem. SLURM enforces the real wall
         time; the timeout here is only a safety net against an unrecoverable
         hang (e.g. a worker that died without writing a marker).
+
+        Parameters
+        ----------
+        folders : list of str
+            The single-dataset result folders to wait on.
+        timeout : float, optional
+            Maximum seconds to wait before raising. Default is one week.
+        poll : float, optional
+            Seconds between polls of the shared filesystem. Default is 15.
+
+        Raises
+        ------
+        WorkflowError
+            If the timeout elapses before all markers appear.
         """
         start = time.time()
         pending = set(range(len(folders)))
@@ -519,21 +739,37 @@ class AggregationWorkflowRunner:
             time.sleep(poll)
 
     @staticmethod
-    def _load_single_results(folder):
-        """Load just the results dict a single WorkflowRunner saved, without
-        re-initializing its Confluence reporter (which WorkflowRunner.load
-        would do)."""
+    def _load_single_results(folder: str) -> dict:
+        """Load only the results dict a single WorkflowRunner saved.
+
+        Avoids re-initializing the Confluence reporter that
+        :meth:`WorkflowRunner.load` would set up.
+
+        Parameters
+        ----------
+        folder : str
+            The single-dataset result folder, holding
+            ``WorkflowRunner.yaml``.
+
+        Returns
+        -------
+        dict
+            The saved ``results`` dictionary.
+        """
         fp = os.path.join(folder, "WorkflowRunner.yaml")
         with open(fp, "r") as f:
             data = yaml.safe_load(f)
         return data["results"]
 
-    def save(self, dirn="."):
-        """Save the current config and results into
-        'WorkflowRunnerResults.yaml' in the given directory.
-        Args:
-            dirn : str
-                the directory to save into
+    def save(self, dirn: str = ".") -> None:
+        """Save the current config and results to the given directory.
+
+        Writes ``AggregationWorkflowRunner.yaml``.
+
+        Parameters
+        ----------
+        dirn : str, optional
+            The directory to save into. Default is the current directory.
         """
         fp = os.path.join(dirn, "AggregationWorkflowRunner.yaml")
         data = {
@@ -548,11 +784,18 @@ class AggregationWorkflowRunner:
             yaml.dump(data, f)
 
     @classmethod
-    def load(cls, dirn="."):
-        """Load instance from a "WorkflowRunnerResults.yaml" file.
-        Args:
-            dirn : str
-                the directory to load from
+    def load(cls, dirn: str = ".") -> "AggregationWorkflowRunner":
+        """Load an instance from an ``AggregationWorkflowRunner.yaml`` file.
+
+        Parameters
+        ----------
+        dirn : str, optional
+            The directory to load from. Default is the current directory.
+
+        Returns
+        -------
+        AggregationWorkflowRunner
+            The reconstructed runner, marked to continue a previous run.
         """
         fp = os.path.join(dirn, "AggregationWorkflowRunner.yaml")
         with open(fp, "r") as f:
@@ -571,26 +814,30 @@ class AggregationWorkflowRunner:
 
 
 class WorkflowError(Exception):
-    pass
+    """Raised when a workflow cannot complete (e.g. a failed dataset)."""
 
 
 class WorkflowRunner:
-    """Runs a workflow, defined as a sequence of modules, which
-    are worked on and their results published on Confluence.
+    """Run a workflow and publish its results to Confluence.
 
-    Currently supported usage:
-    ra, ac, wm = {}, {}, {}
-    wr = WorkflowRunner.config_from_dicts(rc, ac, wm)
-    wr.run()
+    A workflow is a sequence of modules that are run in order, each module's
+    results being reported to Confluence.
+
+    Examples
+    --------
+    >>> rc, ac, wm = {}, {}, {}
+    >>> wr = WorkflowRunner.config_from_dicts(rc, ac, wm)
+    >>> wr.run()
     """
 
-    def __init__(self, postfix=None):
-        """
-        Args:
-            postfix : str, default None
-                The postfix to use (for loading prior analyses).
-                Format: %y%m%d-%H%M.
-                If None, a new postfix is generated
+    def __init__(self, postfix: str | None = None):
+        """Initialize the runner.
+
+        Parameters
+        ----------
+        postfix : str, optional
+            Postfix used to load prior analyses, formatted ``%y%m%d-%H%M``.
+            If None, a new postfix is generated from the current time.
         """
         if postfix:
             self.postfix = postfix
@@ -603,31 +850,38 @@ class WorkflowRunner:
     @classmethod
     def config_from_dicts(
         cls,
-        reporter_config,
-        analysis_config,
-        workflow_modules,
-        postfix=None,
-        continue_previous_runner=False,
-    ):
-        """To keep flexibility for initialization methods, this is not
-        done in __init__. This way in the future, we can instantiate
-        by providing config file names, retrieving config and parameters
-        via a web API, or such.
-        Args:
-            reporter_config : dict
-                configuration of the reporter, for now Confluence reporter
-            analysis_config : dict
-                general analysis configuration
-            workflow_modules : list of tuples
-                the workflow modules to run
-            postfix : str, default None
-                The postfix to use (for loading prior analyses).
-                Format: %y%m%d-%H%M.
-                If None, a new postfix is generated
-            continue_previous_runner : bool, default False
-                continue a previous analysis that aborted (e.g. because of a
-                manual step). If no previous analysis exists in that folder,
-                create a new one.
+        reporter_config: dict,
+        analysis_config: dict,
+        workflow_modules: list[tuple],
+        postfix: str | None = None,
+        continue_previous_runner: bool = False,
+    ) -> "WorkflowRunner":
+        """Build a configured runner from plain config dicts.
+
+        Initialization is kept out of ``__init__`` to preserve flexibility for
+        alternative entry points in the future (config file names, a web API,
+        etc.).
+
+        Parameters
+        ----------
+        reporter_config : dict
+            Configuration of the reporter (currently the Confluence reporter).
+        analysis_config : dict
+            General analysis configuration.
+        workflow_modules : list of tuple
+            The workflow modules to run, as ``(module_name, parameters)``.
+        postfix : str, optional
+            Postfix used to load prior analyses, formatted ``%y%m%d-%H%M``.
+            If None, a new postfix is generated.
+        continue_previous_runner : bool, optional
+            Continue a previous analysis that aborted (e.g. at a manual step).
+            If no previous analysis exists in that folder, a new one is
+            created. Default is False.
+
+        Returns
+        -------
+        WorkflowRunner
+            The configured runner instance.
         """
         if continue_previous_runner:
             folder = analysis_config["result_location"]
@@ -652,17 +906,23 @@ class WorkflowRunner:
         return instance
 
     @classmethod
-    def _check_previous_runner(cls, folder, report_name):
-        """Check for a previous runner instance in the given location
-        Args:
-            folder : str
-                the folder to look in
-            report_name : str
-                the name of the report
-        Returns:
-            postfix : str
-                the postfix of the latest previous runner in that location
-                if none are found, postfix is None
+    def _check_previous_runner(
+        cls, folder: str, report_name: str
+    ) -> str | None:
+        """Find the postfix of the latest previous runner in a location.
+
+        Parameters
+        ----------
+        folder : str
+            The folder to look in.
+        report_name : str
+            The name of the report.
+
+        Returns
+        -------
+        str or None
+            The postfix of the latest previous runner in that location, or
+            None if none are found.
         """
         dirs = [
             it
@@ -686,8 +946,19 @@ class WorkflowRunner:
                 latest_postfix = postfix
         return latest_postfix
 
-    def _initialize_analysis(self, analysis_config, report_name):
-        """Initializes the Analysis worker."""
+    def _initialize_analysis(
+        self, analysis_config: dict, report_name: str
+    ) -> None:
+        """Initialize the analysis worker and its result directory.
+
+        Parameters
+        ----------
+        analysis_config : dict
+            General analysis configuration; ``result_location`` is popped to
+            build the result folder.
+        report_name : str
+            Name of the report, used as the result subfolder name.
+        """
         logger.debug("Initializing Analysis.")
         # create analysis result directory
         self.result_folder = os.path.join(
@@ -700,21 +971,68 @@ class WorkflowRunner:
 
         self.autopicasso = AutoPicasso(self.result_folder, analysis_config)
 
-    def _initialize_reporter(self, reporter_config):
-        """Initializes the reporter, documenting the analysis."""
+    def _initialize_reporter(self, reporter_config: dict) -> None:
+        """Initialize the reporter(s) that document the analysis.
+
+        Supports two reporter backends, either or both of which may be
+        configured under ``reporter_config``:
+
+        - ``ConfluenceReporter`` -- live Confluence reporting (its sub-dict
+          holds the connection kwargs).
+        - ``HTMLReporter`` -- a local navigable ``report.html`` (no Confluence
+          connection or credentials). Its sub-dict may set ``report_dir``;
+          otherwise the report is written into the run's result folder.
+
+        Configured reporters are collected in ``self.reporters`` and invoked
+        in turn for every module. ``self.confluencereporter`` is retained as
+        an alias for the Confluence reporter when present.
+
+        Parameters
+        ----------
+        reporter_config : dict
+            Reporter configuration.
+        """
         logger.debug("Initializing Reporter.")
         self.report_name = reporter_config["report_name"]
+        self.reporters = []
+        self.confluencereporter = None
         if init_kwargs := reporter_config.get("ConfluenceReporter"):
             init_kwargs["report_name"] = self.report_name
             # logger.debug(init_kwargs)
             self.confluencereporter = ConfluenceReporter(**init_kwargs)
+            self.reporters.append(self.confluencereporter)
+        if (html_kwargs := reporter_config.get("HTMLReporter")) is not None:
+            report_dir = html_kwargs.get("report_dir")
+            if not report_dir:
+                # _initialize_analysis sets result_folder but pops
+                # result_location, and the two entry points call them in
+                # different orders -- prefer whichever is available.
+                if getattr(self, "result_folder", None):
+                    report_dir = self.result_folder
+                else:
+                    report_dir = os.path.join(
+                        self.analysis_config["result_location"],
+                        self.report_name,
+                    )
+            self.htmlreporter = HTMLReporter(report_dir, self.report_name)
+            self.reporters.append(self.htmlreporter)
 
-    def run(self):
-        """Run the analysis of the worfklow modules.
-        Returns:
-            success : bool
-                whether all modulles ran through successfully.
+    def run(self) -> bool:
+        """Run the analysis of the workflow modules in order.
+
+        Already-succeeded modules from a previous run are skipped; execution
+        stops at the first module that fails.
+
+        Returns
+        -------
+        bool
+            Whether all modules ran through successfully.
         """
+        # pre-flight: validate dependencies/scope (warn-only, non-blocking)
+        _log_workflow_validation(
+            self.workflow_modules, Scope.SINGLE, "single-dataset workflow"
+        )
+
         # first, check whether all modules are actually implemented
         available_modules = inspect.getmembers(AbstractModuleCollection)
         available_modules = [
@@ -752,10 +1070,8 @@ class WorkflowRunner:
             ) and self.module_previously_analyzed(i):
                 # if it has, skip this. This way an aborted module
                 # will be re-analyzed.
-                logger.debug(
-                    f"""Module {i}, {module_name} has been previously
-                    analyzed. Skipping."""
-                )
+                logger.debug(f"""Module {i}, {module_name} has been previously
+                    analyzed. Skipping.""")
                 continue
             else:
                 all_previously_succeeded = False
@@ -780,16 +1096,30 @@ class WorkflowRunner:
     # UTIL FUNCTIONS
     ##########################################################################
 
-    def get_postfixed_filename(self, filename):
-        """ """
+    def get_postfixed_filename(self, filename: str) -> str:
+        """Return ``filename`` prefixed with the runner's postfix.
+
+        Parameters
+        ----------
+        filename : str
+            The base filename.
+
+        Returns
+        -------
+        str
+            The postfixed path under ``self.savedir``.
+        """
         return os.path.join(self.savedir, self.postfix + filename)
 
-    def save(self, dirn="."):
-        """Save the current results into 'WorkflowRunnerResults.yaml' in the
-        given directory.
-        Args:
-            dirn : str
-                the directory to save into
+    def save(self, dirn: str = ".") -> None:
+        """Save the current results to the given directory.
+
+        Writes ``WorkflowRunner.yaml``.
+
+        Parameters
+        ----------
+        dirn : str, optional
+            The directory to save into. Default is the current directory.
         """
         pce = DictSimpleTyper(to_simple_type=True)
         filepath = os.path.join(dirn, "WorkflowRunner.yaml")
@@ -805,11 +1135,18 @@ class WorkflowRunner:
             yaml.dump(data, f)
 
     @classmethod
-    def load(cls, dirn="."):
-        """Load the results from a "WorkflowRunner.yaml" file.
-        Args:
-            dirn : str
-                the directory to load from
+    def load(cls, dirn: str = ".") -> "WorkflowRunner":
+        """Load the results from a ``WorkflowRunner.yaml`` file.
+
+        Parameters
+        ----------
+        dirn : str, optional
+            The directory to load from. Default is the current directory.
+
+        Returns
+        -------
+        WorkflowRunner
+            The reconstructed runner with analysis and reporter initialized.
         """
         filepath = os.path.join(dirn, "WorkflowRunner.yaml")
         with open(filepath, "r") as f:
@@ -825,15 +1162,21 @@ class WorkflowRunner:
         instance._initialize_reporter(instance.reporter_config)
         return instance
 
-    def module_previously_analyzed(self, i):
-        """Checks whether the module with index i has been analysed previously.
-        If it has, a folder with its index prefixed has been created.
-        Args:
-            i : int
-                the module index
-        Returns:
-            module_found : bool
-                whether the folder corresponding to the module index was found
+    def module_previously_analyzed(self, i: int) -> bool:
+        """Check whether the module with index ``i`` was analysed previously.
+
+        If it was, a folder prefixed with its index exists in the result
+        folder.
+
+        Parameters
+        ----------
+        i : int
+            The module index.
+
+        Returns
+        -------
+        bool
+            Whether the folder corresponding to the module index was found.
         """
         # via created directories:
         dirs = os.listdir(self.result_folder)
@@ -846,17 +1189,20 @@ class WorkflowRunner:
         module_found = any([d.startswith(prefix) for d in dirs])
         return module_found
 
-    def module_previously_succeeded(self, i, module_name):
-        """Check whether a module has previously succeeded, which must be
-        saved in the results.
-        Args:
-            i : int
-                the module index
-            module_name : str
-                the module name
-        Returns:
-            module_found : bool
-                whether a previous module evaluation has succeeded
+    def module_previously_succeeded(self, i: int, module_name: str) -> bool:
+        """Check whether a module previously succeeded, per the saved results.
+
+        Parameters
+        ----------
+        i : int
+            The module index.
+        module_name : str
+            The module name.
+
+        Returns
+        -------
+        bool
+            Whether a previous evaluation of the module succeeded.
         """
         module_id = f"{i:02d}_{module_name}"
         logger.debug("looking for previous " + module_id)
@@ -866,25 +1212,34 @@ class WorkflowRunner:
         )
         return self.results.get(module_id, {}).get("success", False)
 
-    def call_module(self, fun_name, i, parameters):
-        """At the level of the WorkflowRunner, all modules are processed the
-        same way:
-        first, the analysis is performed (by calling the module in
-        autopicasso), and then the results are reported (by calling the module
-        in confluencereporter). Therefore, this unified call_module function
-        can do the job, instead of writing separate methods here for all
-        modules.
+    def call_module(self, fun_name: str, i: int, parameters: dict) -> bool:
+        """Run one workflow module: analyse, then report.
 
-        Args:
-            fun_name : str
-                the function (module) name.
-            i : int
-                the index of the module in the workflow
-            parameters : dict
-                the module parameters
-        Returns:
-            success : bool
-                whether the module ended successfully
+        At the :class:`WorkflowRunner` level every module is processed the same
+        way -- the analysis is performed by calling the module on
+        ``autopicasso``, then its results are reported by calling the module on
+        ``confluencereporter`` -- so this single method handles all modules
+        instead of one method per module.
+
+        Parameters
+        ----------
+        fun_name : str
+            The function (module) name.
+        i : int
+            The index of the module in the workflow.
+        parameters : dict
+            The module parameters.
+
+        Returns
+        -------
+        bool
+            Whether the module ended successfully.
+
+        Raises
+        ------
+        AutoPicassoError
+            Re-raised if the analysis step failed (after reporting the error
+            to Confluence).
         """
         key = f"{i:02d}_{fun_name}"
         logger.debug(f"Working on {key}")
@@ -904,13 +1259,15 @@ class WorkflowRunner:
             logger.error(e)
             logger.error(traceback.format_exc())
             analyse_error = copy.copy(e)
-            self.confluencereporter.report_error(e, fun_name)
+            for reporter in self.reporters:
+                reporter.report_error(e, fun_name)
             # raise e
         except Exception as e:
             logger.error(e)
             logger.error(traceback.format_exc())
             analyse_error = copy.copy(e)
-            self.confluencereporter.report_error(e, fun_name)
+            for reporter in self.reporters:
+                reporter.report_error(e, fun_name)
             # raise e
 
         # If the analysis step crashed, self.results[key] was never
@@ -922,11 +1279,11 @@ class WorkflowRunner:
             raise analyse_error
 
         # logger.debug(f"RESULTS: {self.results[key]}")
-        fun_cr = getattr(self.confluencereporter, fun_name)
-        try:
-            fun_cr(i, parameters, self.results[key])
-        except ConfluenceInterfaceError as e:
-            logger.error(e)
-            logger.error(traceback.format_exc())
+        for reporter in self.reporters:
+            try:
+                getattr(reporter, fun_name)(i, parameters, self.results[key])
+            except ConfluenceInterfaceError as e:
+                logger.error(e)
+                logger.error(traceback.format_exc())
 
         return self.results[key]["success"]

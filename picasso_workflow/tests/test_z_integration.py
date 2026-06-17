@@ -27,6 +27,7 @@ Two test classes plus one parametrized function:
       safe modules against the bundled test data.  Silently skipped when no
       templates are present.  Populate via: python tools/snapshot_templates.py
 """
+
 import importlib.util
 import logging
 import os
@@ -45,7 +46,6 @@ from picasso_workflow.workflow import (  # noqa: E402
 )
 import picasso_workflow.standard_singledataset_workflows as ssw  # noqa: E402
 import picasso_workflow.standard_aggregation_workflows as saw  # noqa: E402
-
 
 logger = logging.getLogger(__name__)
 
@@ -89,15 +89,15 @@ _RESULTS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
 )
 
-# Names of the environment variables required for live Confluence tests.
-_CONFLUENCE_ENV_VARS = (
-    "TEST_CONFLUENCE_URL",
-    "TEST_CONFLUENCE_TOKEN",
-    "TEST_CONFLUENCE_SPACE",
-    "TEST_CONFLUENCE_PAGE",
-    "TEST_CONFLUENCE_USERNAME",
+# Live-Confluence tests need the test token; non-secret connection settings
+# come from the ConfluenceTest config section (resolver). Without a token the
+# tests are skipped.
+from picasso_workflow.confluence import (  # noqa: E402
+    resolve_confluence_credentials,
 )
-_CONFLUENCE_AVAILABLE = all(os.getenv(v) for v in _CONFLUENCE_ENV_VARS)
+
+_TEST_CREDS = resolve_confluence_credentials("ConfluenceTest")
+_CONFLUENCE_AVAILABLE = bool(_TEST_CREDS.get("token"))
 
 # Shared helpers live in conftest.py so that test_real_data_integration.py
 # can also use them without importing this module.
@@ -184,8 +184,10 @@ class Test_A_PicassoIntegration(unittest.TestCase):
             "03_save_single_dataset, filepath",
         )
 
-        with patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock), \
-                patch("picasso_workflow.workflow.ConfluenceInterface", MagicMock):
+        with (
+            patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock),
+            patch("picasso_workflow.workflow.ConfluenceInterface", MagicMock),
+        ):
             awr = AggregationWorkflowRunner.config_from_dicts(
                 _dummy_reporter_config("test_a02_minimal_channel_align"),
                 _analysis_config(_RESULTS_DIR),
@@ -244,10 +246,7 @@ def test_03_undrift_rcc(synthetic_movie_5k, tmp_path):
 
 @pytest.mark.skipif(
     not _CONFLUENCE_AVAILABLE,
-    reason=(
-        "Confluence env vars not set "
-        f"({', '.join(_CONFLUENCE_ENV_VARS)})"
-    ),
+    reason="Confluence test token not set (TEST_CONFLUENCE_TOKEN)",
 )
 class Test_B_ConfluenceIntegration(unittest.TestCase):
     """Run a minimal workflow with a live ConfluenceReporter.
@@ -261,11 +260,11 @@ class Test_B_ConfluenceIntegration(unittest.TestCase):
         self._reporter_config_base = {
             "report_name": "",
             "ConfluenceReporter": {
-                "base_url": os.getenv("TEST_CONFLUENCE_URL"),
-                "username": os.getenv("TEST_CONFLUENCE_USERNAME"),
-                "space_key": os.getenv("TEST_CONFLUENCE_SPACE"),
-                "parent_page_title": os.getenv("TEST_CONFLUENCE_PAGE"),
-                "token": os.getenv("TEST_CONFLUENCE_TOKEN"),
+                "base_url": _TEST_CREDS["base_url"],
+                "username": _TEST_CREDS["username"],
+                "space_key": _TEST_CREDS["space_key"],
+                "parent_page_title": _TEST_CREDS["parent_page_title"],
+                "token": _TEST_CREDS["token"],
             },
         }
 
@@ -307,6 +306,7 @@ class Test_B_ConfluenceIntegration(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Level B helpers — template smoke tests
 # ---------------------------------------------------------------------------
+
 
 def _import_template(path):
     """Dynamically import a start_workflow.py and return the module object."""
@@ -356,7 +356,7 @@ def _smoke_workflow_from_template(path):
 
 
 def _smoke_template_cases():
-    """Return (name, smoke_modules) pairs for all suitable snapshotted templates."""
+    """Return (name, smoke_modules) pairs for suitable snapshot templates."""
     if not os.path.isdir(_TEMPLATES_DIR):
         return []
     cases = []
@@ -384,8 +384,10 @@ def test_template_smoke(template_name, smoke_modules, tmp_path):
     """
     # Patch both ConfluenceReporter (used by WorkflowRunner) and
     # ConfluenceInterface (used directly by AggregationWorkflowRunner).
-    with patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock), \
-            patch("picasso_workflow.workflow.ConfluenceInterface", MagicMock):
+    with (
+        patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock),
+        patch("picasso_workflow.workflow.ConfluenceInterface", MagicMock),
+    ):
         wr = WorkflowRunner.config_from_dicts(
             _dummy_reporter_config(f"test_c_template_{template_name}"),
             _analysis_config(str(tmp_path)),

@@ -8,6 +8,7 @@ Description: Test the module workflow.py
     this is only about the module itself. For the interaction
     of the different modules, see test_integration.py
 """
+
 import os
 import shutil
 import logging
@@ -15,7 +16,6 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
-
 
 logger = logging.getLogger(__name__)
 

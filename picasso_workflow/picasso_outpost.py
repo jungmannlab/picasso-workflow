@@ -1,13 +1,16 @@
 #!/usr/bin/env python
-"""
-Module Name: picasso_outpost.py
+"""Exploratory DNA-PAINT analysis functions related to picasso.
+
+A collection of picasso-related functions that, if they prove useful, may be
+moved into a future picasso release. Keeping them here makes testing cycles
+faster.
+
 Author: Heinrich Grabmayr
-Initial Date: March 8, 2024
-Description: This is a collection of exploratory DNA-PAINT analysis / picasso
-    related functions which if useful should (potentially) be moved into the
-    next picasso release. The reasoning to put them here is that it makes
-    testing cycles faster.
+Initial date: March 8, 2024
 """
+
+from __future__ import annotations
+
 # import logging
 from loguru import logger
 import numpy as np
@@ -15,7 +18,6 @@ import numpy as np
 # from numpy.lib.recfunctions import stack_arrays
 import pandas as pd
 import numba as nb
-import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 from matplotlib.colors import LogNorm
@@ -45,7 +47,6 @@ from scipy import stats
 import itertools
 import glob
 
-
 # logger = logging.getLogger(__name__)
 
 
@@ -61,51 +62,57 @@ def align_channels(
     plot_histogram=False,
     plot_dir=None,
 ):
-    """This is taken from picasso.gui.render.View.align. As the code is not
-    modular enough, it is replicated here. Potentially, this could go into
-    a non-gui function in picasso.
-    Args:
-        channel_locs : list of recarray
-            the localizations of the different channels
-        channel_info : list of dict
-            the infos of the different channels
-        max_iterations : int
-            the maximum number of iterations of alignment
-        convergence : float
-            convergence criterium when a shift is negligible and thus
-            alignment convergence achieved. The value is in pixels.
-        fiducial_locs : list of recarray
-            the localizations to use as a basis for the alignment. If None,
-            the channel_locs are used as fiducials.
-        force_method : None or str
-            "RCC": force usage of RCC algorithm, also with fiducials present.
-            "picked": force usage of 'by picked' algorithm
-            "filtered_RCC": force usage of filtered RCC algorithm based on
-            shift histograms
-        max_shift : float
-            the maximum shift between picks, if undifting fiducials by picked,
-            or the maximum expected shift for filtered_RCC alignment
-        plot_histogram : bool, default False
-            Whether to save 2D histogram plots for filtered_RCC alignment
-        plot_dir : str, optional
-            Directory to save histogram plots for filtered_RCC alignment
-    Returns:
-        shift : list (len 2-3) of lists (len iterations)
-            the shifts in x, y, (z) for each iteration, averaged over
-            channels (?)
-        cumulative_shift : np array (3, channels, iterations)
-            the cumulative shift in the three dimensions, in all channels
-            the total shift is the last value (in iterations) fo the cum shift
-        use_fiducials : bool
-            reports on whether fiducials have been used (and aligned by picked)
-            or not (and alignment was by rcc)
-        algo_used : str
-            the algorithm used for alignment
-        fp_figs : list
-            list of figure file paths if plotting was enabled
-        shift_uncertainties : dict
-            dictionary containing uncertainty information (only available
-            for RSSO method)
+    """Align multiple channels to each other.
+
+    Adapted from ``picasso.gui.render.View.align``; replicated here because
+    the upstream code is not modular enough. This could eventually become a
+    non-GUI function in picasso.
+
+    Parameters
+    ----------
+    channel_locs : list of recarray
+        The localizations of the different channels.
+    channel_info : list of dict
+        The infos of the different channels.
+    channel_tags : list of str, optional
+        Names of the channels (used by the RSSO method).
+    max_iterations : int, optional
+        Maximum number of alignment iterations. Default is 5.
+    convergence : float, optional
+        Convergence criterion (in pixels) below which a shift is negligible
+        and alignment is considered converged. Default is 0.001.
+    fiducial_locs : list of recarray, optional
+        Localizations to use as the alignment basis. If None, the
+        ``channel_locs`` are used as fiducials.
+    force_method : str, optional
+        Force a specific algorithm: ``"RCC"`` (even with fiducials present),
+        ``"picked"`` (the by-picked algorithm), ``"RSSO"``, or
+        ``"filtered_RCC"`` (filtered RCC based on shift histograms).
+    max_shift : float, optional
+        Maximum shift between picks (when undrifting fiducials by picked) or
+        the maximum expected shift for filtered_RCC / RSSO alignment.
+    plot_histogram : bool, optional
+        Whether to save 2D histogram plots for filtered_RCC alignment.
+        Default is False.
+    plot_dir : str, optional
+        Directory to save the histogram plots.
+
+    Returns
+    -------
+    shift : list of list
+        Length 2-3 (x, y, [z]); for each dimension, the per-iteration shifts
+        averaged over channels.
+    cumulative_shift : numpy.ndarray
+        Shape ``(3, channels, iterations)``; the cumulative shift per
+        dimension and channel (the total is the last iteration value).
+    use_fiducials : bool
+        Whether fiducials were used (aligned by picked) or not (by RCC).
+    algo_used : str
+        The algorithm used for alignment.
+    fp_figs : list
+        Figure file paths, if plotting was enabled.
+    shift_uncertainties : dict
+        Uncertainty information (only populated for the RSSO method).
     """
     logger.debug("Aligning datasets")
     if force_method is None:
@@ -129,11 +136,9 @@ def align_channels(
         logger.debug(f"# fiducials after match and sort: {nfidu}")
 
         algo_used = "by picked"
-        (shift, cumulative_shift, channel_locs, fiducial_locs) = (
-            align_by_picked(
-                channel_locs,
-                fiducial_locs,
-            )
+        shift, cumulative_shift, channel_locs, fiducial_locs = align_by_picked(
+            channel_locs,
+            fiducial_locs,
         )
         fp_figs = []
         shift_uncertainties = {}  # No uncertainty analysis for RCC method
@@ -152,7 +157,7 @@ def align_channels(
         cumulative_shift = np.array(shift)[..., np.newaxis]
     else:
         algo_used = "RCC"
-        (shift, cumulative_shift, channel_locs, fiducial_locs) = align_by_rcc(
+        shift, cumulative_shift, channel_locs, fiducial_locs = align_by_rcc(
             channel_locs,
             channel_info,
             max_iterations,
@@ -184,6 +189,29 @@ def _has_z(locs):
 
 
 def align_by_picked(channel_locs, fiducial_locs):
+    """Align channels using picked fiducials.
+
+    Computes the inter-channel shift from the fiducials and applies it to both
+    the channel and fiducial localizations.
+
+    Parameters
+    ----------
+    channel_locs : list of recarray
+        The localizations of the different channels.
+    fiducial_locs : list of recarray
+        The fiducial localizations of the different channels.
+
+    Returns
+    -------
+    shift : list of list
+        The shift in y, x, (z) per channel.
+    cumulative_shift : numpy.ndarray
+        The shift broadcast to shape ``(dims, channels, 1)``.
+    channel_locs : list of recarray
+        The shifted channel localizations.
+    fiducial_locs : list of recarray
+        The shifted fiducial localizations.
+    """
     # find shift between channels
     shift = shift_from_picked(fiducial_locs)
     # print("Shift {}".format(shift))
@@ -212,6 +240,33 @@ def align_by_rcc(
     convergence=0.001,
     fiducial_locs=None,
 ):
+    """Align channels iteratively using redundant cross-correlation (RCC).
+
+    Parameters
+    ----------
+    channel_locs : list of recarray
+        The localizations of the different channels.
+    channel_info : list of dict
+        The infos of the different channels.
+    max_iterations : int, optional
+        Maximum number of alignment iterations. Default is 5.
+    convergence : float, optional
+        Per-iteration shift (pixels) below which alignment is converged.
+        Default is 0.001.
+    fiducial_locs : list of recarray, optional
+        Fiducials to align on. If None, the ``channel_locs`` are used.
+
+    Returns
+    -------
+    shift : list of list
+        Mean per-iteration shift in x, y, (z).
+    cumulative_shift : numpy.ndarray
+        Cumulative shift, shape ``(3, channels, iterations)``.
+    channel_locs : list of recarray
+        The shifted channel localizations.
+    fiducial_locs : list of recarray
+        The shifted fiducial localizations.
+    """
     shift_x = []
     shift_y = []
     shift_z = []
@@ -283,14 +338,16 @@ def align_by_rcc(
 
 
 def plot_shift(shifts, cum_shifts, filepath):
-    """Plot the sifts generated by align_channels
-    Args:
-        shifts : list of 1D array
-            the shifts in x, y, and potentially z dimensions
-        cum_shifts : 3 D array
-            cumulative shifts (dimension, channel, iteration)
-        filepath : str
-            the filepath to save the plot
+    """Plot the shifts generated by :func:`align_channels`.
+
+    Parameters
+    ----------
+    shifts : list of 1D array
+        The shifts in the x, y and potentially z dimensions.
+    cum_shifts : numpy.ndarray
+        Cumulative shifts, shape ``(dimension, channel, iteration)``.
+    filepath : str
+        The filepath to save the plot to.
     """
     fig, ax = plt.subplots(nrows=1 + len(shifts), sharex=True)
     # ax[0].suptitle("Shift")
@@ -306,26 +363,34 @@ def plot_shift(shifts, cum_shifts, filepath):
 
 
 def shift_from_rcc(channel_locs, channel_info):
-    """
-    Used by align. Estimates image shifts based on whole images'
-    rcc.
+    """Estimate inter-channel image shifts via whole-image RCC.
 
-    Args:
-        channel_locs : list of recarray
-            the localizations of the different channels
-        channel_info : list of dict
-            the infos of the different channels
+    Used by :func:`align_by_rcc`.
 
-    Returns:
-        shifts : tuple
-            the channel shifts shape (2,) or (3,) (if z coordinate present)
+    Parameters
+    ----------
+    channel_locs : list of recarray
+        The localizations of the different channels.
+    channel_info : list of dict
+        The infos of the different channels.
+
+    Returns
+    -------
+    tuple
+        The channel shifts, of shape ``(2,)`` or ``(3,)`` (if a z coordinate
+        is present).
     """
     n_channels = len(channel_locs)
     images = []
     logger.debug("Rendering localizations.")
     # render each channel and save it in images
     for i, (locs_, info_) in enumerate(zip(channel_locs, channel_info)):
-        _, image = render.render(locs_, info_, blur_method="smooth")
+        # Pass disp_px_size explicitly (oversampling=1 equivalent) to avoid
+        # the deprecated-`oversampling` warning in picasso >= 0.10.
+        pixelsize = lib.get_from_metadata(info_, "Pixelsize", raise_error=True)
+        _, image = render.render(
+            locs_, info_, blur_method="smooth", disp_px_size=pixelsize
+        )
         images.append(image)
     n_pairs = int(n_channels * (n_channels - 1) / 2)
     logger.debug(f"Correlating {n_pairs} image pairs.")
@@ -340,39 +405,40 @@ def align_by_rsso(
     plot_histogram=False,
     plot_dir=None,
 ):
-    """
-    Align channels using redundent spot shift overrepresentation (RSSO)
-    based on shift histograms of all channel combinations.
+    """Align channels using redundant spot-shift overrepresentation (RSSO).
 
-    This function calculates shifts between all channel pairs to provide
-    redundant measurements, then solves for the optimal alignment using
-    least squares. It assumes that localizations in different channels
-    correspond to each other but are shifted by delta_x and delta_y with
-    some normal distributed error.
+    Computes shifts between all channel pairs (redundant measurements) from
+    their shift histograms, then solves for the optimal alignment by least
+    squares. Assumes localizations in different channels correspond to each
+    other but are shifted by ``delta_x``/``delta_y`` with normally distributed
+    error.
 
-    Args:
-        channel_locs : list of np.rec.array
-            List of localization arrays for different channels. Each array
-            should have 'x' and 'y' fields.
-        channel_tags : list of str or None
-            the tags to the channels
-        max_shift : float, default 10.0
-            Maximum expected shift in pixels for alignment
-        plot_histogram : bool, default False
-            Whether to save 2D histogram plots for each channel pair
-        plot_dir : str, optional
-            Directory to save histogram plots. If None and plot_histogram
-            is True, saves to current directory.
+    Parameters
+    ----------
+    channel_locs : list of np.rec.array
+        Localization arrays for the different channels; each must have ``x``
+        and ``y`` fields.
+    channel_tags : list of str or None, optional
+        The names of the channels.
+    max_shift : float, optional
+        Maximum expected shift in pixels for alignment. Default is 10.0.
+    plot_histogram : bool, optional
+        Whether to save 2D histogram plots for each channel pair. Default is
+        False.
+    plot_dir : str, optional
+        Directory to save histogram plots. If None and ``plot_histogram`` is
+        True, saves to the current directory.
 
-    Returns:
-        shifts : tuple
-            The channel shifts as (shift_y, shift_x) for compatibility with
-            existing code
-        fp_figs : list
-            List of file paths to saved histogram plots
-            (empty if plot_histogram=False)
-        shift_uncertainties : dict
-            Dictionary containing uncertainty information for channel shifts
+    Returns
+    -------
+    shifts : tuple
+        The channel shifts as ``(shift_y, shift_x)`` for compatibility with
+        existing code.
+    fp_figs : list
+        File paths to saved histogram plots (empty if ``plot_histogram`` is
+        False).
+    shift_uncertainties : dict
+        Uncertainty information for the channel shifts.
     """
     n_channels = len(channel_locs)
     if n_channels < 2:
@@ -460,58 +526,66 @@ def _calculate_pairwise_shift(
     enable_fit_quality_check=True,
     fit_quality_thresholds=None,
 ):
-    """
-    Calculate shift between two channels using histogram peak finding with temporal filtering.
+    """Calculate the shift between two channels via histogram peak finding.
 
-    Args:
-        locs_i : np.rec.array or cKDTree
-            Localizations for first channel (or pre-built KDTree)
-        locs_j : np.rec.array
-            Localizations for second channel
-        max_shift : float
-            Maximum expected shift in pixels
-        plot_histogram : bool, default False
-            Whether to save 2D histogram plot
-        plot_dir : str, optional
-            Directory to save plots
-        channel_pair : tuple, optional
-            (i, j) channel indices for filename
-        remove_zeroshift : bool, default False
-            in case locs_j are part of locs_i, this may be useful
-        ref_frames : ndarray, optional
-            Frame numbers for reference localizations (for temporal filtering)
-        frame_locs_frames : ndarray, optional
-            Frame numbers for frame localizations (for temporal filtering)
-        ton_exclusion : int, default 0
-            Exclude pairs from frames within ±2×ton (temporal filtering)
-        peak_mode : str, default "auto"
-            Peak finding method:
-            - "gaussian": Try 2D Gaussian fit, fall back to center of mass if fails
-            - "center_of_mass": Use center of mass of top 9 bins directly
-            - "auto": Same as "gaussian" (try Gaussian, fall back to CoM)
-        snr_threshold : float, default 3.0
-            Signal-to-noise ratio threshold (max_bin / median_bin).
-            If SNR < threshold, force center_of_mass and mark as failed.
-        build_frame_contributions : bool, default False
-            Whether to build frame_contributions dictionary for matrix-based
-            drift correction. Only set to True if matrix solver will be used,
-            as building this data is computationally expensive (O(n*log(bins))).
-        enable_fit_quality_check : bool, default True
-            Whether to check Gaussian fit quality and fall back to CoM if quality
-            is poor. When True, both chi_squared and r_squared thresholds must pass.
-        fit_quality_thresholds : dict, optional
-            Thresholds for fit quality check. Default: {"chi_squared": 2.0, "r_squared": 0.90}
-            Both thresholds must be satisfied for fit to be accepted.
+    Uses temporal filtering of localization pairs where frame information is
+    available.
 
-    Returns:
-        shift_x, shift_y, plot_filepath : float, float, str or None
-            Shift from channel i to channel j, or (None, None, None) if failed.
-            plot_filepath is the path to the saved histogram plot if
-            plot_histogram=True, otherwise None.
-        sigma_x, sigma_y : float, float
-            Gaussian widths representing uncertainty in shift measurements
-        shift_x_error, shift_y_error : float, float
-            Parameter errors from covariance matrix fitting
+    Parameters
+    ----------
+    locs_i : np.rec.array or scipy.spatial.cKDTree
+        Localizations for the first channel (or a pre-built KDTree).
+    locs_j : np.rec.array
+        Localizations for the second channel.
+    max_shift : float
+        Maximum expected shift in pixels.
+    plot_histogram : bool, optional
+        Whether to save a 2D histogram plot. Default is False.
+    plot_dir : str, optional
+        Directory to save plots.
+    channel_pair : tuple, optional
+        ``(i, j)`` channel indices, used in the filename.
+    remove_zeroshift : bool, optional
+        Skip zero shifts; useful when ``locs_j`` are part of ``locs_i``.
+        Default is False.
+    plot_fn_suffix : str, optional
+        Suffix appended to the plot filename.
+    ref_frames, frame_locs_frames : ndarray, optional
+        Frame numbers for the reference and frame localizations (for temporal
+        filtering).
+    ton_exclusion : int, optional
+        Exclude pairs from frames within ±2×ton (temporal filtering).
+        Default is 0.
+    peak_mode : str, optional
+        Peak-finding method: ``"gaussian"`` (2D Gaussian fit, falling back to
+        center of mass), ``"center_of_mass"`` (center of mass of the top 9
+        bins) or ``"auto"`` (same as ``"gaussian"``). Default is ``"auto"``.
+    snr_threshold : float, optional
+        Signal-to-noise threshold (``max_bin / median_bin``); below it,
+        center-of-mass is forced and the result marked as failed. Default
+        is 3.0.
+    build_frame_contributions : bool, optional
+        Whether to build the ``frame_contributions`` dict for matrix-based
+        drift correction. Expensive (``O(n*log(bins))``); enable only if the
+        matrix solver is used. Default is False.
+    enable_fit_quality_check : bool, optional
+        Whether to check Gaussian fit quality and fall back to center of mass
+        when poor. Default is True.
+    fit_quality_thresholds : dict, optional
+        Thresholds for the fit-quality check (default
+        ``{"chi_squared": 2.0, "r_squared": 0.90}``); both must pass for the
+        fit to be accepted.
+
+    Returns
+    -------
+    shift_x, shift_y : float or None
+        Shift from channel i to channel j, or None if the calculation failed.
+    plot_filepath : str or None
+        Path to the saved histogram plot if ``plot_histogram`` is True, else
+        None.
+    uncertainty_info : dict or None
+        Uncertainty information (Gaussian widths and parameter errors), or
+        None on failure.
     """
     # Set default quality thresholds if not provided
     if fit_quality_thresholds is None:
@@ -519,9 +593,9 @@ def _calculate_pairwise_shift(
 
     # Use KDTree for efficient nearest neighbor search
     from scipy.spatial import cKDTree
+
     if not isinstance(locs_i, cKDTree):
-        tree_i = cKDTree(
-            np.column_stack([locs_i.x, locs_i.y]))
+        tree_i = cKDTree(np.column_stack([locs_i.x, locs_i.y]))
     else:
         tree_i = locs_i
 
@@ -532,7 +606,9 @@ def _calculate_pairwise_shift(
 
     # Determine if temporal filtering is enabled
     use_temporal_filter = (
-        ton_exclusion > 0 and ref_frames is not None and frame_locs_frames is not None
+        ton_exclusion > 0
+        and ref_frames is not None
+        and frame_locs_frames is not None
     )
     temporal_threshold = 2 * ton_exclusion
 
@@ -551,7 +627,7 @@ def _calculate_pairwise_shift(
             dy = coord_j[1] - coord_i[1]  # y shift from i to j
 
             # Skip zero shifts if requested
-            if remove_zeroshift and dx ==0 and dy ==0:
+            if remove_zeroshift and dx == 0 and dy == 0:
                 continue
 
             # Temporal filtering: skip pairs from nearby frames
@@ -567,9 +643,7 @@ def _calculate_pairwise_shift(
             ref_indices.append(i_idx)  # Track reference localization index
 
     if len(valid_shifts_x) == 0:
-        logger.warning(
-            f"No valid shifts. Returning Nones."
-        )
+        logger.warning("No valid shifts. Returning Nones.")
         return None, None, None, None
     # Create 2D histogram with adaptive binning
     shift_range = [-max_shift, max_shift]
@@ -587,7 +661,11 @@ def _calculate_pairwise_shift(
     # Build frame contributions dictionary (for matrix-based drift correction)
     # ONLY if explicitly requested, as this is computationally expensive
     frame_contributions = None
-    if build_frame_contributions and ref_frames is not None and len(ref_indices) > 0:
+    if (
+        build_frame_contributions
+        and ref_frames is not None
+        and len(ref_indices) > 0
+    ):
         frame_contributions = {}
         n_bins = len(x_edges) - 1
 
@@ -598,8 +676,8 @@ def _calculate_pairwise_shift(
             ref_frame = ref_frames[ref_idx]
 
             # Find which bin this shift fell into
-            bin_x = np.searchsorted(x_edges, shift_x_val, side='right') - 1
-            bin_y = np.searchsorted(y_edges, shift_y_val, side='right') - 1
+            bin_x = np.searchsorted(x_edges, shift_x_val, side="right") - 1
+            bin_y = np.searchsorted(y_edges, shift_y_val, side="right") - 1
 
             # Ensure valid bin indices
             bin_x = np.clip(bin_x, 0, n_bins - 1)
@@ -613,7 +691,9 @@ def _calculate_pairwise_shift(
     # Calculate signal-to-noise ratio
     max_bin_value = np.max(hist)
     non_zero_bins = hist[hist > 0]
-    median_bin_value = np.median(non_zero_bins) if len(non_zero_bins) > 0 else 1.0
+    median_bin_value = (
+        np.median(non_zero_bins) if len(non_zero_bins) > 0 else 1.0
+    )
     snr = max_bin_value / median_bin_value if median_bin_value > 0 else 0.0
 
     # Check if SNR is too low - if so, force center_of_mass and mark as failed
@@ -632,23 +712,41 @@ def _calculate_pairwise_shift(
 
     if peak_mode_to_use == "center_of_mass":
         # Use center of mass directly (faster, more robust for broad peaks)
-        (shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error,
-         com_threshold, com_use_threshold) = (
-            _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift, snr_threshold)
+        (
+            shift_x,
+            shift_y,
+            sigma_x,
+            sigma_y,
+            shift_x_error,
+            shift_y_error,
+            com_threshold,
+            com_use_threshold,
+        ) = _find_peak_center_of_mass(
+            hist, x_edges, y_edges, max_shift, snr_threshold
         )
         # If user EXPLICITLY requested center_of_mass, ALWAYS mark as successful
         # If FORCED to center_of_mass due to low SNR, mark as failed to trigger max_shift retry
         if snr_too_low and peak_mode != "center_of_mass":
-            fit_successful = False  # Was forced by low SNR, trigger max_shift iterations
+            fit_successful = (
+                False  # Was forced by low SNR, trigger max_shift iterations
+            )
         else:
-            fit_successful = True  # Explicit request OR good SNR - mark as successful
+            fit_successful = (
+                True  # Explicit request OR good SNR - mark as successful
+            )
 
     elif peak_mode_to_use in ["gaussian", "auto"]:
         # Try 2D Gaussian fitting first
         try:
-            shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error, goodness_of_fit = (
-                _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift)
-            )
+            (
+                shift_x,
+                shift_y,
+                sigma_x,
+                sigma_y,
+                shift_x_error,
+                shift_y_error,
+                goodness_of_fit,
+            ) = _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift)
 
             # Check fit quality if enabled
             fit_quality_passed = True
@@ -659,7 +757,9 @@ def _calculate_pairwise_shift(
                 r_threshold = fit_quality_thresholds["r_squared"]
 
                 # Combined metric: BOTH chi_squared and r_squared must pass
-                fit_quality_passed = (chi_sq < chi_threshold) and (r_sq > r_threshold)
+                fit_quality_passed = (chi_sq < chi_threshold) and (
+                    r_sq > r_threshold
+                )
 
                 if not fit_quality_passed:
                     # logger.warning(
@@ -677,16 +777,28 @@ def _calculate_pairwise_shift(
                 "Falling back to center of mass method."
             )
             # Fallback to center of mass method (better than simple maximum)
-            (shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error,
-             com_threshold, com_use_threshold) = (
-                _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift, snr_threshold)
+            (
+                shift_x,
+                shift_y,
+                sigma_x,
+                sigma_y,
+                shift_x_error,
+                shift_y_error,
+                com_threshold,
+                com_use_threshold,
+            ) = _find_peak_center_of_mass(
+                hist, x_edges, y_edges, max_shift, snr_threshold
             )
             fit_successful = False  # Indicates fallback was used
-            peak_mode_to_use = "center_of_mass"  # Update to reflect actual method used
+            peak_mode_to_use = (
+                "center_of_mass"  # Update to reflect actual method used
+            )
             goodness_of_fit = None  # CoM doesn't have goodness of fit
 
     else:
-        raise ValueError(f"Unknown peak_mode: {peak_mode}. Use 'gaussian', 'center_of_mass', or 'auto'.")
+        raise ValueError(
+            f"Unknown peak_mode: {peak_mode}. Use 'gaussian', 'center_of_mass', or 'auto'."
+        )
 
     # Return shift values and uncertainties
     uncertainty_info = {
@@ -712,8 +824,7 @@ def _calculate_pairwise_shift(
     if plot_histogram:
         # Normalize quality metrics for unified plotting function
         quality_metrics = _normalize_quality_metrics(
-            uncertainty_info=uncertainty_info,
-            hist=hist
+            uncertainty_info=uncertainty_info, hist=hist
         )
 
         # Call unified plotting function
@@ -738,22 +849,23 @@ def _calculate_pairwise_shift(
 
 
 def _calculate_adaptive_bins(valid_shifts_x, valid_shifts_y, max_shift):
-    """
-    Calculate adaptive bin size and number of bins for optimal histogram.
+    """Calculate an adaptive bin size and bin count for the histogram.
 
-    Args:
-        valid_shifts_x : list
-            X shift values
-        valid_shifts_y : list
-            Y shift values
-        max_shift : float
-            Maximum shift range
+    Parameters
+    ----------
+    valid_shifts_x : list
+        X shift values.
+    valid_shifts_y : list
+        Y shift values.
+    max_shift : float
+        Maximum shift range.
 
-    Returns:
-        bin_size : float
-            Calculated bin size in pixels
-        bins : int
-            Number of bins for histogram
+    Returns
+    -------
+    bin_size : float
+        Calculated bin size in pixels.
+    bins : int
+        Number of histogram bins.
     """
     base_bin_size = 0.1  # Base bin size of 0.1 pixels
     n_points = len(valid_shifts_x)
@@ -785,41 +897,42 @@ def _calculate_adaptive_bins(valid_shifts_x, valid_shifts_y, max_shift):
     return bin_size, bins
 
 
-def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None, snr_threshold=3.0):
-    """
-    Find peak location using center of mass of the highest bins.
+def _find_peak_center_of_mass(
+    hist, x_edges, y_edges, max_shift=None, snr_threshold=3.0
+):
+    """Find a peak via the center of mass of the highest histogram bins.
 
-    More robust than simple histogram maximum for broad/non-Gaussian peaks.
-    Provides sub-bin precision without requiring Gaussian fitting.
+    More robust than a simple histogram maximum for broad/non-Gaussian peaks,
+    and gives sub-bin precision without Gaussian fitting. Uses threshold-based
+    bin selection (all bins with ``count >= median × snr_threshold``, minimum
+    9 bins), falling back to a 3×3 neighborhood when fewer than 9 bins exceed
+    the threshold.
 
-    Uses threshold-based bin selection: includes all bins with count >= median × snr_threshold
-    in the center of mass calculation (minimum 9 bins). Falls back to 3×3 neighborhood if
-    fewer than 9 bins exceed the threshold.
+    Parameters
+    ----------
+    hist : np.ndarray
+        2D histogram of shifts.
+    x_edges, y_edges : np.ndarray
+        Histogram bin edges in x and y.
+    max_shift : float, optional
+        Maximum shift radius (for consistency with the Gaussian-fit API).
+    snr_threshold : float, optional
+        Threshold multiplier for the median bin count; bins with
+        ``count >= median × snr_threshold`` are included. Default is 3.0.
 
-    Args:
-        hist : np.array
-            2D histogram of shifts
-        x_edges : np.array
-            Histogram x bin edges
-        y_edges : np.array
-            Histogram y bin edges
-        max_shift : float, optional
-            Maximum shift radius (for consistency with Gaussian fit API)
-        snr_threshold : float, optional
-            Threshold multiplier for median bin count. Bins with count >= median × snr_threshold
-            are included in center of mass calculation. Default: 3.0
-
-    Returns:
-        shift_x, shift_y : float, float
-            Center of mass coordinates
-        sigma_x, sigma_y : float, float
-            Estimated spread (std dev of 3×3 neighborhood values)
-        shift_x_error, shift_y_error : float, float
-            Estimated errors (based on bin size and peak sharpness)
-        threshold : float
-            Threshold value used for bin selection (median × snr_threshold)
-        use_threshold : bool
-            Whether threshold-based selection was used (True) or 3×3 fallback (False)
+    Returns
+    -------
+    shift_x, shift_y : float
+        Center-of-mass coordinates.
+    sigma_x, sigma_y : float
+        Estimated spread (std dev of the neighborhood values).
+    shift_x_error, shift_y_error : float
+        Estimated errors (based on bin size and peak sharpness).
+    threshold : float
+        Threshold value used for bin selection (``median × snr_threshold``).
+    use_threshold : bool
+        Whether threshold-based selection (True) or the 3×3 fallback (False)
+        was used.
     """
     # Create bin centers
     x_centers = (x_edges[:-1] + x_edges[1:]) / 2
@@ -829,8 +942,12 @@ def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None, snr_thresh
 
     # Find histogram maximum
     hist_transposed = hist.T  # Match meshgrid convention
-    peak_idx = np.unravel_index(np.argmax(hist_transposed), hist_transposed.shape)
-    peak_y_bin, peak_x_bin = peak_idx  # Note: unravel_index returns (row, col) = (y, x)
+    peak_idx = np.unravel_index(
+        np.argmax(hist_transposed), hist_transposed.shape
+    )
+    peak_y_bin, peak_x_bin = (
+        peak_idx  # Note: unravel_index returns (row, col) = (y, x)
+    )
 
     # Calculate median of non-zero bins for threshold-based selection
     non_zero_bins = hist_transposed[hist_transposed > 0]
@@ -842,7 +959,16 @@ def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None, snr_thresh
         sigma_y = bin_size_y
         shift_x_error = bin_size_x / 2
         shift_y_error = bin_size_y / 2
-        return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error, 0.0, False
+        return (
+            shift_x,
+            shift_y,
+            sigma_x,
+            sigma_y,
+            shift_x_error,
+            shift_y_error,
+            0.0,
+            False,
+        )
 
     median_val = np.median(non_zero_bins)
     threshold = median_val * snr_threshold
@@ -870,14 +996,10 @@ def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None, snr_thresh
     else:
         # Fall back to 3×3 neighborhood around maximum
         x_indices = np.clip(
-            [peak_x_bin - 1, peak_x_bin, peak_x_bin + 1],
-            0,
-            hist.shape[0] - 1
+            [peak_x_bin - 1, peak_x_bin, peak_x_bin + 1], 0, hist.shape[0] - 1
         ).astype(int)
         y_indices = np.clip(
-            [peak_y_bin - 1, peak_y_bin, peak_y_bin + 1],
-            0,
-            hist.shape[1] - 1
+            [peak_y_bin - 1, peak_y_bin, peak_y_bin + 1], 0, hist.shape[1] - 1
         ).astype(int)
 
         # Remove duplicates (in case peak is at edge and clipping created duplicates)
@@ -915,10 +1037,12 @@ def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None, snr_thresh
     # Estimate uncertainty based on spread of the neighborhood
     # Calculate weighted standard deviation
     sigma_x = np.sqrt(
-        np.sum(neighborhood_values * (x_coord_grid - shift_x)**2) / total_mass
+        np.sum(neighborhood_values * (x_coord_grid - shift_x) ** 2)
+        / total_mass
     )
     sigma_y = np.sqrt(
-        np.sum(neighborhood_values * (y_coord_grid - shift_y)**2) / total_mass
+        np.sum(neighborhood_values * (y_coord_grid - shift_y) ** 2)
+        / total_mass
     )
 
     # Estimate position error based on bin size and peak sharpness
@@ -928,48 +1052,51 @@ def _find_peak_center_of_mass(hist, x_edges, y_edges, max_shift=None, snr_thresh
     sharpness_ratio = peak_value / mean_value if mean_value > 0 else 1.0
 
     # Error scales inversely with sharpness, bounded by bin size
-    shift_x_error = min(bin_size_x / (2 * np.sqrt(sharpness_ratio)), bin_size_x / 2)
-    shift_y_error = min(bin_size_y / (2 * np.sqrt(sharpness_ratio)), bin_size_y / 2)
+    shift_x_error = min(
+        bin_size_x / (2 * np.sqrt(sharpness_ratio)), bin_size_x / 2
+    )
+    shift_y_error = min(
+        bin_size_y / (2 * np.sqrt(sharpness_ratio)), bin_size_y / 2
+    )
 
-    return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error, threshold, use_threshold
+    return (
+        shift_x,
+        shift_y,
+        sigma_x,
+        sigma_y,
+        shift_x_error,
+        shift_y_error,
+        threshold,
+        use_threshold,
+    )
 
 
 def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
-    """
-    Fit a 2D Gaussian to the histogram peak to find precise shift location.
-    Values outside the max_shift circle are set to NaN and excluded from
-    fitting.
+    """Fit a 2D Gaussian to the histogram peak for a precise shift location.
 
-    Args:
-        hist : np.array
-            2D histogram of shifts
-        x_edges : np.array
-            Histogram x bin edges
-        y_edges : np.array
-            Histogram y bin edges
-        max_shift : float, optional
-            Maximum shift radius. Values outside this circle are set to NaN.
+    Values outside the ``max_shift`` circle are set to NaN and excluded from
+    the fit.
 
-    Returns:
-        shift_x : float
-            Fitted peak center x coordinate
-        shift_y : float
-            Fitted peak center y coordinate
-        sigma_x : float
-            Gaussian width in x direction
-        sigma_y : float
-            Gaussian width in y direction
-        shift_x_error : float
-            Uncertainty in x coordinate from covariance matrix
-        shift_y_error : float
-            Uncertainty in y coordinate from covariance matrix
-        goodness_of_fit : dict
-            Dictionary containing fit quality metrics:
-            - chi_squared_reduced: Reduced chi-squared statistic
-            - r_squared: R-squared (coefficient of determination)
-            - rmse: Root mean squared error
-            - n_points: Number of data points used in fit
-            - degrees_of_freedom: Degrees of freedom (n_points - n_params)
+    Parameters
+    ----------
+    hist : np.ndarray
+        2D histogram of shifts.
+    x_edges, y_edges : np.ndarray
+        Histogram bin edges in x and y.
+    max_shift : float, optional
+        Maximum shift radius; values outside this circle are set to NaN.
+
+    Returns
+    -------
+    shift_x, shift_y : float
+        Fitted peak center coordinates.
+    sigma_x, sigma_y : float
+        Gaussian widths in x and y.
+    shift_x_error, shift_y_error : float
+        Coordinate uncertainties from the covariance matrix.
+    goodness_of_fit : dict
+        Fit-quality metrics: ``chi_squared_reduced``, ``r_squared``,
+        ``rmse``, ``n_points`` and ``degrees_of_freedom``.
     """
     from scipy.optimize import curve_fit
 
@@ -1066,8 +1193,9 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
         # Suppress numerical warnings from scipy optimizer
         # (divide by zero warnings are expected for ill-conditioned histograms)
         import warnings
+
         with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=RuntimeWarning)
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
             popt, pcov = curve_fit(
                 gaussian_2d,
                 (x_fit, y_fit),
@@ -1112,17 +1240,21 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
         # Use Poisson variance (variance = observed count)
         # For bins with very low counts, use minimum of 1 to avoid division by zero
         variances = np.maximum(z_fit, 1.0)
-        chi_squared = np.sum((residuals ** 2) / variances)
-        chi_squared_reduced = chi_squared / degrees_of_freedom if degrees_of_freedom > 0 else np.inf
+        chi_squared = np.sum((residuals**2) / variances)
+        chi_squared_reduced = (
+            chi_squared / degrees_of_freedom
+            if degrees_of_freedom > 0
+            else np.inf
+        )
 
         # R-squared (coefficient of determination)
         # R² = 1 - (SS_residual / SS_total)
-        ss_residual = np.sum(residuals ** 2)
+        ss_residual = np.sum(residuals**2)
         ss_total = np.sum((z_fit - np.mean(z_fit)) ** 2)
         r_squared = 1 - (ss_residual / ss_total) if ss_total > 0 else 0.0
 
         # Root mean squared error
-        rmse = np.sqrt(np.mean(residuals ** 2))
+        rmse = np.sqrt(np.mean(residuals**2))
 
         goodness_of_fit = {
             "chi_squared_reduced": chi_squared_reduced,
@@ -1132,40 +1264,47 @@ def _fit_2d_gaussian_peak(hist, x_edges, y_edges, max_shift=None):
             "degrees_of_freedom": degrees_of_freedom,
         }
 
-        return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error, goodness_of_fit
+        return (
+            shift_x,
+            shift_y,
+            sigma_x,
+            sigma_y,
+            shift_x_error,
+            shift_y_error,
+            goodness_of_fit,
+        )
 
     except Exception as e:
         raise RuntimeError(f"Gaussian fitting failed: {str(e)}")
 
 
-def _normalize_quality_metrics(uncertainty_info=None, quality_metrics=None, hist=None):
-    """
-    Normalize quality metrics from either standard or numba route format.
+def _normalize_quality_metrics(
+    uncertainty_info=None, quality_metrics=None, hist=None
+):
+    """Normalize quality metrics from the standard or numba route.
 
-    Converts uncertainty_info (standard route) or quality_metrics (numba route)
-    into a unified format suitable for plotting functions.
+    Converts ``uncertainty_info`` (standard route) or ``quality_metrics``
+    (numba route) into a unified format suitable for the plotting functions.
 
-    Args:
-        uncertainty_info : dict or None
-            Quality metrics from standard route (_calculate_pairwise_shift)
-            Expected keys: sigma_x, sigma_y, fit_successful, peak_mode,
-                          com_threshold, com_use_threshold
-        quality_metrics : dict or None
-            Quality metrics from numba route (_compute_rsso_shift_numba_optimized)
-            Expected keys: sigma_x, sigma_y, peak_mode, success,
-                          com_threshold, com_use_threshold, total_pairs
-        hist : np.array or None
-            2D histogram for calculating total_pairs if not in quality_metrics
+    Parameters
+    ----------
+    uncertainty_info : dict or None
+        Quality metrics from the standard route
+        (:func:`_calculate_pairwise_shift`); expected keys ``sigma_x``,
+        ``sigma_y``, ``fit_successful``, ``peak_mode``, ``com_threshold``,
+        ``com_use_threshold``.
+    quality_metrics : dict or None
+        Quality metrics from the numba route; expected keys ``sigma_x``,
+        ``sigma_y``, ``peak_mode``, ``success``, ``com_threshold``,
+        ``com_use_threshold``, ``total_pairs``.
+    hist : np.ndarray or None
+        2D histogram, used to compute ``total_pairs`` if not already present.
 
-    Returns:
-        normalized : dict
-            Unified quality metrics dict with keys:
-                - peak_mode : str
-                - sigma_x : float
-                - sigma_y : float
-                - total_pairs : float
-                - com_threshold : float or None
-                - com_use_threshold : bool or None
+    Returns
+    -------
+    dict
+        Unified metrics with keys ``peak_mode``, ``sigma_x``, ``sigma_y``,
+        ``total_pairs``, ``com_threshold`` and ``com_use_threshold``.
     """
     normalized = {}
 
@@ -1176,11 +1315,12 @@ def _normalize_quality_metrics(uncertainty_info=None, quality_metrics=None, hist
         normalized["sigma_x"] = quality_metrics.get("sigma_x", 0.0)
         normalized["sigma_y"] = quality_metrics.get("sigma_y", 0.0)
         normalized["total_pairs"] = quality_metrics.get(
-            "total_pairs",
-            np.sum(hist) if hist is not None else 0
+            "total_pairs", np.sum(hist) if hist is not None else 0
         )
         normalized["com_threshold"] = quality_metrics.get("com_threshold")
-        normalized["com_use_threshold"] = quality_metrics.get("com_use_threshold")
+        normalized["com_use_threshold"] = quality_metrics.get(
+            "com_use_threshold"
+        )
 
     elif uncertainty_info is not None:
         # Standard route - convert from uncertainty_info format
@@ -1196,7 +1336,9 @@ def _normalize_quality_metrics(uncertainty_info=None, quality_metrics=None, hist
         normalized["sigma_y"] = uncertainty_info.get("sigma_y", 0.0)
         normalized["total_pairs"] = np.sum(hist) if hist is not None else 0
         normalized["com_threshold"] = uncertainty_info.get("com_threshold")
-        normalized["com_use_threshold"] = uncertainty_info.get("com_use_threshold")
+        normalized["com_use_threshold"] = uncertainty_info.get(
+            "com_use_threshold"
+        )
 
     else:
         # No metrics provided - use defaults
@@ -1226,52 +1368,47 @@ def _save_rsso_shift_histogram_plot(
     output_subdir=None,
     shared_plot_dict=None,
 ):
-    """
-    Unified function to save 2D histogram plots showing RSSO shift distribution and peak.
+    """Save a 2D histogram plot of the RSSO shift distribution and peak.
 
-    Works for both standard (channel alignment) and numba (iterative drift) routes.
-    Can either save to disk (traditional mode) or store in shared memory
-    for incremental video writing (memory-efficient mode).
+    Works for both the standard (channel alignment) and numba (iterative
+    drift) routes. Either saves to disk (traditional mode) or stores the plot
+    in shared memory for incremental video writing (memory-efficient mode).
 
-    Args:
-        hist : np.array
-            2D histogram of shifts
-        x_edges : np.array
-            Histogram x bin edges
-        y_edges : np.array
-            Histogram y bin edges
-        shift_x : float
-            Estimated x shift
-        shift_y : float
-            Estimated y shift
-        max_shift : float
-            Maximum shift range
-        plot_dir : str
-            Directory to save plot (only used if shared_plot_dict is None)
-        quality_metrics : dict
-            Quality metrics to display on plot. Expected keys:
-                - peak_mode : str (method used)
-                - sigma_x, sigma_y : float (uncertainties)
-                - total_pairs : float (number of pairs)
-                - com_threshold : float or None (CoM threshold)
-                - com_use_threshold : bool or None (whether threshold was used)
-        iteration : int or None, optional
-            Iteration number for filename (numba route)
-        frame_number : int or None, optional
-            Frame number for filename (numba route)
-        channel_pair : tuple or None, optional
-            (i, j) channel indices for filename (standard route)
-        output_subdir : str or None, optional
-            Subdirectory structure to create (e.g., "rsso_plots/iteration_00/sglframe/")
-            If None, saves directly to plot_dir
-        shared_plot_dict : multiprocessing.Manager.dict() or None, optional
-            If provided, stores plot as numpy array in this dict instead of saving to disk.
-            Key is frame_number, value is numpy array of shape (height, width, 3).
+    Parameters
+    ----------
+    hist : np.ndarray
+        2D histogram of shifts.
+    x_edges, y_edges : np.ndarray
+        Histogram bin edges in x and y.
+    shift_x, shift_y : float
+        Estimated x and y shift.
+    max_shift : float
+        Maximum shift range.
+    plot_dir : str
+        Directory to save the plot (only used if ``shared_plot_dict`` is None).
+    quality_metrics : dict
+        Metrics to display, with keys ``peak_mode``, ``sigma_x``/``sigma_y``
+        (uncertainties), ``total_pairs``, ``com_threshold`` and
+        ``com_use_threshold``.
+    plot_fn_suffix : str or None, optional
+        Suffix appended to the plot filename.
+    iteration, frame_number : int or None, optional
+        Iteration / frame number for the filename (numba route).
+    channel_pair : tuple or None, optional
+        ``(i, j)`` channel indices for the filename (standard route).
+    output_subdir : str or None, optional
+        Subdirectory structure to create (e.g.
+        ``"rsso_plots/iteration_00/sglframe/"``). If None, saves directly to
+        ``plot_dir``.
+    shared_plot_dict : multiprocessing.Manager.dict or None, optional
+        If provided, stores the plot as a ``(height, width, 3)`` numpy array
+        in this dict (keyed by ``frame_number``) instead of saving to disk.
 
-    Returns:
-        filepath : str or frame_number
-            If shared_plot_dict is None: Path to saved plot file
-            If shared_plot_dict is provided: Frame number (key in dict)
+    Returns
+    -------
+    str or int
+        The saved plot's filepath, or the ``frame_number`` key if
+        ``shared_plot_dict`` was provided.
     """
     import matplotlib.pyplot as plt
     import random
@@ -1358,9 +1495,17 @@ def _save_rsso_shift_histogram_plot(
                 if selected_bins[j, i]:  # Note: hist_t is transposed
                     # Calculate bin edges
                     x_left = x_edges[i]
-                    x_right = x_edges[i+1] if i+1 < len(x_edges) else x_edges[i] + bin_size_x
+                    x_right = (
+                        x_edges[i + 1]
+                        if i + 1 < len(x_edges)
+                        else x_edges[i] + bin_size_x
+                    )
                     y_bottom = y_edges[j]
-                    y_top = y_edges[j+1] if j+1 < len(y_edges) else y_edges[j] + bin_size_y
+                    y_top = (
+                        y_edges[j + 1]
+                        if j + 1 < len(y_edges)
+                        else y_edges[j] + bin_size_y
+                    )
 
                     # Draw rectangle outline
                     rect = plt.Rectangle(
@@ -1368,9 +1513,9 @@ def _save_rsso_shift_histogram_plot(
                         x_right - x_left,
                         y_top - y_bottom,
                         fill=False,
-                        edgecolor='cyan',
+                        edgecolor="cyan",
                         linewidth=1.5,
-                        alpha=0.8
+                        alpha=0.8,
                     )
                     ax.add_patch(rect)
 
@@ -1382,7 +1527,9 @@ def _save_rsso_shift_histogram_plot(
     title_parts = []
     if channel_pair is not None:
         # Standard route - channel alignment
-        title_parts.append(f"RSSO: Ch {channel_pair[0]} → Ch {channel_pair[1]}")
+        title_parts.append(
+            f"RSSO: Ch {channel_pair[0]} → Ch {channel_pair[1]}"
+        )
     else:
         # Numba route - iterative drift
         title_parts.append("RSSO Shift Histogram")
@@ -1439,7 +1586,9 @@ def _save_rsso_shift_histogram_plot(
 
         # Convert figure to numpy array (RGB format)
         img_array = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        img_array = img_array.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        img_array = img_array.reshape(
+            fig.canvas.get_width_height()[::-1] + (3,)
+        )
 
         # Store in shared dict with frame number as key
         if frame_number is not None:
@@ -1505,35 +1654,45 @@ def _save_shift_histogram_plot(
     plot_dir,
     channel_pair,
     fit_successful=False,
-    plot_fn_suffix=""
+    plot_fn_suffix="",
 ):
-    """
-    DEPRECATED: Use _save_rsso_shift_histogram_plot instead.
+    """Save a shift histogram plot (deprecated).
 
-    This function is kept for backward compatibility and redirects to the
-    unified plotting function.
+    .. deprecated::
+        Use :func:`_save_rsso_shift_histogram_plot` instead. Kept for
+        backward compatibility; redirects to the unified plotting function.
 
-    Args:
-        hist : np.array - 2D histogram of shifts
-        x_edges : np.array - Histogram x bin edges
-        y_edges : np.array - Histogram y bin edges
-        shift_x : float - Estimated x shift
-        shift_y : float - Estimated y shift
-        max_shift : float - Maximum shift range
-        plot_dir : str or None - Directory to save plot
-        channel_pair : tuple - (i, j) channel indices
-        fit_successful : bool - Whether Gaussian fit succeeded
-        plot_fn_suffix : str - Suffix for filename (ignored in new function)
+    Parameters
+    ----------
+    hist : np.ndarray
+        2D histogram of shifts.
+    x_edges, y_edges : np.ndarray
+        Histogram bin edges in x and y.
+    shift_x, shift_y : float
+        Estimated x and y shift.
+    max_shift : float
+        Maximum shift range.
+    plot_dir : str or None
+        Directory to save the plot.
+    channel_pair : tuple
+        ``(i, j)`` channel indices.
+    fit_successful : bool, optional
+        Whether the Gaussian fit succeeded. Default is False.
+    plot_fn_suffix : str, optional
+        Suffix for the filename (ignored by the new function).
 
-    Returns:
-        filepath : str - Path to saved plot file
+    Returns
+    -------
+    str
+        Path to the saved plot file.
     """
     import warnings
+
     warnings.warn(
         "_save_shift_histogram_plot is deprecated. "
         "Use _save_rsso_shift_histogram_plot instead.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
 
     # Build quality_metrics from old parameters
@@ -1571,28 +1730,27 @@ def _save_shift_histogram_plot(
 def _solve_optimal_shifts(
     pairwise_shifts, n_channels, pairwise_uncertainties=None
 ):
-    """
-    Solve for optimal channel shifts using least squares given pairwise
-    measurements.
+    """Solve for optimal channel shifts from pairwise measurements.
 
-    The constraint is that shift_j - shift_i = measured_shift_ij for all
-    pairs (i,j). We set the first channel as reference (shift = 0) and
-    solve for the others.
+    Uses least squares under the constraint ``shift_j - shift_i =
+    measured_shift_ij`` for all pairs ``(i, j)``. The first channel is set as
+    the reference (shift = 0) and the others are solved for.
 
-    Args:
-        pairwise_shifts : dict
-            Dictionary with keys (i,j) and values (shift_x, shift_y)
-        n_channels : int
-            Number of channels
-        pairwise_uncertainties : dict, optional
-            Dictionary with keys (i,j) and values containing uncertainty
-            information
+    Parameters
+    ----------
+    pairwise_shifts : dict
+        Keys ``(i, j)``, values ``(shift_x, shift_y)``.
+    n_channels : int
+        Number of channels.
+    pairwise_uncertainties : dict, optional
+        Keys ``(i, j)``, values containing uncertainty information.
 
-    Returns:
-        shifts_x, shifts_y : np.array, np.array
-            Optimal shifts for each channel
-        shift_uncertainties : dict
-            Dictionary containing uncertainty information for channel shifts
+    Returns
+    -------
+    shifts_x, shifts_y : np.ndarray
+        Optimal shifts for each channel.
+    shift_uncertainties : dict
+        Uncertainty information for the channel shifts.
     """
     if len(pairwise_shifts) == 0:
         return np.zeros(n_channels), np.zeros(n_channels), {}
@@ -1734,17 +1892,18 @@ def _solve_optimal_shifts(
 
 
 def convert_zeiss_file(filepath_czi, filepath_raw, info=None):
-    """Convert Zeiss .czi file into a picasso-readable .raw file.
-    Args:
-        filepath_csi : str
-            the filepath to the .czi file to load
-        filepath_raw : str
-            the filepath to the .raw file to write
-        info : dict, default None
-            the metadata to make the raw file picasso-readable.
-            If None is given, dummy values are entered.
-            Necesary keys:
-                'Byte Order', 'Camera', 'Micro-Manager Metadata'
+    """Convert a Zeiss ``.czi`` file into a picasso-readable ``.raw`` file.
+
+    Parameters
+    ----------
+    filepath_czi : str
+        Filepath of the ``.czi`` file to load.
+    filepath_raw : str
+        Filepath of the ``.raw`` file to write.
+    info : dict, optional
+        Metadata to make the raw file picasso-readable. If None, dummy values
+        are entered. Necessary keys: ``'Byte Order'``, ``'Camera'``,
+        ``'Micro-Manager Metadata'``.
     """
     img = AICSImage(filepath_czi)
 
@@ -1775,11 +1934,30 @@ def convert_zeiss_file(filepath_czi, filepath_raw, info=None):
 
 
 def get_spots(movie, identifications, box, camera_info):
+    """Cut spot boxes from a movie and convert them to photons.
+
+    Parameters
+    ----------
+    movie : array-like
+        The image data ``(t, x, y)``.
+    identifications : recarray
+        Identified spot positions (``frame``, ``x``, ``y``).
+    box : int
+        The (odd) box size to cut around each spot.
+    camera_info : dict
+        Camera parameters for the photon conversion.
+
+    Returns
+    -------
+    numpy.ndarray
+        The cut spots in photons.
+    """
     spots = _cut_spots(movie, identifications, box)
     return localize._to_photons(spots, camera_info)
 
 
 def _cut_spots(movie, ids, box):
+    """Cut ``box``-sized spots from ``movie`` at the identified positions."""
     N = len(ids.frame)
     spots = np.zeros((N, box, box), dtype=movie.dtype)
     spots = _cut_spots_byrandomframe(
@@ -1789,21 +1967,24 @@ def _cut_spots(movie, ids, box):
 
 
 def _cut_spots_byrandomframe(movie, ids_frame, ids_x, ids_y, box, spots):
-    """Cuts the spots out of a movie by non-sorted frames.
+    """Cut spots out of a movie by (unsorted) frame.
 
-    Args:
-        movie : AbstractPicassoMovie (t, x, y)
-            the image data
-        ids_frame, ids_x, ids_y : 1D array (k)
-            spot positions in the image data. Length: number of spots
-            identified
-        box : uneven int
-            the cut spot box size
-        spots : 3D array (k, box, box)
-            the cut spots
-    Returns:
-        spots : as above
-            the image-data filled spots
+    Parameters
+    ----------
+    movie : AbstractPicassoMovie
+        The image data ``(t, x, y)``.
+    ids_frame, ids_x, ids_y : 1D array
+        Spot positions in the image data, length = number of spots
+        identified.
+    box : int
+        The (odd) cut-spot box size.
+    spots : 3D array
+        Pre-allocated output array of shape ``(k, box, box)``.
+
+    Returns
+    -------
+    3D array
+        The ``spots`` array filled with image data.
     """
     r = int(box / 2)
     for j, (fr, xc, yc) in enumerate(zip(ids_frame, ids_x, ids_y)):
@@ -1813,6 +1994,22 @@ def _cut_spots_byrandomframe(movie, ids_frame, ids_x, ids_y, box, spots):
 
 
 def normalize_spot(spot, maxval=255, dtype=np.uint8):
+    """Rescale a spot to ``[0, maxval]`` and cast to ``dtype``.
+
+    Parameters
+    ----------
+    spot : numpy.ndarray
+        The spot image.
+    maxval : int, optional
+        The maximum value after rescaling. Default is 255.
+    dtype : numpy.dtype, optional
+        The output dtype. Default is ``np.uint8``.
+
+    Returns
+    -------
+    numpy.ndarray
+        The normalized spot.
+    """
     # logger.debug('spot input: ' + str(spot))
     sp = spot - np.min(spot)
     imgmax = np.max(sp)
@@ -1823,26 +2020,27 @@ def normalize_spot(spot, maxval=255, dtype=np.uint8):
 
 
 def spinna_batch(parameters_filename):
-    """This function runs a spinna batch analysis from file,
-    as run via command line in picasso.__main__.
+    """Run a SPINNA batch analysis from a config file.
 
-    picasso's ``_spinna_batch_analysis`` derives the result directory
-    from the parameters filename (appending an index if a directory of
-    that name already exists) and saves the summary csv and the NND
-    figures there, but it does not return any paths. They are therefore
-    reconstructed here with the same logic picasso uses internally.
+    Mirrors the command-line entry point in ``picasso.__main__``. picasso's
+    ``_spinna_batch_analysis`` derives the result directory from the
+    parameters filename (appending an index if such a directory already
+    exists) and saves the summary csv and NND figures there but returns no
+    paths, so they are reconstructed here with the same logic.
 
-    Args:
-        parameters_filename : str
-            the filepath of the spinna batch analysis config (.csv) file
+    Parameters
+    ----------
+    parameters_filename : str
+        Filepath of the SPINNA batch-analysis config (``.csv``) file.
 
-    Returns:
-        result_dir : str
-            folder containing the results
-        fp_summary : str
-            the filepath of the summary csv file
-        fp_fig : list of str
-            filepaths of the NND figures
+    Returns
+    -------
+    result_dir : str
+        Folder containing the results.
+    fp_summary : str
+        Filepath of the summary csv file.
+    fp_fig : list of str
+        Filepaths of the NND figures.
     """
     result_dir = parameters_filename.replace(".csv", "_fitting_results")
     if os.path.isdir(result_dir):
@@ -1881,22 +2079,29 @@ def single_spinna_run(
     n_simulated,
     bootstrap=False,
 ):
-    """This function directly runs one spinna simulation.
-    The implementation is taken from spinna batch analysis
-    (picasso.__main__._spinna_batch_analysis), and adapted for one run,
-    with parameters directly given.
+    """Run a single SPINNA simulation with directly-given parameters.
 
-    Args:
-        parameters : dict with keys:
-            structures, label_unc, le, mask_dict, width, height, depth,
-            random_rot_mode, exp_data, sim_repeats, fit_NND_bin,
-            fit_NND_maxdist, N_structures, save_filename, asynch, targets,
-            apply_mask, nn_plotted, result_dir
-    Returns:
-        spinna_result : dict
-            dictionary containing the results of the spinna run
-        fp_fig : list of str
-            filepaths of the NND figures
+    The implementation is adapted from the SPINNA batch analysis
+    (``picasso.__main__._spinna_batch_analysis``) for a single run.
+
+    Parameters
+    ----------
+    structures, label_unc, le, mask_dict, width, height, depth, \
+            random_rot_mode, exp_data, sim_repeats, NND_bin, NND_maxdist, \
+            N_structures, save_filename, asynch, targets, apply_mask, \
+            nn_plotted, result_dir, n_simulated
+        The SPINNA simulation parameters (see
+        ``picasso.spinna.StructureMixer`` and the batch analysis).
+    bootstrap : bool, optional
+        Whether to bootstrap the standard error of the means. Default is
+        False.
+
+    Returns
+    -------
+    spinna_result : dict
+        The results of the SPINNA run.
+    fp_fig : list of str
+        Filepaths of the NND figures.
     """
     mixer = spinna.StructureMixer(
         structures=structures,
@@ -2016,41 +2221,43 @@ def plot_spinna_nnd(
     save_filename,
     result_dir,
 ):
-    """Plot and save the simulated-vs-experimental nearest-neighbor-distance
-    (NND) histograms for a fitted SPINNA mixer.
+    """Plot simulated-vs-experimental NND histograms for a fitted mixer.
 
-    Extracted from single_spinna_run so it can be reused directly with the
-    StructureMixer and proportions returned by spinna.fit_le.
+    Extracted from :func:`single_spinna_run` so it can be reused directly with
+    the ``StructureMixer`` and proportions returned by ``spinna.fit_le``.
 
-    Args:
-        mixer : spinna.StructureMixer
-            the fitted mixer
-        targets : list of str
-            molecular target names; figures are produced for each target
-            pair (duplicated), in the order given by
-            mixer.get_neighbor_idx(duplicate=True)
-        exp_data : dict
-            experimental coordinates per target
-        opt_props : np.ndarray or tuple
-            fitted structure proportions (tuple if bootstrapped; mean used)
-        n_simulated : dict
-            number of simulated molecules per target
-        sim_repeats : int
-            number of simulation repeats
-        NND_bin : float
-            histogram bin size (nm)
-        NND_maxdist : float
-            maximum distance shown (nm)
-        nn_plotted : int
-            number of nearest neighbors to plot
-        save_filename : str
-            base filename (without extension) for saved figures
-        result_dir : str
-            directory the returned figure paths are anchored to
+    Parameters
+    ----------
+    mixer : spinna.StructureMixer
+        The fitted mixer.
+    targets : list of str
+        Molecular target names; figures are produced for each (duplicated)
+        target pair, in the order given by
+        ``mixer.get_neighbor_idx(duplicate=True)``.
+    exp_data : dict
+        Experimental coordinates per target.
+    opt_props : np.ndarray or tuple
+        Fitted structure proportions (a tuple if bootstrapped; the mean is
+        used).
+    n_simulated : dict
+        Number of simulated molecules per target.
+    sim_repeats : int
+        Number of simulation repeats.
+    NND_bin : float
+        Histogram bin size in nm.
+    NND_maxdist : float
+        Maximum distance shown in nm.
+    nn_plotted : int
+        Number of nearest neighbours to plot.
+    save_filename : str
+        Base filename (without extension) for the saved figures.
+    result_dir : str
+        Directory the returned figure paths are anchored to.
 
-    Returns:
-        fp_fig : list of str
-            filepaths of the saved NND .png figures
+    Returns
+    -------
+    fp_fig : list of str
+        Filepaths of the saved NND ``.png`` figures.
     """
     nn_counts = {}
     for i, t1 in enumerate(targets):
@@ -2151,6 +2358,24 @@ def load_structures_from_dict(structure_dict):
 
 
 def generate_N_structures(structures, N_total, res_factor, save=""):
+    """Generate ``N_total`` structures (thin wrapper around picasso SPINNA).
+
+    Parameters
+    ----------
+    structures : list
+        The structure definitions to sample from.
+    N_total : int
+        Total number of structures to generate.
+    res_factor : float
+        The SPINNA resolution factor.
+    save : str, optional
+        Save location passed through to SPINNA. Default is ``""``.
+
+    Returns
+    -------
+    object
+        The structures generated by ``spinna.generate_N_structures``.
+    """
     return spinna.generate_N_structures(
         structures,
         N_total,
@@ -2175,25 +2400,39 @@ def estimate_density_from_neighbordists(
     bkg_fraction=0,
     fit_bkg=False,
 ):
-    """For one point with k nearest neighbor distances (all assumed from
-    a CSR distribution), do a maximum likelihood estimation for the
-    density.
-    Args:
-        nn_dists : array, len k - or 2D array: (N, k)
-            the k nearest neighbor distances (of N spots)
-        rho_init : float
-            the initial estimation of density
-        min_dist, max_dist : float
-            ignore nn distances outside this range
-        bkg_fraction : float
-            the fraction of nn distances that are background, i.e. randomly
-            distributed over all distances, independent on spot density
-        fit_bkg : bool
-            whether to take bkg_fraction as granted, or as an input fit value
-    Returns:
-        mle_rho : float
-            the maximum likelihood estimate for the local density
-            based on the nearest neighbor distances
+    """Maximum-likelihood-estimate the density from k-NN distances.
+
+    For one point with k nearest-neighbour distances (all assumed drawn from a
+    CSR distribution).
+
+    Parameters
+    ----------
+    nn_dists : array
+        The k nearest-neighbour distances, of shape ``(k,)`` or ``(N, k)``
+        for N spots.
+    rho_init : float
+        Initial density estimate.
+    kmin : int, optional
+        The smallest neighbour order in ``nn_dists``. Default is 1.
+    rho_bound_factor : float, optional
+        Factor setting the density bounds around ``rho_init``. Default is 10.
+    d : int, optional
+        Dimensionality. Default is 2.
+    min_dist, max_dist : float, optional
+        Ignore nn distances outside this range.
+    bkg_fraction : float, optional
+        Fraction of nn distances that are background (uniformly distributed,
+        independent of spot density). Default is 0.
+    fit_bkg : bool, optional
+        Whether to fit ``bkg_fraction`` rather than take it as given. Default
+        is False.
+
+    Returns
+    -------
+    mle_rho : float
+        The maximum-likelihood estimate for the local density.
+    result : scipy.optimize.OptimizeResult
+        The full minimizer result.
     """
     bounds = [
         (rho_init / rho_bound_factor, rho_init * rho_bound_factor)
@@ -2238,19 +2477,31 @@ def minimization_loglike(
     max_dist=np.inf,
     bkg_fraction=0,
 ):
-    """The minimization function for nndist loglikelihood fun
-    based on k-th nearest neighbor CSR distributions
-    Args:
-        parameters : list, len 1 or 2
-            the estimated density, and potentially bkg_fraciton
-        nndist_observed : array, len k - or 2D array: (N, k)
-            the k nearest neighbor distances (of N spots)
-        bkg_fraction : the background fraction. ignored if there
-            is a second entry of parameters
-    Returns:
-        loglike : float
-            the log likelihood of finding the observed neighbor distances
-            in the model of CSR and given rho
+    """Objective for the NND log-likelihood fit (negative log-likelihood).
+
+    Based on the k-th nearest-neighbour CSR distributions.
+
+    Parameters
+    ----------
+    parameters : list
+        The estimated density (and, if length 2, the ``bkg_fraction``).
+    nndist_observed : array
+        The k nearest-neighbour distances, shape ``(k,)`` or ``(N, k)``.
+    d : int, optional
+        Dimensionality. Default is 2.
+    kmin : int, optional
+        The smallest neighbour order. Default is 1.
+    min_dist, max_dist : float, optional
+        Ignore nn distances outside this range.
+    bkg_fraction : float, optional
+        The background fraction; ignored if a second entry of ``parameters``
+        is given. Default is 0.
+
+    Returns
+    -------
+    float
+        The negative log-likelihood of the observed neighbour distances under
+        the CSR model with the given density.
     """
     rho = parameters[0]
     if len(parameters) == 2:
@@ -2269,17 +2520,28 @@ def nndist_loglikelihood_csr(
     max_dist=np.inf,
     bkg_fraction=0,
 ):
-    """get the Log-Likelihood of observed nearest neighbors assuming
-    a CSR distribution with density rho.
-    Args:
-        nndist_observed : array, len k - or 2D array: (N, k)
-            the k nearest neighbor distances (of one or N spots)
-        rho : float
-            the density
-    Returns:
-        log_like : float
-            the log likelihood of all distances observed being drawn
-            from CSR
+    """Log-likelihood of observed nearest neighbours under CSR.
+
+    Parameters
+    ----------
+    nndist_observed : array
+        The k nearest-neighbour distances, shape ``(k,)`` or ``(N, k)`` for
+        one or N spots.
+    rho : float
+        The density.
+    d : int, optional
+        Dimensionality. Default is 2.
+    kmin : int, optional
+        The smallest neighbour order. Default is 1.
+    min_dist, max_dist : float, optional
+        Ignore nn distances outside this range.
+    bkg_fraction : float, optional
+        The background fraction. Default is 0.
+
+    Returns
+    -------
+    log_like : float
+        The log-likelihood of all observed distances being drawn from CSR.
     """
     log_like = 0
     # print("nndist_obs shape", nndist_observed.shape)
@@ -2311,23 +2573,35 @@ def nndistribution_from_csr(
     max_dist=np.inf,
     renormalize=True,
 ):
-    """The CSR Nearest Neighbor distribution of finding the k-th nearest
-    neighbor at r. with the spatial randomness covering d dimensions
-    Args:
-        r : float or array of floats
-            the distance(s) to evaluate the probability density at
-        k : int
-            evaluation of the k-th nearest neighbor
-        rho : float
-            the density
-        d : int
-            the dimensionality of the problem
-        min_dist : float
-            the minimum distance observable (e.g. due to technical reasons),
-            the model is cut off below that and renormalized
-    Returns:
-        p : same as r
-            the probability density of k-th nearest neighbor at r
+    """CSR nearest-neighbour distribution for the k-th neighbour at ``r``.
+
+    For spatial randomness over ``d`` dimensions.
+
+    Parameters
+    ----------
+    r : float or array of float
+        The distance(s) to evaluate the probability density at.
+    k : int
+        Which nearest neighbour to evaluate.
+    rho : float
+        The density.
+    d : int, optional
+        The dimensionality of the problem. Default is 2.
+    bkg_fraction : float, optional
+        Uniform background fraction added across distances. Default is 0.
+    min_dist : float, optional
+        Minimum observable distance (e.g. due to technical limits); the model
+        is cut off below it and renormalized. Default is 0.
+    max_dist : float, optional
+        Maximum observable distance. Default is ``np.inf``.
+    renormalize : bool, optional
+        Whether to renormalize after applying the distance cutoffs. Default is
+        True.
+
+    Returns
+    -------
+    p : same type as ``r``
+        The probability density of the k-th nearest neighbour at ``r``.
     """
     # if k != 1:
     #     print(f'evaluating CSR not at k=1 but k={k}')
@@ -2377,29 +2651,29 @@ def nndistribution_from_csr(
 def csr_cdf_for_ks_test(
     x, k, rho, d=2, min_dist=0, max_dist=np.inf, bkg_fraction=0
 ):
-    """CDF of the theoretical CSR distribution for k-th nearest neighbor.
+    """CDF of the theoretical CSR distribution for the k-th nearest neighbour.
 
     Used for Kolmogorov-Smirnov goodness-of-fit testing.
 
-    Args:
-        x : float or array-like
-            Distance values to evaluate CDF at
-        k : int
-            k-th nearest neighbor order
-        rho : float
-            Density parameter from CSR fit
-        d : int, default 2
-            Dimensionality (2D or 3D)
-        min_dist : float, default 0
-            Minimum observable distance
-        max_dist : float, default np.inf
-            Maximum observable distance
-        bkg_fraction : float, default 0
-            Background fraction parameter
+    Parameters
+    ----------
+    x : float or array-like
+        Distance values to evaluate the CDF at.
+    k : int
+        The k-th nearest-neighbour order.
+    rho : float
+        Density parameter from the CSR fit.
+    d : int, optional
+        Dimensionality (2 or 3). Default is 2.
+    min_dist, max_dist : float, optional
+        Minimum/maximum observable distance.
+    bkg_fraction : float, optional
+        Background fraction parameter. Default is 0.
 
-    Returns:
-        float or array
-            CDF values at input distances
+    Returns
+    -------
+    float or array
+        CDF values at the input distances.
     """
     x = np.atleast_1d(x)
     cdf_values = np.zeros_like(x, dtype=float)
@@ -2426,7 +2700,7 @@ def csr_cdf_for_ks_test(
                     renormalize=True,
                 )
                 # Numerical integration using trapezoidal rule
-                cdf_values[i] = np.trapz(pdf_vals, r_integrate)
+                cdf_values[i] = np.trapezoid(pdf_vals, r_integrate)
             else:
                 cdf_values[i] = 0.0
 
@@ -2711,7 +2985,7 @@ def _do_dbscan_molint(
     # perform adapteation of Rafal's analysis
     channel_map_r = {v: k for k, v in channel_map.items()}
     targets = [channel_map_r[i] for i in sorted(channel_map_r.keys())]
-    (barcode_df, barcode_agg, barcode_map) = DBSCAN_analysis_pd(
+    barcode_df, barcode_agg, barcode_map = DBSCAN_analysis_pd(
         db_cluster_output, targets
     )
     filepaths["fp_barcode"] = os.path.join(result_folder, f"barcode_{it}.xlsx")
@@ -2830,7 +3104,7 @@ def _do_dbscan_molint(
 
     # Calculate and save mean of output metrics of all clusters in the cell
     # + some output metrics specific to the whole cell
-    (mean_filename, mean_large_filename, mean_small_filename) = (
+    mean_filename, mean_large_filename, mean_small_filename = (
         output_metrics.output_cell_mean(
             channel_map,
             df_mask,
@@ -2916,25 +3190,30 @@ def degree_of_clustering(
 def _plot_degreeofclustering(
     data, origin_colors, fp_fig, ylabel="fraction of locs per cell"
 ):
-    """
-    Plot the degree of clustering of experimental versus simulated
-    data in violin plots, including stripplots of the data.
-    Args:
-        data: dict of array
-            the underlying data to plot (numer/fraction of clustered
-            or unclustered locs for each cell)
-            keys: 'exp' and 'csr'
-        origin_colors : list of str
-            the colors of 'exp', and 'csr' data, respectively
-        fp_fig : str
-            the path to save the figure at
-    Returns:
-        t_stats : xyz
-            the results of the t_test between experimental and csr
-            data for clustered and non-clustered data comparison
-        p_values : array len 2
-            the p_values of exp and csr being drawn from the same
-            distribution for clustered and non-clustered data
+    """Plot the degree of clustering of experimental vs simulated data.
+
+    Uses violin plots overlaid with strip plots of the data.
+
+    Parameters
+    ----------
+    data : dict of array
+        The underlying data to plot (number/fraction of clustered or
+        unclustered locs per cell), with keys ``'exp'`` and ``'csr'``.
+    origin_colors : list of str
+        The colors of the ``'exp'`` and ``'csr'`` data, respectively.
+    fp_fig : str
+        The path to save the figure at.
+    ylabel : str, optional
+        The y-axis label. Default is ``"fraction of locs per cell"``.
+
+    Returns
+    -------
+    t_stats : numpy.ndarray
+        The t-test statistics between experimental and CSR data, for the
+        clustered and non-clustered comparisons.
+    p_values : numpy.ndarray
+        Length-2 array of p-values for exp vs csr being drawn from the same
+        distribution (clustered and non-clustered).
     """
     categories = ["clustered", "non-clustered"]
 
@@ -3010,36 +3289,40 @@ def _plot_and_compare_barcodes(
     title="",
     ylabel="",
 ):
-    """Plot the comparison of barcodes between experiment and simulation,
-    and perform a t-test to evaluate whether the distributions are
-    different.
-    Args:
-        pivot_table : pd.DataFrame
-            index: barcodes (str, 0b...)
-            columns: multiindex, first index: origin (['exp', 'csr'])
-        origin_colors : list of str
-            the colors to use for the two conditions
-        targets : list of str
-            the protein targets
-        ttest_pvalue_max : float
-            the pvalue above which no significance is attributed to
-            the difference of exp and csr
-        population_threshold : float
-            the relative population a barcode needs to be significant
-            (e.g. 1% of all clusters need to have a barcode for it
-            to pop up)
-        population_threshold : float, between 0 and 1
-            the fraction of cells that need to have this barcode at least once.
-        fp_fig : str
-            the filepath to save the figure at
-        title : str
-            the title addition for the plot
-    Returns:
-        significant_barcodes : list of str
-            the barcodes that evaluated as significantly changed between
-            exp and csr
-        p_values : list of float
-            the p_values of the t-test for all barcodes
+    """Plot and compare barcodes between experiment and simulation.
+
+    Performs a t-test to evaluate whether the distributions differ.
+
+    Parameters
+    ----------
+    pivot_table : pd.DataFrame
+        Index: barcodes (str, ``0b...``); columns: a multi-index whose first
+        level is the origin (``['exp', 'csr']``).
+    origin_colors : list of str
+        The colors to use for the two conditions.
+    targets : list of str
+        The protein targets.
+    ttest_pvalue_max : float
+        The p-value above which no significance is attributed to the exp-vs-csr
+        difference.
+    population_threshold : float
+        The relative population a barcode needs to be significant (e.g. 1% of
+        all clusters must carry a barcode for it to appear).
+    cellfraction_threshold : float
+        The fraction of cells (0-1) that must carry the barcode at least once.
+    fp_fig : str
+        The filepath to save the figure at.
+    title : str, optional
+        Title addition for the plot.
+    ylabel : str, optional
+        The y-axis label.
+
+    Returns
+    -------
+    significant_barcodes : list of str
+        The barcodes evaluated as significantly changed between exp and csr.
+    p_values : list of float
+        The t-test p-values for all barcodes.
     """
     # plot distribution of number of barcodes
     fig, ax = plt.subplots(nrows=1, sharex=True)
@@ -3162,20 +3445,23 @@ def _plot_and_compare_barcodes(
 def _plot_and_compare_ntargets_in_barcodes(
     df, bc, origin_colors, targets, fp_fig
 ):
-    """For a significant cluster, plot the distribution of
-    number of targets for exp and csr cases, and determine
-    whether they are stastistically differnt
-    Args:
-        df : DataFrame
-            the list of all clusters with this barcode
-        bc : str
-            the barcode ('0b...')
-        origin_colors : list of str
-            the colors for exp and csr
-        targets : list of str
-            the protein target names
-        fp_fig : str
-            the filepath to save the figure as
+    """Plot the per-target count distribution for a significant barcode.
+
+    Compares the experimental and CSR cases and tests whether they differ
+    statistically.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        All clusters carrying this barcode.
+    bc : str
+        The barcode (``'0b...'``).
+    origin_colors : list of str
+        The colors for the exp and csr cases.
+    targets : list of str
+        The protein target names.
+    fp_fig : str
+        The filepath to save the figure as.
     """
     fig, ax = plt.subplots()
     bxwidth = 1 / (len(origin_colors) + 2)
@@ -3305,13 +3591,22 @@ def _plot_interaction_graph(
     target_colors: list,
     targets: list,
 ):
-    """Create an interaction graph plot to show both density of proteins
-    (node sizes), and interaction strength (edge sizes)
-    Args:
-        node_sizes : np array (N,)
-            the size of the nodes
-        edge_sizes : np array (N, N)
-            the interaction strength between edges, including self
+    """Create an interaction-graph plot of protein density and interaction.
+
+    Node sizes encode protein density and edge sizes encode interaction
+    strength.
+
+    Parameters
+    ----------
+    node_sizes : np.ndarray
+        The node sizes, shape ``(N,)``.
+    edge_sizes : np.ndarray
+        The interaction strength between nodes (including self), shape
+        ``(N, N)``.
+    target_colors : list
+        Per-target colors.
+    targets : list
+        The protein target names.
     """
     from matplotlib.lines import Line2D
     import matplotlib.patches as mpatches
@@ -3427,7 +3722,7 @@ def prep_pick_similar_kwargs(locs, info, diameter):
     d2 = d**2
 
     # extract n_locs and rmsd from current picks
-    (locs_temp, r, _, _, block_starts, block_ends, K, L) = (
+    locs_temp, r, _, _, block_starts, block_ends, K, L = (
         postprocess.get_index_blocks(locs, info, r)
     )
 
@@ -3467,26 +3762,33 @@ def prep_pick_similar_kwargs(locs, info, diameter):
 
 
 def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=0.4):
-    """
-    Searches picks similar to Gold clusters.
+    """Search for picks similar to gold clusters.
 
-    Focuses on the number of locs and their root mean square
-    displacement from center of mass. Std is defined in Tools
-    Settings Dialog.
+    Focuses on the number of locs and their root-mean-square displacement
+    from the center of mass.
 
-    Args:
-        diameter : float
-            the pick similar diameter
-        std_range, mean_rmsd : float
-            the pick similar parameters identifying gold
-    Returns:
-        similar : list of [x, y] position pairs
-            the positions (picks) of gold beads
+    Parameters
+    ----------
+    locs : np.rec.array
+        The localizations.
+    info : list of dict
+        The localization metadata.
+    diameter : float, optional
+        The pick-similar diameter. Default is 2.
+    std_range : float, optional
+        The pick-similar std range identifying gold. Default is 1.4.
+    mean_rmsd : float, optional
+        The pick-similar mean RMSD identifying gold. Default is 0.4.
+
+    Returns
+    -------
+    similar : list of [x, y]
+        The positions (picks) of gold beads.
 
     Raises
     ------
     NotImplementedError
-        If pick shape is rectangle
+        If the pick shape is a rectangle.
     """
     maxframe = info[0]["Frames"]
 
@@ -3576,28 +3878,31 @@ def locs_at(x, y, locs, r, return_indices=False):
 def picked_locs(
     locs, info, _centers, pick_diameter, add_group=True, return_nonpicked=False
 ):
-    """
-    Returns picked localizations in the specified channel.
+    """Return localizations picked around the given centers.
 
     Parameters
     ----------
-    channel : int
-        Channel of locs to be processed
-    add_group : boolean (default=True)
-        True if group id should be added to locs. Each pick will be
-        assigned a different id
-    return_nonpicked : bool
-        whether to return the non-picked locs
+    locs : np.rec.array
+        The localizations to pick from.
+    info : list of dict
+        The localization metadata.
+    _centers : array-like
+        The pick centers.
+    pick_diameter : float
+        The pick diameter.
+    add_group : bool, optional
+        Whether to add a ``group`` id to the locs; each pick gets a different
+        id. Default is True.
+    return_nonpicked : bool, optional
+        Whether to also return the non-picked locs. Default is False.
 
-    Returns:
-        all_picked_locs : np.recarray
-            locs within pick_diameter around _centers, linked to
-            common centers by field 'group'
-        # all_picked_locs : list of np.recarray
-        #     locs within pick_diameter around _centers, linked to
-        #     common centers by field 'group'
-        non_picked_locs : np.recarray
-            locs that have not been picked.
+    Returns
+    -------
+    all_picked_locs : np.recarray
+        Locs within ``pick_diameter`` of ``_centers``, linked to common
+        centers by the ``group`` field.
+    non_picked_locs : np.recarray
+        Locs that were not picked (only if ``return_nonpicked`` is True).
     """
 
     picked_locs = []
@@ -3633,16 +3938,16 @@ def picked_locs(
     if return_nonpicked:
         # Create a merge to identify picked locs
         locs_with_key = locs.copy()
-        locs_with_key['_key'] = 1
-        picked_with_key = all_picked_locs[["frame", "x", "y", "photons"]].copy()
-        picked_with_key['_picked'] = 1
+        locs_with_key["_key"] = 1
+        picked_with_key = all_picked_locs[
+            ["frame", "x", "y", "photons"]
+        ].copy()
+        picked_with_key["_picked"] = 1
 
         merged = locs_with_key.merge(
-            picked_with_key,
-            on=["frame", "x", "y", "photons"],
-            how='left'
+            picked_with_key, on=["frame", "x", "y", "photons"], how="left"
         )
-        mask = merged['_picked'].notna().values
+        mask = merged["_picked"].notna().values
         non_picked_locs = locs[~mask]
         return all_picked_locs, non_picked_locs
     else:
@@ -3678,7 +3983,7 @@ def _undrift_from_picked_coordinate(info, picked_locs, coordinate):
     # Remove center of mass offset
     for i, locs in enumerate(picked_locs):
         coordinates = locs[coordinate]
-        drift[i, locs['frame']] = coordinates - np.mean(coordinates)
+        drift[i, locs["frame"]] = coordinates - np.mean(coordinates)
 
     # Mean drift over picks
     drift_mean = np.nanmean(drift, 0)
@@ -3715,31 +4020,32 @@ def _undrift_from_picked(locs, info, picked_locs):
     """
     drift_x = _undrift_from_picked_coordinate(info, picked_locs, "x")
     drift_y = _undrift_from_picked_coordinate(info, picked_locs, "y")
-    locs['x'] -= drift_x[locs['frame']]
-    locs['y'] -= drift_y[locs['frame']]
+    locs["x"] -= drift_x[locs["frame"]]
+    locs["y"] -= drift_y[locs["frame"]]
 
-    drift = {'x': drift_x, 'y': drift_y}
+    drift = {"x": drift_x, "y": drift_y}
     if "z" in locs.columns:
         drift_z = _undrift_from_picked_coordinate(info, picked_locs, "z")
-        locs['z'] -= drift_z[locs['frame']]
-        drift['z'] = drift_z
+        locs["z"] -= drift_z[locs["frame"]]
+        drift["z"] = drift_z
     # drift = np.array(drift).T
     return locs, info, drift
 
 
 def shift_from_picked(channel_fiducials):
-    """
-    Calculate shift based on picked fiducials
+    """Calculate the inter-channel shift from picked fiducials.
 
-    Args:
-        channel_fiducials : list of np.recarray
-            the picked localizations to evaluate shifts from.
-            Must contain a 'x', 'y', 'group' columns
+    Parameters
+    ----------
+    channel_fiducials : list of np.recarray
+        The picked localizations to evaluate shifts from; must contain ``x``,
+        ``y`` and ``group`` columns.
 
     Returns
     -------
     tuple
-        With shifts; shape (2,) or (3,) (if z coordinate present)
+        The shifts, of shape ``(2,)`` or ``(3,)`` (if a z coordinate is
+        present).
     """
     dy = shifts_from_picked_coordinate(channel_fiducials, "y")
     dx = shifts_from_picked_coordinate(channel_fiducials, "x")
@@ -3755,15 +4061,21 @@ def shift_from_picked(channel_fiducials):
 
 
 def sort_picked_locs(channel_picks, max_shift=None):
-    """Sorts picked localizations to match between channels.
-    Args:
-        max_shift : None or float
-            the maximum shift between channel picks. If given, picks are only
-            considered if they have corresponding picks in all other channels,
-            and resorted accordingly.
-    Returns:
-        channel_locs : list of np.rec.array
-            the accepted picks in corresponding order
+    """Sort picked localizations to match between channels.
+
+    Parameters
+    ----------
+    channel_picks : list of np.rec.array
+        The picked localizations per channel (each with a ``group`` field).
+    max_shift : float or None, optional
+        Maximum shift between channel picks. If given, picks are kept only if
+        they have corresponding picks in all other channels, and are resorted
+        accordingly.
+
+    Returns
+    -------
+    channel_locs : list of np.rec.array
+        The accepted picks in corresponding order.
     """
     n_channels = len(channel_picks)
     # ngroups = [len(np.unique(picks['group'])) for picks in channel_picks]
@@ -3923,30 +4235,35 @@ def pick_similar(
     min_rmsd=0.1,
     max_rmsd=0.3,
 ):
-    """
-    Searches picks similar to given nlocs/rmsd parameters.
+    """Search for picks matching given nlocs/rmsd parameters.
 
-    Focuses on the number of locs and their root mean square
-    displacement from center of mass.
-    Instead of picking "similar" to a few manual picks, the rectangle
-    in nlocs/rmsd space is given directly here
+    Focuses on the number of locs and their root-mean-square displacement
+    from the center of mass. Instead of picking "similar" to a few manual
+    picks, the rectangle in nlocs/rmsd space is given directly.
 
-    Args:
-        diameter : float
-            the pick similar diameter
-        min_n_locs_per_frame, max_n_locs_per_frame : float or str
-            the boundaries for min/max nlocs per frame per pick
-            if str: "q0.25" - 0.25-quantile
-        min_rmsd, max_rmsd : float
-            the boundaries for min/max rmsd per pick
-    Returns:
-        similar : list of [x, y] position pairs
-            the positions (picks) of gold beads
+    Parameters
+    ----------
+    locs : np.rec.array
+        The localizations.
+    info : list of dict
+        The localization metadata.
+    diameter : float, optional
+        The pick-similar diameter. Default is 2.
+    min_n_locs_per_frame, max_n_locs_per_frame : float or str, optional
+        Boundaries for min/max nlocs per frame per pick. A string like
+        ``"q0.25"`` denotes the 0.25-quantile.
+    min_rmsd, max_rmsd : float, optional
+        Boundaries for min/max RMSD per pick.
+
+    Returns
+    -------
+    similar : list of [x, y]
+        The positions (picks) matching the parameters.
 
     Raises
     ------
     NotImplementedError
-        If pick shape is rectangle
+        If the pick shape is a rectangle.
     """
     maxframe = info[0]["Frames"]
     # min_n_locs = int(maxframe * min_n_locs_per_frame)
@@ -4133,9 +4450,7 @@ def pick_similar_analysis(
                 # picked_locs_xy = postprocess.locs_at(
                 #     x_grid, y_grid, block_locs_xy, r
                 # )
-                picked_locs_xy = _locs_at(
-                    x_grid, y_grid, block_locs_xy, r
-                )
+                picked_locs_xy = _locs_at(x_grid, y_grid, block_locs_xy, r)
                 if picked_locs_xy.shape[1] > 1:
                     # Move to COM peak
                     x_test_old = x_grid
@@ -4182,25 +4497,41 @@ def pick_similar_analysis(
 
 @nb.jit(nopython=True, nogil=True, cache=True)
 def _get_block_locs_at(
-        x_range, y_range, locs_xy, 
-        block_starts, block_ends, K, L,
-    ):
+    x_range,
+    y_range,
+    locs_xy,
+    block_starts,
+    block_ends,
+    K,
+    L,
+):
     step = 0
     for k in range(y_range - 1, y_range + 2):
         if 0 < k < K:
-            for l in range(x_range - 1, x_range + 2):
-                if 0 < l < L:
-                    if block_ends[k, l] - block_starts[k, l] > 0:
-                        # numba does not work if you attach arange to an empty list so the first step is different
-                        # this is because of dtype issues
+            for lx in range(x_range - 1, x_range + 2):
+                if 0 < lx < L:
+                    if block_ends[k, lx] - block_starts[k, lx] > 0:
+                        # numba does not work if you attach arange to an
+                        # empty list, so the first step is different; this
+                        # is because of dtype issues
                         if step == 0:
-                            indices = np.arange(float(block_starts[k, l]), float(block_ends[k, l]), 
-                                dtype=np.uint32)
+                            indices = np.arange(
+                                float(block_starts[k, lx]),
+                                float(block_ends[k, lx]),
+                                dtype=np.uint32,
+                            )
                             step = 1
                         else:
-                            indices = np.concatenate((indices, 
-                                np.arange(float(block_starts[k, l]), float(block_ends[k, l]), dtype=np.uint32)
-                            ))
+                            indices = np.concatenate(
+                                (
+                                    indices,
+                                    np.arange(
+                                        float(block_starts[k, lx]),
+                                        float(block_ends[k, lx]),
+                                        dtype=np.uint32,
+                                    ),
+                                )
+                            )
     return locs_xy[:, indices]
 
 
@@ -4208,8 +4539,8 @@ def _get_block_locs_at(
 def _locs_at(x, y, locs_xy, r):
     dx = locs_xy[0] - x
     dy = locs_xy[1] - y
-    r2 = r ** 2
-    is_picked = dx ** 2 + dy ** 2 < r2
+    r2 = r**2
+    is_picked = dx**2 + dy**2 < r2
     return locs_xy[:, is_picked]
 
 
@@ -4217,8 +4548,9 @@ def _locs_at(x, y, locs_xy, r):
 def _rmsd_at_com(locs_xy):
     com_x = np.mean(locs_xy[0])
     com_y = np.mean(locs_xy[1])
-    return np.sqrt(np.mean((locs_xy[0] - com_x) ** 2 + (locs_xy[1] - com_y) ** 2))
-
+    return np.sqrt(
+        np.mean((locs_xy[0] - com_x) ** 2 + (locs_xy[1] - com_y) ** 2)
+    )
 
 
 #####
@@ -4278,40 +4610,49 @@ def resolution_ppac(
     use_chunking=False,
     use_sparse=False,
 ):
-    """Calculate the resolution by 2D point pattern autocorrelation
+    """Calculate the resolution by 2D point-pattern autocorrelation.
 
-    Args:
-        locs: DataFrame with 'x' and 'y' columns of localizations
-        pixelsize: Pixel size in physical units (e.g., nm)
-        delta_r: Grid spacing for autocorrelation calculation
-        r_max: Maximum radius for autocorrelation
-        batch_size: Deprecated parameter (no longer used)
-        n_processes: Number of parallel threads (auto-detected if None)
-        use_chunking: Deprecated - chunking has been removed as it was
-            mathematically incorrect. This parameter is ignored.
-        use_sparse: Whether to use sparse matrices for very large grids
-            (default: False)
+    Parameters
+    ----------
+    locs : pd.DataFrame
+        Localizations with ``x`` and ``y`` columns.
+    pixelsize : float
+        Pixel size in physical units (e.g. nm).
+    delta_r : float
+        Grid spacing for the autocorrelation calculation.
+    r_max : float
+        Maximum radius for the autocorrelation.
+    batch_size : int or None, optional
+        Deprecated; no longer used.
+    n_processes : int or None, optional
+        Number of parallel threads (auto-detected if None).
+    use_chunking : bool, optional
+        Deprecated and ignored (chunking was removed as mathematically
+        incorrect). Default is False.
+    use_sparse : bool, optional
+        Whether to use sparse matrices for very large grids. Default is False.
 
-    Returns:
-        2D autocorrelation intensity map normalized by central value
+    Returns
+    -------
+    numpy.ndarray
+        2D autocorrelation intensity map normalized by the central value.
 
-    Notes:
-        - Now uses ThreadPoolExecutor for true parallelization
-        - Exploits autocorrelation symmetry for 2× speedup
-        - Removed incorrect chunking implementation
+    Notes
+    -----
+    Uses a ``ThreadPoolExecutor`` for parallelization and exploits
+    autocorrelation symmetry for a 2× speedup.
     """
     from multiprocessing import cpu_count
-    from concurrent.futures import ThreadPoolExecutor
-    import gc
 
     # Warn if deprecated parameters are used
     if use_chunking:
         import warnings
+
         warnings.warn(
             "use_chunking parameter is deprecated and ignored. "
             "The chunking implementation was mathematically incorrect and has been removed.",
             DeprecationWarning,
-            stacklevel=2
+            stacklevel=2,
         )
 
     r_max = (r_max // delta_r) * delta_r
@@ -4334,7 +4675,6 @@ def resolution_ppac(
 
     # Convert to physical coordinates once
     xy = np.column_stack([locs["x"] * pixelsize, locs["y"] * pixelsize])
-    n_points = len(xy)
 
     # Auto-detect number of threads
     if n_processes is None:
@@ -4351,9 +4691,7 @@ def resolution_ppac(
             intensities = result_intensities
     else:
         # Use optimized sequential algorithm with symmetry
-        intensities = _resolution_ppac_sequential_optimized(
-            xy, rs, r_search
-        )
+        intensities = _resolution_ppac_sequential_optimized(xy, rs, r_search)
 
     # Convert back to dense array if using sparse
     if using_sparse:
@@ -4364,26 +4702,34 @@ def resolution_ppac(
     if max_intensity > 0:
         intensities = intensities / max_intensity
     # set the center to the mean of its 4-connected neighbors
-    intensities[idx_ctr, idx_ctr] = np.mean([
-        intensities[idx_ctr - 1, idx_ctr],
-        intensities[idx_ctr, idx_ctr - 1],
-        intensities[idx_ctr + 1, idx_ctr],
-        intensities[idx_ctr, idx_ctr + 1]
-        ])
+    intensities[idx_ctr, idx_ctr] = np.mean(
+        [
+            intensities[idx_ctr - 1, idx_ctr],
+            intensities[idx_ctr, idx_ctr - 1],
+            intensities[idx_ctr + 1, idx_ctr],
+            intensities[idx_ctr, idx_ctr + 1],
+        ]
+    )
 
     return intensities
 
 
 def _resolution_ppac_sequential_optimized(xy, rs, r_search):
-    """Optimized sequential PPAC with symmetry exploitation
+    """Optimized sequential PPAC exploiting autocorrelation symmetry.
 
-    Args:
-        xy: Nx2 array of coordinates
-        rs: Array of shift values
-        r_search: Search radius for neighbor counting
+    Parameters
+    ----------
+    xy : numpy.ndarray
+        ``(N, 2)`` array of coordinates.
+    rs : numpy.ndarray
+        Array of shift values.
+    r_search : float
+        Search radius for neighbour counting.
 
-    Returns:
-        2D autocorrelation intensity map
+    Returns
+    -------
+    numpy.ndarray
+        2D autocorrelation intensity map.
     """
     import gc
 
@@ -4420,19 +4766,25 @@ def _resolution_ppac_sequential_optimized(xy, rs, r_search):
 
 
 def _resolution_ppac_parallel_optimized(xy, rs, r_search, n_threads):
-    """Optimized parallel PPAC using ThreadPoolExecutor with symmetry
+    """Optimized parallel PPAC using a ThreadPoolExecutor with symmetry.
 
-    Args:
-        xy: Nx2 array of coordinates
-        rs: Array of shift values
-        r_search: Search radius for neighbor counting
-        n_threads: Number of threads to use
+    Parameters
+    ----------
+    xy : numpy.ndarray
+        ``(N, 2)`` array of coordinates.
+    rs : numpy.ndarray
+        Array of shift values.
+    r_search : float
+        Search radius for neighbour counting.
+    n_threads : int
+        Number of threads to use.
 
-    Returns:
-        2D autocorrelation intensity map
+    Returns
+    -------
+    numpy.ndarray
+        2D autocorrelation intensity map.
     """
     from concurrent.futures import ThreadPoolExecutor
-    import functools
 
     grid_size = len(rs)
     intensities = np.zeros((grid_size, grid_size))
@@ -4613,21 +4965,22 @@ def _compute_autocorr_point_chunk(task):
 
 
 def analyse_resolution_ppac(intensities, delta_r):
-    """Fit 2D Gaussian to autocorrelation map to extract resolution
+    """Fit a 2D Gaussian to an autocorrelation map to extract resolution.
 
-    Args:
-        intensities: 2D autocorrelation intensity map from resolution_ppac
-        delta_r: Grid spacing used for autocorrelation calculation
+    Parameters
+    ----------
+    intensities : numpy.ndarray
+        2D autocorrelation intensity map from :func:`resolution_ppac`.
+    delta_r : float
+        Grid spacing used for the autocorrelation calculation.
 
-    Returns:
-        dict: Resolution analysis results containing:
-            - sigma_x, sigma_y: Gaussian standard deviations in x,y
-                (physical units)
-            - resolution: Average resolution (2.35 * mean(sigma_x, sigma_y))
-            - fwhm_x, fwhm_y: Full-width half-maximum values
-            - amplitude: Fitted Gaussian amplitude
-            - background: Fitted background level
-            - fit_quality: R-squared goodness of fit
+    Returns
+    -------
+    dict
+        Resolution analysis results with keys ``sigma_x``/``sigma_y``
+        (Gaussian std devs in physical units), ``resolution`` (``2.35 *
+        mean(sigma_x, sigma_y)``), ``fwhm_x``/``fwhm_y``, ``amplitude``,
+        ``background`` and ``fit_quality`` (R-squared).
     """
     from scipy.optimize import curve_fit
 
@@ -4693,8 +5046,9 @@ def analyse_resolution_ppac(intensities, delta_r):
         # Suppress numerical warnings from scipy optimizer
         # (divide by zero warnings are expected for ill-conditioned histograms)
         import warnings
+
         with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=RuntimeWarning)
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
             popt, pcov = curve_fit(
                 gaussian_2d,
                 coords,

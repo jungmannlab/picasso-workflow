@@ -17,6 +17,7 @@ To populate TestData/templates/ run:
     python tools/snapshot_templates.py
 (requires network access to the mounted pool volumes)
 """
+
 import importlib.util
 import inspect
 import logging
@@ -25,7 +26,6 @@ import os
 import pytest
 
 from picasso_workflow import util
-
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ _TEMPLATES_DIR = os.path.join(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _available_modules():
     """Return the set of public module names in AbstractModuleCollection."""
@@ -112,6 +113,7 @@ def _extract_module_names(mod):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("name,path", _template_files())
 def test_template_modules_exist(name, path):

@@ -205,6 +205,51 @@ New-Item -ItemType Directory -Force "C:\ProgramData\picasso_workflow"
 # then copy or create config.yaml there
 ```
 
+### Confluence credentials
+
+Confluence credentials are split into **non-secret connection settings** and
+the **secret token**, and the same scheme covers all three use cases (the
+pytest suite, CI, and GUI-launched workflows):
+
+- **Non-secret settings** (`URL`, `Space`, `DefaultPage`, `Username`) live in
+  `config.yaml`, in two sections:
+  - `Confluence` — operational target (real workflow runs / the GUI).
+  - `ConfluenceTest` — target for the pytest suite (a dedicated test space, so
+    tests never write to your operational space).
+
+  Override them per machine in your per-user `config.yaml`, or per field with
+  the matching environment variables: operational
+  `CONFLUENCE_URL` / `CONFLUENCE_SPACE` / `CONFLUENCE_BASE_PAGE` /
+  `CONFLUENCE_USERNAME`; tests `TEST_CONFLUENCE_URL` / `TEST_CONFLUENCE_SPACE` /
+  `TEST_CONFLUENCE_PAGE` / `TEST_CONFLUENCE_USERNAME`.
+
+- **The token is *only* ever an environment variable** — never stored in
+  `config.yaml`, a generated `start_workflow.py`, results files, or logs:
+  - operational: `CONFLUENCE_TOKEN` (legacy alias `CONFLUENCE_BEARER`)
+  - tests: `TEST_CONFLUENCE_TOKEN`
+
+  All of them resolve through one helper,
+  `picasso_workflow.confluence.resolve_confluence_credentials(profile)`.
+
+**Where to set the token per use case**
+
+- **Local (laptop)** — export in your shell (or `picasso_workflow/.env`, which
+  is loaded automatically at import by python-dotenv).
+- **Cluster** — set it so both the login node *and* SLURM jobs see it. Two
+  robust options:
+  - a `.env` next to the installed package (loaded at `import picasso_workflow`,
+    so it works identically in interactive shells and batch jobs), or
+  - an `export` sourced unconditionally from `~/.bashrc` (above any
+    non-interactive guard). `tools/cluster_tests/submit_all.sh` submits with
+    `--export=ALL` and the sbatch scripts `source ~/.bashrc`, so both paths
+    propagate into jobs.
+- **CI** — the runner provides only the token env var; the non-secret test
+  settings come from the bundled `ConfluenceTest` section.
+
+The GUI's Documentation Config tab shows the non-secret fields (prefilled from
+`config.yaml`) but **has no token field** — it always reads `CONFLUENCE_TOKEN`
+from the environment at run time.
+
 ### macOS deployment — single-user app bundle
 
 On macOS the standard way to make a Python GUI launchable from Finder (or
@@ -248,18 +293,71 @@ environment.
 
 ## Testing
 
-The test suite is organised in four tiers. The first two tiers run without
-any external dependencies and are executed by CI on every push. Tiers 3 and 4
-require a working `picassosr` installation and are run explicitly before
-merging to `master`. Tier 4 additionally requires access to lab network
-volumes and is run on a lab machine.
+### Strategy at a glance
+
+Testing is layered so that the **fast feedback you need while coding stays
+local and cheap, while the slow, hardware-hungry checks run on the cluster**
+and report back in one place. The selection is driven entirely by two pytest
+markers — `integration` and `real_data` — so the *same* test files serve every
+layer; you just change which marker expression you select.
+
+The suite is organised in four tiers of increasing cost and fidelity:
+
+| Tier | What it checks | Select with | Needs | Speed |
+|---|---|---|---|---|
+| **1 — Unit** | every module in isolation, picasso fully mocked | `pytest` (default) | nothing | seconds |
+| **2 — Template validation** | snapshotted templates only reference modules that still exist | `pytest` (runs with tier 1) | nothing | seconds |
+| **3 — Integration** | the real picasso pipeline on tiny bundled / synthetic data | `pytest -m integration` | `picassosr` | minutes |
+| **4 — Real data** | the production pipeline on real acquisitions | `pytest -m "integration and real_data"` | `picassosr` + `PW_TEST_DATA_DIR` mounted | up to hours |
+
+The default `addopts` deselect the `integration` mark, so a bare **`pytest` is
+unit-only (tiers 1 + 2)** — that is the loop you run constantly. Everything
+heavier is opt-in by marker, or runs on the cluster.
+
+There are three entry points, in increasing order of coverage:
+
+- **`pytest`** — local development. Runs whatever your machine can: tiers 1 + 2
+  always, tier 3 if `picassosr` is installed, tier 4 if a data directory is
+  configured and mounted.
+- **`tools/cluster_tests/submit_all.sh`** — the cluster. Submits all four tiers
+  **plus one end-to-end run of every detected template workflow**, then a
+  dependent summary job condenses the whole run into a single
+  `test-results/latest/SUMMARY.txt`. This is the "submit once, read one file"
+  path and the only one that exercises the real templates against real data.
+- **GitHub Actions** — automation. `run-unittests.yml` runs the unit tests on
+  every push/PR; `run-cluster-tests.yml` runs tiers 1–3 on the cluster for
+  every push/PR (tier 4 on push to `master`), surfacing the same `SUMMARY.txt`
+  on the run page. See [CI / GitHub Actions](#ci--github-actions).
+
+**Typical developer workflow**
+
+1. While coding, run `pytest` (or `pytest -k <name>`) for the fast unit loop.
+2. Touching anything in the picasso pipeline? Run `pytest -m integration`
+   locally if you have `picassosr`, to catch pipeline breakage early.
+3. Renamed/removed a workflow module, or changed a standard workflow? Re-run
+   `python tools/snapshot_templates.py` so the committed template snapshots
+   (tiers 2 & 3) stay in sync — see
+   [Keeping template snapshots up to date](#keeping-template-snapshots-up-to-date).
+4. Push — CI runs the unit tests and cluster tiers 1–3 automatically.
+5. Before merging to `master` (or whenever you want full coverage including the
+   real templates), run `tools/cluster_tests/submit_all.sh` on the cluster and
+   read `test-results/latest/SUMMARY.txt`.
+
+The rest of this section documents each tier, the cluster runner, and CI in
+detail.
 
 ### Tier 1 — Unit tests
 
+The default `addopts` deselect the `integration` mark, so a bare `pytest` is
+**unit-only** — the fast loop you want while developing locally. The heavy
+integration tests (real picasso pipeline) only run when you ask for them, or
+on the cluster.
+
 ```bash
-pytest                        # run all non-integration tests
-pytest -v                     # verbose output
-pytest -m "not integration"   # explicitly exclude integration tests
+pytest                        # unit tests only (integration deselected)
+pytest -v                     # verbose, still unit-only
+pytest -m integration         # opt in to the heavy integration tests
+pytest -m ""                  # run everything (clears the default filter)
 ```
 
 Each module in `analyse.py` / `workflow.py` / `confluence.py` has a
@@ -302,16 +400,21 @@ needed. The tests are skipped automatically if `picassosr` is not installed.
 
 The `test_03_undrift_rcc` test uses a **session-scoped synthetic movie** (5 000 frames, 128 × 128 px, ~20 Gaussian emitters on Poisson background) generated in `conftest.py`. It does not require any external data files.
 
-**Confluence integration** (optional, skipped when env vars are absent):
+**Confluence integration** (optional, skipped when the test token is absent):
+
+The live Confluence test needs only the **token** as an environment variable;
+the non-secret connection settings come from the `ConfluenceTest` section of
+`config.yaml` (see [Confluence credentials](#confluence-credentials)).
 
 ```bash
-export TEST_CONFLUENCE_URL=https://your-confluence-instance
-export TEST_CONFLUENCE_USERNAME=your-username
-export TEST_CONFLUENCE_TOKEN=your-api-token
-export TEST_CONFLUENCE_SPACE=SPACE_KEY
-export TEST_CONFLUENCE_PAGE=Parent Page Title
+export TEST_CONFLUENCE_TOKEN=your-test-api-token
 pytest -m integration
 ```
+
+If your test instance differs from the bundled `ConfluenceTest` defaults, set
+it once in your per-user `config.yaml`, or override individual fields with
+`TEST_CONFLUENCE_URL` / `TEST_CONFLUENCE_SPACE` / `TEST_CONFLUENCE_PAGE` /
+`TEST_CONFLUENCE_USERNAME`.
 
 ### Tier 4 — Real acquired-data tests
 
@@ -367,14 +470,25 @@ a SLURM job chain.  Each tier is submitted as a separate job; a tier starts
 only if the previous one passed (`--dependency=afterok`), so a Tier 1
 failure automatically cancels Tiers 2–4 without wasting compute time.
 
+Each detected template workflow is also submitted as its own end-to-end job,
+and a final **summary job** (`afterany` on everything) condenses the whole
+run into a single `SUMMARY.txt` — so you submit one command and read one
+file.
+
 ```
 submit_all.sh
     │
-    ├─► [job A] tier1_2.sbatch   unit + template validation
+    ├─► [job A] tier1_2.sbatch        unit + template validation
     │         afterok:A ↓
-    ├─► [job B] tier3.sbatch     integration (synthetic + bundled data)
+    ├─► [job B] tier3.sbatch          integration (synthetic + bundled data)
     │         afterok:B ↓
-    └─► [job C] tier4.sbatch     real acquired data (skips if not mounted)
+    ├─► [job C] tier4.sbatch          real acquired data (skips if not mounted)
+    │
+    ├─► [job T1..Tn] <template>/run_workflow_slurm.sh
+    │                                 one end-to-end run per detected template
+    │                                 (afterok:B; only if PW_TEST_DATA_DIR set)
+    │         afterany: A,B,C,T1..Tn ↓
+    └─► [job S] summary.sbatch        writes SUMMARY.txt + summary.json
 ```
 
 #### Prerequisites
@@ -432,18 +546,24 @@ The `network_test_data` fixture checks these sources in order, stopping at the f
 
 On most HPC clusters the home directory is NFS-mounted and shared between login nodes and compute nodes, so `~/.config/picasso_workflow/config.yaml` is the same file everywhere.  If you have already set `TestData.directory` there for local Tier 4 runs, the cluster jobs pick it up automatically without any extra env var.  The env var is only needed if you want to override the config for a specific run.
 
-The script prints the three job IDs and a ready-made `squeue` command:
+The script prints all job IDs, a ready-made `squeue` command, and where the
+final report will appear:
 
 ```
 Project directory: /home/you/picasso-workflow
-Results directory: /home/you/picasso-workflow/test-results
+Results directory: /home/you/picasso-workflow/test-results/20260608_..._master_b9e6d95
 
 Submitted Tier 1+2 (unit + template):  job 12345
 Submitted Tier 3  (integration):        job 12346  (depends on 12345)
 Submitted Tier 4  (real data):          job 12347  (depends on 12346)
+Submitted template run:                 job 12350  (.../templates/eva-full)
+Submitted template run:                 job 12351  (.../templates/basic-loc)
+Submitted summary (report):             job 12352  (depends on all above)
 
-Monitor:  squeue -j 12345,12346,12347
-Tail log: tail -f test-results/tier1_2_12345.log
+Monitor:  squeue -j 12345,12346,12347,12350,12351,12352
+Tail log: tail -f test-results/.../tier1_2_12345.log
+Report:   test-results/.../SUMMARY.txt  (written when summary job 12352 finishes)
+          → also reachable at test-results/latest/SUMMARY.txt
 ```
 
 #### Monitoring progress
@@ -472,24 +592,66 @@ find the failing test.
 
 #### Reading the results
 
-Results land in `test-results/` (gitignored):
+**Start with `SUMMARY.txt`.** Each run gets its own timestamped directory
+under `test-results/` (gitignored), and `test-results/latest` always points
+at the newest one. The summary job writes a single consolidated report there
+once everything finishes:
 
-```
-test-results/
-    tier1_2_12345.log   # full pytest output + SLURM bookkeeping
-    tier1_2_12345.xml   # JUnit XML (machine-readable)
-    tier3_12346.log
-    tier3_12346.xml
-    tier4_12347.log
-    tier4_12347.xml
+```bash
+cat test-results/latest/SUMMARY.txt
 ```
 
-The last few lines of each `.log` file contain the pytest summary:
+```
+======================================================================
+ picasso-workflow cluster test summary
+======================================================================
+run_id:     20260608_..._master_b9e6d95
+OVERALL: FAIL   (2/3 tiers passed, 1/2 template workflows ran through)
+
+ Pytest tiers
+ TIER       JOB    STATE      TESTS PASS FAIL SKIP  RESULT
+ tier1_2    12345  COMPLETED    210  208    0    2  PASS
+ tier3      12346  COMPLETED     18   17    1    0  FAIL
+ tier4      12347  COMPLETED      3    0    0    3  PASS (all skipped)
+   tier3 failures:
+     - test_z_integration.py::Test_A::test_02_minimal_channel_align
+
+ Template workflows (end-to-end runs)
+ Ran through: 1 / 2
+ NAME                     JOB    STATE      ERR  RESULT
+ eva-full                 12350  FAILED       4  FAIL
+ basic-loc                12351  COMPLETED    0  PASS
+   eva-full: job state FAILED, 4 error line(s) in logs
+     log: .../templates/eva-full/logs/picasso-workflow-job12350-rank0.log
+```
+
+The headline line answers the two questions at a glance: did each tier pass,
+and **how many detected template workflows ran through** (verdict =
+SLURM job `COMPLETED` *and* no `ERROR`/`Traceback` lines in that job's logs).
+The summary job's own exit code is 0 on overall PASS, 1 otherwise.
+
+Need a snapshot before the run finishes? Run the summarizer by hand against
+any run directory (it reads whatever artefacts exist so far):
+
+```bash
+python3 tools/cluster_tests/summarize.py test-results/latest
+```
+
+Underlying artefacts, if you need to drill in, all live in the same dir:
 
 ```
-PASSED picasso_workflow/tests/test_z_integration.py::...
-FAILED picasso_workflow/tests/test_z_integration.py::... - AssertionError
-====== 5 passed, 1 failed in 23.4s ======
+test-results/<run_id>/
+    SUMMARY.txt          # consolidated report (read this first)
+    summary.json         # same data, machine-readable
+    run_info.txt         # run metadata + job IDs
+    jobs.tsv             # job manifest the summarizer reads
+    tier1_2_12345.log    # full pytest output + SLURM bookkeeping
+    tier1_2_12345.xml    # JUnit XML (machine-readable)
+    tier3_12346.log / .xml
+    tier4_12347.log / .xml
+    summary_12352.log    # the report, echoed by the summary job
+# Each template workflow's own logs stay next to the template:
+#   <PW_TEST_DATA_DIR>/.../<template>/logs/picasso-workflow-job<jid>-rank*.log
 ```
 
 #### Resubmitting a single tier
@@ -550,8 +712,21 @@ to `master` and `develop`.
 `run-cluster-tests.yml` runs on a self-hosted runner registered on the
 cluster login node.  It submits individual `sbatch` jobs (the same scripts
 used manually via `submit_all.sh`) and polls `squeue` until they finish,
-then checks exit codes via `sacct` and uploads the JUnit XML reports as
-workflow artifacts.
+then checks exit codes via `sacct`.
+
+Once the jobs finish, each CI job runs the same
+`tools/cluster_tests/summarize.py` used by `submit_all.sh` to render a
+consolidated `SUMMARY.txt`.  The report is written into the **GitHub Actions
+run page** (the job summary, so PASS/FAIL and any failing test names are
+visible without downloading anything) and uploaded as a workflow artifact
+alongside `summary.json` and the JUnit XML.  Because the `tiers-1-3` and
+`tier-4` jobs run separately, each publishes its own report slice.
+
+> The CI does not submit the per-template end-to-end workflow runs (those
+> need `PW_TEST_DATA_DIR` and add hours of walltime), so the report's
+> "Template workflows ran through" section is empty in CI.  Run
+> `submit_all.sh` on the cluster with `PW_TEST_DATA_DIR` set to exercise and
+> report on those.
 
 ```
 GitHub Actions runner (login node)

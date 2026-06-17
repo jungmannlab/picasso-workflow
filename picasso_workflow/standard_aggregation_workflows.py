@@ -1,27 +1,28 @@
 #!/usr/bin/env python
-"""
-Module Name: stanard_aggregation_workflows.py
+"""Predefined standard workflows for analyzing multiple datasets.
+
+Module Name: standard_aggregation_workflows.py
 Author: Heinrich Grabmayr
 Initial Date: March 20, 2024
-Description: This module provides predefined standard workflows for
-    analyzing multiple datasets
 """
+
+from __future__ import annotations
+
 import picasso_workflow.standard_singledataset_workflows as ssw
 
 
 def minimal_channel_align(filepaths, box_size=7):
-    """Provides workflow modules for a minimal workflow for multiple
-    files which are eventually aligned.
-    Each dataset is processed with the follwing:
-    - load_dataset
-    - identify
-    - localize
-    - undrift_rcc
-    Args:
-        filepaths : list of str
-            the names of the files to analyze
-        box_size : uneven int
-            the analysis box size
+    """Provide the modules for a minimal multi-dataset align workflow.
+
+    Each dataset is processed with ``load_dataset``, ``identify``,
+    ``localize`` and ``undrift_rcc``, after which the channels are aligned.
+
+    Parameters
+    ----------
+    filepaths : list of str
+        The names of the files to analyze.
+    box_size : int
+        The (odd) analysis box size.
     """
     sgl_dataset_workflow = ssw.minimal(
         filepath=("$$map", "filepath"), box_size=box_size

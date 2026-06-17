@@ -5,27 +5,38 @@ Author: Heinrich Grabmayr
 Initial Date: March 8, 2024
 Description: Test the module confluence.py
 """
+
 import logging
+import os
 import unittest
 from unittest.mock import patch, MagicMock
-import os
 import inspect
 import numpy as np
+import pytest
 
 from picasso_workflow import confluence, util
-
+from picasso_workflow.confluence import resolve_confluence_credentials
 
 logger = logging.getLogger(__name__)
 
+# Live-Confluence tests need the test token; non-secret fields come from the
+# ConfluenceTest config section (resolver). Without a token they are skipped.
+_TEST_CREDS = resolve_confluence_credentials("ConfluenceTest")
+_CONFLUENCE_AVAILABLE = bool(_TEST_CREDS.get("token"))
 
+
+@pytest.mark.skipif(
+    not _CONFLUENCE_AVAILABLE,
+    reason="Confluence test token not set (TEST_CONFLUENCE_TOKEN)",
+)
 class Test_A_ConfluenceInterface(unittest.TestCase):
 
     def setUp(self):
-        self.confluence_url = os.getenv("TEST_CONFLUENCE_URL")
-        self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
-        self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
-        self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
-        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
+        self.confluence_url = _TEST_CREDS["base_url"]
+        self.confluence_token = _TEST_CREDS["token"]
+        self.confluence_space = _TEST_CREDS["space_key"]
+        self.confluence_page = _TEST_CREDS["parent_page_title"]
+        self.confluence_username = _TEST_CREDS["username"]
         self.testpgtitle = "mytestpage"
         self.bodytxt = "mybodytext"
 
@@ -101,11 +112,11 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
 
     @patch("picasso_workflow.confluence.ConfluenceInterface")
     def setUp(self, mock_cfi):
-        self.confluence_url = os.getenv("TEST_CONFLUENCE_URL")
-        self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
-        self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
-        self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
-        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
+        self.confluence_url = _TEST_CREDS["base_url"]
+        self.confluence_token = _TEST_CREDS["token"]
+        self.confluence_space = _TEST_CREDS["space_key"]
+        self.confluence_page = _TEST_CREDS["parent_page_title"]
+        self.confluence_username = _TEST_CREDS["username"]
 
         report_name = "my test report"
 
@@ -769,23 +780,24 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         import tempfile
         import shutil
         import os
+
         temp_dir = tempfile.mkdtemp()
         try:
             fp_fullfov = os.path.join(temp_dir, "fullfov.png")
             with open(fp_fullfov, "wb") as f:
                 f.write(b"PNG mock data")
-            
+
             fp_ctrmass = os.path.join(temp_dir, "ctrmass.png")
             with open(fp_ctrmass, "wb") as f:
                 f.write(b"PNG mock data")
-                
+
             fp_scene_rois = []
             for i in range(5):
                 fp_roi = os.path.join(temp_dir, f"roi_{i+1}.png")
                 with open(fp_roi, "wb") as f:
                     f.write(b"PNG mock data")
                 fp_scene_rois.append(fp_roi)
-                
+
             results = {
                 "start time": "now",
                 "duration": 4.12,
@@ -1310,11 +1322,11 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
 
     @patch("picasso_workflow.confluence.ConfluenceInterface")
     def setUp(self, mock_cfi):
-        self.confluence_url = os.getenv("TEST_CONFLUENCE_URL")
-        self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
-        self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
-        self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
-        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
+        self.confluence_url = _TEST_CREDS["base_url"]
+        self.confluence_token = _TEST_CREDS["token"]
+        self.confluence_space = _TEST_CREDS["space_key"]
+        self.confluence_page = _TEST_CREDS["parent_page_title"]
+        self.confluence_username = _TEST_CREDS["username"]
 
         report_name = "my test report"
 
@@ -1343,15 +1355,19 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
 
 
 # @unittest.skip('')
+@pytest.mark.skipif(
+    not _CONFLUENCE_AVAILABLE,
+    reason="Confluence test token not set (TEST_CONFLUENCE_TOKEN)",
+)
 class Test_C_ConfluenceReporter(Test_B_ConfluenceReporter):
     """This time really use the ConfluenceInterface, no mocking."""
 
     def setUp(self):
-        self.confluence_url = os.getenv("TEST_CONFLUENCE_URL")
-        self.confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
-        self.confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
-        self.confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
-        self.confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
+        self.confluence_url = _TEST_CREDS["base_url"]
+        self.confluence_token = _TEST_CREDS["token"]
+        self.confluence_space = _TEST_CREDS["space_key"]
+        self.confluence_page = _TEST_CREDS["parent_page_title"]
+        self.confluence_username = _TEST_CREDS["username"]
 
         report_name = "my test report"
 
@@ -1366,3 +1382,127 @@ class Test_C_ConfluenceReporter(Test_B_ConfluenceReporter):
 
         pgid, pgtitle = self.cr.ci.get_page_properties(report_name)
         self.cr.ci.delete_page(pgid)
+
+
+# ---------------------------------------------------------------------------
+# Optimistic-locking (StaleState) retry handling -- no network needed.
+# ---------------------------------------------------------------------------
+
+
+def test_is_stale_state_conflict_detection():
+    """Recognize StaleState/Conflict text and HTTP 409, reject the rest."""
+    from requests.exceptions import HTTPError
+
+    stale = HTTPError(
+        "ConflictException ... StaleStateException: Batch update returned "
+        "unexpected row count from update [0]"
+    )
+    assert confluence._is_stale_state_conflict(stale)
+
+    resp = MagicMock(status_code=409)
+    assert confluence._is_stale_state_conflict(HTTPError("x", response=resp))
+
+    assert not confluence._is_stale_state_conflict(HTTPError("plain 500"))
+
+
+def test_confluence_call_retries_on_stale_state(monkeypatch):
+    """A version conflict is retried, then succeeds."""
+    from requests.exceptions import HTTPError
+
+    monkeypatch.setattr(confluence, "_STALE_STATE_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+    stale = HTTPError("StaleStateException: row count [0]")
+
+    class Dummy:
+        def __init__(self):
+            self.calls = 0
+
+        def connect(self):
+            pass
+
+        @confluence.confluence_call
+        def write(self):
+            self.calls += 1
+            if self.calls < 3:
+                raise stale
+            return "ok"
+
+    d = Dummy()
+    assert d.write() == "ok"
+    assert d.calls == 3
+
+
+def test_confluence_call_raises_after_exhausting_retries(monkeypatch):
+    """Persistent conflicts raise ConfluenceInterfaceError after retries."""
+    from requests.exceptions import HTTPError
+
+    monkeypatch.setattr(confluence, "_STALE_STATE_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+    stale = HTTPError("StaleStateException: row count [0]")
+
+    class Dummy:
+        def __init__(self):
+            self.calls = 0
+
+        def connect(self):
+            pass
+
+        @confluence.confluence_call
+        def write(self):
+            self.calls += 1
+            raise stale
+
+    d = Dummy()
+    with pytest.raises(confluence.ConfluenceInterfaceError):
+        d.write()
+    assert d.calls == confluence._STALE_STATE_RETRIES + 1
+
+
+# ---------------------------------------------------------------------------
+# Eventual-consistency page-lookup retry -- no network needed.
+# ---------------------------------------------------------------------------
+
+
+def test_get_page_properties_retries_until_page_appears(monkeypatch):
+    """A newly created page found only after a few lookups still resolves."""
+    monkeypatch.setattr(confluence, "_PAGE_LOOKUP_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+
+    calls = {"n": 0}
+
+    def fake_get_page_by_title(space, title):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return None
+        return {"id": "123", "title": title}
+
+    ci = MagicMock()
+    ci.space_key = "SPC"
+    ci.base_url = "http://example/wiki"
+    ci.confluence.get_page_by_title.side_effect = fake_get_page_by_title
+
+    result = confluence.ConfluenceInterface.get_page_properties(
+        ci, page_title="newpage"
+    )
+    assert result == ("123", "newpage")
+    assert calls["n"] == 3
+
+
+def test_get_page_properties_raises_clear_error_when_absent(monkeypatch):
+    """A page that never appears raises ConfluenceInterfaceError, not None."""
+    monkeypatch.setattr(confluence, "_PAGE_LOOKUP_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+
+    ci = MagicMock()
+    ci.space_key = "SPC"
+    ci.base_url = "http://example/wiki"
+    ci.confluence.get_page_by_title.return_value = None
+
+    with pytest.raises(confluence.ConfluenceInterfaceError):
+        confluence.ConfluenceInterface.get_page_properties(
+            ci, page_title="missing"
+        )
+    assert (
+        ci.confluence.get_page_by_title.call_count
+        == confluence._PAGE_LOOKUP_RETRIES + 1
+    )

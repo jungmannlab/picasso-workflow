@@ -1,10 +1,10 @@
 """
 Iterative RSSO-based Drift Correction
 
-This module implements iterative Redundant Spot Shift Overrepresentation (RSSO)
-drift correction where each frame is compared against the whole dataset to compute
-total drift for that frame. The process is repeated iteratively with the undrifted
-dataset to improve accuracy.
+This module implements iterative Redundant Spot Shift Overrepresentation
+(RSSO) drift correction, where each frame is compared against the whole
+dataset to compute the total drift for that frame. The process is repeated
+iteratively with the undrifted dataset to improve accuracy.
 
 Key features:
 - Iterative refinement for improved drift estimation accuracy
@@ -16,6 +16,8 @@ Key features:
 
 Author: Generated for picasso-workflow
 """
+
+from __future__ import annotations
 
 import numpy as np
 
@@ -73,7 +75,6 @@ def _configure_openmp_for_multiprocessing():
     SLURM/cluster environments where each MPI rank uses multiprocessing.
     """
     # Configuration now done at module level - this function is a no-op
-    pass
 
 
 def _setup_multiprocessing_context():
@@ -101,43 +102,52 @@ _WORKER_FRAMES_SHM = None  # Shared memory reference for frame array
 
 
 def _worker_init_kdtree(ref_coords):
-    """Initialize worker process by building cKDTree once
+    """Initialize a worker process by building the cKDTree once.
 
-    This function is called once per worker process during pool initialization.
-    Building the cKDTree once per worker (rather than passing it with each task)
-    significantly reduces data transfer overhead.
+    Called once per worker process during pool initialization. Building the
+    cKDTree once per worker (rather than passing it with each task)
+    significantly reduces data-transfer overhead.
 
-    Args:
-        ref_coords : ndarray
-            Reference coordinates (N x 2) array of [x, y] positions
+    Parameters
+    ----------
+    ref_coords : ndarray
+        Reference coordinates, an ``(N, 2)`` array of ``[x, y]`` positions.
     """
     global _WORKER_KDTREE
     from scipy.spatial import cKDTree
 
     _WORKER_KDTREE = cKDTree(ref_coords)
-    logger.debug(f"Worker initialized: built cKDTree with {_WORKER_KDTREE.n} points")
+    logger.debug(
+        f"Worker initialized: built cKDTree with {_WORKER_KDTREE.n} points"
+    )
 
 
 def _init_worker_from_shared_memory(
-    shm_name, kdtree_size, frame_shm_name=None, frame_array_len=None, frame_dtype=None
+    shm_name,
+    kdtree_size,
+    frame_shm_name=None,
+    frame_array_len=None,
+    frame_dtype=None,
 ):
-    """Initialize worker by loading cKDTree and frame array from shared memory
+    """Initialize a worker by loading the cKDTree and frame array from SHM.
 
-    This function provides zero-copy access to a pre-built cKDTree and reference
-    frame array by deserializing them from shared memory. This is faster than
-    building the tree from coordinates and uses less memory than per-worker copies.
+    Provides zero-copy access to a pre-built cKDTree and reference frame
+    array by deserializing them from shared memory. This is faster than
+    building the tree from coordinates and uses less memory than per-worker
+    copies.
 
-    Args:
-        shm_name : str
-            Name of the cKDTree shared memory segment
-        kdtree_size : int
-            Size of the serialized cKDTree in bytes
-        frame_shm_name : str, optional
-            Name of the frame array shared memory segment
-        frame_array_len : int, optional
-            Number of elements in frame array
-        frame_dtype : dtype, optional
-            Data type of frame array (typically np.int32)
+    Parameters
+    ----------
+    shm_name : str
+        Name of the cKDTree shared memory segment.
+    kdtree_size : int
+        Size of the serialized cKDTree in bytes.
+    frame_shm_name : str, optional
+        Name of the frame array shared memory segment.
+    frame_array_len : int, optional
+        Number of elements in the frame array.
+    frame_dtype : dtype, optional
+        Data type of the frame array (typically ``np.int32``).
     """
     global _WORKER_KDTREE, _WORKER_KDTREE_SHM, _WORKER_FRAMES, _WORKER_FRAMES_SHM
     from multiprocessing import shared_memory
@@ -160,7 +170,9 @@ def _init_worker_from_shared_memory(
     # Load frame array if provided (for temporal filtering)
     if frame_shm_name is not None and frame_array_len is not None:
         frame_shm = shared_memory.SharedMemory(name=frame_shm_name)
-        frame_bytes = bytes(frame_shm.buf[: frame_array_len * np.dtype(frame_dtype).itemsize])
+        frame_bytes = bytes(
+            frame_shm.buf[: frame_array_len * np.dtype(frame_dtype).itemsize]
+        )
         _WORKER_FRAMES = np.frombuffer(frame_bytes, dtype=frame_dtype)
         _WORKER_FRAMES_SHM = frame_shm
 
@@ -170,19 +182,22 @@ def _init_worker_from_shared_memory(
 
 
 def _create_shared_memory_kdtree(reference_coords):
-    """Serialize cKDTree to shared memory for zero-copy worker access
+    """Serialize a cKDTree to shared memory for zero-copy worker access.
 
-    Creates a cKDTree from reference coordinates, serializes it using pickle,
-    and stores it in shared memory. Workers can then deserialize from the
-    shared memory without requiring per-task or per-worker data transfer.
+    Builds a cKDTree from reference coordinates, serializes it with pickle
+    and stores it in shared memory. Workers can then deserialize it without
+    per-task or per-worker data transfer.
 
-    Args:
-        reference_coords : ndarray
-            Reference coordinates (N x 2) array of [x, y] positions
+    Parameters
+    ----------
+    reference_coords : ndarray
+        Reference coordinates, an ``(N, 2)`` array of ``[x, y]`` positions.
 
-    Returns:
-        tuple : (SharedMemory, int)
-            Shared memory object and size in bytes of the serialized cKDTree
+    Returns
+    -------
+    tuple
+        ``(SharedMemory, int)`` — the shared memory object and the size in
+        bytes of the serialized cKDTree.
     """
     from scipy.spatial import cKDTree
     from multiprocessing import shared_memory
@@ -206,18 +221,21 @@ def _create_shared_memory_kdtree(reference_coords):
 
 
 def _create_shared_memory_frame_array(frame_array):
-    """Serialize frame array to shared memory for zero-copy worker access
+    """Serialize a frame array to shared memory for zero-copy worker access.
 
     Stores frame numbers in shared memory so workers can filter pairs by
     temporal proximity without serializing the array with each task.
 
-    Args:
-        frame_array : ndarray
-            Frame numbers (N,) array of integers
+    Parameters
+    ----------
+    frame_array : ndarray
+        Frame numbers, an ``(N,)`` array of integers.
 
-    Returns:
-        tuple : (SharedMemory, int, dtype)
-            Shared memory object, array size, and dtype for reconstruction
+    Returns
+    -------
+    tuple
+        ``(SharedMemory, int, dtype)`` — the shared memory object, the array
+        size and the dtype for reconstruction.
     """
     from multiprocessing import shared_memory
 
@@ -244,12 +262,13 @@ def _create_shared_memory_frame_array(frame_array):
 
 
 class _Timer:
-    """Context manager for timing code blocks and operations
+    """Context manager for timing code blocks and operations.
 
-    Usage:
-        with _Timer("operation_name") as timer:
-            # code to time
-        elapsed = timer.elapsed  # seconds
+    Examples
+    --------
+    >>> with _Timer("operation_name") as timer:
+    ...     pass  # code to time
+    >>> elapsed = timer.elapsed  # seconds
     """
 
     def __init__(self, name="operation"):
@@ -267,14 +286,18 @@ class _Timer:
 
 
 def _format_time(seconds):
-    """Format seconds into human-readable string
+    """Format a duration in seconds into a human-readable string.
 
-    Args:
-        seconds : float
-            Time in seconds
+    Parameters
+    ----------
+    seconds : float
+        Time in seconds.
 
-    Returns:
-        str : Formatted string like "2.34 sec" or "3.45 min" or "1.23 hr"
+    Returns
+    -------
+    str
+        Formatted string such as ``"2.34 sec"``, ``"3.45 min"`` or
+        ``"1.23 hr"``.
     """
     if seconds is None:
         return "N/A"
@@ -293,19 +316,20 @@ def _log_performance_summary(
     method_name,
     n_processes,
 ):
-    """Log detailed performance summary for an iteration with comprehensive breakdown
+    """Log a detailed performance summary for one iteration.
 
-    Args:
-        iteration : int
-            Iteration number (1-indexed)
-        total_frames : int
-            Number of frames processed
-        timings : dict
-            Dictionary with timing information including all fine-grained metrics
-        method_name : str
-            KDTree sharing method name
-        n_processes : int
-            Number of worker processes
+    Parameters
+    ----------
+    iteration : int
+        Iteration number (1-indexed).
+    total_frames : int
+        Number of frames processed.
+    timings : dict
+        Timing information, including all fine-grained metrics.
+    method_name : str
+        KDTree sharing method name.
+    n_processes : int
+        Number of worker processes.
     """
     total_time = timings["total"]
 
@@ -332,7 +356,9 @@ def _log_performance_summary(
     chunk_data_preparation = timings.get("chunk_data_preparation", 0.0)
     worker_computation = timings.get("worker_computation", 0.0)
     result_collection = timings.get("result_collection", 0.0)
-    processing_total = frame_grouping + chunk_data_preparation + result_collection
+    processing_total = (
+        frame_grouping + chunk_data_preparation + result_collection
+    )
 
     # Post-processing phase (localization-level operations)
     array_copy = timings.get("array_copy", 0.0)
@@ -340,7 +366,13 @@ def _log_performance_summary(
     windowing_outliers = timings.get("windowing_outliers", 0.0)
     array_operations = timings.get("array_operations", 0.0)
     frame_corrections = timings.get("frame_corrections", 0.0)
-    postproc_total = array_copy + frame_pregrouping + windowing_outliers + array_operations + frame_corrections
+    postproc_total = (
+        array_copy
+        + frame_pregrouping
+        + windowing_outliers
+        + array_operations
+        + frame_corrections
+    )
 
     # Finalization phase
     convergence_check = timings.get("convergence_check", 0.0)
@@ -349,80 +381,145 @@ def _log_performance_summary(
 
     # Calculate throughput
     frame_processing_time = timings.get("frame_processing", 0.0)
-    frames_per_sec = total_frames / frame_processing_time if frame_processing_time > 0 else 0
-    time_per_frame = frame_processing_time / total_frames if total_frames > 0 else 0
+    frames_per_sec = (
+        total_frames / frame_processing_time
+        if frame_processing_time > 0
+        else 0
+    )
 
     # Log comprehensive summary
     logger.info("")
     logger.info(f"{'='*70}")
-    logger.info(f"  Iteration {iteration} Performance Summary - {method_name} ({n_processes} workers)")
+    logger.info(
+        f"  Iteration {iteration} Performance Summary - {method_name} ({n_processes} workers)"
+    )
     logger.info(f"{'='*70}")
     logger.info(f"Total time: {_format_time(total_time)}")
     logger.info("")
 
     # Setup phase
-    logger.info(f"┌─ SETUP: {_format_time(setup_total)} ({pct(setup_total):.1f}%)")
+    logger.info(
+        f"┌─ SETUP: {_format_time(setup_total)} ({pct(setup_total):.1f}%)"
+    )
     if reference_creation > 0:
-        logger.info(f"│  ├─ Reference creation: {_format_time(reference_creation)} ({pct(reference_creation):.1f}%)")
-    logger.info(f"│  ├─ KDTree creation: {_format_time(kdtree_creation)} ({pct(kdtree_creation):.1f}%)")
+        logger.info(
+            f"│  ├─ Reference creation: {_format_time(reference_creation)} ({pct(reference_creation):.1f}%)"
+        )
+    logger.info(
+        f"│  ├─ KDTree creation: {_format_time(kdtree_creation)} ({pct(kdtree_creation):.1f}%)"
+    )
     if kdtree_serialization > 0:
-        logger.info(f"│  └─ KDTree serialization: {_format_time(kdtree_serialization)} ({pct(kdtree_serialization):.1f}%)")
+        logger.info(
+            f"│  └─ KDTree serialization: {_format_time(kdtree_serialization)} ({pct(kdtree_serialization):.1f}%)"
+        )
     logger.info("")
 
     # Multiprocessing phase
     if mp_total > 0:
-        logger.info(f"├─ MULTIPROCESSING: {_format_time(mp_total)} ({pct(mp_total):.1f}%)")
+        logger.info(
+            f"├─ MULTIPROCESSING: {_format_time(mp_total)} ({pct(mp_total):.1f}%)"
+        )
         if pool_creation > 0:
-            logger.info(f"│  ├─ Pool creation: {_format_time(pool_creation)} ({pct(pool_creation):.1f}%)")
+            logger.info(
+                f"│  ├─ Pool creation: {_format_time(pool_creation)} ({pct(pool_creation):.1f}%)"
+            )
         if worker_initialization > 0:
-            logger.info(f"│  ├─ Worker initialization: {_format_time(worker_initialization)} ({pct(worker_initialization):.1f}%)")
+            logger.info(
+                f"│  ├─ Worker initialization: {_format_time(worker_initialization)} ({pct(worker_initialization):.1f}%)"
+            )
         if pool_map_total > 0:
-            logger.info(f"│  ├─ Pool.map total: {_format_time(pool_map_total)} ({pct(pool_map_total):.1f}%)")
+            logger.info(
+                f"│  ├─ Pool.map total: {_format_time(pool_map_total)} ({pct(pool_map_total):.1f}%)"
+            )
             if worker_computation > 0:
-                logger.info(f"│  │  ├─ Worker computation: {_format_time(worker_computation)} ({pct(worker_computation):.1f}%)")
+                logger.info(
+                    f"│  │  ├─ Worker computation: {_format_time(worker_computation)} ({pct(worker_computation):.1f}%)"
+                )
             if multiprocessing_overhead > 0:
-                mp_overhead_pct = (multiprocessing_overhead / pool_map_total * 100) if pool_map_total > 0 else 0
-                logger.info(f"│  │  └─ MP overhead: {_format_time(multiprocessing_overhead)} ({mp_overhead_pct:.1f}% of pool.map)")
+                mp_overhead_pct = (
+                    (multiprocessing_overhead / pool_map_total * 100)
+                    if pool_map_total > 0
+                    else 0
+                )
+                logger.info(
+                    f"│  │  └─ MP overhead: {_format_time(multiprocessing_overhead)} ({mp_overhead_pct:.1f}% of pool.map)"
+                )
         logger.info("")
 
     # Processing phase
-    logger.info(f"├─ PROCESSING: {_format_time(processing_total)} ({pct(processing_total):.1f}%)")
+    logger.info(
+        f"├─ PROCESSING: {_format_time(processing_total)} ({pct(processing_total):.1f}%)"
+    )
     if frame_grouping > 0:
-        logger.info(f"│  ├─ Frame grouping: {_format_time(frame_grouping)} ({pct(frame_grouping):.1f}%)")
+        logger.info(
+            f"│  ├─ Frame grouping: {_format_time(frame_grouping)} ({pct(frame_grouping):.1f}%)"
+        )
     if chunk_data_preparation > 0:
-        logger.info(f"│  ├─ Chunk data prep: {_format_time(chunk_data_preparation)} ({pct(chunk_data_preparation):.1f}%)")
+        logger.info(
+            f"│  ├─ Chunk data prep: {_format_time(chunk_data_preparation)} ({pct(chunk_data_preparation):.1f}%)"
+        )
     if result_collection > 0:
-        logger.info(f"│  └─ Result collection: {_format_time(result_collection)} ({pct(result_collection):.1f}%)")
-    logger.info(f"│     └─ Total frames: {total_frames} @ {frames_per_sec:.2f} frames/sec")
+        logger.info(
+            f"│  └─ Result collection: {_format_time(result_collection)} ({pct(result_collection):.1f}%)"
+        )
+    logger.info(
+        f"│     └─ Total frames: {total_frames} @ {frames_per_sec:.2f} frames/sec"
+    )
     logger.info("")
 
     # Post-processing phase
-    logger.info(f"├─ POST-PROCESSING: {_format_time(postproc_total)} ({pct(postproc_total):.1f}%)")
+    logger.info(
+        f"├─ POST-PROCESSING: {_format_time(postproc_total)} ({pct(postproc_total):.1f}%)"
+    )
     if array_copy > 0:
-        logger.info(f"│  ├─ Array copy: {_format_time(array_copy)} ({pct(array_copy):.1f}%)")
+        logger.info(
+            f"│  ├─ Array copy: {_format_time(array_copy)} ({pct(array_copy):.1f}%)"
+        )
     if frame_pregrouping > 0:
-        logger.info(f"│  ├─ Frame pre-grouping: {_format_time(frame_pregrouping)} ({pct(frame_pregrouping):.1f}%)")
+        logger.info(
+            f"│  ├─ Frame pre-grouping: {_format_time(frame_pregrouping)} ({pct(frame_pregrouping):.1f}%)"
+        )
     if windowing_outliers > 0:
-        logger.info(f"│  ├─ Windowing/outliers: {_format_time(windowing_outliers)} ({pct(windowing_outliers):.1f}%)")
+        logger.info(
+            f"│  ├─ Windowing/outliers: {_format_time(windowing_outliers)} ({pct(windowing_outliers):.1f}%)"
+        )
     if array_operations > 0:
-        logger.info(f"│  ├─ Array operations: {_format_time(array_operations)} ({pct(array_operations):.1f}%)")
+        logger.info(
+            f"│  ├─ Array operations: {_format_time(array_operations)} ({pct(array_operations):.1f}%)"
+        )
     if frame_corrections > 0:
-        logger.info(f"│  └─ Frame corrections: {_format_time(frame_corrections)} ({pct(frame_corrections):.1f}%)")
+        logger.info(
+            f"│  └─ Frame corrections: {_format_time(frame_corrections)} ({pct(frame_corrections):.1f}%)"
+        )
     logger.info("")
 
     # Finalization phase
-    logger.info(f"└─ FINALIZATION: {_format_time(finalization_total)} ({pct(finalization_total):.1f}%)")
+    logger.info(
+        f"└─ FINALIZATION: {_format_time(finalization_total)} ({pct(finalization_total):.1f}%)"
+    )
     if convergence_check > 0:
-        logger.info(f"   ├─ Convergence check: {_format_time(convergence_check)} ({pct(convergence_check):.1f}%)")
+        logger.info(
+            f"   ├─ Convergence check: {_format_time(convergence_check)} ({pct(convergence_check):.1f}%)"
+        )
     if history_storage > 0:
-        logger.info(f"   └─ History storage: {_format_time(history_storage)} ({pct(history_storage):.1f}%)")
+        logger.info(
+            f"   └─ History storage: {_format_time(history_storage)} ({pct(history_storage):.1f}%)"
+        )
 
     # Sanity check: sum of phases vs total
-    phase_sum = setup_total + mp_total + processing_total + postproc_total + finalization_total
+    phase_sum = (
+        setup_total
+        + mp_total
+        + processing_total
+        + postproc_total
+        + finalization_total
+    )
     unaccounted = total_time - phase_sum
     if abs(unaccounted) > 0.1:  # More than 0.1 second unaccounted
         logger.info("")
-        logger.info(f"⚠️  Unaccounted time: {_format_time(abs(unaccounted))} ({pct(abs(unaccounted)):.1f}%)")
+        logger.info(
+            f"⚠️  Unaccounted time: {_format_time(abs(unaccounted))} ({pct(abs(unaccounted)):.1f}%)"
+        )
 
     logger.info("")
     logger.info(f"{'='*70}")
@@ -448,36 +545,47 @@ if False:  # NUMBA_AVAILABLE:
 
     @numba.jit(nopython=True, parallel=True, cache=True)
     def _compute_pairwise_shifts_numba(
-        i_x, i_y, j_x, j_y, max_shift=None, i_frames=None, j_frames=None, ton_exclusion=0
+        i_x,
+        i_y,
+        j_x,
+        j_y,
+        max_shift=None,
+        i_frames=None,
+        j_frames=None,
+        ton_exclusion=0,
     ):
-        """Numba-optimized pairwise shift computation with temporal filtering
+        """Compute pairwise shifts with temporal filtering (Numba).
 
-        Computes shifts from i to j: j - i (matches standard implementation)
-        Only includes pairs within max_shift distance (like standard KDTree approach)
-        Optionally excludes pairs from temporally close frames (within ±2×ton)
+        Computes shifts from ``i`` to ``j`` (``j - i``), including only pairs
+        within ``max_shift`` distance and optionally excluding pairs from
+        temporally close frames (within ±2×ton).
 
-        Note: Uses parallel=True with fixed-size arrays for optimal performance
+        Parameters
+        ----------
+        i_x, i_y : ndarray
+            First set of coordinates (the reference in the standard call).
+        j_x, j_y : ndarray
+            Second set of coordinates (the frame in the standard call).
+        max_shift : float, optional
+            Maximum distance at which to consider pairs.
+        i_frames : ndarray, optional
+            Frame numbers for the ``i`` coordinates (temporal filtering).
+        j_frames : ndarray, optional
+            Frame numbers for the ``j`` coordinates (temporal filtering).
+        ton_exclusion : int, default 0
+            Exclude pairs from frames within ±2×ton (temporal filtering).
 
-        Args:
-            i_x, i_y : ndarray
-                First set of coordinates (reference in standard call)
-            j_x, j_y : ndarray
-                Second set of coordinates (frame in standard call)
-            max_shift : float, optional
-                Maximum distance to consider pairs (matches standard implementation)
-            i_frames : ndarray, optional
-                Frame numbers for i coordinates (for temporal filtering)
-            j_frames : ndarray, optional
-                Frame numbers for j coordinates (for temporal filtering)
-            ton_exclusion : int, default 0
-                Exclude pairs from frames within ±2×ton (temporal filtering)
+        Returns
+        -------
+        shifts_x, shifts_y : ndarray
+            Valid pairwise shift vectors from ``i`` to ``j``.
+        ref_indices : ndarray
+            Reference localization indices (``i``) for each valid shift,
+            tracking which reference frame contributed each shift.
 
-        Returns:
-            shifts_x, shifts_y : ndarray
-                Valid pairwise shift vectors from i to j
-            ref_indices : ndarray
-                Reference localization indices (i) for each valid shift
-                Used to track which reference frame contributed each shift
+        Notes
+        -----
+        Uses ``parallel=True`` with fixed-size arrays for performance.
         """
         n_i = len(i_x)
         n_j = len(j_x)
@@ -489,7 +597,9 @@ if False:  # NUMBA_AVAILABLE:
         max_pairs = n_i * n_j
         all_shifts_x = np.empty(max_pairs, dtype=numba.float32)
         all_shifts_y = np.empty(max_pairs, dtype=numba.float32)
-        all_ref_indices = np.empty(max_pairs, dtype=numba.int32)  # Track reference loc index
+        all_ref_indices = np.empty(
+            max_pairs, dtype=numba.int32
+        )  # Track reference loc index
         valid_mask = np.zeros(max_pairs, dtype=numba.boolean)
 
         # Determine if temporal filtering is enabled
@@ -553,17 +663,19 @@ if False:  # NUMBA_AVAILABLE:
         nopython=True, parallel=False, cache=True
     )  # Sequential for thread safety in binning
     def _histogram2d_numba(shifts_x, shifts_y, x_edges, y_edges):
-        """Numba-optimized 2D histogram binning (Phase 2)
+        """Bin shift vectors into a 2D histogram (Numba).
 
-        Args:
-            shifts_x, shifts_y : ndarray
-                Shift vectors to bin
-            x_edges, y_edges : ndarray
-                Bin edges for histogram
+        Parameters
+        ----------
+        shifts_x, shifts_y : ndarray
+            Shift vectors to bin.
+        x_edges, y_edges : ndarray
+            Histogram bin edges.
 
-        Returns:
-            hist : ndarray
-                2D histogram counts
+        Returns
+        -------
+        hist : ndarray
+            2D histogram counts.
         """
         nx_bins = len(x_edges) - 1
         ny_bins = len(y_edges) - 1
@@ -599,17 +711,19 @@ if False:  # NUMBA_AVAILABLE:
 
     @numba.jit(nopython=True, cache=True)
     def _find_histogram_peak_numba(hist):
-        """Numba-optimized peak finding with sub-pixel refinement
+        """Find the histogram peak with sub-pixel refinement (Numba).
 
-        Args:
-            hist : ndarray
-                2D histogram
+        Parameters
+        ----------
+        hist : ndarray
+            2D histogram.
 
-        Returns:
-            peak_x, peak_y : float
-                Peak location with sub-pixel precision
-            peak_value : int
-                Peak histogram value
+        Returns
+        -------
+        peak_x, peak_y : float
+            Peak location with sub-pixel precision.
+        peak_value : int
+            Peak histogram value.
         """
         max_val = 0
         max_i = 0
@@ -653,31 +767,38 @@ if False:  # NUMBA_AVAILABLE:
         return peak_x, peak_y, max_val
 
     @numba.jit(nopython=True, cache=True)
-    def _find_peak_center_of_mass_numba(hist, x_edges, y_edges, snr_threshold=3.0):
-        """Numba-optimized center of mass peak finding
+    def _find_peak_center_of_mass_numba(
+        hist, x_edges, y_edges, snr_threshold=3.0
+    ):
+        """Find the peak by center of mass (Numba).
 
-        Calculates weighted center of mass using threshold-based bin selection.
-        Includes all bins >= median × snr_threshold, with 3×3 fallback if < 9 bins.
+        Computes the weighted center of mass using threshold-based bin
+        selection, including all bins >= median × ``snr_threshold``, with a
+        3×3 fallback if fewer than 9 bins qualify.
 
-        Args:
-            hist : ndarray (2D)
-                Histogram counts
-            x_edges : ndarray
-                X bin edges
-            y_edges : ndarray
-                Y bin edges
-            snr_threshold : float, default 3.0
-                Multiplier for median threshold (bins >= median × snr_threshold are included)
+        Parameters
+        ----------
+        hist : ndarray
+            2D histogram counts.
+        x_edges : ndarray
+            X bin edges.
+        y_edges : ndarray
+            Y bin edges.
+        snr_threshold : float, default 3.0
+            Multiplier for the median threshold; bins >= median ×
+            ``snr_threshold`` are included.
 
-        Returns:
-            shift_x, shift_y : float
-                Center of mass coordinates
-            peak_value : float
-                Maximum bin value
-            threshold : float
-                Threshold value used for bin selection (median × snr_threshold)
-            use_threshold : bool
-                Whether threshold-based selection was used (True) or 3×3 fallback (False)
+        Returns
+        -------
+        shift_x, shift_y : float
+            Center-of-mass coordinates.
+        peak_value : float
+            Maximum bin value.
+        threshold : float
+            Threshold used for bin selection (median × ``snr_threshold``).
+        use_threshold : bool
+            True if threshold-based selection was used, False for the 3×3
+            fallback.
         """
         # Find histogram maximum
         max_val = numba.float32(0.0)
@@ -700,9 +821,23 @@ if False:  # NUMBA_AVAILABLE:
 
         if non_zero_count == 0:
             # No data, return center
-            bin_size_x = x_edges[1] - x_edges[0] if len(x_edges) > 1 else numba.float32(1.0)
-            bin_size_y = y_edges[1] - y_edges[0] if len(y_edges) > 1 else numba.float32(1.0)
-            return numba.float32(0.0), numba.float32(0.0), max_val, numba.float32(0.0), False
+            bin_size_x = (
+                x_edges[1] - x_edges[0]
+                if len(x_edges) > 1
+                else numba.float32(1.0)
+            )
+            bin_size_y = (
+                y_edges[1] - y_edges[0]
+                if len(y_edges) > 1
+                else numba.float32(1.0)
+            )
+            return (
+                numba.float32(0.0),
+                numba.float32(0.0),
+                max_val,
+                numba.float32(0.0),
+                False,
+            )
 
         # Collect non-zero values for median calculation
         non_zero_vals = np.empty(non_zero_count, dtype=numba.float32)
@@ -727,8 +862,12 @@ if False:  # NUMBA_AVAILABLE:
         use_threshold = n_threshold_bins >= 9
 
         # Calculate bin centers
-        bin_size_x = x_edges[1] - x_edges[0] if len(x_edges) > 1 else numba.float32(1.0)
-        bin_size_y = y_edges[1] - y_edges[0] if len(y_edges) > 1 else numba.float32(1.0)
+        bin_size_x = (
+            x_edges[1] - x_edges[0] if len(x_edges) > 1 else numba.float32(1.0)
+        )
+        bin_size_y = (
+            y_edges[1] - y_edges[0] if len(y_edges) > 1 else numba.float32(1.0)
+        )
 
         # Calculate center of mass
         total_mass = numba.float32(0.0)
@@ -777,7 +916,14 @@ if False:  # NUMBA_AVAILABLE:
 else:
     # Fallback implementations when Numba is not available
     def _compute_pairwise_shifts_numba(
-        i_x, i_y, j_x, j_y, max_shift=None, i_frames=None, j_frames=None, ton_exclusion=0
+        i_x,
+        i_y,
+        j_x,
+        j_y,
+        max_shift=None,
+        i_frames=None,
+        j_frames=None,
+        ton_exclusion=0,
     ):
         """Fallback NumPy implementation with temporal filtering"""
         i_coords = np.column_stack([i_x, i_y])
@@ -839,11 +985,14 @@ else:
         max_idx = np.unravel_index(hist.argmax(), hist.shape)
         return float(max_idx[0]), float(max_idx[1]), hist[max_idx]
 
-    def _find_peak_center_of_mass_numba(hist, x_edges, y_edges, snr_threshold=3.0):
-        """Fallback NumPy implementation of center of mass peak finding
+    def _find_peak_center_of_mass_numba(
+        hist, x_edges, y_edges, snr_threshold=3.0
+    ):
+        """Find the peak by center of mass (NumPy fallback).
 
-        Uses threshold-based bin selection: includes all bins >= median × snr_threshold,
-        with 3×3 fallback if < 9 bins found.
+        Uses threshold-based bin selection, including all bins >= median ×
+        ``snr_threshold``, with a 3×3 fallback if fewer than 9 bins are
+        found.
         """
         # Find histogram maximum
         max_idx = np.unravel_index(hist.argmax(), hist.shape)
@@ -898,12 +1047,12 @@ else:
             # Create coordinate grids for neighborhood
             i_indices = np.arange(i_start, i_end)
             j_indices = np.arange(j_start, j_end)
-            i_grid, j_grid = np.meshgrid(i_indices, j_indices, indexing='ij')
+            i_grid, j_grid = np.meshgrid(i_indices, j_indices, indexing="ij")
 
             # Bin center coordinates
             x_coords = x_edges[i_indices] + bin_size_x / 2
             y_coords = y_edges[j_indices] + bin_size_y / 2
-            x_grid, y_grid = np.meshgrid(x_coords, y_coords, indexing='ij')
+            x_grid, y_grid = np.meshgrid(x_coords, y_coords, indexing="ij")
 
             # Calculate center of mass
             total_mass = np.sum(neighborhood)
@@ -915,7 +1064,13 @@ else:
                 shift_x = x_edges[max_i] + bin_size_x / 2
                 shift_y = y_edges[max_j] + bin_size_y / 2
 
-        return float(shift_x), float(shift_y), float(max_val), float(threshold), bool(use_threshold)
+        return (
+            float(shift_x),
+            float(shift_y),
+            float(max_val),
+            float(threshold),
+            bool(use_threshold),
+        )
 
 
 # ==============================================================================
@@ -929,24 +1084,26 @@ if NUMBA_AVAILABLE:
     def _apply_frame_corrections_numba(
         frame_shifts_x, frame_shifts_y, frame_index_map, pixelsize
     ):
-        """Apply per-frame shifts to per-localization corrections using Numba
+        """Apply per-frame shifts to per-localization corrections (Numba).
 
-        This is much faster than NumPy fancy indexing for large arrays.
-        Uses parallel processing for optimal performance.
+        Much faster than NumPy fancy indexing for large arrays, using
+        parallel processing.
 
-        Args:
-            frame_shifts_x : ndarray (float)
-                Per-frame shifts in x (nm)
-            frame_shifts_y : ndarray (float)
-                Per-frame shifts in y (nm)
-            frame_index_map : ndarray (int32)
-                Maps each localization to its frame index
-            pixelsize : float
-                Pixel size for conversion from nm to pixels
+        Parameters
+        ----------
+        frame_shifts_x : ndarray of float
+            Per-frame shifts in x (nm).
+        frame_shifts_y : ndarray of float
+            Per-frame shifts in y (nm).
+        frame_index_map : ndarray of int32
+            Maps each localization to its frame index.
+        pixelsize : float
+            Pixel size for conversion from nm to pixels.
 
-        Returns:
-            corrections_x, corrections_y : tuple of ndarray (float32)
-                Per-localization corrections in pixels
+        Returns
+        -------
+        corrections_x, corrections_y : ndarray of float32
+            Per-localization corrections in pixels.
         """
         n_locs = len(frame_index_map)
         corrections_x = np.empty(n_locs, dtype=np.float32)
@@ -968,7 +1125,9 @@ else:
         """Fallback NumPy implementation when Numba is not available"""
         corrections_x = frame_shifts_x[frame_index_map] / pixelsize
         corrections_y = frame_shifts_y[frame_index_map] / pixelsize
-        return corrections_x.astype(np.float32), corrections_y.astype(np.float32)
+        return corrections_x.astype(np.float32), corrections_y.astype(
+            np.float32
+        )
 
 
 # ==============================================================================
@@ -992,47 +1151,50 @@ def _compute_rsso_shift_numba_optimized(
     snr_threshold=3.0,
     shared_plot_dict=None,
 ):
-    """Numba-optimized RSSO shift computation with temporal filtering
+    """Compute the RSSO shift with temporal filtering (Numba-optimized).
 
-    Args:
-        locs_i : ndarray
-            First set of localizations (reference in standard call)
-        locs_j : ndarray
-            Second set of localizations (frame in standard call)
-        max_shift_pixels : float
-            Maximum expected shift in pixels
-        enable_numba : bool
-            Whether to use Numba optimization
-        plot_histogram : bool
-            Whether to save 2D histogram plot
-        plot_dir : str, optional
-            Directory to save plots
-        iteration : int, optional
-            Iteration number for filename
-        frame_number : int, optional
-            Frame number for filename
-        ref_frames : ndarray, optional
-            Frame numbers for reference localizations (for temporal filtering)
-        frame_locs_frames : ndarray, optional
-            Frame numbers for frame localizations (for temporal filtering)
-        ton : int, default 0
-            Exclude pairs from frames within ±2×ton (temporal filtering)
-        peak_mode : str, default "auto"
-            Peak finding method:
-            - "gaussian": Not supported in Numba route (reserved for standard route)
-            - "center_of_mass": Use center of mass of top 9 bins directly
-            - "auto": Use parabolic interpolation (Numba default) or CoM
-        snr_threshold : float, default 3.0
-            Signal-to-noise ratio threshold (max_bin / median_bin).
-            If SNR < threshold, force center_of_mass and mark as failed.
-        shared_plot_dict : multiprocessing.Manager.dict() or None, optional
-            If provided, stores plot as numpy array in this dict instead of saving to disk.
+    Parameters
+    ----------
+    locs_i : ndarray
+        First set of localizations (the reference in the standard call).
+    locs_j : ndarray
+        Second set of localizations (the frame in the standard call).
+    max_shift_pixels : float
+        Maximum expected shift in pixels.
+    enable_numba : bool
+        Whether to use Numba optimization.
+    plot_histogram : bool
+        Whether to save the 2D histogram plot.
+    plot_dir : str, optional
+        Directory in which to save plots.
+    iteration : int, optional
+        Iteration number, used in the filename.
+    frame_number : int, optional
+        Frame number, used in the filename.
+    ref_frames : ndarray, optional
+        Frame numbers for the reference localizations (temporal filtering).
+    frame_locs_frames : ndarray, optional
+        Frame numbers for the frame localizations (temporal filtering).
+    ton : int, default 0
+        Exclude pairs from frames within ±2×ton (temporal filtering).
+    peak_mode : str, default "auto"
+        Peak-finding method: ``"gaussian"`` (not supported in the Numba
+        route, reserved for the standard route), ``"center_of_mass"`` (center
+        of mass of the top 9 bins) or ``"auto"`` (parabolic interpolation, the
+        Numba default, or center of mass).
+    snr_threshold : float, default 3.0
+        Signal-to-noise threshold (max_bin / median_bin). If SNR is below the
+        threshold, center of mass is forced and the result is marked failed.
+    shared_plot_dict : multiprocessing.Manager.dict or None, optional
+        If provided, the plot is stored as a numpy array in this dict instead
+        of being saved to disk.
 
-    Returns:
-        shift_x, shift_y : float
-            Detected shift from locs_i to locs_j (same as standard)
-        quality_metrics : dict
-            Quality and uncertainty information
+    Returns
+    -------
+    shift_x, shift_y : float
+        Detected shift from ``locs_i`` to ``locs_j``.
+    quality_metrics : dict
+        Quality and uncertainty information.
     """
     import time
 
@@ -1050,12 +1212,20 @@ def _compute_rsso_shift_numba_optimized(
 
     # Extract frame numbers if available for temporal filtering
     if ref_frames is not None:
-        i_frames = ref_frames.astype(np.int32) if not isinstance(ref_frames, np.ndarray) else ref_frames.astype(np.int32)
+        i_frames = (
+            ref_frames.astype(np.int32)
+            if not isinstance(ref_frames, np.ndarray)
+            else ref_frames.astype(np.int32)
+        )
     else:
         i_frames = None
 
     if frame_locs_frames is not None:
-        j_frames = frame_locs_frames.astype(np.int32) if not isinstance(frame_locs_frames, np.ndarray) else frame_locs_frames.astype(np.int32)
+        j_frames = (
+            frame_locs_frames.astype(np.int32)
+            if not isinstance(frame_locs_frames, np.ndarray)
+            else frame_locs_frames.astype(np.int32)
+        )
     else:
         j_frames = None
 
@@ -1106,8 +1276,8 @@ def _compute_rsso_shift_numba_optimized(
             ref_frame = i_frames[ref_idx]
 
             # Find which bin this shift fell into (replicate binning logic)
-            bin_x = np.searchsorted(x_edges, shift_x_val, side='right') - 1
-            bin_y = np.searchsorted(y_edges, shift_y_val, side='right') - 1
+            bin_x = np.searchsorted(x_edges, shift_x_val, side="right") - 1
+            bin_y = np.searchsorted(y_edges, shift_y_val, side="right") - 1
 
             # Ensure valid bin indices
             bin_x = np.clip(bin_x, 0, n_bins - 1)
@@ -1124,7 +1294,9 @@ def _compute_rsso_shift_numba_optimized(
     # Calculate signal-to-noise ratio
     max_bin_value = np.max(hist)
     non_zero_bins = hist[hist > 0]
-    median_bin_value = np.median(non_zero_bins) if len(non_zero_bins) > 0 else 1.0
+    median_bin_value = (
+        np.median(non_zero_bins) if len(non_zero_bins) > 0 else 1.0
+    )
     snr = max_bin_value / median_bin_value if median_bin_value > 0 else 0.0
 
     # Check if SNR is too low - if so, force center_of_mass and mark as failed
@@ -1140,8 +1312,10 @@ def _compute_rsso_shift_numba_optimized(
     com_use_threshold = None
     if peak_mode_to_use == "center_of_mass":
         # Use center of mass directly (better for broad peaks)
-        shift_x, shift_y, peak_value, com_threshold, com_use_threshold = _find_peak_center_of_mass_numba(
-            hist, x_edges, y_edges, snr_threshold
+        shift_x, shift_y, peak_value, com_threshold, com_use_threshold = (
+            _find_peak_center_of_mass_numba(
+                hist, x_edges, y_edges, snr_threshold
+            )
         )
     else:
         # Use parabolic interpolation (default Numba method)
@@ -1198,9 +1372,13 @@ def _compute_rsso_shift_numba_optimized(
     }
 
     # Create and save histogram plot if requested
-    if plot_histogram and (plot_dir is not None or shared_plot_dict is not None):
+    if plot_histogram and (
+        plot_dir is not None or shared_plot_dict is not None
+    ):
         # Import unified plotting function from picasso_outpost
-        from picasso_workflow.picasso_outpost import _save_rsso_shift_histogram_plot
+        from picasso_workflow.picasso_outpost import (
+            _save_rsso_shift_histogram_plot,
+        )
 
         # Determine output subdirectory structure for numba route
         if iteration is not None:
@@ -1241,33 +1419,45 @@ def _save_rsso_histogram_plot(
     quality_metrics,
     shared_plot_dict=None,
 ):
-    """
-    DEPRECATED: Use _save_rsso_shift_histogram_plot from picasso_outpost instead.
+    """Save the RSSO histogram plot (deprecated).
 
-    This function is kept for backward compatibility and redirects to the
-    unified plotting function in picasso_outpost.py.
+    .. deprecated::
+        Kept for backward compatibility; redirects to the unified
+        :func:`picasso_outpost._save_rsso_shift_histogram_plot`.
 
-    Args:
-        hist, x_edges, y_edges, shift_x, shift_y, max_shift : see new function
-        plot_dir : str - Directory to save plot
-        iteration : int or None - Iteration number
-        frame_number : int or None - Frame number
-        quality_metrics : dict - Quality metrics
-        shared_plot_dict : dict or None - Shared memory dict for video
+    Parameters
+    ----------
+    hist, x_edges, y_edges, shift_x, shift_y, max_shift
+        See the replacement function.
+    plot_dir : str
+        Directory in which to save the plot.
+    iteration : int or None
+        Iteration number.
+    frame_number : int or None
+        Frame number.
+    quality_metrics : dict
+        Quality metrics.
+    shared_plot_dict : dict or None
+        Shared-memory dict for video assembly.
 
-    Returns:
-        filepath : str or frame_number
+    Returns
+    -------
+    str or int
+        The output filepath, or the frame number.
     """
     import warnings
+
     warnings.warn(
         "_save_rsso_histogram_plot is deprecated. "
         "Use picasso_outpost._save_rsso_shift_histogram_plot instead.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
 
     # Import unified function
-    from picasso_workflow.picasso_outpost import _save_rsso_shift_histogram_plot
+    from picasso_workflow.picasso_outpost import (
+        _save_rsso_shift_histogram_plot,
+    )
 
     # Determine output subdirectory structure
     if iteration is not None:
@@ -1294,20 +1484,24 @@ def _save_rsso_histogram_plot(
 
 
 def _write_plots_to_video(shared_plot_dict, video_writer):
-    """
-    Write plot images from shared memory dict to video file in order.
+    """Write plot images from a shared-memory dict to a video, in order.
 
-    Sorts frames by frame number and writes them to the video writer sequentially.
-    Clears processed frames from the shared dict to free memory.
+    Sorts frames by frame number, writes them to the video writer
+    sequentially and clears processed frames from the shared dict to free
+    memory.
 
-    Args:
-        shared_plot_dict : multiprocessing.Manager.dict()
-            Dictionary mapping frame_number -> numpy array (H x W x 3)
-        video_writer : imageio.Writer
-            Open video writer to append frames to
+    Parameters
+    ----------
+    shared_plot_dict : multiprocessing.Manager.dict
+        Dictionary mapping ``frame_number`` to a numpy array
+        ``(H, W, 3)``.
+    video_writer : imageio.Writer
+        Open video writer to append frames to.
 
-    Returns:
-        int : Number of frames written
+    Returns
+    -------
+    int
+        Number of frames written.
     """
     if not shared_plot_dict:
         return 0
@@ -1340,34 +1534,38 @@ def _create_histogram_movie(
     fps=10,
     cleanup=True,
 ):
-    """
-    Create a movie from histogram PNG files for a given iteration.
+    """Create a movie from the histogram PNGs of a given iteration.
 
-    Searches for all histogram files matching the iteration number,
-    sorts them by frame number, and compiles into an MP4 video.
-    Optionally deletes individual PNG files after movie creation.
+    Finds all histogram files matching the iteration number, sorts them by
+    frame number and compiles them into an MP4 video, optionally deleting the
+    individual PNGs afterwards.
 
-    Args:
-        results_folder : str
-            Directory containing histogram images
-        iteration : int
-            Iteration number to create movie for
-        min_frames_for_movie : int, default 10
-            Minimum number of histogram images required to create a movie
-        fps : int, default 10
-            Frames per second for output video
-        cleanup : bool, default True
-            Whether to delete individual PNG files after movie creation
+    Parameters
+    ----------
+    results_folder : str
+        Directory containing the histogram images.
+    iteration : int
+        Iteration number to create the movie for.
+    min_frames_for_movie : int, default 10
+        Minimum number of histogram images required to create a movie.
+    fps : int, default 10
+        Frames per second for the output video.
+    cleanup : bool, default True
+        Whether to delete the individual PNG files after movie creation.
 
-    Returns:
-        movie_path : str or None
-            Path to created movie, or None if failed/insufficient frames
+    Returns
+    -------
+    movie_path : str or None
+        Path to the created movie, or None if it failed or there were
+        insufficient frames.
     """
     import os
     import glob
     import re
+
     try:
         import imageio
+
         IMAGEIO_AVAILABLE = True
     except ImportError:
         IMAGEIO_AVAILABLE = False
@@ -1379,12 +1577,18 @@ def _create_histogram_movie(
 
     # Pattern: rsso_iter{iteration:02d}_frame{frame:04d}_{randomcode}.png
     # Check new subfolder structure first: iteration_XX/sglframe/
-    sglframe_dir = os.path.join(rsso_plot_dir, f"iteration_{iteration:02d}", "sglframe")
+    sglframe_dir = os.path.join(
+        rsso_plot_dir, f"iteration_{iteration:02d}", "sglframe"
+    )
     if os.path.exists(sglframe_dir):
-        pattern = os.path.join(sglframe_dir, f"rsso_iter{iteration:02d}_frame*.png")
+        pattern = os.path.join(
+            sglframe_dir, f"rsso_iter{iteration:02d}_frame*.png"
+        )
     else:
         # Fallback to old structure (flat directory)
-        pattern = os.path.join(rsso_plot_dir, f"rsso_iter{iteration:02d}_frame*.png")
+        pattern = os.path.join(
+            rsso_plot_dir, f"rsso_iter{iteration:02d}_frame*.png"
+        )
 
     histogram_files = glob.glob(pattern)
 
@@ -1405,7 +1609,7 @@ def _create_histogram_movie(
     # Sort files by frame number
     def extract_frame_number(filepath):
         """Extract frame number from filename"""
-        match = re.search(r'_frame(\d+)_', os.path.basename(filepath))
+        match = re.search(r"_frame(\d+)_", os.path.basename(filepath))
         return int(match.group(1)) if match else 0
 
     histogram_files_sorted = sorted(histogram_files, key=extract_frame_number)
@@ -1424,14 +1628,18 @@ def _create_histogram_movie(
         )
 
         # Use imageio to create video
-        writer = imageio.get_writer(movie_path, fps=fps, codec='libx264', pixelformat='yuv420p')
+        writer = imageio.get_writer(
+            movie_path, fps=fps, codec="libx264", pixelformat="yuv420p"
+        )
 
         for filepath in histogram_files_sorted:
             try:
                 image = imageio.imread(filepath)
                 writer.append_data(image)
             except Exception as e:
-                logger.warning(f"Failed to read histogram image {filepath}: {e}")
+                logger.warning(
+                    f"Failed to read histogram image {filepath}: {e}"
+                )
                 continue
 
         writer.close()
@@ -1446,7 +1654,9 @@ def _create_histogram_movie(
                 except Exception as e:
                     logger.warning(f"Failed to delete {filepath}: {e}")
 
-            logger.debug(f"Cleaned up {len(histogram_files_sorted)} individual histogram PNGs")
+            logger.debug(
+                f"Cleaned up {len(histogram_files_sorted)} individual histogram PNGs"
+            )
 
         return movie_path
 
@@ -1466,34 +1676,37 @@ def _plot_shift_magnitude_histogram(
     results_folder,
     pixelsize,
 ):
-    """
-    Plot histogram of shift magnitudes for frames with quantile annotations.
+    """Plot a histogram of frame shift magnitudes with quantile annotations.
 
-    Shows distribution of per-frame drift magnitudes and compares them to
-    the RMS value and search radius settings. Helps tune max_shift_rms_multiplier.
+    Shows the distribution of per-frame drift magnitudes and compares them to
+    the RMS value and search-radius settings, helping to tune
+    ``max_shift_rms_multiplier``.
 
-    Args:
-        frame_shifts_x : ndarray
-            X shifts for all frames (nm)
-        frame_shifts_y : ndarray
-            Y shifts for all frames (nm)
-        convergence_rms : float
-            RMS of shifts (nm)
-        current_max_shift_nm : float
-            Max shift used for this iteration (nm)
-        next_max_shift_nm : float
-            Max shift to be used for next iteration (nm)
-        rms_multiplier : float
-            Multiplier applied to RMS
-        iteration : int
-            Current iteration number (1-indexed)
-        results_folder : str
-            Directory to save plot
-        pixelsize : float
-            Pixel size in nm (for reference)
+    Parameters
+    ----------
+    frame_shifts_x : ndarray
+        X shifts for all frames (nm).
+    frame_shifts_y : ndarray
+        Y shifts for all frames (nm).
+    convergence_rms : float
+        RMS of the shifts (nm).
+    current_max_shift_nm : float
+        Max shift used for this iteration (nm).
+    next_max_shift_nm : float
+        Max shift to be used for the next iteration (nm).
+    rms_multiplier : float
+        Multiplier applied to the RMS.
+    iteration : int
+        Current iteration number (1-indexed).
+    results_folder : str
+        Directory in which to save the plot.
+    pixelsize : float
+        Pixel size in nm (for reference).
 
-    Returns:
-        dict : Statistics including quantiles and percentile at RMS
+    Returns
+    -------
+    dict
+        Statistics, including quantiles and the percentile at the RMS.
     """
     import matplotlib.pyplot as plt
 
@@ -1514,11 +1727,15 @@ def _plot_shift_magnitude_histogram(
     p95 = np.percentile(shift_magnitudes, 95)
 
     # Calculate percentile at RMS value
-    percentile_at_rms = (np.sum(shift_magnitudes <= convergence_rms) / len(shift_magnitudes)) * 100
+    percentile_at_rms = (
+        np.sum(shift_magnitudes <= convergence_rms) / len(shift_magnitudes)
+    ) * 100
 
     # Calculate percentile at RMS × multiplier
     rms_times_mult = convergence_rms * rms_multiplier
-    percentile_at_rms_mult = (np.sum(shift_magnitudes <= rms_times_mult) / len(shift_magnitudes)) * 100
+    percentile_at_rms_mult = (
+        np.sum(shift_magnitudes <= rms_times_mult) / len(shift_magnitudes)
+    ) * 100
 
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -1526,84 +1743,124 @@ def _plot_shift_magnitude_histogram(
     # Plot histogram
     n_bins = min(50, max(10, len(shift_magnitudes) // 10))
     counts, bins, patches = ax.hist(
-        shift_magnitudes, bins=n_bins, color='skyblue',
-        edgecolor='black', alpha=0.7, label='Frame shifts'
+        shift_magnitudes,
+        bins=n_bins,
+        color="skyblue",
+        edgecolor="black",
+        alpha=0.7,
+        label="Frame shifts",
     )
 
     # Add vertical lines for quantiles
-    ax.axvline(median, color='green', linestyle='--', linewidth=2,
-               label=f'Median: {median:.2f} nm', alpha=0.8)
-    ax.axvline(p90, color='orange', linestyle='--', linewidth=2,
-               label=f'90th %ile: {p90:.2f} nm', alpha=0.8)
-    ax.axvline(p95, color='red', linestyle='--', linewidth=2,
-               label=f'95th %ile: {p95:.2f} nm', alpha=0.8)
+    ax.axvline(
+        median,
+        color="green",
+        linestyle="--",
+        linewidth=2,
+        label=f"Median: {median:.2f} nm",
+        alpha=0.8,
+    )
+    ax.axvline(
+        p90,
+        color="orange",
+        linestyle="--",
+        linewidth=2,
+        label=f"90th %ile: {p90:.2f} nm",
+        alpha=0.8,
+    )
+    ax.axvline(
+        p95,
+        color="red",
+        linestyle="--",
+        linewidth=2,
+        label=f"95th %ile: {p95:.2f} nm",
+        alpha=0.8,
+    )
 
     # Add vertical line for RMS
-    ax.axvline(convergence_rms, color='blue', linestyle='-', linewidth=2.5,
-               label=f'RMS: {convergence_rms:.2f} nm ({percentile_at_rms:.1f}th %ile)',
-               alpha=0.9)
+    ax.axvline(
+        convergence_rms,
+        color="blue",
+        linestyle="-",
+        linewidth=2.5,
+        label=f"RMS: {convergence_rms:.2f} nm ({percentile_at_rms:.1f}th %ile)",
+        alpha=0.9,
+    )
 
     # Add vertical line for RMS × multiplier (next max_shift)
     if rms_multiplier != 1.0:
-        ax.axvline(rms_times_mult, color='purple', linestyle='-', linewidth=2.5,
-                   label=f'RMS×{rms_multiplier:.1f}: {rms_times_mult:.2f} nm ({percentile_at_rms_mult:.1f}th %ile)',
-                   alpha=0.9)
+        ax.axvline(
+            rms_times_mult,
+            color="purple",
+            linestyle="-",
+            linewidth=2.5,
+            label=f"RMS×{rms_multiplier:.1f}: {rms_times_mult:.2f} nm ({percentile_at_rms_mult:.1f}th %ile)",
+            alpha=0.9,
+        )
 
     # Add vertical line for current max_shift
     if current_max_shift_nm is not None:
-        ax.axvline(current_max_shift_nm, color='gray', linestyle=':', linewidth=2,
-                   label=f'Current max_shift: {current_max_shift_nm:.2f} nm',
-                   alpha=0.7)
+        ax.axvline(
+            current_max_shift_nm,
+            color="gray",
+            linestyle=":",
+            linewidth=2,
+            label=f"Current max_shift: {current_max_shift_nm:.2f} nm",
+            alpha=0.7,
+        )
 
     # Labels and title
-    ax.set_xlabel('Shift Magnitude (nm)', fontsize=12)
-    ax.set_ylabel('Number of Frames', fontsize=12)
+    ax.set_xlabel("Shift Magnitude (nm)", fontsize=12)
+    ax.set_ylabel("Number of Frames", fontsize=12)
     ax.set_title(
-        f'Iteration {iteration} - Frame Shift Distribution\n'
-        f'{len(shift_magnitudes)} valid frames, RMS={convergence_rms:.2f} nm',
-        fontsize=13, fontweight='bold'
+        f"Iteration {iteration} - Frame Shift Distribution\n"
+        f"{len(shift_magnitudes)} valid frames, RMS={convergence_rms:.2f} nm",
+        fontsize=13,
+        fontweight="bold",
     )
 
     # Add text box with statistics
     textstr = (
-        f'Next iteration max_shift:\n'
-        f'  {next_max_shift_nm:.2f} nm\n'
-        f'  (RMS × {rms_multiplier:.1f})\n'
-        f'  Covers {percentile_at_rms_mult:.1f}% of shifts'
+        f"Next iteration max_shift:\n"
+        f"  {next_max_shift_nm:.2f} nm\n"
+        f"  (RMS × {rms_multiplier:.1f})\n"
+        f"  Covers {percentile_at_rms_mult:.1f}% of shifts"
     )
-    props = dict(boxstyle='round', facecolor='wheat', alpha=0.9)
+    props = dict(boxstyle="round", facecolor="wheat", alpha=0.9)
     ax.text(
-        0.98, 0.98, textstr,
+        0.98,
+        0.98,
+        textstr,
         transform=ax.transAxes,
         fontsize=10,
-        verticalalignment='top',
-        horizontalalignment='right',
-        bbox=props
+        verticalalignment="top",
+        horizontalalignment="right",
+        bbox=props,
     )
 
     # Legend
-    ax.legend(loc='upper left', fontsize=9, framealpha=0.9)
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
     ax.grid(True, alpha=0.3)
 
     # Save plot
-    filename = f'shift_histogram_iter{iteration:02d}.png'
+    filename = f"shift_histogram_iter{iteration:02d}.png"
     filepath = os.path.join(results_folder, filename)
-    plt.savefig(filepath, dpi=150, bbox_inches='tight')
+    plt.savefig(filepath, dpi=150, bbox_inches="tight")
     plt.close()
 
     logger.debug(f"    Saved shift histogram: {filename}")
 
     # Return statistics
     return {
-        'median': median,
-        'p50': p50,
-        'p90': p90,
-        'p95': p95,
-        'rms': convergence_rms,
-        'percentile_at_rms': percentile_at_rms,
-        'percentile_at_rms_mult': percentile_at_rms_mult,
-        'n_valid_frames': len(shift_magnitudes),
-        'plot_path': filepath,
+        "median": median,
+        "p50": p50,
+        "p90": p90,
+        "p95": p95,
+        "rms": convergence_rms,
+        "percentile_at_rms": percentile_at_rms,
+        "percentile_at_rms_mult": percentile_at_rms_mult,
+        "n_valid_frames": len(shift_magnitudes),
+        "plot_path": filepath,
     }
 
 
@@ -1613,29 +1870,31 @@ def _plot_frame_shift_correlation_grid(
     outlier_percentile=99,
     max_frames_scatter=500,
 ):
-    """
-    Plot pairwise correlation grid showing frame shift relationships across iterations.
+    """Plot a pairwise correlation grid of frame shifts across iterations.
 
-    Creates an N×N grid where N is the number of iterations. Diagonal panels show
-    histograms of shift magnitudes for each iteration. Off-diagonal panels show
-    scatter plots (hexbin density + outlier overlay) comparing shifts between
-    different iterations.
+    Creates an N×N grid where N is the number of iterations. Diagonal panels
+    show histograms of shift magnitudes per iteration; off-diagonal panels
+    show scatter plots (hexbin density plus an outlier overlay) comparing
+    shifts between iterations.
 
-    Args:
-        iteration_history : list of dict
-            Each dict contains 'drift_x', 'drift_y', 'iteration' for all frames
-        results_folder : str
-            Directory to save plot
-        outlier_percentile : float
-            Percentile threshold for outlier identification (default 99)
-        max_frames_scatter : int
-            Maximum number of outlier frames to plot as scatter points
+    Parameters
+    ----------
+    iteration_history : list of dict
+        Each dict holds ``drift_x``, ``drift_y`` and ``iteration`` for all
+        frames.
+    results_folder : str
+        Directory in which to save the plot.
+    outlier_percentile : float, optional
+        Percentile threshold for outlier identification. Default is 99.
+    max_frames_scatter : int, optional
+        Maximum number of outlier frames to plot as scatter points.
 
-    Returns:
-        str : Path to saved plot
+    Returns
+    -------
+    str
+        Path to the saved plot.
     """
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Ellipse
     from scipy.stats import pearsonr
 
     n_iterations = len(iteration_history)
@@ -1644,12 +1903,12 @@ def _plot_frame_shift_correlation_grid(
         return None
 
     # Extract shift magnitudes for all iterations
-    n_frames = len(iteration_history[0]['drift_x'])
+    n_frames = len(iteration_history[0]["drift_x"])
     shift_magnitudes = np.zeros((n_frames, n_iterations))
 
     for i, hist in enumerate(iteration_history):
-        dx = hist['drift_x']
-        dy = hist['drift_y']
+        dx = hist["drift_x"]
+        dy = hist["drift_y"]
         shift_magnitudes[:, i] = np.sqrt(dx**2 + dy**2)
 
     # Identify outlier frames
@@ -1657,7 +1916,9 @@ def _plot_frame_shift_correlation_grid(
     outlier_mask = np.any(shift_magnitudes > outlier_threshold, axis=1)
     n_outliers = np.sum(outlier_mask)
 
-    logger.debug(f"Identified {n_outliers:,} outlier frames ({n_outliers/n_frames*100:.2f}%)")
+    logger.debug(
+        f"Identified {n_outliers:,} outlier frames ({n_outliers/n_frames*100:.2f}%)"
+    )
 
     # Sample outliers for plotting if too many
     outlier_indices = np.where(outlier_mask)[0]
@@ -1668,7 +1929,11 @@ def _plot_frame_shift_correlation_grid(
         outlier_indices = outlier_indices[worst_indices]
 
     # Create figure with N×N subplots
-    fig, axes = plt.subplots(n_iterations, n_iterations, figsize=(4*n_iterations, 4*n_iterations))
+    fig, axes = plt.subplots(
+        n_iterations,
+        n_iterations,
+        figsize=(4 * n_iterations, 4 * n_iterations),
+    )
     if n_iterations == 1:
         axes = np.array([[axes]])
     elif n_iterations == 2:
@@ -1681,31 +1946,48 @@ def _plot_frame_shift_correlation_grid(
 
             if i == j:
                 # Diagonal: histogram
-                ax.hist(shift_magnitudes[:, i], bins=50, color='skyblue',
-                       edgecolor='black', alpha=0.7)
+                ax.hist(
+                    shift_magnitudes[:, i],
+                    bins=50,
+                    color="skyblue",
+                    edgecolor="black",
+                    alpha=0.7,
+                )
 
                 # Mark outliers
                 outlier_shifts = shift_magnitudes[outlier_indices, i]
-                ax.scatter(outlier_shifts, np.zeros_like(outlier_shifts),
-                          color='red', s=50, alpha=0.6, marker='|',
-                          linewidths=2, label=f'Outliers (n={len(outlier_indices)})')
+                ax.scatter(
+                    outlier_shifts,
+                    np.zeros_like(outlier_shifts),
+                    color="red",
+                    s=50,
+                    alpha=0.6,
+                    marker="|",
+                    linewidths=2,
+                    label=f"Outliers (n={len(outlier_indices)})",
+                )
 
                 # Statistics
                 mean_shift = np.mean(shift_magnitudes[:, i])
                 median_shift = np.median(shift_magnitudes[:, i])
                 p95 = np.percentile(shift_magnitudes[:, i], 95)
 
-                ax.text(0.98, 0.98,
-                       f'Mean: {mean_shift:.2f} nm\n'
-                       f'Median: {median_shift:.2f} nm\n'
-                       f'95%: {p95:.2f} nm',
-                       transform=ax.transAxes, fontsize=9,
-                       verticalalignment='top', horizontalalignment='right',
-                       bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+                ax.text(
+                    0.98,
+                    0.98,
+                    f"Mean: {mean_shift:.2f} nm\n"
+                    f"Median: {median_shift:.2f} nm\n"
+                    f"95%: {p95:.2f} nm",
+                    transform=ax.transAxes,
+                    fontsize=9,
+                    verticalalignment="top",
+                    horizontalalignment="right",
+                    bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
+                )
 
-                ax.set_xlabel(f'Iteration {i+1} Shift (nm)')
-                ax.set_ylabel('Count')
-                ax.legend(loc='upper left', fontsize=8)
+                ax.set_xlabel(f"Iteration {i+1} Shift (nm)")
+                ax.set_ylabel("Count")
+                ax.legend(loc="upper left", fontsize=8)
 
             else:
                 # Off-diagonal: scatter with hexbin density
@@ -1713,19 +1995,39 @@ def _plot_frame_shift_correlation_grid(
                 y_data = shift_magnitudes[:, i]
 
                 # 2D histogram (hexbin)
-                hb = ax.hexbin(x_data, y_data, gridsize=40, cmap='Blues',
-                             mincnt=1, alpha=0.6, linewidths=0.2)
+                ax.hexbin(
+                    x_data,
+                    y_data,
+                    gridsize=40,
+                    cmap="Blues",
+                    mincnt=1,
+                    alpha=0.6,
+                    linewidths=0.2,
+                )
 
                 # Overlay outliers
                 if len(outlier_indices) > 0:
-                    ax.scatter(x_data[outlier_indices], y_data[outlier_indices],
-                             color='red', s=20, alpha=0.5, edgecolors='darkred',
-                             linewidths=0.5, label='Outliers')
+                    ax.scatter(
+                        x_data[outlier_indices],
+                        y_data[outlier_indices],
+                        color="red",
+                        s=20,
+                        alpha=0.5,
+                        edgecolors="darkred",
+                        linewidths=0.5,
+                        label="Outliers",
+                    )
 
                 # Identity line
                 max_val = max(np.max(x_data), np.max(y_data))
-                ax.plot([0, max_val], [0, max_val], 'k--', alpha=0.5, linewidth=1,
-                       label='y=x')
+                ax.plot(
+                    [0, max_val],
+                    [0, max_val],
+                    "k--",
+                    alpha=0.5,
+                    linewidth=1,
+                    label="y=x",
+                )
 
                 # Calculate correlation
                 corr, p_value = pearsonr(x_data, y_data)
@@ -1737,30 +2039,38 @@ def _plot_frame_shift_correlation_grid(
                 # Percentage improving
                 pct_improving = np.sum(y_data < x_data) / len(y_data) * 100
 
-                ax.text(0.02, 0.98,
-                       f'R² = {r_squared:.3f}\n'
-                       f'r = {corr:.3f}\n'
-                       f'MAD = {mad:.2f} nm\n'
-                       f'Improving: {pct_improving:.1f}%',
-                       transform=ax.transAxes, fontsize=9,
-                       verticalalignment='top', horizontalalignment='left',
-                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+                ax.text(
+                    0.02,
+                    0.98,
+                    f"R² = {r_squared:.3f}\n"
+                    f"r = {corr:.3f}\n"
+                    f"MAD = {mad:.2f} nm\n"
+                    f"Improving: {pct_improving:.1f}%",
+                    transform=ax.transAxes,
+                    fontsize=9,
+                    verticalalignment="top",
+                    horizontalalignment="left",
+                    bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
+                )
 
-                ax.set_xlabel(f'Iteration {j+1} Shift (nm)')
-                ax.set_ylabel(f'Iteration {i+1} Shift (nm)')
-                ax.legend(loc='lower right', fontsize=8)
-                ax.set_aspect('equal', adjustable='box')
+                ax.set_xlabel(f"Iteration {j+1} Shift (nm)")
+                ax.set_ylabel(f"Iteration {i+1} Shift (nm)")
+                ax.legend(loc="lower right", fontsize=8)
+                ax.set_aspect("equal", adjustable="box")
 
-    plt.suptitle(f'Frame Shift Correlation Grid ({n_frames:,} frames, {n_outliers:,} outliers)',
-                fontsize=14, fontweight='bold')
+    plt.suptitle(
+        f"Frame Shift Correlation Grid ({n_frames:,} frames, {n_outliers:,} outliers)",
+        fontsize=14,
+        fontweight="bold",
+    )
     plt.tight_layout()
 
     # Save plot
-    filepath = os.path.join(results_folder, 'shift_correlation_grid.png')
-    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    filepath = os.path.join(results_folder, "shift_correlation_grid.png")
+    plt.savefig(filepath, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.debug(f"Saved correlation grid: shift_correlation_grid.png")
+    logger.debug("Saved correlation grid: shift_correlation_grid.png")
 
     return filepath
 
@@ -1771,25 +2081,28 @@ def _plot_shift_convergence_lines(
     n_sample_frames=500,
     outlier_percentile=90,
 ):
-    """
-    Plot frame shift magnitude evolution across iterations with convergence lines.
+    """Plot frame shift magnitude evolution across iterations.
 
-    Shows how individual frame shifts evolve over iterations. Displays percentile
-    bands, RMS convergence, and highlights outlier frames (slow convergers,
-    non-monotonic).
+    Shows how individual frame shifts evolve over iterations, displaying
+    percentile bands and RMS convergence and highlighting outlier frames
+    (slow convergers, non-monotonic).
 
-    Args:
-        iteration_history : list of dict
-            Each dict contains 'drift_x', 'drift_y', 'iteration' for all frames
-        results_folder : str
-            Directory to save plot
-        n_sample_frames : int
-            Number of representative frames to plot as lines (default 500)
-        outlier_percentile : float
-            Percentile threshold for outlier identification (default 90)
+    Parameters
+    ----------
+    iteration_history : list of dict
+        Each dict holds ``drift_x``, ``drift_y`` and ``iteration`` for all
+        frames.
+    results_folder : str
+        Directory in which to save the plot.
+    n_sample_frames : int, optional
+        Number of representative frames to plot as lines. Default is 500.
+    outlier_percentile : float, optional
+        Percentile threshold for outlier identification. Default is 90.
 
-    Returns:
-        str : Path to saved plot
+    Returns
+    -------
+    str
+        Path to the saved plot.
     """
     import matplotlib.pyplot as plt
 
@@ -1799,12 +2112,12 @@ def _plot_shift_convergence_lines(
         return None
 
     # Extract shift magnitudes for all iterations
-    n_frames = len(iteration_history[0]['drift_x'])
+    n_frames = len(iteration_history[0]["drift_x"])
     shift_magnitudes = np.zeros((n_frames, n_iterations))
 
     for i, hist in enumerate(iteration_history):
-        dx = hist['drift_x']
-        dy = hist['drift_y']
+        dx = hist["drift_x"]
+        dy = hist["drift_y"]
         shift_magnitudes[:, i] = np.sqrt(dx**2 + dy**2)
 
     iterations = np.arange(1, n_iterations + 1)
@@ -1812,11 +2125,15 @@ def _plot_shift_convergence_lines(
     # Calculate statistics per iteration
     percentiles = {}
     for p in [5, 25, 50, 75, 90, 95]:
-        percentiles[p] = [np.percentile(shift_magnitudes[:, i], p)
-                          for i in range(n_iterations)]
+        percentiles[p] = [
+            np.percentile(shift_magnitudes[:, i], p)
+            for i in range(n_iterations)
+        ]
 
-    rms_values = [np.sqrt(np.mean(shift_magnitudes[:, i]**2))
-                  for i in range(n_iterations)]
+    rms_values = [
+        np.sqrt(np.mean(shift_magnitudes[:, i] ** 2))
+        for i in range(n_iterations)
+    ]
     median_values = percentiles[50]
 
     # Identify outlier categories
@@ -1830,7 +2147,9 @@ def _plot_shift_convergence_lines(
 
     # Fast convergers: below median by iteration 2 (if enough iterations)
     if n_iterations >= 2:
-        fast_convergers = np.where(shift_magnitudes[:, 1] < median_values[1])[0]
+        fast_convergers = np.where(shift_magnitudes[:, 1] < median_values[1])[
+            0
+        ]
     else:
         fast_convergers = np.array([])
 
@@ -1843,52 +2162,121 @@ def _plot_shift_convergence_lines(
     fig, ax = plt.subplots(figsize=(12, 8))
 
     # Plot percentile bands
-    ax.fill_between(iterations, percentiles[5], percentiles[95],
-                     color='lightblue', alpha=0.3, label='5-95 percentile')
-    ax.fill_between(iterations, percentiles[25], percentiles[75],
-                     color='skyblue', alpha=0.5, label='25-75 percentile')
+    ax.fill_between(
+        iterations,
+        percentiles[5],
+        percentiles[95],
+        color="lightblue",
+        alpha=0.3,
+        label="5-95 percentile",
+    )
+    ax.fill_between(
+        iterations,
+        percentiles[25],
+        percentiles[75],
+        color="skyblue",
+        alpha=0.5,
+        label="25-75 percentile",
+    )
 
     # Plot sample frames as gray lines
     for idx in sample_indices:
-        ax.plot(iterations, shift_magnitudes[idx, :],
-               color='gray', alpha=0.2, linewidth=0.5, zorder=1)
+        ax.plot(
+            iterations,
+            shift_magnitudes[idx, :],
+            color="gray",
+            alpha=0.2,
+            linewidth=0.5,
+            zorder=1,
+        )
 
     # Plot outlier categories with thick colored lines
     # Slow convergers
-    for idx in slow_convergers[:min(20, len(slow_convergers))]:  # Limit to 20 for visibility
-        ax.plot(iterations, shift_magnitudes[idx, :],
-               color='red', alpha=0.6, linewidth=1.5, zorder=3)
+    for idx in slow_convergers[
+        : min(20, len(slow_convergers))
+    ]:  # Limit to 20 for visibility
+        ax.plot(
+            iterations,
+            shift_magnitudes[idx, :],
+            color="red",
+            alpha=0.6,
+            linewidth=1.5,
+            zorder=3,
+        )
 
     # Non-monotonic
-    for idx in non_monotonic[:min(20, len(non_monotonic))]:
-        ax.plot(iterations, shift_magnitudes[idx, :],
-               color='orange', alpha=0.6, linewidth=1.5, zorder=2)
+    for idx in non_monotonic[: min(20, len(non_monotonic))]:
+        ax.plot(
+            iterations,
+            shift_magnitudes[idx, :],
+            color="orange",
+            alpha=0.6,
+            linewidth=1.5,
+            zorder=2,
+        )
 
     # Plot RMS and median as thick lines
-    ax.plot(iterations, rms_values, 'b-o', linewidth=3, markersize=8,
-           label='RMS', zorder=5)
-    ax.plot(iterations, median_values, 'g--o', linewidth=2.5, markersize=7,
-           label='Median', zorder=4)
+    ax.plot(
+        iterations,
+        rms_values,
+        "b-o",
+        linewidth=3,
+        markersize=8,
+        label="RMS",
+        zorder=5,
+    )
+    ax.plot(
+        iterations,
+        median_values,
+        "g--o",
+        linewidth=2.5,
+        markersize=7,
+        label="Median",
+        zorder=4,
+    )
 
     # Add dummy lines for legend (outlier categories)
-    ax.plot([], [], color='red', linewidth=2, alpha=0.8,
-           label=f'Slow convergers (n={len(slow_convergers)})')
-    ax.plot([], [], color='orange', linewidth=2, alpha=0.8,
-           label=f'Non-monotonic (n={len(non_monotonic)})')
-    ax.plot([], [], color='gray', linewidth=1, alpha=0.5,
-           label=f'Sample frames (n={len(sample_indices)})')
+    ax.plot(
+        [],
+        [],
+        color="red",
+        linewidth=2,
+        alpha=0.8,
+        label=f"Slow convergers (n={len(slow_convergers)})",
+    )
+    ax.plot(
+        [],
+        [],
+        color="orange",
+        linewidth=2,
+        alpha=0.8,
+        label=f"Non-monotonic (n={len(non_monotonic)})",
+    )
+    ax.plot(
+        [],
+        [],
+        color="gray",
+        linewidth=1,
+        alpha=0.5,
+        label=f"Sample frames (n={len(sample_indices)})",
+    )
 
     # Labels and title
-    ax.set_xlabel('Iteration', fontsize=12)
-    ax.set_ylabel('Shift Magnitude (nm)', fontsize=12)
-    ax.set_title(f'Frame Shift Convergence ({n_frames:,} frames)',
-                fontsize=14, fontweight='bold')
+    ax.set_xlabel("Iteration", fontsize=12)
+    ax.set_ylabel("Shift Magnitude (nm)", fontsize=12)
+    ax.set_title(
+        f"Frame Shift Convergence ({n_frames:,} frames)",
+        fontsize=14,
+        fontweight="bold",
+    )
     ax.set_xticks(iterations)
     ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
+    ax.legend(loc="upper right", fontsize=10, framealpha=0.9)
 
     # Add convergence statistics text box
-    fast_pct = len(fast_convergers) / n_frames * 100 if n_iterations >= 2 else 0
+    fast_pct = (
+        len(fast_convergers) / n_frames * 100 if n_iterations >= 2 else 0
+    )
     slow_pct = len(slow_convergers) / n_frames * 100
     non_mono_pct = len(non_monotonic) / n_frames * 100
 
@@ -1896,40 +2284,55 @@ def _plot_shift_convergence_lines(
     if n_iterations >= 2:
         ratios = []
         for i in range(1, n_iterations):
-            ratio = rms_values[i] / rms_values[i-1] if rms_values[i-1] > 0 else 1.0
+            ratio = (
+                rms_values[i] / rms_values[i - 1]
+                if rms_values[i - 1] > 0
+                else 1.0
+            )
             ratios.append(ratio)
         mean_conv_rate = np.mean(ratios)
     else:
         mean_conv_rate = 1.0
 
     textstr = (
-        f'Convergence Statistics:\n'
-        f'━━━━━━━━━━━━━━━━━━━━━━\n'
-        f'Fast convergers (<50% by iter 2): {len(fast_convergers):,} ({fast_pct:.1f}%)\n'
-        f'Slow convergers (>90% final): {len(slow_convergers):,} ({slow_pct:.1f}%)\n'
-        f'Non-monotonic frames: {len(non_monotonic):,} ({non_mono_pct:.2f}%)\n'
-        f'Mean convergence rate: {mean_conv_rate:.3f}'
+        f"Convergence Statistics:\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Fast convergers (<50% by iter 2): {len(fast_convergers):,} ({fast_pct:.1f}%)\n"
+        f"Slow convergers (>90% final): {len(slow_convergers):,} ({slow_pct:.1f}%)\n"
+        f"Non-monotonic frames: {len(non_monotonic):,} ({non_mono_pct:.2f}%)\n"
+        f"Mean convergence rate: {mean_conv_rate:.3f}"
     )
 
-    props = dict(boxstyle='round', facecolor='wheat', alpha=0.9)
-    ax.text(0.02, 0.98, textstr,
-           transform=ax.transAxes, fontsize=10,
-           verticalalignment='top', horizontalalignment='left',
-           bbox=props, family='monospace')
+    props = dict(boxstyle="round", facecolor="wheat", alpha=0.9)
+    ax.text(
+        0.02,
+        0.98,
+        textstr,
+        transform=ax.transAxes,
+        fontsize=10,
+        verticalalignment="top",
+        horizontalalignment="left",
+        bbox=props,
+        family="monospace",
+    )
 
     # Use log scale if dynamic range is large
-    if np.max(shift_magnitudes) / np.min(shift_magnitudes[shift_magnitudes > 0]) > 100:
-        ax.set_yscale('log')
-        ax.set_ylabel('Shift Magnitude (nm, log scale)', fontsize=12)
+    if (
+        np.max(shift_magnitudes)
+        / np.min(shift_magnitudes[shift_magnitudes > 0])
+        > 100
+    ):
+        ax.set_yscale("log")
+        ax.set_ylabel("Shift Magnitude (nm, log scale)", fontsize=12)
 
     plt.tight_layout()
 
     # Save plot
-    filepath = os.path.join(results_folder, 'shift_convergence_lines.png')
-    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    filepath = os.path.join(results_folder, "shift_convergence_lines.png")
+    plt.savefig(filepath, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.debug(f"Saved convergence lines: shift_convergence_lines.png")
+    logger.debug("Saved convergence lines: shift_convergence_lines.png")
 
     return filepath
 
@@ -1940,24 +2343,29 @@ def _plot_shift_trajectory_2d(
     n_sample_frames=500,
     outlier_percentile=99,
 ):
-    """
-    Plot 2D trajectories of frame shifts in X-Y coordinate space across iterations.
+    """Plot 2D trajectories of frame shifts in X-Y space across iterations.
 
-    Shows how frame shifts evolve in 2D space from iteration 1 to final iteration.
-    Displays trajectories as paths with color gradients, highlighting outliers.
+    Shows how frame shifts evolve in 2D space from the first to the final
+    iteration, displaying trajectories as paths with color gradients and
+    highlighting outliers.
 
-    Args:
-        iteration_history : list of dict
-            Each dict contains 'drift_x', 'drift_y', 'iteration' for all frames
-        results_folder : str
-            Directory to save plot
-        n_sample_frames : int
-            Number of representative frames to plot as trajectories (default 500)
-        outlier_percentile : float
-            Percentile threshold for outlier identification (default 99)
+    Parameters
+    ----------
+    iteration_history : list of dict
+        Each dict holds ``drift_x``, ``drift_y`` and ``iteration`` for all
+        frames.
+    results_folder : str
+        Directory in which to save the plot.
+    n_sample_frames : int, optional
+        Number of representative frames to plot as trajectories. Default is
+        500.
+    outlier_percentile : float, optional
+        Percentile threshold for outlier identification. Default is 99.
 
-    Returns:
-        str : Path to saved plot
+    Returns
+    -------
+    str
+        Path to the saved plot.
     """
     import matplotlib.pyplot as plt
     from matplotlib.collections import LineCollection
@@ -1970,13 +2378,13 @@ def _plot_shift_trajectory_2d(
         return None
 
     # Extract shifts for all iterations
-    n_frames = len(iteration_history[0]['drift_x'])
+    n_frames = len(iteration_history[0]["drift_x"])
     shifts_x = np.zeros((n_frames, n_iterations))
     shifts_y = np.zeros((n_frames, n_iterations))
 
     for i, hist in enumerate(iteration_history):
-        shifts_x[:, i] = hist['drift_x']
-        shifts_y[:, i] = hist['drift_y']
+        shifts_x[:, i] = hist["drift_x"]
+        shifts_y[:, i] = hist["drift_y"]
 
     # Calculate shift magnitudes for outlier identification
     shift_magnitudes = np.sqrt(shifts_x**2 + shifts_y**2)
@@ -2006,11 +2414,19 @@ def _plot_shift_trajectory_2d(
     # Plot 2D hexbin of initial positions (iteration 1)
     x_init = shifts_x[:, 0]
     y_init = shifts_y[:, 0]
-    hb = ax.hexbin(x_init, y_init, gridsize=50, cmap='Greys', alpha=0.3,
-                  mincnt=1, linewidths=0.2, zorder=1)
+    ax.hexbin(
+        x_init,
+        y_init,
+        gridsize=50,
+        cmap="Greys",
+        alpha=0.3,
+        mincnt=1,
+        linewidths=0.2,
+        zorder=1,
+    )
 
     # Color map for iteration progression
-    cmap = colormaps['RdYlGn_r']  # Red (start) -> Yellow -> Green (end)
+    cmap = colormaps["RdYlGn_r"]  # Red (start) -> Yellow -> Green (end)
 
     # Plot sample frame trajectories with color gradient
     for idx in sample_indices:
@@ -2024,16 +2440,36 @@ def _plot_shift_trajectory_2d(
         # Color by iteration (normalized 0 to 1)
         colors = np.linspace(0, 1, len(x_traj) - 1)
 
-        lc = LineCollection(segments, array=colors, cmap=cmap, linewidth=0.8,
-                           alpha=0.3, zorder=2)
+        lc = LineCollection(
+            segments,
+            array=colors,
+            cmap=cmap,
+            linewidth=0.8,
+            alpha=0.3,
+            zorder=2,
+        )
         ax.add_collection(lc)
 
         # Add start marker
-        ax.plot(x_traj[0], y_traj[0], 'o', color='blue', markersize=2,
-               alpha=0.3, zorder=2)
+        ax.plot(
+            x_traj[0],
+            y_traj[0],
+            "o",
+            color="blue",
+            markersize=2,
+            alpha=0.3,
+            zorder=2,
+        )
         # Add end marker
-        ax.plot(x_traj[-1], y_traj[-1], 'x', color='green', markersize=3,
-               alpha=0.3, zorder=2)
+        ax.plot(
+            x_traj[-1],
+            y_traj[-1],
+            "x",
+            color="green",
+            markersize=3,
+            alpha=0.3,
+            zorder=2,
+        )
 
     # Plot outlier trajectories with thick lines
     for idx in outlier_indices_plot:
@@ -2047,46 +2483,95 @@ def _plot_shift_trajectory_2d(
         # Color by iteration
         colors = np.linspace(0, 1, len(x_traj) - 1)
 
-        lc = LineCollection(segments, array=colors, cmap=cmap, linewidth=2.5,
-                           alpha=0.8, zorder=4)
+        lc = LineCollection(
+            segments,
+            array=colors,
+            cmap=cmap,
+            linewidth=2.5,
+            alpha=0.8,
+            zorder=4,
+        )
         ax.add_collection(lc)
 
         # Add start and end markers
-        ax.plot(x_traj[0], y_traj[0], 'o', color='darkred', markersize=6,
-               alpha=0.8, zorder=5, markeredgecolor='black', markeredgewidth=0.5)
-        ax.plot(x_traj[-1], y_traj[-1], 's', color='darkgreen', markersize=6,
-               alpha=0.8, zorder=5, markeredgecolor='black', markeredgewidth=0.5)
+        ax.plot(
+            x_traj[0],
+            y_traj[0],
+            "o",
+            color="darkred",
+            markersize=6,
+            alpha=0.8,
+            zorder=5,
+            markeredgecolor="black",
+            markeredgewidth=0.5,
+        )
+        ax.plot(
+            x_traj[-1],
+            y_traj[-1],
+            "s",
+            color="darkgreen",
+            markersize=6,
+            alpha=0.8,
+            zorder=5,
+            markeredgecolor="black",
+            markeredgewidth=0.5,
+        )
 
     # Annotate worst 10 outliers
-    worst_10_indices = outlier_indices_plot[:min(10, len(outlier_indices_plot))]
+    worst_10_indices = outlier_indices_plot[
+        : min(10, len(outlier_indices_plot))
+    ]
     for rank, idx in enumerate(worst_10_indices):
         x_final = shifts_x[idx, -1]
         y_final = shifts_y[idx, -1]
-        ax.annotate(f'{rank+1}', xy=(x_final, y_final), xytext=(5, 5),
-                   textcoords='offset points', fontsize=8, color='red',
-                   fontweight='bold', zorder=6)
+        ax.annotate(
+            f"{rank+1}",
+            xy=(x_final, y_final),
+            xytext=(5, 5),
+            textcoords="offset points",
+            fontsize=8,
+            color="red",
+            fontweight="bold",
+            zorder=6,
+        )
 
     # Add origin crosshairs
     max_extent = max(np.abs(shifts_x).max(), np.abs(shifts_y).max()) * 1.1
-    ax.axhline(0, color='k', linewidth=0.8, alpha=0.5, linestyle='--')
-    ax.axvline(0, color='k', linewidth=0.8, alpha=0.5, linestyle='--')
+    ax.axhline(0, color="k", linewidth=0.8, alpha=0.5, linestyle="--")
+    ax.axvline(0, color="k", linewidth=0.8, alpha=0.5, linestyle="--")
 
     # Add percentile circles for initial distribution
     percentiles_to_plot = [50, 90, 95]
     for p in percentiles_to_plot:
         radius = np.percentile(np.sqrt(x_init**2 + y_init**2), p)
-        circle = plt.Circle((0, 0), radius, fill=False, color='gray',
-                           linestyle=':', alpha=0.5, linewidth=1)
+        circle = plt.Circle(
+            (0, 0),
+            radius,
+            fill=False,
+            color="gray",
+            linestyle=":",
+            alpha=0.5,
+            linewidth=1,
+        )
         ax.add_patch(circle)
-        ax.text(radius * 0.707, radius * 0.707, f'{p}%',
-               fontsize=8, color='gray', alpha=0.7)
+        ax.text(
+            radius * 0.707,
+            radius * 0.707,
+            f"{p}%",
+            fontsize=8,
+            color="gray",
+            alpha=0.7,
+        )
 
     # Labels and title
-    ax.set_xlabel('Shift X (nm)', fontsize=12)
-    ax.set_ylabel('Shift Y (nm)', fontsize=12)
-    ax.set_title(f'2D Shift Trajectories Across Iterations ({n_frames:,} frames)',
-                fontsize=14, fontweight='bold')
-    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlabel("Shift X (nm)", fontsize=12)
+    ax.set_ylabel("Shift Y (nm)", fontsize=12)
+    ax.set_title(
+        f"2D Shift Trajectories Across Iterations ({n_frames:,} frames)",
+        fontsize=14,
+        fontweight="bold",
+    )
+    ax.set_aspect("equal", adjustable="box")
     ax.grid(True, alpha=0.3)
 
     # Set axis limits
@@ -2095,22 +2580,53 @@ def _plot_shift_trajectory_2d(
 
     # Add legend
     legend_elements = [
-        plt.Line2D([0], [0], color='gray', linewidth=1, alpha=0.5,
-                  label=f'Sample frames (n={len(sample_indices)})'),
-        plt.Line2D([0], [0], color='red', linewidth=2.5, alpha=0.8,
-                  label=f'Outlier frames (n={len(outlier_indices_plot)})'),
-        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='blue',
-                  markersize=8, label='Start (iter 1)'),
-        plt.Line2D([0], [0], marker='x', color='w', markerfacecolor='green',
-                  markersize=8, markeredgewidth=2, label='End (final iter)'),
+        plt.Line2D(
+            [0],
+            [0],
+            color="gray",
+            linewidth=1,
+            alpha=0.5,
+            label=f"Sample frames (n={len(sample_indices)})",
+        ),
+        plt.Line2D(
+            [0],
+            [0],
+            color="red",
+            linewidth=2.5,
+            alpha=0.8,
+            label=f"Outlier frames (n={len(outlier_indices_plot)})",
+        ),
+        plt.Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor="blue",
+            markersize=8,
+            label="Start (iter 1)",
+        ),
+        plt.Line2D(
+            [0],
+            [0],
+            marker="x",
+            color="w",
+            markerfacecolor="green",
+            markersize=8,
+            markeredgewidth=2,
+            label="End (final iter)",
+        ),
     ]
-    ax.legend(handles=legend_elements, loc='upper left', fontsize=10, framealpha=0.9)
+    ax.legend(
+        handles=legend_elements, loc="upper left", fontsize=10, framealpha=0.9
+    )
 
     # Add colorbar for iteration progression
-    sm = cm.ScalarMappable(cmap=cmap, norm=mcolors.Normalize(vmin=1, vmax=n_iterations))
+    sm = plt.cm.ScalarMappable(
+        cmap=cmap, norm=mcolors.Normalize(vmin=1, vmax=n_iterations)
+    )
     sm.set_array([])
-    cbar = plt.colorbar(sm, ax=ax, orientation='vertical', pad=0.02, aspect=30)
-    cbar.set_label('Iteration', fontsize=10)
+    cbar = plt.colorbar(sm, ax=ax, orientation="vertical", pad=0.02, aspect=30)
+    cbar.set_label("Iteration", fontsize=10)
 
     # Add convergence statistics text box
     # Calculate directional bias
@@ -2120,28 +2636,35 @@ def _plot_shift_trajectory_2d(
     mean_y_final = np.mean(shifts_y[:, -1])
 
     textstr = (
-        f'Convergence Patterns:\n'
-        f'━━━━━━━━━━━━━━━━━━━━\n'
-        f'Initial mean: ({mean_x_init:.1f}, {mean_y_init:.1f}) nm\n'
-        f'Final mean: ({mean_x_final:.1f}, {mean_y_final:.1f}) nm\n'
-        f'Outliers (>{outlier_percentile}%ile): {len(outlier_indices):,}\n'
-        f'Non-converged frames: {np.sum(shift_magnitudes[:, -1] > outlier_threshold):,}'
+        f"Convergence Patterns:\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"Initial mean: ({mean_x_init:.1f}, {mean_y_init:.1f}) nm\n"
+        f"Final mean: ({mean_x_final:.1f}, {mean_y_final:.1f}) nm\n"
+        f"Outliers (>{outlier_percentile}%ile): {len(outlier_indices):,}\n"
+        f"Non-converged frames: {np.sum(shift_magnitudes[:, -1] > outlier_threshold):,}"
     )
 
-    props = dict(boxstyle='round', facecolor='wheat', alpha=0.9)
-    ax.text(0.98, 0.02, textstr,
-           transform=ax.transAxes, fontsize=10,
-           verticalalignment='bottom', horizontalalignment='right',
-           bbox=props, family='monospace')
+    props = dict(boxstyle="round", facecolor="wheat", alpha=0.9)
+    ax.text(
+        0.98,
+        0.02,
+        textstr,
+        transform=ax.transAxes,
+        fontsize=10,
+        verticalalignment="bottom",
+        horizontalalignment="right",
+        bbox=props,
+        family="monospace",
+    )
 
     plt.tight_layout()
 
     # Save plot
-    filepath = os.path.join(results_folder, 'shift_trajectory_2d.png')
-    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    filepath = os.path.join(results_folder, "shift_trajectory_2d.png")
+    plt.savefig(filepath, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.debug(f"Saved 2D trajectory plot: shift_trajectory_2d.png")
+    logger.debug("Saved 2D trajectory plot: shift_trajectory_2d.png")
 
     return filepath
 
@@ -2152,36 +2675,41 @@ def _plot_convergence_behavior_analysis(
     convergence_threshold=0.5,
     max_frames_scatter=1000,
 ):
-    """
-    Analyze convergence behavior to detect over/undercompensation patterns.
+    """Analyze convergence behavior for over/under-compensation patterns.
 
-    Creates sequential iteration comparison plots (N vs N+1) showing:
-    - Residual drift detected at each iteration (incremental, not cumulative)
-    - Sign flips indicate overcompensation (correction was too large)
-    - Magnitude increases indicate divergence (correction made things worse)
-    - Proper monotonic convergence (magnitude decreases, same direction)
+    Creates sequential iteration comparison plots (N vs N+1). Residual drift
+    is shown per iteration (incremental, not cumulative): sign flips indicate
+    overcompensation (correction too large), magnitude increases indicate
+    divergence (correction made things worse), and a decreasing magnitude in
+    the same direction indicates proper monotonic convergence.
 
-    The plot shows INCREMENTAL drift at each iteration:
-    - Iter 1: Initial drift detected and corrected
-    - Iter 2: Residual drift after applying correction 1
-    - Iter 3: Residual drift after applying correction 2
-    - etc.
+    Parameters
+    ----------
+    iteration_history : list of dict
+        History containing ``drift_x`` and ``drift_y`` (cumulative) for each
+        iteration.
+    results_folder : str
+        Directory in which to save the plots.
+    convergence_threshold : float, optional
+        Threshold (nm) below which frames are considered converged. Default
+        is 0.5.
+    max_frames_scatter : int, optional
+        Maximum number of individual frames to show as scatter points.
+        Default is 1000.
 
-    Args:
-        iteration_history : list of dict
-            History containing drift_x, drift_y (cumulative) for each iteration
-        results_folder : str
-            Directory to save plots
-        convergence_threshold : float
-            Threshold (nm) below which frames are considered converged
-        max_frames_scatter : int
-            Maximum number of individual frames to show as scatter points
+    Returns
+    -------
+    filepath : str
+        Path to the saved plot.
+    pair_statistics : list of dict
+        Statistics for each iteration pair.
 
-    Returns:
-        filepath : str
-            Path to saved plot
-        pair_statistics : list of dict
-            Statistics for each iteration pair
+    Notes
+    -----
+    The plot shows incremental drift at each iteration: iteration 1 is the
+    initial drift detected and corrected, iteration 2 is the residual drift
+    after correction 1, iteration 3 the residual after correction 2, and so
+    on.
     """
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
@@ -2196,13 +2724,13 @@ def _plot_convergence_behavior_analysis(
     n_pairs = n_iterations - 1
 
     # Extract drift data for all iterations
-    n_frames = len(iteration_history[0]['drift_x'])
+    n_frames = len(iteration_history[0]["drift_x"])
     drift_x_cumulative = np.zeros((n_frames, n_iterations))
     drift_y_cumulative = np.zeros((n_frames, n_iterations))
 
     for i, hist in enumerate(iteration_history):
-        drift_x_cumulative[:, i] = hist['drift_x']
-        drift_y_cumulative[:, i] = hist['drift_y']
+        drift_x_cumulative[:, i] = hist["drift_x"]
+        drift_y_cumulative[:, i] = hist["drift_y"]
 
     # Calculate INCREMENTAL (additional) drift at each iteration
     # This is what was detected/corrected at that specific iteration
@@ -2215,16 +2743,24 @@ def _plot_convergence_behavior_analysis(
 
     # Subsequent iterations: incremental = difference from previous
     for i in range(1, n_iterations):
-        drift_x_incremental[:, i] = drift_x_cumulative[:, i] - drift_x_cumulative[:, i-1]
-        drift_y_incremental[:, i] = drift_y_cumulative[:, i] - drift_y_cumulative[:, i-1]
+        drift_x_incremental[:, i] = (
+            drift_x_cumulative[:, i] - drift_x_cumulative[:, i - 1]
+        )
+        drift_y_incremental[:, i] = (
+            drift_y_cumulative[:, i] - drift_y_cumulative[:, i - 1]
+        )
 
     # Calculate magnitudes of INCREMENTAL drifts
-    drift_mag_incremental = np.sqrt(drift_x_incremental**2 + drift_y_incremental**2)
+    drift_mag_incremental = np.sqrt(
+        drift_x_incremental**2 + drift_y_incremental**2
+    )
 
     # Create figure with subplots for each iteration pair
     # Layout: n_pairs columns, 2 rows (scatter + histogram)
     fig = plt.figure(figsize=(6 * n_pairs, 10))
-    gs = GridSpec(2, n_pairs, figure=fig, height_ratios=[2, 1], hspace=0.3, wspace=0.3)
+    gs = GridSpec(
+        2, n_pairs, figure=fig, height_ratios=[2, 1], hspace=0.3, wspace=0.3
+    )
 
     # Store statistics for summary
     pair_statistics = []
@@ -2253,7 +2789,9 @@ def _plot_convergence_behavior_analysis(
         diverging = drift_mag_n1 > drift_mag_n
 
         # 3. Well-converged (both iterations below threshold)
-        converged = (drift_mag_n < convergence_threshold) & (drift_mag_n1 < convergence_threshold)
+        converged = (drift_mag_n < convergence_threshold) & (
+            drift_mag_n1 < convergence_threshold
+        )
 
         # 4. Proper convergence (same direction, magnitude decreases, not yet converged)
         proper_convergence = (~any_sign_flip) & (~diverging) & (~converged)
@@ -2262,20 +2800,24 @@ def _plot_convergence_behavior_analysis(
         # Avoid division by zero
         damping_ratio = np.zeros(n_frames)
         valid_damping = drift_mag_n > 0.01  # Avoid very small denominators
-        damping_ratio[valid_damping] = drift_mag_n1[valid_damping] / drift_mag_n[valid_damping]
+        damping_ratio[valid_damping] = (
+            drift_mag_n1[valid_damping] / drift_mag_n[valid_damping]
+        )
         damping_ratio[~valid_damping] = np.nan
 
         # Statistics for this pair
         stats = {
-            'pair': f"{iter_n+1}→{iter_n+1}",
-            'sign_flip_x_pct': 100 * np.sum(sign_flip_x) / n_frames,
-            'sign_flip_y_pct': 100 * np.sum(sign_flip_y) / n_frames,
-            'any_sign_flip_pct': 100 * np.sum(any_sign_flip) / n_frames,
-            'diverging_pct': 100 * np.sum(diverging) / n_frames,
-            'converged_pct': 100 * np.sum(converged) / n_frames,
-            'proper_convergence_pct': 100 * np.sum(proper_convergence) / n_frames,
-            'mean_damping': np.nanmean(damping_ratio),
-            'median_damping': np.nanmedian(damping_ratio),
+            "pair": f"{iter_n+1}→{iter_n+1}",
+            "sign_flip_x_pct": 100 * np.sum(sign_flip_x) / n_frames,
+            "sign_flip_y_pct": 100 * np.sum(sign_flip_y) / n_frames,
+            "any_sign_flip_pct": 100 * np.sum(any_sign_flip) / n_frames,
+            "diverging_pct": 100 * np.sum(diverging) / n_frames,
+            "converged_pct": 100 * np.sum(converged) / n_frames,
+            "proper_convergence_pct": 100
+            * np.sum(proper_convergence)
+            / n_frames,
+            "mean_damping": np.nanmean(damping_ratio),
+            "median_damping": np.nanmedian(damping_ratio),
         }
         pair_statistics.append(stats)
 
@@ -2295,12 +2837,20 @@ def _plot_convergence_behavior_analysis(
             if n_problems < max_frames_scatter:
                 # Add random sample of well-behaved frames
                 good_indices = np.where(~problem_frames)[0]
-                n_additional = min(max_frames_scatter - n_problems, len(good_indices))
-                additional_indices = np.random.choice(good_indices, n_additional, replace=False)
-                sample_indices = np.concatenate([problem_indices, additional_indices])
+                n_additional = min(
+                    max_frames_scatter - n_problems, len(good_indices)
+                )
+                additional_indices = np.random.choice(
+                    good_indices, n_additional, replace=False
+                )
+                sample_indices = np.concatenate(
+                    [problem_indices, additional_indices]
+                )
             else:
                 # Too many problems - sample from problems
-                sample_indices = np.random.choice(problem_indices, max_frames_scatter, replace=False)
+                sample_indices = np.random.choice(
+                    problem_indices, max_frames_scatter, replace=False
+                )
 
         # Plot hexbin as background for all data
         valid_data = ~np.isnan(drift_mag_n) & ~np.isnan(drift_mag_n1)
@@ -2309,35 +2859,35 @@ def _plot_convergence_behavior_analysis(
                 drift_mag_n[valid_data],
                 drift_mag_n1[valid_data],
                 gridsize=30,
-                cmap='Greys',
+                cmap="Greys",
                 alpha=0.3,
                 mincnt=1,
-                zorder=1
+                zorder=1,
             )
 
         # Scatter plot of sampled frames, color-coded by behavior
         for idx in sample_indices:
             if converged[idx]:
-                color = 'blue'
-                marker = 'o'
+                color = "blue"
+                marker = "o"
                 size = 20
                 alpha = 0.3
                 zorder = 2
             elif any_sign_flip[idx]:
-                color = 'red'
-                marker = 'x'
+                color = "red"
+                marker = "x"
                 size = 50
                 alpha = 0.8
                 zorder = 4
             elif diverging[idx]:
-                color = 'orange'
-                marker = 's'
+                color = "orange"
+                marker = "s"
                 size = 40
                 alpha = 0.7
                 zorder = 3
             else:  # proper_convergence
-                color = 'green'
-                marker = 'o'
+                color = "green"
+                marker = "o"
                 size = 30
                 alpha = 0.5
                 zorder = 2
@@ -2349,7 +2899,7 @@ def _plot_convergence_behavior_analysis(
                 marker=marker,
                 s=size,
                 alpha=alpha,
-                zorder=zorder
+                zorder=zorder,
             )
 
         # Reference lines
@@ -2357,43 +2907,69 @@ def _plot_convergence_behavior_analysis(
         x_ref = np.array([0, max_drift])
 
         # y = x (no change - BAD)
-        ax_scatter.plot(x_ref, x_ref, 'k--', linewidth=1, alpha=0.5, label='No change (y=x)')
+        ax_scatter.plot(
+            x_ref,
+            x_ref,
+            "k--",
+            linewidth=1,
+            alpha=0.5,
+            label="No change (y=x)",
+        )
 
         # y = 0.5x (50% reduction - GOOD)
-        ax_scatter.plot(x_ref, 0.5 * x_ref, 'g--', linewidth=1.5, alpha=0.7, label='50% reduction')
+        ax_scatter.plot(
+            x_ref,
+            0.5 * x_ref,
+            "g--",
+            linewidth=1.5,
+            alpha=0.7,
+            label="50% reduction",
+        )
 
         # y = 0 (perfect correction)
-        ax_scatter.axhline(0, color='gray', linewidth=1, alpha=0.5)
+        ax_scatter.axhline(0, color="gray", linewidth=1, alpha=0.5)
 
         # Shading: acceptable convergence zone (between y=0 and y=0.5x)
-        ax_scatter.fill_between(x_ref, 0, 0.5 * x_ref, color='green', alpha=0.1, zorder=0)
+        ax_scatter.fill_between(
+            x_ref, 0, 0.5 * x_ref, color="green", alpha=0.1, zorder=0
+        )
 
         # Labels and title
-        ax_scatter.set_xlabel(f'Residual drift at iter {iter_n+1} (nm)', fontsize=10)
-        ax_scatter.set_ylabel(f'Residual drift at iter {iter_n1+1} (nm)', fontsize=10)
+        ax_scatter.set_xlabel(
+            f"Residual drift at iter {iter_n+1} (nm)", fontsize=10
+        )
+        ax_scatter.set_ylabel(
+            f"Residual drift at iter {iter_n1+1} (nm)", fontsize=10
+        )
         ax_scatter.set_title(
-            f'Iteration {iter_n+1} → {iter_n1+1}\n'
+            f"Iteration {iter_n+1} → {iter_n1+1}\n"
             f'Sign flips: {stats["any_sign_flip_pct"]:.1f}% | '
             f'Diverging: {stats["diverging_pct"]:.1f}%',
-            fontsize=10
+            fontsize=10,
         )
 
         # Set equal aspect ratio and square limits
         ax_scatter.set_xlim(0, max_drift * 1.05)
         ax_scatter.set_ylim(0, max_drift * 1.05)
         ax_scatter.set_box_aspect(1)  # Force square aspect ratio
-        ax_scatter.set_aspect('equal', adjustable='box')
+        ax_scatter.set_aspect("equal", adjustable="box")
         ax_scatter.grid(True, alpha=0.3)
 
         # Legend
         if pair_idx == 0:
             legend_elements = [
-                mpatches.Patch(color='green', alpha=0.5, label='Proper convergence'),
-                mpatches.Patch(color='red', alpha=0.8, label='Sign flip (overcomp.)'),
-                mpatches.Patch(color='orange', alpha=0.7, label='Diverging'),
-                mpatches.Patch(color='blue', alpha=0.3, label='Converged'),
+                mpatches.Patch(
+                    color="green", alpha=0.5, label="Proper convergence"
+                ),
+                mpatches.Patch(
+                    color="red", alpha=0.8, label="Sign flip (overcomp.)"
+                ),
+                mpatches.Patch(color="orange", alpha=0.7, label="Diverging"),
+                mpatches.Patch(color="blue", alpha=0.3, label="Converged"),
             ]
-            ax_scatter.legend(handles=legend_elements, loc='upper left', fontsize=8)
+            ax_scatter.legend(
+                handles=legend_elements, loc="upper left", fontsize=8
+            )
 
         # Statistics text box
         textstr = (
@@ -2401,14 +2977,16 @@ def _plot_convergence_behavior_analysis(
             f"Proper conv: {stats['proper_convergence_pct']:.1f}%\n"
             f"Converged: {stats['converged_pct']:.1f}%"
         )
-        props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+        props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
         ax_scatter.text(
-            0.98, 0.02, textstr,
+            0.98,
+            0.02,
+            textstr,
             transform=ax_scatter.transAxes,
             fontsize=8,
-            verticalalignment='bottom',
-            horizontalalignment='right',
-            bbox=props
+            verticalalignment="bottom",
+            horizontalalignment="right",
+            bbox=props,
         )
 
         # Create damping ratio histogram (bottom row)
@@ -2420,37 +2998,70 @@ def _plot_convergence_behavior_analysis(
             # Clip extreme values for visualization
             damping_clipped = np.clip(valid_damping_data, -0.5, 2.0)
 
-            ax_hist.hist(damping_clipped, bins=50, color='steelblue', alpha=0.7, edgecolor='black')
+            ax_hist.hist(
+                damping_clipped,
+                bins=50,
+                color="steelblue",
+                alpha=0.7,
+                edgecolor="black",
+            )
 
             # Reference lines
-            ax_hist.axvline(0, color='red', linewidth=2, linestyle='--', alpha=0.7, label='Zero (sign flip)')
-            ax_hist.axvline(0.5, color='green', linewidth=2, linestyle='--', alpha=0.7, label='0.5 (good)')
-            ax_hist.axvline(1.0, color='orange', linewidth=2, linestyle='--', alpha=0.7, label='1.0 (no change)')
+            ax_hist.axvline(
+                0,
+                color="red",
+                linewidth=2,
+                linestyle="--",
+                alpha=0.7,
+                label="Zero (sign flip)",
+            )
+            ax_hist.axvline(
+                0.5,
+                color="green",
+                linewidth=2,
+                linestyle="--",
+                alpha=0.7,
+                label="0.5 (good)",
+            )
+            ax_hist.axvline(
+                1.0,
+                color="orange",
+                linewidth=2,
+                linestyle="--",
+                alpha=0.7,
+                label="1.0 (no change)",
+            )
 
-            ax_hist.set_xlabel('Damping ratio (residual_N+1 / residual_N)', fontsize=9)
-            ax_hist.set_ylabel('Count', fontsize=9)
-            ax_hist.set_title(f'Damping Ratio Distribution', fontsize=9)
-            ax_hist.grid(True, alpha=0.3, axis='y')
+            ax_hist.set_xlabel(
+                "Damping ratio (residual_N+1 / residual_N)", fontsize=9
+            )
+            ax_hist.set_ylabel("Count", fontsize=9)
+            ax_hist.set_title("Damping Ratio Distribution", fontsize=9)
+            ax_hist.grid(True, alpha=0.3, axis="y")
             ax_hist.legend(fontsize=7)
 
             # Shade acceptable region (0.3-0.7)
-            ax_hist.axvspan(0.3, 0.7, color='green', alpha=0.1, zorder=0)
+            ax_hist.axvspan(0.3, 0.7, color="green", alpha=0.1, zorder=0)
 
     # Overall title
     fig.suptitle(
-        'CONVERGENCE BEHAVIOR ANALYSIS - Over/Undercompensation Detection\n'
-        'Residual drift at iteration N vs N+1 (incremental, not cumulative)\n'
-        'Points below y=x: convergence | Red X: sign flip (overcompensation) | Above y=x: divergence',
+        "CONVERGENCE BEHAVIOR ANALYSIS - Over/Undercompensation Detection\n"
+        "Residual drift at iteration N vs N+1 (incremental, not cumulative)\n"
+        "Points below y=x: convergence | Red X: sign flip (overcompensation) | Above y=x: divergence",
         fontsize=11,
-        fontweight='bold'
+        fontweight="bold",
     )
 
     # Save plot
-    filepath = os.path.join(results_folder, 'convergence_behavior_analysis.png')
-    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    filepath = os.path.join(
+        results_folder, "convergence_behavior_analysis.png"
+    )
+    plt.savefig(filepath, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.debug(f"Saved convergence behavior analysis: convergence_behavior_analysis.png")
+    logger.debug(
+        "Saved convergence behavior analysis: convergence_behavior_analysis.png"
+    )
 
     # Return filepath and statistics
     return filepath, pair_statistics
@@ -2462,25 +3073,30 @@ def _plot_goodness_of_fit_analysis(
     fit_quality_thresholds,
     min_valid_fits=10,
 ):
-    """
-    Plot goodness of fit metrics (chi-squared and R-squared) across iterations.
+    """Plot goodness-of-fit metrics (chi-squared, R-squared) per iteration.
 
-    Creates a comprehensive 2×2 grid showing:
-    1. Chi-squared vs frame number for all iterations (time series)
-    2. R-squared vs frame number for all iterations (time series)
-    3. Chi-squared vs R-squared scatter plot
-    4. Multi-panel scatter: Chi-squared vs shift magnitude, R-squared vs shift magnitude
+    Creates a 2×2 grid showing chi-squared vs frame number (time series),
+    R-squared vs frame number (time series), a chi-squared vs R-squared
+    scatter plot, and a multi-panel scatter of chi-squared and R-squared
+    against shift magnitude.
 
-    Args:
-        iteration_history : list of dict
-            Each dict contains drift data, goodness_of_fit metrics for all frames
-        results_folder : str
-            Directory to save plot
-        min_valid_fits : int
-            Minimum number of valid Gaussian fits required to create plots
+    Parameters
+    ----------
+    iteration_history : list of dict
+        Each dict holds drift data and goodness-of-fit metrics for all
+        frames.
+    results_folder : str
+        Directory in which to save the plot.
+    fit_quality_thresholds : dict
+        Threshold values used to flag acceptable fit quality.
+    min_valid_fits : int, optional
+        Minimum number of valid Gaussian fits required to create plots.
+        Default is 10.
 
-    Returns:
-        str or None : Path to saved plot, or None if insufficient data
+    Returns
+    -------
+    str or None
+        Path to the saved plot, or None if there was insufficient data.
     """
     import matplotlib.pyplot as plt
     import matplotlib.gridspec as gridspec
@@ -2488,13 +3104,15 @@ def _plot_goodness_of_fit_analysis(
 
     n_iterations = len(iteration_history)
     if n_iterations < 1:
-        logger.warning("No iteration history available for goodness of fit plots")
+        logger.warning(
+            "No iteration history available for goodness of fit plots"
+        )
         return None
 
-    n_frames = len(iteration_history[0]['drift_x'])
+    n_frames = len(iteration_history[0]["drift_x"])
 
-    thresh_chisq = fit_quality_thresholds['chi_squared']
-    thresh_rsq = fit_quality_thresholds['r_squared']
+    thresh_chisq = fit_quality_thresholds["chi_squared"]
+    thresh_rsq = fit_quality_thresholds["r_squared"]
 
     # Extract goodness of fit metrics across all iterations
     chi_squared_all = np.zeros((n_frames, n_iterations))
@@ -2502,12 +3120,14 @@ def _plot_goodness_of_fit_analysis(
     shift_magnitude_all = np.zeros((n_frames, n_iterations))
 
     for i, hist in enumerate(iteration_history):
-        chi_squared_all[:, i] = hist.get('chi_squared', np.full(n_frames, np.nan))
-        r_squared_all[:, i] = hist.get('r_squared', np.full(n_frames, np.nan))
+        chi_squared_all[:, i] = hist.get(
+            "chi_squared", np.full(n_frames, np.nan)
+        )
+        r_squared_all[:, i] = hist.get("r_squared", np.full(n_frames, np.nan))
 
         # Calculate shift magnitudes
-        dx = hist['drift_x']
-        dy = hist['drift_y']
+        dx = hist["drift_x"]
+        dy = hist["drift_y"]
         shift_magnitude_all[:, i] = np.sqrt(dx**2 + dy**2)
 
     # Count valid Gaussian fits (non-NaN chi_squared values)
@@ -2553,24 +3173,34 @@ def _plot_goodness_of_fit_analysis(
             ax1.plot(
                 frame_indices[valid_mask],
                 chi_sq[valid_mask],
-                'o-',
+                "o-",
                 color=colors_iter[i],
                 alpha=alpha,
                 linewidth=linewidth,
                 markersize=3,
-                label=label
+                label=label,
             )
 
     # Add threshold line (chi_squared < 2.0 is good)
-    ax1.axhline(y=thresh_chisq, color='red', linestyle='--', linewidth=2,
-               alpha=0.7, label='Quality threshold (2.0)')
+    ax1.axhline(
+        y=thresh_chisq,
+        color="red",
+        linestyle="--",
+        linewidth=2,
+        alpha=0.7,
+        label="Quality threshold (2.0)",
+    )
 
-    ax1.set_xlabel('Frame Number', fontsize=11)
-    ax1.set_ylabel('Reduced Chi-Squared', fontsize=11)
-    ax1.set_title('Goodness of Fit: Chi-Squared Evolution', fontsize=12, fontweight='bold')
+    ax1.set_xlabel("Frame Number", fontsize=11)
+    ax1.set_ylabel("Reduced Chi-Squared", fontsize=11)
+    ax1.set_title(
+        "Goodness of Fit: Chi-Squared Evolution",
+        fontsize=12,
+        fontweight="bold",
+    )
     ax1.grid(True, alpha=0.3)
-    ax1.legend(fontsize=8, loc='best', ncol=2)
-    ax1.set_yscale('log')  # Log scale often better for chi-squared
+    ax1.legend(fontsize=8, loc="best", ncol=2)
+    ax1.set_yscale("log")  # Log scale often better for chi-squared
 
     # =========================
     # Plot 2: R-squared Time Series (Top-Right)
@@ -2590,23 +3220,31 @@ def _plot_goodness_of_fit_analysis(
             ax2.plot(
                 frame_indices[valid_mask],
                 r_sq[valid_mask],
-                'o-',
+                "o-",
                 color=colors_iter[i],
                 alpha=alpha,
                 linewidth=linewidth,
                 markersize=3,
-                label=label
+                label=label,
             )
 
     # Add threshold line (R² > 0.90 is good)
-    ax2.axhline(y=thresh_rsq, color='green', linestyle='--', linewidth=2,
-               alpha=0.7, label='Quality threshold (0.90)')
+    ax2.axhline(
+        y=thresh_rsq,
+        color="green",
+        linestyle="--",
+        linewidth=2,
+        alpha=0.7,
+        label="Quality threshold (0.90)",
+    )
 
-    ax2.set_xlabel('Frame Number', fontsize=11)
-    ax2.set_ylabel('R-Squared (R²)', fontsize=11)
-    ax2.set_title('Goodness of Fit: R-Squared Evolution', fontsize=12, fontweight='bold')
+    ax2.set_xlabel("Frame Number", fontsize=11)
+    ax2.set_ylabel("R-Squared (R²)", fontsize=11)
+    ax2.set_title(
+        "Goodness of Fit: R-Squared Evolution", fontsize=12, fontweight="bold"
+    )
     ax2.grid(True, alpha=0.3)
-    ax2.legend(fontsize=8, loc='best', ncol=2)
+    ax2.legend(fontsize=8, loc="best", ncol=2)
     ax2.set_ylim([0, 1.05])  # R² is always between 0 and 1
 
     # =========================
@@ -2619,49 +3257,85 @@ def _plot_goodness_of_fit_analysis(
     r_sq_flat = r_squared_all[valid_fits_mask]
 
     # Create scatter with color by iteration
-    iteration_labels = np.repeat(np.arange(n_iterations), n_frames)[valid_fits_mask.ravel()]
+    iteration_labels = np.repeat(np.arange(n_iterations), n_frames)[
+        valid_fits_mask.ravel()
+    ]
 
     scatter = ax3.scatter(
         chi_sq_flat,
         r_sq_flat,
         c=iteration_labels,
-        cmap='viridis',
+        cmap="viridis",
         alpha=0.6,
         s=30,
-        edgecolors='black',
-        linewidths=0.5
+        edgecolors="black",
+        linewidths=0.5,
     )
 
     # Add reference lines
-    ax3.axvline(x=thresh_chisq, color='red', linestyle='--', linewidth=2, alpha=0.5, label='χ² threshold')
-    ax3.axhline(y=thresh_rsq, color='green', linestyle='--', linewidth=2, alpha=0.5, label='R² threshold')
+    ax3.axvline(
+        x=thresh_chisq,
+        color="red",
+        linestyle="--",
+        linewidth=2,
+        alpha=0.5,
+        label="χ² threshold",
+    )
+    ax3.axhline(
+        y=thresh_rsq,
+        color="green",
+        linestyle="--",
+        linewidth=2,
+        alpha=0.5,
+        label="R² threshold",
+    )
 
     # Add "good fit" region shading
-    ax3.axvspan(0, thresh_chisq, ymin=thresh_rsq/1.05, ymax=1.0, color='green', alpha=0.1, zorder=0)
+    ax3.axvspan(
+        0,
+        thresh_chisq,
+        ymin=thresh_rsq / 1.05,
+        ymax=1.0,
+        color="green",
+        alpha=0.1,
+        zorder=0,
+    )
 
-    ax3.set_xlabel('Reduced Chi-Squared', fontsize=11)
-    ax3.set_ylabel('R-Squared (R²)', fontsize=11)
-    ax3.set_title('Fit Quality: Chi-Squared vs R-Squared', fontsize=12, fontweight='bold')
+    ax3.set_xlabel("Reduced Chi-Squared", fontsize=11)
+    ax3.set_ylabel("R-Squared (R²)", fontsize=11)
+    ax3.set_title(
+        "Fit Quality: Chi-Squared vs R-Squared", fontsize=12, fontweight="bold"
+    )
     ax3.grid(True, alpha=0.3)
     # ax3.set_xscale('log')
     ax3.set_ylim([0, 1.05])
     ax3.legend(fontsize=9)
 
     # Add colorbar
-    cbar = plt.colorbar(scatter, ax=ax3, label='Iteration')
+    cbar = plt.colorbar(scatter, ax=ax3, label="Iteration")
     cbar.set_ticks(np.arange(n_iterations))
-    cbar.set_ticklabels([f'{i+1}' for i in range(n_iterations)])
+    cbar.set_ticklabels([f"{i+1}" for i in range(n_iterations)])
 
     # Add statistics text box
     good_fits = np.sum((chi_sq_flat < 2.0) & (r_sq_flat > 0.90))
     pct_good = good_fits / len(chi_sq_flat) * 100
-    stats_text = f"Good fits: {good_fits}/{len(chi_sq_flat)} ({pct_good:.1f}%)\n"
+    stats_text = (
+        f"Good fits: {good_fits}/{len(chi_sq_flat)} ({pct_good:.1f}%)\n"
+    )
     stats_text += f"Median χ²: {np.median(chi_sq_flat):.2f}\n"
     stats_text += f"Median R²: {np.median(r_sq_flat):.3f}"
 
-    props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
-    ax3.text(0.98, 0.02, stats_text, transform=ax3.transAxes, fontsize=9,
-             verticalalignment='bottom', horizontalalignment='right', bbox=props)
+    props = dict(boxstyle="round", facecolor="wheat", alpha=0.8)
+    ax3.text(
+        0.98,
+        0.02,
+        stats_text,
+        transform=ax3.transAxes,
+        fontsize=9,
+        verticalalignment="bottom",
+        horizontalalignment="right",
+        bbox=props,
+    )
 
     # =========================
     # Plot 4: Chi²/R² vs Shift Magnitude (Bottom-Right, Dual Panels)
@@ -2682,69 +3356,87 @@ def _plot_goodness_of_fit_analysis(
         scatter1 = ax4.scatter(
             shift_mag_final[valid_final],
             chi_sq_final[valid_final],
-            c='blue',
+            c="blue",
             alpha=0.5,
             s=30,
-            label='Chi-squared',
-            marker='o',
-            edgecolors='darkblue',
-            linewidths=0.5
+            label="Chi-squared",
+            marker="o",
+            edgecolors="darkblue",
+            linewidths=0.5,
         )
 
         # Plot R-squared vs shift magnitude (right y-axis)
         scatter2 = ax4_twin.scatter(
             shift_mag_final[valid_final],
             r_sq_final[valid_final],
-            c='red',
+            c="red",
             alpha=0.5,
             s=30,
-            label='R-squared',
-            marker='s',
-            edgecolors='darkred',
-            linewidths=0.5
+            label="R-squared",
+            marker="s",
+            edgecolors="darkred",
+            linewidths=0.5,
         )
 
         # Reference lines
-        ax4.axhline(y=thresh_chisq, color='blue', linestyle='--', linewidth=1.5, alpha=0.5)
-        ax4_twin.axhline(y=thresh_rsq, color='red', linestyle='--', linewidth=1.5, alpha=0.5)
+        ax4.axhline(
+            y=thresh_chisq,
+            color="blue",
+            linestyle="--",
+            linewidth=1.5,
+            alpha=0.5,
+        )
+        ax4_twin.axhline(
+            y=thresh_rsq, color="red", linestyle="--", linewidth=1.5, alpha=0.5
+        )
 
-        ax4.set_xlabel('Shift Magnitude (nm)', fontsize=11)
-        ax4.set_ylabel('Reduced Chi-Squared', fontsize=11, color='blue')
-        ax4_twin.set_ylabel('R-Squared (R²)', fontsize=11, color='red')
-        ax4.set_title('Fit Quality vs Shift Magnitude (Final Iteration)',
-                      fontsize=12, fontweight='bold')
+        ax4.set_xlabel("Shift Magnitude (nm)", fontsize=11)
+        ax4.set_ylabel("Reduced Chi-Squared", fontsize=11, color="blue")
+        ax4_twin.set_ylabel("R-Squared (R²)", fontsize=11, color="red")
+        ax4.set_title(
+            "Fit Quality vs Shift Magnitude (Final Iteration)",
+            fontsize=12,
+            fontweight="bold",
+        )
         ax4.grid(True, alpha=0.3)
-        ax4.set_yscale('log')
+        ax4.set_yscale("log")
         ax4_twin.set_ylim([0, 1.05])
 
         # Color y-axis labels
-        ax4.tick_params(axis='y', labelcolor='blue')
-        ax4_twin.tick_params(axis='y', labelcolor='red')
+        ax4.tick_params(axis="y", labelcolor="blue")
+        ax4_twin.tick_params(axis="y", labelcolor="red")
 
         # Combined legend
         lines = [scatter1, scatter2]
-        labels = ['Chi-squared', 'R-squared']
-        ax4.legend(lines, labels, fontsize=9, loc='upper left')
+        labels = ["Chi-squared", "R-squared"]
+        ax4.legend(lines, labels, fontsize=9, loc="upper left")
     else:
-        ax4.text(0.5, 0.5, 'No valid data for final iteration',
-                transform=ax4.transAxes, ha='center', va='center', fontsize=12)
+        ax4.text(
+            0.5,
+            0.5,
+            "No valid data for final iteration",
+            transform=ax4.transAxes,
+            ha="center",
+            va="center",
+            fontsize=12,
+        )
 
     # Overall figure title
     fig.suptitle(
-        'GOODNESS OF FIT ANALYSIS - Gaussian Peak Fitting Quality Metrics\n'
-        f'{n_iterations} iterations, {n_valid_fits}/{chi_squared_all.size} valid Gaussian fits '
-        f'({n_valid_fits / chi_squared_all.size * 100:.1f}%)',
+        "GOODNESS OF FIT ANALYSIS - Gaussian Peak Fitting Quality Metrics\n"
+        f"{n_iterations} iterations, {n_valid_fits}/{chi_squared_all.size} valid Gaussian fits "
+        f"({n_valid_fits / chi_squared_all.size * 100:.1f}%)",
         fontsize=14,
-        fontweight='bold',
-        y=0.98
+        fontweight="bold",
+        y=0.98,
     )
 
     # Save plot
-    filepath = os.path.join(results_folder, 'goodness_of_fit_analysis.png')
-    plt.savefig(filepath, dpi=300, bbox_inches='tight')
+    filepath = os.path.join(results_folder, "goodness_of_fit_analysis.png")
+    plt.savefig(filepath, dpi=300, bbox_inches="tight")
     plt.close()
 
-    logger.info(f"Saved goodness of fit analysis: goodness_of_fit_analysis.png")
+    logger.info("Saved goodness of fit analysis: goodness_of_fit_analysis.png")
     return filepath
 
 
@@ -2864,7 +3556,7 @@ def _validate_numba_implementation():
         print(f"    Max shift limit: {max_shift_pixels} pixels")
 
         # Test with identical small dataset to isolate the difference
-        print(f"    Testing with identical subset...")
+        print("    Testing with identical subset...")
         small_frame = frame_locs[:10]  # First 10 points
         small_ref = ref_locs[:20]  # First 20 points
 
@@ -2899,7 +3591,7 @@ def _validate_numba_implementation():
                 f"    Small test diff: ({small_diff_x:.3f}, {small_diff_y:.3f}), pairs: {small_numba_pairs}"
             )
         else:
-            print(f"    Small test failed - one implementation returned None")
+            print("    Small test failed - one implementation returned None")
 
         # Compare results
         if numba_shift_x is not None and std_shift_x is not None:
@@ -2957,24 +3649,28 @@ def _estimate_subsampling_uncertainty(
     n_trials=3,
     enable_numba_optimization=True,
 ):
-    """Estimate uncertainty added by subsampling via multiple subset trials
+    """Estimate the uncertainty added by subsampling via multiple trials.
 
-    Args:
-        frame_locs : ndarray
-            Localizations from single frame
-        reference_dataset : ndarray
-            Full reference dataset (already subsampled from self.locs)
-        max_shift : float
-            Maximum shift for RSSO computation
-        subsampling_fraction : float
-            Fraction to further subsample reference dataset
-        n_trials : int
-            Number of different subsets to test
-        enable_numba_optimization : bool
-            Whether to use Numba-optimized RSSO computation
+    Parameters
+    ----------
+    frame_locs : ndarray
+        Localizations from a single frame.
+    reference_dataset : ndarray
+        Full reference dataset (already subsampled from ``self.locs``).
+    max_shift : float
+        Maximum shift for the RSSO computation.
+    subsampling_fraction : float
+        Fraction by which to further subsample the reference dataset.
+    n_trials : int, optional
+        Number of different subsets to test. Default is 3.
+    enable_numba_optimization : bool, optional
+        Whether to use the Numba-optimized RSSO computation. Default is True.
 
-    Returns:
-        tuple : (mean_shift_x, mean_shift_y, uncertainty_x, uncertainty_y, confidence)
+    Returns
+    -------
+    tuple
+        ``(mean_shift_x, mean_shift_y, uncertainty_x, uncertainty_y,
+        confidence)``.
     """
     from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
 
@@ -3061,21 +3757,27 @@ def _estimate_subsampling_uncertainty(
 
 
 def _compute_frame_to_reference_shift_optimized(frame_data):
-    """Optimized RSSO shift computation with temporal filtering
+    """Compute a frame-to-reference RSSO shift with temporal filtering.
 
-    Args:
-        frame_data : tuple
-            (frame_indices, reference_dataset, target_frames, frame_locs, max_shift, min_locs_per_frame,
-             enable_uncertainty_estimation, n_uncertainty_trials, subsampling_fraction,
-             enable_numba_optimization, plot_histogram, plot_dir, iteration, ton, snr_threshold,
-             shared_plot_dict, use_matrix_solver, enable_shift_capping, max_shift_change_factor,
-             previous_shift_magnitude)
+    Parameters
+    ----------
+    frame_data : tuple
+        Packed arguments: ``(frame_indices, reference_dataset,
+        target_frames, frame_locs, max_shift, min_locs_per_frame,
+        enable_uncertainty_estimation, n_uncertainty_trials,
+        subsampling_fraction, enable_numba_optimization, plot_histogram,
+        plot_dir, iteration, ton, snr_threshold, shared_plot_dict,
+        use_matrix_solver, enable_shift_capping, max_shift_change_factor,
+        previous_shift_magnitude, enable_fit_quality_check,
+        fit_quality_thresholds)``.
 
-    Returns:
-        tuple : (frame_indices, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality, performance_info)
+    Returns
+    -------
+    tuple
+        ``(frame_indices, shift_x, shift_y, uncertainty_x, uncertainty_y,
+        confidence, quality, performance_info)``.
     """
     from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-    import os
 
     (
         frame_indices,
@@ -3116,8 +3818,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
         # Create dataset by excluding all target frames
         from scipy.spatial import cKDTree
 
-        # Use pre-built cKDTree and frame array from worker initialization if available
-        global _WORKER_KDTREE, _WORKER_FRAMES
+        # Use pre-built cKDTree and frame array from worker init if available
         if _WORKER_KDTREE is not None:
             # Worker has pre-built cKDTree - use it directly
             # Temporal filtering will be done at pair level using _WORKER_FRAMES
@@ -3133,7 +3834,9 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                 temporal_exclusion = 2 * ton
                 for target_frame in target_frames:
                     # Exclude all frames in the range [target_frame - 2*ton, target_frame + 2*ton]
-                    frame_diffs = np.abs(reference_dataset["frame"] - target_frame)
+                    frame_diffs = np.abs(
+                        reference_dataset["frame"] - target_frame
+                    )
                     temporal_mask = frame_diffs > temporal_exclusion
                     dataset_mask &= temporal_mask
 
@@ -3178,7 +3881,9 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
             frame_number = target_frames[0] if len(target_frames) > 0 else None
 
             # Extract frame numbers for temporal filtering
-            frame_locs_frames = frame_locs["frame"] if "frame" in frame_locs.columns else None
+            frame_locs_frames = (
+                frame_locs["frame"] if "frame" in frame_locs.columns else None
+            )
             ref_frames = _WORKER_FRAMES  # From worker global (or None if not using shared memory)
 
             # Determine peak finding mode based on iteration
@@ -3214,7 +3919,9 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
                         snr_threshold=snr_threshold,
                         shared_plot_dict=shared_plot_dict,
                     )
-                    uncertainty_info = numba_info if numba_info is not None else {}
+                    uncertainty_info = (
+                        numba_info if numba_info is not None else {}
+                    )
                     computation_type = "Numba-optimized"
                     if uncertainty_info.get("success", False):
                         break
@@ -3271,7 +3978,9 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
                     # If current magnitude exceeds limit, scale it down
                     if current_magnitude > max_allowed_magnitude:
-                        scale_factor = max_allowed_magnitude / current_magnitude
+                        scale_factor = (
+                            max_allowed_magnitude / current_magnitude
+                        )
                         shift_x_uncapped = shift_x
                         shift_y_uncapped = shift_y
                         shift_x = shift_x * scale_factor
@@ -3331,7 +4040,7 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
                 quality = len(frame_locs) + len_dataset
             else:
-                logger.debug(f"shift x or y is None.")
+                logger.debug("shift x or y is None.")
                 return (frame_indices, None, None, None, None, 0.0, 0.0, None)
 
         return (
@@ -3357,36 +4066,42 @@ def _compute_frame_to_reference_shift_optimized(frame_data):
 
 
 def _build_connectivity_matrix(frame_results, snr_threshold=3.0):
-    """Build sparse connectivity matrix from RSSO frame contributions.
+    """Build a sparse connectivity matrix from RSSO frame contributions.
 
-    For each frame pair (i,j), calculates signal enrichment to determine if
-    frame j genuinely contributes to frame i's drift estimate. Uses threshold-
-    based bin selection to distinguish signal from background noise.
+    For each frame pair ``(i, j)``, computes signal enrichment to decide
+    whether frame ``j`` genuinely contributes to frame ``i``'s drift
+    estimate, using threshold-based bin selection to distinguish signal from
+    background noise.
 
-    Args:
-        frame_results : dict
-            Dictionary mapping frame_i -> quality_metrics (with frame_contributions, hist, etc.)
-        snr_threshold : float, default 3.0
-            Signal enrichment threshold. Frame j included if:
-            (observed_signal / expected_signal) >= snr_threshold
+    Parameters
+    ----------
+    frame_results : dict
+        Maps ``frame_i`` to its quality metrics (with
+        ``frame_contributions``, ``hist``, etc.).
+    snr_threshold : float, default 3.0
+        Signal-enrichment threshold; frame ``j`` is included if
+        ``observed_signal / expected_signal >= snr_threshold``.
 
-    Returns:
-        W : scipy.sparse.csr_matrix (N×N)
-            Connectivity matrix where W[i,j] = net signal count (signal - expected background)
-            Sparse (~1-2% non-zero)
-        s_obs : ndarray (N×2)
-            Observed shifts for each frame (x, y components)
-        frame_numbers : ndarray (N,)
-            Frame numbers corresponding to rows/columns of W
-        valid_frames : ndarray (N,) bool
-            Mask indicating which frames have valid connectivity
+    Returns
+    -------
+    W : scipy.sparse.csr_matrix
+        ``(N, N)`` connectivity matrix where ``W[i, j]`` is the net signal
+        count (signal minus expected background); sparse (~1-2% non-zero).
+    s_obs : ndarray
+        ``(N, 2)`` observed shifts for each frame (x, y components).
+    frame_numbers : ndarray
+        ``(N,)`` frame numbers corresponding to the rows/columns of ``W``.
+    valid_frames : ndarray of bool
+        ``(N,)`` mask indicating which frames have valid connectivity.
     """
     import scipy.sparse as sp
 
     # Extract frame numbers and sort
     all_frame_numbers = sorted(frame_results.keys())
     n_frames = len(all_frame_numbers)
-    frame_to_idx = {frame_num: idx for idx, frame_num in enumerate(all_frame_numbers)}
+    frame_to_idx = {
+        frame_num: idx for idx, frame_num in enumerate(all_frame_numbers)
+    }
 
     # Initialize outputs
     s_obs = np.zeros((n_frames, 2), dtype=np.float64)
@@ -3409,7 +4124,11 @@ def _build_connectivity_matrix(frame_results, snr_threshold=3.0):
         hist = metrics.get("hist")
         frame_contributions = metrics.get("frame_contributions")
 
-        if hist is None or frame_contributions is None or len(frame_contributions) == 0:
+        if (
+            hist is None
+            or frame_contributions is None
+            or len(frame_contributions) == 0
+        ):
             valid_frames[idx_i] = False
             continue
 
@@ -3426,7 +4145,9 @@ def _build_connectivity_matrix(frame_results, snr_threshold=3.0):
         # Calculate expected background fraction
         n_signal_bins = np.sum(signal_mask)
         n_total_bins = hist.size
-        expected_background_fraction = n_signal_bins / n_total_bins if n_total_bins > 0 else 0
+        expected_background_fraction = (
+            n_signal_bins / n_total_bins if n_total_bins > 0 else 0
+        )
 
         if expected_background_fraction == 0:
             valid_frames[idx_i] = False
@@ -3441,7 +4162,9 @@ def _build_connectivity_matrix(frame_results, snr_threshold=3.0):
 
             # Count shifts in signal vs noise bins
             total_shifts = len(bin_list)
-            signal_count = sum(1 for (bx, by) in bin_list if signal_mask[bx, by])
+            signal_count = sum(
+                1 for (bx, by) in bin_list if signal_mask[bx, by]
+            )
 
             if signal_count == 0:
                 continue  # No signal from this frame
@@ -3450,7 +4173,11 @@ def _build_connectivity_matrix(frame_results, snr_threshold=3.0):
             expected_signal_count = total_shifts * expected_background_fraction
 
             # Calculate signal enrichment
-            signal_enrichment = signal_count / expected_signal_count if expected_signal_count > 0 else 0
+            signal_enrichment = (
+                signal_count / expected_signal_count
+                if expected_signal_count > 0
+                else 0
+            )
 
             # Test: Is frame j genuinely connected to frame i?
             if signal_enrichment >= snr_threshold:
@@ -3468,37 +4195,42 @@ def _build_connectivity_matrix(frame_results, snr_threshold=3.0):
         W = sp.csr_matrix(
             (values, (rows, cols)),
             shape=(n_frames, n_frames),
-            dtype=np.float64
+            dtype=np.float64,
         )
 
     # Calculate sparsity
     sparsity = 1.0 - (W.nnz / (n_frames * n_frames)) if n_frames > 0 else 1.0
-    logger.debug(f"Connectivity matrix: {n_frames}×{n_frames}, "
-                 f"{W.nnz} non-zero ({sparsity*100:.1f}% sparse)")
+    logger.debug(
+        f"Connectivity matrix: {n_frames}×{n_frames}, "
+        f"{W.nnz} non-zero ({sparsity*100:.1f}% sparse)"
+    )
     logger.debug(f"Valid frames: {np.sum(valid_frames)}/{n_frames}")
 
     return W, s_obs, np.array(all_frame_numbers), valid_frames
 
 
 def _solve_drift_from_connectivity(W, s_obs, valid_frames):
-    """Solve linear system to estimate drift from connectivity matrix.
+    """Solve a linear system to estimate drift from a connectivity matrix.
 
-    Solves: (I - W_normalized) × drift = s_obs
-    With constraint: mean(drift) = 0 (removes global offset ambiguity)
+    Solves ``(I - W_normalized) @ drift = s_obs`` with the constraint
+    ``mean(drift) = 0`` to remove the global-offset ambiguity.
 
-    Args:
-        W : scipy.sparse matrix (N×N)
-            Connectivity matrix from _build_connectivity_matrix
-        s_obs : ndarray (N×2)
-            Observed shifts (x, y)
-        valid_frames : ndarray (N,) bool
-            Mask indicating valid frames
+    Parameters
+    ----------
+    W : scipy.sparse matrix
+        ``(N, N)`` connectivity matrix from
+        :func:`_build_connectivity_matrix`.
+    s_obs : ndarray
+        ``(N, 2)`` observed shifts (x, y).
+    valid_frames : ndarray of bool
+        ``(N,)`` mask indicating valid frames.
 
-    Returns:
-        drift_x, drift_y : ndarray (N,)
-            Estimated drift for each frame (zero-mean)
-        info : dict
-            Solver statistics (residuals, iterations, etc.)
+    Returns
+    -------
+    drift_x, drift_y : ndarray
+        ``(N,)`` estimated zero-mean drift for each frame.
+    info : dict
+        Solver statistics (residuals, iterations, etc.).
     """
     import scipy.sparse as sp
     import scipy.sparse.linalg as spla
@@ -3506,12 +4238,18 @@ def _solve_drift_from_connectivity(W, s_obs, valid_frames):
     n_frames = W.shape[0]
     n_valid = np.sum(valid_frames)
 
-    logger.debug(f"Solving drift system for {n_valid}/{n_frames} valid frames...")
+    logger.debug(
+        f"Solving drift system for {n_valid}/{n_frames} valid frames..."
+    )
 
     # Handle edge cases
     if n_valid == 0:
         logger.warning("No valid frames for matrix solver!")
-        return np.zeros(n_frames), np.zeros(n_frames), {"success": False, "reason": "no_valid_frames"}
+        return (
+            np.zeros(n_frames),
+            np.zeros(n_frames),
+            {"success": False, "reason": "no_valid_frames"},
+        )
 
     if n_valid == 1:
         logger.warning("Only 1 valid frame - cannot solve system!")
@@ -3529,9 +4267,9 @@ def _solve_drift_from_connectivity(W, s_obs, valid_frames):
     D_inv = sp.diags(1.0 / row_sums)
     W_normalized = D_inv @ W
 
-    # Build system matrix: A = I - W_normalized
-    I = sp.eye(n_frames, format='csr')
-    A = I - W_normalized
+    # Build system matrix: A = identity - W_normalized
+    identity = sp.eye(n_frames, format="csr")
+    A = identity - W_normalized
 
     # Solve for x and y components separately
     try:
@@ -3553,12 +4291,16 @@ def _solve_drift_from_connectivity(W, s_obs, valid_frames):
             "iterations_y": result_y[2],
             "residual_x": result_x[3],
             "residual_y": result_y[3],
-            "rms_drift_x": np.sqrt(np.mean(drift_x[valid_frames]**2)),
-            "rms_drift_y": np.sqrt(np.mean(drift_y[valid_frames]**2)),
+            "rms_drift_x": np.sqrt(np.mean(drift_x[valid_frames] ** 2)),
+            "rms_drift_y": np.sqrt(np.mean(drift_y[valid_frames] ** 2)),
         }
 
-        logger.debug(f"Solver converged: {info['iterations_x']} / {info['iterations_y']} iterations")
-        logger.debug(f"RMS drift: ({info['rms_drift_x']:.3f}, {info['rms_drift_y']:.3f}) px")
+        logger.debug(
+            f"Solver converged: {info['iterations_x']} / {info['iterations_y']} iterations"
+        )
+        logger.debug(
+            f"RMS drift: ({info['rms_drift_x']:.3f}, {info['rms_drift_y']:.3f}) px"
+        )
 
     except Exception as e:
         logger.error(f"Matrix solver failed: {e}")
@@ -3575,36 +4317,39 @@ def _solve_drift_from_connectivity(W, s_obs, valid_frames):
 
 
 def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
-    """Compute iterative RSSO-based drift correction
+    """Compute iterative RSSO-based drift correction.
 
-    This is the main computation function that performs the full iterative RSSO
-    drift correction algorithm.
+    The main computation function that performs the full iterative RSSO drift
+    correction algorithm.
 
-    Args:
-        locs : structured array
-            Localization data with 'x', 'y', 'frame' fields
-        pixelsize : float
-            Camera pixel size in nm
-        info : dict
-            Metadata dictionary
-        parameters : dict
-            Algorithm parameters (see undrift_rsso method docstring for details)
-        results_folder : str
-            Path to folder for saving results
+    Parameters
+    ----------
+    locs : structured array
+        Localization data with ``x``, ``y`` and ``frame`` fields.
+    pixelsize : float
+        Camera pixel size in nm.
+    info : dict
+        Metadata dictionary.
+    parameters : dict
+        Algorithm parameters (see the ``undrift_rsso`` method docstring for
+        details).
+    results_folder : str
+        Path to the folder for saving results.
 
-    Returns:
-        locs_undrifted : structured array
-            Drift-corrected localizations
-        drift : ndarray
-            Drift trajectory (n_frames x 2)
-        results : dict
-            Analysis results dictionary
+    Returns
+    -------
+    locs_undrifted : structured array
+        Drift-corrected localizations.
+    drift : ndarray
+        Drift trajectory, ``(n_frames, 2)``.
+    results : dict
+        Analysis results dictionary.
     """
     import gc
     import psutil
     from picasso import io
     import matplotlib.pyplot as plt
-    import matplotlib.colors as mcolors
+
     # from concurrent.futures import ProcessPoolExecutor
 
     # Note: OpenMP configuration is now done at module import time
@@ -3636,7 +4381,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     save_locs = parameters.get("save_locs", True)
     plot_drift = parameters.get("plot_drift", True)
     plot_rsso = parameters.get("plot_rsso", False)
-    snr_threshold = parameters.get("snr_threshold", 3.0)  # SNR threshold for peak quality check
+    snr_threshold = parameters.get(
+        "snr_threshold", 3.0
+    )  # SNR threshold for peak quality check
 
     # Shift capping for convergence robustness
     enable_shift_capping = parameters.get("enable_shift_capping", True)
@@ -3644,8 +4391,12 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
     # Matrix-based drift correction (experimental)
     use_matrix_solver = parameters.get("use_matrix_solver", False)
-    matrix_refinement_iterations = parameters.get("matrix_refinement_iterations", 0)
-    min_matrix_sparsity = parameters.get("min_matrix_sparsity", 90.0)  # Skip matrix solver if sparsity < this %
+    matrix_refinement_iterations = parameters.get(
+        "matrix_refinement_iterations", 0
+    )
+    min_matrix_sparsity = parameters.get(
+        "min_matrix_sparsity", 90.0
+    )  # Skip matrix solver if sparsity < this %
 
     # Memory management parameters
     chunk_size = parameters.get("chunk_size", 100)
@@ -3688,7 +4439,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     )
 
     # cKDTree sharing method for multiprocessing (non-Numba only)
-    kdtree_sharing_method = parameters.get("kdtree_sharing_method", "worker_init")
+    kdtree_sharing_method = parameters.get(
+        "kdtree_sharing_method", "worker_init"
+    )
     if kdtree_sharing_method not in ["worker_init", "shared_memory", "pickle"]:
         logger.warning(
             f"Invalid kdtree_sharing_method '{kdtree_sharing_method}', "
@@ -3703,13 +4456,13 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         "outlier_detection_enabled", False
     )
     outlier_z_threshold = parameters.get("outlier_z_threshold", 3.5)
-    min_signal_to_noise = parameters.get("min_signal_to_noise", 0.5)
     windowing_enabled = parameters.get("windowing_enabled", True)
     window_size_range = parameters.get("window_size_range", (3, 20))
 
     enable_fit_quality_check = parameters.get("enable_fit_quality_check", True)
     fit_quality_thresholds = parameters.get(
-        "fit_quality_thresholds", {"chi_squared": 2.0, "r_squared": 0.90})
+        "fit_quality_thresholds", {"chi_squared": 2.0, "r_squared": 0.90}
+    )
 
     # Monitor initial memory usage
     process = psutil.Process()
@@ -3769,8 +4522,12 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
     # PRE-COMPUTE frame index mapping (optimization to avoid recomputing every iteration)
     # This maps each localization to its frame index for fast lookup
-    frame_index_map = (original_locs["frame"] - frames[0]).astype(np.int32).values
-    logger.debug(f"Pre-computed frame index mapping for {len(frame_index_map):,} localizations")
+    frame_index_map = (
+        (original_locs["frame"] - frames[0]).astype(np.int32).values
+    )
+    logger.debug(
+        f"Pre-computed frame index mapping for {len(frame_index_map):,} localizations"
+    )
 
     # Estimate memory requirements and warn if needed
     # bytes_per_loc = locs.itemsize * len(locs.dtype)
@@ -3826,11 +4583,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             "reference_creation": 0.0,
             "kdtree_creation": 0.0,
             "kdtree_serialization": 0.0,
-
             # Multiprocessing setup
             "pool_creation": 0.0,
             "worker_initialization": 0.0,
-
             # Processing phase
             "frame_grouping": 0.0,
             "chunk_data_preparation": 0.0,
@@ -3838,22 +4593,18 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             "result_collection": 0.0,
             "pool_teardown": 0.0,
             "frame_processing": 0.0,
-
             # Worker computation (extracted from performance_info)
             "worker_computation": 0.0,
             "multiprocessing_overhead": 0.0,
-
             # Post-processing phase
             "array_copy": 0.0,
             "frame_pregrouping": 0.0,
             "windowing_outliers": 0.0,
             "array_operations": 0.0,
             "frame_corrections": 0.0,
-
             # Finalization phase
             "convergence_check": 0.0,
             "history_storage": 0.0,
-
             # Totals and metadata
             "total": 0.0,
             "chunk_times": [],
@@ -3876,17 +4627,16 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
                 # Create video writer for this iteration
                 rsso_plot_dir = os.path.join(results_folder, "rsso_plots")
-                iteration_dir = os.path.join(rsso_plot_dir, f"iteration_{iteration:02d}")
+                iteration_dir = os.path.join(
+                    rsso_plot_dir, f"iteration_{iteration:02d}"
+                )
                 os.makedirs(iteration_dir, exist_ok=True)
 
                 movie_filename = f"rsso_histograms_iter{iteration:02d}.mp4"
                 movie_path = os.path.join(iteration_dir, movie_filename)
 
                 video_writer = imageio.get_writer(
-                    movie_path,
-                    fps=10,
-                    codec='libx264',
-                    pixelformat='yuv420p'
+                    movie_path, fps=10, codec="libx264", pixelformat="yuv420p"
                 )
 
                 logger.debug(
@@ -3933,7 +4683,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         if final_iteration_full_dataset and iteration == max_iterations - 1:
             # Final iteration: always use full dataset for maximum accuracy
             current_subsampling_fraction = 1.0
-            logger.debug(f"    Final iteration: using full dataset (100%)")
+            logger.debug("    Final iteration: using full dataset (100%)")
         elif progressive_subsampling:
             # Progressive subsampling: use schedule
             if iteration < len(progressive_subsampling_schedule):
@@ -3961,7 +4711,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             current_locs["x"] = original_locs["x"] + cumulative_corrections_x
             current_locs["y"] = original_locs["y"] + cumulative_corrections_y
         iteration_timings["array_copy"] = copy_timer.elapsed
-        logger.debug(f"    Array copy + corrections: {_format_time(copy_timer.elapsed)}")
+        logger.debug(
+            f"    Array copy + corrections: {_format_time(copy_timer.elapsed)}"
+        )
 
         # OPTIMIZATION: Pre-group localizations by frame for fast lookup
         # This eliminates 15+ minutes of boolean masking operations per iteration
@@ -4095,15 +4847,18 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         valid_measurements = 0
 
         # Goodness-of-fit tracking (for Gaussian peak fitting quality)
-        chi_squared_per_frame = np.full(n_frames, np.nan)  # NaN indicates CoM or failed fit
+        chi_squared_per_frame = np.full(
+            n_frames, np.nan
+        )  # NaN indicates CoM or failed fit
         r_squared_per_frame = np.full(n_frames, np.nan)
-        fit_method_per_frame = np.full(n_frames, '', dtype='U20')  # String array for fit method
+        fit_method_per_frame = np.full(
+            n_frames, "", dtype="U20"
+        )  # String array for fit method
 
         # For matrix-based solver: collect frame results with connectivity info
         frame_results_dict = {} if use_matrix_solver else None
 
         # Performance monitoring
-        iteration_start_time = time.time()
         numba_computation_times = []
         standard_computation_times = []
         n_numba_computations = 0
@@ -4129,21 +4884,31 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                             shm, kdtree_size = _create_shared_memory_kdtree(
                                 reference_coords
                             )
-                        iteration_timings["kdtree_serialization"] += serial_timer.elapsed
+                        iteration_timings[
+                            "kdtree_serialization"
+                        ] += serial_timer.elapsed
 
                         # Also create shared memory for frame array (temporal filtering)
                         reference_frames = reference_dataset["frame"]
-                        frame_shm, frame_len, frame_dtype = _create_shared_memory_frame_array(
-                            reference_frames
+                        frame_shm, frame_len, frame_dtype = (
+                            _create_shared_memory_frame_array(reference_frames)
                         )
 
                         with _Timer("pool_init") as pool_timer:
                             pool = ctx.Pool(
                                 processes=n_processes,
                                 initializer=_init_worker_from_shared_memory,
-                                initargs=(shm.name, kdtree_size, frame_shm.name, frame_len, frame_dtype),
+                                initargs=(
+                                    shm.name,
+                                    kdtree_size,
+                                    frame_shm.name,
+                                    frame_len,
+                                    frame_dtype,
+                                ),
                             )
-                        iteration_timings["pool_creation"] += pool_timer.elapsed
+                        iteration_timings[
+                            "pool_creation"
+                        ] += pool_timer.elapsed
 
                     elif kdtree_sharing_method == "worker_init":
                         logger.debug(
@@ -4156,25 +4921,31 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                                 initializer=_worker_init_kdtree,
                                 initargs=(reference_coords,),
                             )
-                        iteration_timings["pool_creation"] += pool_timer.elapsed
+                        iteration_timings[
+                            "pool_creation"
+                        ] += pool_timer.elapsed
 
                     else:  # "pickle"
                         logger.debug(
-                            f"    Creating pool for pickle mode (ONCE for all chunks)"
+                            "    Creating pool for pickle mode (ONCE for all chunks)"
                         )
                         with _Timer("pool_init") as pool_timer:
                             pool = ctx.Pool(processes=n_processes)
-                        iteration_timings["pool_creation"] += pool_timer.elapsed
+                        iteration_timings[
+                            "pool_creation"
+                        ] += pool_timer.elapsed
                 else:
                     # Numba mode - no KDTree
                     logger.debug(
-                        f"    Creating pool for Numba mode (ONCE for all chunks)"
+                        "    Creating pool for Numba mode (ONCE for all chunks)"
                     )
                     with _Timer("pool_init") as pool_timer:
                         pool = ctx.Pool(processes=n_processes)
                     iteration_timings["pool_creation"] += pool_timer.elapsed
             except Exception as e:
-                logger.debug(f"    ⚠ Failed to create pool: {e}, falling back to sequential")
+                logger.debug(
+                    f"    ⚠ Failed to create pool: {e}, falling back to sequential"
+                )
                 enable_multiprocessing = False
 
         # Process frames in chunks (reusing the same pool)
@@ -4242,7 +5013,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         first_frame = group_frame_numbers[0]
                         last_frame = group_frame_numbers[-1]
 
-                        if first_frame in frame_boundaries and last_frame in frame_boundaries:
+                        if (
+                            first_frame in frame_boundaries
+                            and last_frame in frame_boundaries
+                        ):
                             start_idx = frame_boundaries[first_frame][0]
                             end_idx = frame_boundaries[last_frame][1]
                             frame_locs = current_locs[start_idx:end_idx]
@@ -4274,7 +5048,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
                     # Get previous shift magnitude for the first frame in the group
                     # All frames in the group share the same shift, so use first frame's previous magnitude
-                    prev_magnitude = previous_shift_magnitudes[group_indices[0]]
+                    prev_magnitude = previous_shift_magnitudes[
+                        group_indices[0]
+                    ]
 
                     frame_data = (
                         group_indices,  # List of frame indices this result applies to
@@ -4340,7 +5116,10 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     # logger.debug(f"chunk results: {result}")
 
                     # Collect performance statistics
-                    if performance_info and "computation_time" in performance_info:
+                    if (
+                        performance_info
+                        and "computation_time" in performance_info
+                    ):
                         comp_time = performance_info["computation_time"]
                         comp_type = performance_info.get(
                             "computation_type", "Unknown"
@@ -4366,33 +5145,55 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                             frame_shifts_y[frame_idx] = shift_y
                             new_uncertainty_x[frame_idx] = uncertainty_x_val
                             new_uncertainty_y[frame_idx] = uncertainty_y_val
-                            new_sigma_x[frame_idx] = performance_info["sigma_x"]
-                            new_sigma_y[frame_idx] = performance_info["sigma_y"]
+                            new_sigma_x[frame_idx] = performance_info[
+                                "sigma_x"
+                            ]
+                            new_sigma_y[frame_idx] = performance_info[
+                                "sigma_y"
+                            ]
                             new_confidence[frame_idx] = confidence_val
                             new_quality[frame_idx] = quality_val
                             valid_measurements += 1
 
                             # Extract goodness-of-fit metrics if available
                             if performance_info:
-                                goodness_of_fit = performance_info.get("goodness_of_fit")
-                                fit_method = performance_info.get("peak_mode", "unknown")
+                                goodness_of_fit = performance_info.get(
+                                    "goodness_of_fit"
+                                )
+                                fit_method = performance_info.get(
+                                    "peak_mode", "unknown"
+                                )
 
                                 if goodness_of_fit is not None:
                                     # Gaussian fit succeeded - extract quality metrics
-                                    chi_squared_per_frame[frame_idx] = goodness_of_fit["chi_squared_reduced"]
-                                    r_squared_per_frame[frame_idx] = goodness_of_fit["r_squared"]
-                                    fit_method_per_frame[frame_idx] = "gaussian"
+                                    chi_squared_per_frame[frame_idx] = (
+                                        goodness_of_fit["chi_squared_reduced"]
+                                    )
+                                    r_squared_per_frame[frame_idx] = (
+                                        goodness_of_fit["r_squared"]
+                                    )
+                                    fit_method_per_frame[frame_idx] = (
+                                        "gaussian"
+                                    )
                                 else:
                                     # CoM method used or fit failed - store method but leave metrics as NaN
-                                    fit_method_per_frame[frame_idx] = fit_method
+                                    fit_method_per_frame[frame_idx] = (
+                                        fit_method
+                                    )
 
                             # Update shift magnitude tracking for next iteration
-                            previous_shift_magnitudes[frame_idx] = shift_magnitude
+                            previous_shift_magnitudes[frame_idx] = (
+                                shift_magnitude
+                            )
 
                             # Store performance_info for matrix solver
                             if frame_results_dict is not None:
                                 # Add shift values to performance_info
-                                frame_info = performance_info.copy() if performance_info else {}
+                                frame_info = (
+                                    performance_info.copy()
+                                    if performance_info
+                                    else {}
+                                )
                                 frame_info["shift_x"] = shift_x
                                 frame_info["shift_y"] = shift_y
                                 frame_results_dict[frame_idx] = frame_info
@@ -4400,7 +5201,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
             # Write accumulated plots to video incrementally (memory-efficient)
             if video_writer is not None and shared_plot_dict is not None:
-                frames_written = _write_plots_to_video(shared_plot_dict, video_writer)
+                frames_written = _write_plots_to_video(
+                    shared_plot_dict, video_writer
+                )
                 if frames_written > 0:
                     logger.debug(
                         f"      Wrote {frames_written} histogram frames to video (batch mode)"
@@ -4442,7 +5245,8 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         )
 
         framesgt10 = np.argwhere(
-            np.sqrt(frame_shifts_x**2 + frame_shifts_y**2) > 10).ravel()
+            np.sqrt(frame_shifts_x**2 + frame_shifts_y**2) > 10
+        ).ravel()
         logger.debug(
             f"    {len(framesgt10)} frames with shifts > 10 nm: {framesgt10}"
         )
@@ -4498,7 +5302,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     # For low-confidence frames, use windowed averaging (simplified approach)
                     min_window, max_window = window_size_range
                     for frame_idx in np.where(low_confidence_mask)[0]:
-                        if frame_idx > 0:  # Use previous frame's shift as fallback
+                        if (
+                            frame_idx > 0
+                        ):  # Use previous frame's shift as fallback
                             frame_shifts_x[frame_idx] = (
                                 frame_shifts_x[frame_idx - 1] * 0.5
                             )
@@ -4509,7 +5315,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
             # Outlier detection using z-score
             if outlier_detection_enabled and valid_measurements > 5:
-                shifts_magnitude = np.sqrt(frame_shifts_x**2 + frame_shifts_y**2)
+                shifts_magnitude = np.sqrt(
+                    frame_shifts_x**2 + frame_shifts_y**2
+                )
                 valid_shifts = shifts_magnitude[shifts_magnitude > 0]
                 if len(valid_shifts) > 0:
                     z_scores = np.abs(
@@ -4527,7 +5335,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         frame_shifts_y[outliers] = 0
                         new_confidence[outliers] = 0
         iteration_timings["windowing_outliers"] += window_timer.elapsed
-        logger.debug(f"    Windowing + outlier detection: {_format_time(window_timer.elapsed)}")
+        logger.debug(
+            f"    Windowing + outlier detection: {_format_time(window_timer.elapsed)}"
+        )
 
         # mean frame shift should be 0 to keep the image in place
         with _Timer("mean_centering") as center_timer:
@@ -4539,8 +5349,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         drift_y += frame_shifts_y
         uncertainty_x = new_uncertainty_x.copy()
         uncertainty_y = new_uncertainty_y.copy()
-        sigma_x = new_sigma_x.copy()
-        sigma_y = new_sigma_y.copy()
         confidence = new_confidence.copy()
         drift_quality = new_quality.copy()
 
@@ -4548,19 +5356,27 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         # Convert frame-based shifts to per-localization corrections
         with _Timer("frame_corrections") as corrections_timer:
             # Use optimized Numba function (or fallback NumPy if Numba unavailable)
-            frame_corrections_x, frame_corrections_y = _apply_frame_corrections_numba(
-                frame_shifts_x, frame_shifts_y, frame_index_map, pixelsize
+            frame_corrections_x, frame_corrections_y = (
+                _apply_frame_corrections_numba(
+                    frame_shifts_x, frame_shifts_y, frame_index_map, pixelsize
+                )
             )
 
             # Accumulate corrections using in-place operations
             np.subtract(
-                cumulative_corrections_x, frame_corrections_x, out=cumulative_corrections_x
+                cumulative_corrections_x,
+                frame_corrections_x,
+                out=cumulative_corrections_x,
             )
             np.subtract(
-                cumulative_corrections_y, frame_corrections_y, out=cumulative_corrections_y
+                cumulative_corrections_y,
+                frame_corrections_y,
+                out=cumulative_corrections_y,
             )
         iteration_timings["frame_corrections"] = corrections_timer.elapsed
-        logger.debug(f"    Frame corrections application: {_format_time(corrections_timer.elapsed)}")
+        logger.debug(
+            f"    Frame corrections application: {_format_time(corrections_timer.elapsed)}"
+        )
 
         # Calculate convergence metrics (but don't break yet - need to store history first)
         with _Timer("convergence_check") as convergence_timer:
@@ -4592,7 +5408,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         # Enforce minimum shift radius to prevent search radius from becoming too small
         max_shift_pixels = max(
             (convergence_rms * max_shift_rms_multiplier) / pixelsize,
-            min_shift_pixels
+            min_shift_pixels,
         )
         next_iteration_max_shift_nm = max_shift_pixels * pixelsize
 
@@ -4626,7 +5442,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 frame_shifts_y,
                 convergence_rms,
                 current_iteration_max_shift_nm,  # Max_shift used during THIS iteration
-                next_iteration_max_shift_nm,     # Max_shift to be used in NEXT iteration
+                next_iteration_max_shift_nm,  # Max_shift to be used in NEXT iteration
                 max_shift_rms_multiplier,
                 iteration + 1,  # 1-indexed for display
                 results_folder,
@@ -4640,11 +5456,15 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
 
         # Performance reporting for this iteration
         iteration_end_time_perf = time.perf_counter()
-        iteration_timings["total"] = iteration_end_time_perf - iteration_start_time_perf
+        iteration_timings["total"] = (
+            iteration_end_time_perf - iteration_start_time_perf
+        )
 
         # Calculate worker computation time and multiprocessing overhead
         if iteration_timings["worker_times"]:
-            iteration_timings["worker_computation"] = sum(iteration_timings["worker_times"])
+            iteration_timings["worker_computation"] = sum(
+                iteration_timings["worker_times"]
+            )
             # Overhead = total pool_map time - actual worker computation time
             # This includes serialization, IPC, and scheduling overhead
             if iteration_timings["pool_map_total"] > 0:
@@ -4665,7 +5485,11 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             iteration + 1,
             n_frames,
             iteration_timings,
-            kdtree_sharing_method if not enable_numba_optimization else "numba",
+            (
+                kdtree_sharing_method
+                if not enable_numba_optimization
+                else "numba"
+            ),
             n_processes if enable_multiprocessing else 1,
         )
 
@@ -4677,7 +5501,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 try:
                     # Write any remaining frames in shared dict
                     if shared_plot_dict is not None:
-                        frames_written = _write_plots_to_video(shared_plot_dict, video_writer)
+                        frames_written = _write_plots_to_video(
+                            shared_plot_dict, video_writer
+                        )
                         if frames_written > 0:
                             logger.debug(
                                 f"    Wrote final {frames_written} histogram frames to video"
@@ -4726,13 +5552,17 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             logger.info("=" * 70)
             logger.info("MATRIX-BASED DRIFT CORRECTION")
             logger.info("=" * 70)
-            logger.info(f"Building connectivity matrix from {len(frame_results_dict)} frames...")
+            logger.info(
+                f"Building connectivity matrix from {len(frame_results_dict)} frames..."
+            )
 
             try:
                 # Build connectivity matrix
                 matrix_start_time = time.time()
-                W, s_obs, frame_numbers, valid_frames = _build_connectivity_matrix(
-                    frame_results_dict, snr_threshold
+                W, s_obs, frame_numbers, valid_frames = (
+                    _build_connectivity_matrix(
+                        frame_results_dict, snr_threshold
+                    )
                 )
                 matrix_build_time = time.time() - matrix_start_time
 
@@ -4758,26 +5588,31 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                     logger.info("  Continuing with iterative RSSO approach...")
 
                     # Don't break - continue with normal iterations
-                    pass
                 else:
                     # Solve for drift
                     solve_start_time = time.time()
-                    drift_x_matrix, drift_y_matrix, solver_info = _solve_drift_from_connectivity(
-                        W, s_obs, valid_frames
+                    drift_x_matrix, drift_y_matrix, solver_info = (
+                        _solve_drift_from_connectivity(W, s_obs, valid_frames)
                     )
                     solve_time = time.time() - solve_start_time
 
                     if solver_info.get("success", False):
                         logger.info(f"  Solver converged in {solve_time:.2f}s")
-                        logger.info(f"  Iterations: {solver_info.get('iterations_x', 0)} / {solver_info.get('iterations_y', 0)}")
-                        logger.info(f"  RMS drift: ({solver_info.get('rms_drift_x', 0):.3f}, {solver_info.get('rms_drift_y', 0):.3f}) px")
+                        logger.info(
+                            f"  Iterations: {solver_info.get('iterations_x', 0)} / {solver_info.get('iterations_y', 0)}"
+                        )
+                        logger.info(
+                            f"  RMS drift: ({solver_info.get('rms_drift_x', 0):.3f}, {solver_info.get('rms_drift_y', 0):.3f}) px"
+                        )
 
                         # Convert pixel drift to nm and map to frame indices
                         drift_x_matrix_nm = drift_x_matrix * pixelsize
                         drift_y_matrix_nm = drift_y_matrix * pixelsize
 
                         # Create frame mapping
-                        frame_to_matrix_idx = {fn: idx for idx, fn in enumerate(frame_numbers)}
+                        frame_to_matrix_idx = {
+                            fn: idx for idx, fn in enumerate(frame_numbers)
+                        }
 
                         # Map matrix solution to full frame array
                         matrix_drift_x = np.zeros(n_frames)
@@ -4785,8 +5620,12 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         for frame_idx in range(n_frames):
                             if frame_idx in frame_to_matrix_idx:
                                 matrix_idx = frame_to_matrix_idx[frame_idx]
-                                matrix_drift_x[frame_idx] = drift_x_matrix_nm[matrix_idx]
-                                matrix_drift_y[frame_idx] = drift_y_matrix_nm[matrix_idx]
+                                matrix_drift_x[frame_idx] = drift_x_matrix_nm[
+                                    matrix_idx
+                                ]
+                                matrix_drift_y[frame_idx] = drift_y_matrix_nm[
+                                    matrix_idx
+                                ]
 
                         # Replace iterative drift with matrix solution
                         drift_x = matrix_drift_x
@@ -4799,29 +5638,42 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                         # Update iteration history with matrix solution
                         iteration_history[-1]["drift_x"] = drift_x.copy()
                         iteration_history[-1]["drift_y"] = drift_y.copy()
-                        iteration_history[-1]["matrix_solver_info"] = solver_info
-                        iteration_history[-1]["matrix_build_time"] = matrix_build_time
+                        iteration_history[-1][
+                            "matrix_solver_info"
+                        ] = solver_info
+                        iteration_history[-1][
+                            "matrix_build_time"
+                        ] = matrix_build_time
                         iteration_history[-1]["matrix_solve_time"] = solve_time
 
-                        logger.info(f"  Matrix solution applied successfully")
+                        logger.info("  Matrix solution applied successfully")
 
                         # Optional: Run refinement iterations
                         if matrix_refinement_iterations > 0:
-                            logger.info(f"  Running {matrix_refinement_iterations} refinement iteration(s)...")
+                            logger.info(
+                                f"  Running {matrix_refinement_iterations} refinement iteration(s)..."
+                            )
                         else:
                             # Skip remaining iterations - matrix solution is final
-                            logger.info("  Matrix solver complete - skipping remaining iterations")
+                            logger.info(
+                                "  Matrix solver complete - skipping remaining iterations"
+                            )
                             logger.info("=" * 70)
                             break
 
                     else:
-                        logger.warning(f"  Matrix solver failed: {solver_info.get('error', 'unknown')}")
-                        logger.warning("  Continuing with iterative approach...")
+                        logger.warning(
+                            f"  Matrix solver failed: {solver_info.get('error', 'unknown')}"
+                        )
+                        logger.warning(
+                            "  Continuing with iterative approach..."
+                        )
 
             except Exception as e:
                 logger.error(f"  Matrix solver error: {e}")
                 logger.error("  Continuing with iterative approach...")
                 import traceback
+
                 traceback.print_exc()
 
         # Check for convergence and break if converged
@@ -4886,14 +5738,18 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
         try:
             # Plot 4: Convergence behavior analysis (over/undercompensation detection)
             conv_behavior_result = _plot_convergence_behavior_analysis(
-                iteration_history, results_folder, convergence_threshold=convergence_threshold
+                iteration_history,
+                results_folder,
+                convergence_threshold=convergence_threshold,
             )
             if conv_behavior_result is not None:
                 conv_behavior_path, pair_statistics = conv_behavior_result
                 results["convergence_behavior_analysis"] = conv_behavior_path
                 results["convergence_behavior_statistics"] = pair_statistics
         except Exception as e:
-            logger.warning(f"Failed to create convergence behavior analysis plot: {e}")
+            logger.warning(
+                f"Failed to create convergence behavior analysis plot: {e}"
+            )
 
         try:
             # Plot 5: Goodness of fit analysis (chi-squared and R-squared)
@@ -4903,7 +5759,9 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             if gof_analysis_path:
                 results["goodness_of_fit_analysis"] = gof_analysis_path
         except Exception as e:
-            logger.warning(f"Failed to create goodness of fit analysis plot: {e}")
+            logger.warning(
+                f"Failed to create goodness of fit analysis plot: {e}"
+            )
 
         logger.debug("Frame shift evolution plots completed")
 
@@ -4986,8 +5844,6 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     # Create drift plots with confidence intervals
     if plot_drift:
         logger.debug("Creating drift plots...")
-        import matplotlib.pyplot as plt
-        import matplotlib.colors as mcolors
 
         # Create comprehensive drift plots showing all iterations
         fig = plt.figure(figsize=(15, 12))
@@ -5361,16 +6217,22 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
             print("    • Drift range evolution for robustness assessment")
 
         # Print shift magnitude histogram summary table
-        print("\n" + "="*100)
+        print("\n" + "=" * 100)
         print("SHIFT DISTRIBUTION ANALYSIS - Adaptive max_shift Performance")
-        print("="*100)
-        print(f"RMS multiplier: {max_shift_rms_multiplier:.1f}x (adjustable via 'max_shift_rms_multiplier' parameter)")
-        print(f"Min shift: {min_shift_nm:.2f} nm (adaptive max_shift will never go below this)")
+        print("=" * 100)
+        print(
+            f"RMS multiplier: {max_shift_rms_multiplier:.1f}x (adjustable via 'max_shift_rms_multiplier' parameter)"
+        )
+        print(
+            f"Min shift: {min_shift_nm:.2f} nm (adaptive max_shift will never go below this)"
+        )
         print("\nPer-iteration shift statistics (all values in nm):")
-        print("-"*100)
-        print(f"{'Iter':<6} {'RMS':<8} {'Median':<8} {'90th':<8} {'95th':<8} "
-              f"{'%@RMS':<10} {'%@RMS×mult':<12} {'next_max_shift':<15}")
-        print("-"*100)
+        print("-" * 100)
+        print(
+            f"{'Iter':<6} {'RMS':<8} {'Median':<8} {'90th':<8} {'95th':<8} "
+            f"{'%@RMS':<10} {'%@RMS×mult':<12} {'next_max_shift':<15}"
+        )
+        print("-" * 100)
 
         for hist_entry in iteration_history:
             iter_num = hist_entry["iteration"]
@@ -5388,127 +6250,221 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
                 # Apply same min_shift constraint as actual algorithm
                 next_max = max(rms * max_shift_rms_multiplier, min_shift_nm)
 
-                print(f"{iter_num:<6} {rms:<8.2f} {median:<8.2f} {p90:<8.2f} {p95:<8.2f} "
-                      f"{pct_at_rms:<10.1f} {pct_at_rms_mult:<12.1f} {next_max:<15.2f}")
+                print(
+                    f"{iter_num:<6} {rms:<8.2f} {median:<8.2f} {p90:<8.2f} {p95:<8.2f} "
+                    f"{pct_at_rms:<10.1f} {pct_at_rms_mult:<12.1f} {next_max:<15.2f}"
+                )
 
-        print("-"*100)
+        print("-" * 100)
         print("\nInterpretation guide:")
         print("  • '%@RMS': Percentile of shifts covered by RMS value")
-        print("  • '%@RMS×mult': Percentile covered by next iteration's max_shift (RMS × multiplier)")
-        print("  • Target: 85-95% coverage for optimal performance/accuracy balance")
-        print(f"  • Current multiplier ({max_shift_rms_multiplier:.1f}x) achieves "
-              f"{np.mean([h.get('histogram_stats', {}).get('percentile_at_rms_mult', np.nan) for h in iteration_history]):.1f}% avg coverage")
+        print(
+            "  • '%@RMS×mult': Percentile covered by next iteration's max_shift (RMS × multiplier)"
+        )
+        print(
+            "  • Target: 85-95% coverage for optimal performance/accuracy balance"
+        )
+        print(
+            f"  • Current multiplier ({max_shift_rms_multiplier:.1f}x) achieves "
+            f"{np.mean([h.get('histogram_stats', {}).get('percentile_at_rms_mult', np.nan) for h in iteration_history]):.1f}% avg coverage"
+        )
         print("\nTuning recommendations:")
-        avg_coverage = np.mean([h.get('histogram_stats', {}).get('percentile_at_rms_mult', np.nan)
-                                for h in iteration_history if 'histogram_stats' in h])
+        avg_coverage = np.mean(
+            [
+                h.get("histogram_stats", {}).get(
+                    "percentile_at_rms_mult", np.nan
+                )
+                for h in iteration_history
+                if "histogram_stats" in h
+            ]
+        )
         if avg_coverage < 85:
             recommended_mult = max_shift_rms_multiplier * (90 / avg_coverage)
-            print(f"  → Coverage too low (<85%) - consider increasing multiplier to ~{recommended_mult:.1f}x")
+            print(
+                f"  → Coverage too low (<85%) - consider increasing multiplier to ~{recommended_mult:.1f}x"
+            )
         elif avg_coverage > 95:
             recommended_mult = max_shift_rms_multiplier * (92 / avg_coverage)
-            print(f"  → Coverage very high (>95%) - can reduce multiplier to ~{recommended_mult:.1f}x for speed")
+            print(
+                f"  → Coverage very high (>95%) - can reduce multiplier to ~{recommended_mult:.1f}x for speed"
+            )
         else:
-            print(f"  ✓ Coverage optimal (85-95%) - multiplier well-tuned!")
-        print("="*100 + "\n")
+            print("  ✓ Coverage optimal (85-95%) - multiplier well-tuned!")
+        print("=" * 100 + "\n")
 
         # Print frame shift evolution plot summary
         if n_iterations > 1:
-            print("\n" + "="*100)
-            print("FRAME SHIFT EVOLUTION ANALYSIS - Multi-Iteration Visualization")
-            print("="*100)
+            print("\n" + "=" * 100)
+            print(
+                "FRAME SHIFT EVOLUTION ANALYSIS - Multi-Iteration Visualization"
+            )
+            print("=" * 100)
             print("Four complementary visualizations have been generated:\n")
 
             if "shift_correlation_grid" in results:
                 print("  1. CORRELATION GRID (shift_correlation_grid.png)")
-                print("     • N×N grid showing pairwise correlations between iterations")
-                print("     • Diagonal: histograms of shift magnitudes per iteration")
-                print("     • Off-diagonal: hexbin density + outlier scatter plots")
+                print(
+                    "     • N×N grid showing pairwise correlations between iterations"
+                )
+                print(
+                    "     • Diagonal: histograms of shift magnitudes per iteration"
+                )
+                print(
+                    "     • Off-diagonal: hexbin density + outlier scatter plots"
+                )
                 print("     • Statistics: R², Pearson r, MAD, % improving")
-                print("     → Reveals: Statistical decorrelation as algorithm converges\n")
+                print(
+                    "     → Reveals: Statistical decorrelation as algorithm converges\n"
+                )
 
             if "shift_convergence_lines" in results:
                 print("  2. CONVERGENCE LINES (shift_convergence_lines.png)")
                 print("     • Shift magnitude vs iteration number")
-                print("     • Percentile bands (5-95%, 25-75%) showing bulk behavior")
-                print("     • RMS and median lines tracking overall convergence")
-                print("     • Individual lines for outlier frames (slow/non-monotonic)")
-                print("     → Reveals: Which frames converge quickly vs slowly\n")
+                print(
+                    "     • Percentile bands (5-95%, 25-75%) showing bulk behavior"
+                )
+                print(
+                    "     • RMS and median lines tracking overall convergence"
+                )
+                print(
+                    "     • Individual lines for outlier frames (slow/non-monotonic)"
+                )
+                print(
+                    "     → Reveals: Which frames converge quickly vs slowly\n"
+                )
 
             if "shift_trajectory_2d" in results:
                 print("  3. 2D TRAJECTORIES (shift_trajectory_2d.png)")
                 print("     • Shift-X vs Shift-Y coordinate space")
-                print("     • Colored paths showing evolution from iter1 → final")
+                print(
+                    "     • Colored paths showing evolution from iter1 → final"
+                )
                 print("     • Hexbin background showing initial distribution")
                 print("     • Percentile circles and worst-10 annotations")
-                print("     → Reveals: Spatial drift patterns and directional bias\n")
+                print(
+                    "     → Reveals: Spatial drift patterns and directional bias\n"
+                )
 
             if "convergence_behavior_analysis" in results:
-                print("  4. CONVERGENCE BEHAVIOR ANALYSIS (convergence_behavior_analysis.png)")
-                print("     • Sequential iteration comparison plots (N vs N+1)")
-                print("     • Color-coded by behavior: Green=converging, Red=sign flip, Orange=diverging")
-                print("     • Reference lines: y=x (no change), y=0.5x (50% reduction)")
-                print("     • Damping ratio histograms showing convergence rate distribution")
-                print("     → Reveals: Overcompensation (sign flips) vs proper convergence\n")
+                print(
+                    "  4. CONVERGENCE BEHAVIOR ANALYSIS (convergence_behavior_analysis.png)"
+                )
+                print(
+                    "     • Sequential iteration comparison plots (N vs N+1)"
+                )
+                print(
+                    "     • Color-coded by behavior: Green=converging, Red=sign flip, Orange=diverging"
+                )
+                print(
+                    "     • Reference lines: y=x (no change), y=0.5x (50% reduction)"
+                )
+                print(
+                    "     • Damping ratio histograms showing convergence rate distribution"
+                )
+                print(
+                    "     → Reveals: Overcompensation (sign flips) vs proper convergence\n"
+                )
 
                 # Print detailed statistics if available
                 if "convergence_behavior_statistics" in results:
                     pair_stats = results["convergence_behavior_statistics"]
                     print("     Convergence Behavior Statistics:")
-                    print("     " + "-"*60)
-                    print(f"     {'Transition':<12} {'Sign Flip':<12} {'Diverging':<12} {'Mean Damping':<12}")
-                    print("     " + "-"*60)
+                    print("     " + "-" * 60)
+                    print(
+                        f"     {'Transition':<12} {'Sign Flip':<12} {'Diverging':<12} {'Mean Damping':<12}"
+                    )
+                    print("     " + "-" * 60)
                     for stats in pair_stats:
-                        print(f"     {stats['pair']:<12} "
-                              f"{stats['any_sign_flip_pct']:>9.1f}%  "
-                              f"{stats['diverging_pct']:>9.1f}%  "
-                              f"{stats['mean_damping']:>11.2f}")
-                    print("     " + "-"*60)
+                        print(
+                            f"     {stats['pair']:<12} "
+                            f"{stats['any_sign_flip_pct']:>9.1f}%  "
+                            f"{stats['diverging_pct']:>9.1f}%  "
+                            f"{stats['mean_damping']:>11.2f}"
+                        )
+                    print("     " + "-" * 60)
 
                     # Calculate overall statistics
-                    avg_sign_flip = np.mean([s['any_sign_flip_pct'] for s in pair_stats])
-                    avg_diverging = np.mean([s['diverging_pct'] for s in pair_stats])
-                    avg_damping = np.mean([s['mean_damping'] for s in pair_stats])
+                    avg_sign_flip = np.mean(
+                        [s["any_sign_flip_pct"] for s in pair_stats]
+                    )
+                    avg_diverging = np.mean(
+                        [s["diverging_pct"] for s in pair_stats]
+                    )
+                    avg_damping = np.mean(
+                        [s["mean_damping"] for s in pair_stats]
+                    )
 
-                    print(f"\n     Overall Averages:")
-                    print(f"       Sign flips (overcompensation): {avg_sign_flip:.1f}%")
+                    print("\n     Overall Averages:")
+                    print(
+                        f"       Sign flips (overcompensation): {avg_sign_flip:.1f}%"
+                    )
                     print(f"       Diverging frames: {avg_diverging:.1f}%")
                     print(f"       Mean damping ratio: {avg_damping:.2f}")
 
                     # Interpretation guidance
-                    print(f"\n     Interpretation:")
+                    print("\n     Interpretation:")
                     if avg_sign_flip > 10:
-                        print(f"       ⚠ HIGH sign flip rate ({avg_sign_flip:.1f}%) indicates overcompensation")
-                        print(f"         → Consider reducing correction aggressiveness or max_shift")
+                        print(
+                            f"       ⚠ HIGH sign flip rate ({avg_sign_flip:.1f}%) indicates overcompensation"
+                        )
+                        print(
+                            "         → Consider reducing correction aggressiveness or max_shift"
+                        )
                     elif avg_sign_flip > 5:
-                        print(f"       ⚠ Moderate sign flip rate ({avg_sign_flip:.1f}%) - some overcompensation")
+                        print(
+                            f"       ⚠ Moderate sign flip rate ({avg_sign_flip:.1f}%) - some overcompensation"
+                        )
                     else:
-                        print(f"       ✓ Low sign flip rate ({avg_sign_flip:.1f}%) - minimal overcompensation")
+                        print(
+                            f"       ✓ Low sign flip rate ({avg_sign_flip:.1f}%) - minimal overcompensation"
+                        )
 
                     if avg_damping < 0.3:
-                        print(f"       ✓ Fast convergence (damping={avg_damping:.2f}) - aggressive correction")
+                        print(
+                            f"       ✓ Fast convergence (damping={avg_damping:.2f}) - aggressive correction"
+                        )
                     elif avg_damping < 0.7:
-                        print(f"       ✓ Good convergence rate (damping={avg_damping:.2f})")
+                        print(
+                            f"       ✓ Good convergence rate (damping={avg_damping:.2f})"
+                        )
                     elif avg_damping < 0.9:
-                        print(f"       ⚠ Slow convergence (damping={avg_damping:.2f}) - consider increasing correction")
+                        print(
+                            f"       ⚠ Slow convergence (damping={avg_damping:.2f}) - consider increasing correction"
+                        )
                     else:
-                        print(f"       ⚠ Very slow convergence (damping={avg_damping:.2f}) - barely improving")
+                        print(
+                            f"       ⚠ Very slow convergence (damping={avg_damping:.2f}) - barely improving"
+                        )
 
                     if avg_diverging > 5:
-                        print(f"       ⚠ HIGH divergence rate ({avg_diverging:.1f}%) - algorithm may be unstable")
+                        print(
+                            f"       ⚠ HIGH divergence rate ({avg_diverging:.1f}%) - algorithm may be unstable"
+                        )
                     print()
 
             # Count outliers across all plots
-            if iteration_history and 'histogram_stats' in iteration_history[-1]:
+            if (
+                iteration_history
+                and "histogram_stats" in iteration_history[-1]
+            ):
                 # Get outlier info from first visualization that ran
-                n_frames_total = len(iteration_history[0]['drift_x'])
+                n_frames_total = len(iteration_history[0]["drift_x"])
                 print(f"Dataset size: {n_frames_total:,} frames analyzed")
 
             print("\nHow to use these plots:")
-            print("  • Correlation grid: Check R² decreasing across iterations (good decorrelation)")
-            print("  • Convergence lines: Identify problematic frames requiring investigation")
-            print("  • 2D trajectories: Detect systematic drift or spatial clustering of outliers")
-            print("  • Convergence behavior: Detect overcompensation (red X) or undercompensation (slow)")
-            print("="*100 + "\n")
+            print(
+                "  • Correlation grid: Check R² decreasing across iterations (good decorrelation)"
+            )
+            print(
+                "  • Convergence lines: Identify problematic frames requiring investigation"
+            )
+            print(
+                "  • 2D trajectories: Detect systematic drift or spatial clustering of outliers"
+            )
+            print(
+                "  • Convergence behavior: Detect overcompensation (red X) or undercompensation (slow)"
+            )
+            print("=" * 100 + "\n")
 
     # Save final undrifted localizations
     if save_locs:

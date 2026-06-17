@@ -52,7 +52,7 @@ class Mask:
         # number generation a bit more efficient
 
         # Reject points outside of mask
-        (steps_x, steps_y) = (1, 1)
+        steps_x, steps_y = (1, 1)
         x_ind = (np.floor(points[:, 0] / steps_x)).astype(int)
         y_ind = (np.floor(points[:, 1] / steps_y)).astype(int)
         index = self.mask[y_ind, x_ind].astype(bool)

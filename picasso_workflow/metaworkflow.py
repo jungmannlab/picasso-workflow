@@ -1,12 +1,16 @@
 #!/usr/bin/env python
-"""
-Module Name: metaworkflow.py
+"""Higher-level analysis coordination across conditions and cells.
+
+Provides path parsing across machines (:class:`PathParser`) and a family of
+workflow coordinators that run picasso-workflow analyses over multiple
+conditions, cells and targets and aggregate over them.
+
 Author: Heinrich Grabmayr
-Initial Date: January 29, 2025
-Description: This module implements functionality to do
-    higher level analyses, e.g. running workflows on
-    multiple conditions and cells, and aggregating over these.
+Initial date: January 29, 2025
 """
+
+from __future__ import annotations
+
 import os
 from picasso_workflow import ON_CLUSTER
 from picasso_workflow import AggregationWorkflowRunner, WorkflowRunner
@@ -29,7 +33,6 @@ import re
 import abc
 from picasso_workflow import CONFIG
 
-
 # if ON_CLUSTER:
 #     from mpi4py import MPI
 
@@ -38,12 +41,12 @@ from picasso_workflow import CONFIG
 
 
 class PathParser:
-    """A class to parse paths for multi-level picasso-workflow analysis
-    The paths come in a dictionary with keys that have four underscores
-    specifying the different analysis levels, and values that are the
-    paths to the corresponding data. The goal of the PathParser is
-    to re-structure the data in multilevel dicts, for the different
-    analysis levels, and to adjust the paths to the current machine.
+    """Parse and re-map data paths for multi-level picasso-workflow analysis.
+
+    Paths arrive in a dictionary whose keys encode the analysis levels (via
+    underscore-separated fields) and whose values are paths to the
+    corresponding data. The parser restructures these into nested per-level
+    dicts and rewrites the paths for the current machine's drive layout.
     """
 
     def __init__(self):
@@ -62,15 +65,23 @@ class PathParser:
         self.drive_paths = CONFIG["Drivepaths"]
         logger.debug(f"drivepaths: {self.drive_paths}")
 
-    def windows_path_to_curr_os(self, winpath, drive_map):
-        """Convert a windows path to a path in the format for the current
-        os. Replace the windows drive (e.g. 'X:' by a given drive)
-        Args:
-            winpath : str
-                the windows-style path to convert
-            drive_map : dict
-                the map from windows drive (e.g. "W:") to posix drive
-                (e.g. "/Volumes/pool-miblab4")
+    def windows_path_to_curr_os(self, winpath: str, drive_map: dict) -> str:
+        """Convert a Windows-style path to the current OS's drive layout.
+
+        Replaces the Windows drive (e.g. ``X:``) with the mapped drive.
+
+        Parameters
+        ----------
+        winpath : str
+            The Windows-style path to convert.
+        drive_map : dict
+            Map from Windows drive (e.g. ``"W:"``) to the target drive
+            (e.g. ``"/Volumes/pool-miblab4"``).
+
+        Returns
+        -------
+        str
+            The converted path.
         """
         winpath = pathlib.PureWindowsPath(winpath)
         if winpath.drive:
@@ -98,15 +109,23 @@ class PathParser:
                 currospath = pathlib.PurePosixPath(winpath)
         return str(currospath)
 
-    def posix_path_to_curr_os(self, posixpath, drive_map):
-        """Convert a windows path to a path in the format for the current
-        os. Replace the windows drive (e.g. 'X:' by a given drive)
-        Args:
-            posixpath : str
-                the posix-style path to convert
-            drive_map : dict
-                the map from windows drive (e.g. "W:") to posix drive
-                (e.g. "/Volumes/pool-miblab4")
+    def posix_path_to_curr_os(self, posixpath: str, drive_map: dict) -> str:
+        """Convert a posix-style path to the current OS's drive layout.
+
+        Replaces the source drive root with the mapped drive.
+
+        Parameters
+        ----------
+        posixpath : str
+            The posix-style path to convert.
+        drive_map : dict
+            Map from source drive (e.g. ``"W:"``) to the target drive
+            (e.g. ``"/Volumes/pool-miblab4"``).
+
+        Returns
+        -------
+        str
+            The converted path.
         """
         # Backslashes are only ever path separators in these data paths,
         # never filename characters. Normalise them so a mixed-separator
@@ -167,17 +186,27 @@ class PathParser:
         # print('new path:', currospath)
         return str(currospath)
 
-    def check_path_style(self, path):
-        """Check whether a path is windows or posix style.
+    def check_path_style(self, path: str) -> bool:
+        """Check whether a path is windows- or posix-style.
 
-        A leading drive letter (e.g. "U:") or UNC prefix ("\\\\server")
-        unambiguously marks a Windows path; a leading "/" marks a posix
-        path. These take precedence over separator counting: a Windows
-        path may well contain forward slashes (e.g.
-        "U:/users/foo\\bar"), so counting "/" against "\\" would
-        misclassify it as posix and lose the backslash-joined parts.
-        Only relative paths (no such prefix) fall back to comparing the
-        number of "/" and "\\" separators.
+        A leading drive letter (e.g. ``"U:"``) or UNC prefix
+        (``"\\\\server"``) unambiguously marks a Windows path; a leading
+        ``"/"`` marks a posix path. These take precedence over separator
+        counting: a Windows path may well contain forward slashes (e.g.
+        ``"U:/users/foo\\bar"``), so counting ``"/"`` against ``"\\"`` would
+        misclassify it as posix and lose the backslash-joined parts. Only
+        relative paths (no such prefix) fall back to comparing the number of
+        ``"/"`` and ``"\\"`` separators.
+
+        Parameters
+        ----------
+        path : str
+            The path to classify.
+
+        Returns
+        -------
+        bool
+            True if the path is posix-style, False if it is Windows-style.
         """
         path = str(path)
         if re.match(r"[A-Za-z]:", path) or path.startswith("\\\\"):
@@ -188,16 +217,43 @@ class PathParser:
         num_bwd = path.count("\\")
         return num_fwd > num_bwd
 
-    def check_machine(self, machine, pattern):
-        """Checks a machine against a machine pattern, for example
-        'mymachine6234' against 'mymachine6XXX', with X being a digit
+    def check_machine(self, machine: str, pattern: str) -> bool:
+        """Check a machine name against a machine pattern.
+
+        For example, ``"mymachine6234"`` against ``"mymachine6XXX"``, with
+        ``X`` standing for any non-whitespace character.
+
+        Parameters
+        ----------
+        machine : str
+            The concrete machine name.
+        pattern : str
+            The pattern, with ``X`` as a wildcard character.
+
+        Returns
+        -------
+        bool
+            Whether the machine name matches the pattern.
         """
         regex = pattern.replace("X", r"\S")
         regex = f"^{regex}$"
         # print('machine', machine, 'pattern', pattern, 'regex', regex)
         return re.fullmatch(regex, machine) is not None
 
-    def get_machine_drivepaths(self, machine):
+    def get_machine_drivepaths(self, machine: str) -> list | None:
+        """Return the configured drive paths for a machine, or None.
+
+        Parameters
+        ----------
+        machine : str
+            The machine name to resolve against the ``Drivepaths`` config.
+
+        Returns
+        -------
+        list or None
+            The drive paths of the first matching machine pattern, or None if
+            no pattern matches.
+        """
         # print('drive paths', self.drive_paths)
         for pattern, paths in self.drive_paths.items():
             if self.check_machine(machine, pattern):
@@ -205,13 +261,26 @@ class PathParser:
         else:
             return None
 
-    def convert_path(self, src_path, dest_machine):
-        """Convert a path from a source machine style to a dest
-        machine style and volume notation.
+    def convert_path(self, src_path: str, dest_machine: str | None) -> str:
+        """Convert a path from a source machine to a destination machine.
 
-        If the destination machine cannot be resolved (it is not listed
-        in the Drivepaths config), or the source path is not located
-        under any known drive root, the path is returned unchanged.
+        Rewrites both the path style and the volume notation. If the
+        destination machine cannot be resolved (it is not listed in the
+        ``Drivepaths`` config), or the source path is not located under any
+        known drive root, the path is returned unchanged.
+
+        Parameters
+        ----------
+        src_path : str
+            The source path to convert.
+        dest_machine : str or None
+            The destination machine name. If None, the current host is used.
+
+        Returns
+        -------
+        str
+            The converted path, or ``src_path`` unchanged if it could not be
+            resolved.
         """
         # find current machine key
         if dest_machine is None:
@@ -269,21 +338,37 @@ class PathParser:
         return dest_path
 
     def parse_source(
-        self, src_loc, receptors, dest_machine=None, underscores=[1, 0, 0]
-    ):
-        """
-        Args:
-            src_loc : string
-                filepath to a yaml file defining a list (len 1) of dict:
-                keys: strings with four "_"
-                    (A_B_C_D: cell type/condition defined by A_B,
-                     C: cell/img position ID, D: imaging target)
-                values: paths to data
-            receptors : list of str or int
-                The targets to analyse, if they are the same in all datasets
-                Or the number of targets to analyse, if their identities differ
-            underscores : list of int
-                the number of underscores in the different levels.
+        self,
+        src_loc: str,
+        receptors: list | int,
+        dest_machine: str | None = None,
+        underscores: list[int] = [1, 0, 0],
+    ) -> tuple[dict, dict]:
+        """Parse a source-location YAML into nested filepath and target dicts.
+
+        Parameters
+        ----------
+        src_loc : str
+            Filepath to a YAML file defining a length-1 list of dict whose
+            keys encode the analysis levels (e.g. ``A_B_C_D``: cell
+            type/condition ``A_B``, cell/image position ID ``C``, imaging
+            target ``D``) and whose values are paths to data.
+        receptors : list of str or int
+            The targets to analyse if identical across datasets, or the number
+            of targets if their identities differ between datasets.
+        dest_machine : str, optional
+            The destination machine name. If None, the current host is used.
+        underscores : list of int, optional
+            The number of underscores in each analysis level. Default is
+            ``[1, 0, 0]``.
+
+        Returns
+        -------
+        filepaths : dict
+            Nested dict of per-level data paths, rewritten for the current
+            machine.
+        targets : dict
+            Nested dict of per-level target identities.
         """
         src_dict = io.load_info(src_loc)[0]
         # if dest_machine not in self.drive_paths.keys():
@@ -389,21 +474,38 @@ class PathParser:
         return filepaths, targets
 
 
-def find_dnapaint_raw(working_folder):
+def find_dnapaint_raw(working_folder: str) -> tuple[dict, str]:
+    """Discover raw DNA-PAINT movies and write a source-location file.
+
+    Parameters
+    ----------
+    working_folder : str
+        Folder to search for raw movies.
+
+    Returns
+    -------
+    datasets : dict
+        Mapping of dataset tags to discovered raw-movie paths.
+    dest_file : str
+        Path to the written ``src_loc.yaml`` describing the datasets.
+    """
     from picasso_workflow import util
     from picasso import io
-    
+
     datasets = util.find_raw_movies(working_folder)
-    
+
     dest_file = os.path.join(working_folder, "src_loc.yaml")
     io.save_info(dest_file, [datasets])
     return datasets, dest_file
 
 
 class AbstractWorkflowCoordinator(abc.ABC):
-    """Abstract Base Class for coordination of an analysis.
-    This wraps the WorkflowRunner and AggregationWorkflowRunner
-    from picasso_workflow.workflow for convenient usability.
+    """Abstract base class for coordinating an analysis.
+
+    Wraps :class:`~picasso_workflow.workflow.WorkflowRunner` and
+    :class:`~picasso_workflow.workflow.AggregationWorkflowRunner` for
+    convenient usability, including Confluence page setup and SLURM rank
+    handling.
     """
 
     def __init__(
@@ -420,6 +522,8 @@ class AbstractWorkflowCoordinator(abc.ABC):
         always_save=False,
         profile_space=None,
         profile_basepage=None,
+        document_confluence=True,
+        document_html=False,
     ):
         self.root_folder = os.path.join(
             working_folder, f"AnalysisResults-{analysis_name}"
@@ -431,10 +535,19 @@ class AbstractWorkflowCoordinator(abc.ABC):
         self.confluence_token = confluence_token
         self.confluence_username = confluence_username
 
+        # Documentation backends. If Confluence is off, default HTML on so a
+        # run always produces some documentation.
+        self.document_confluence = document_confluence
+        self.document_html = document_html
+        if not self.document_confluence and not self.document_html:
+            self.document_html = True
+
         logger.debug(f"confluence_url: {confluence_url}")
         logger.debug(f"confluence_space: {confluence_space}")
         logger.debug(f"confluence_token: {confluence_token}")
         logger.debug(f"confluence_username: {confluence_username}")
+        logger.debug(f"document_confluence: {self.document_confluence}")
+        logger.debug(f"document_html: {self.document_html}")
 
         self.always_save = always_save
 
@@ -453,6 +566,17 @@ class AbstractWorkflowCoordinator(abc.ABC):
             logger.debug(
                 f"No SLRUM env vars found. Assigned this node rank {self.rank}, size {self.size}."
             )
+
+        if not self.document_confluence:
+            # No network: a no-op interface lets all self.ci.* calls run
+            # harmlessly. Reports are produced locally via the HTMLReporter
+            # configured in get_configs().
+            logger.debug(
+                "Confluence documentation disabled; using a no-op interface."
+            )
+            self.ci = confluence.NullConfluenceInterface()
+            self.profiler = None
+            return
 
         if self.rank == 0:
             ci = confluence.ConfluenceInterface(
@@ -497,25 +621,41 @@ class AbstractWorkflowCoordinator(abc.ABC):
             self.profiler = None
 
     @classmethod
-    def hash_hex(cls, s, length=6):
-        """Hashes a string and digests it to a hex string of a given length.
-        Args:
-            s : str
-                string to hash
-            length : int (even)
-                length to digest to
-        Returns:
-            string of len length
+    def hash_hex(cls, s: str, length: int = 6) -> str:
+        """Hash a string and digest it to a hex string of a given length.
+
+        Parameters
+        ----------
+        s : str
+            String to hash.
+        length : int, optional
+            Length (even) to digest to. Default is 6.
+
+        Returns
+        -------
+        str
+            Hex digest of length ``length``.
         """
         return hashlib.shake_128(s.encode("utf-8")).hexdigest(int(length / 2))
 
-    def _shared_runstamp(self):
-        """Return a run timestamp ("%y%m%d-%H%M") identical across all ranks.
+    def _shared_runstamp(self) -> str:
+        """Return a run timestamp (``%y%m%d-%H%M``) identical across ranks.
 
         Multi-node aggregation needs every rank to agree on report names
         (hence result folders) so they can cooperate on one aggregation.
         Rank 0 writes the stamp to a shared file in the root folder; worker
         ranks read it (waiting briefly for it to appear).
+
+        Returns
+        -------
+        str
+            The shared run timestamp.
+
+        Raises
+        ------
+        RuntimeError
+            On a worker rank, if the stamp does not appear within the
+            wait window.
         """
         stamp_file = os.path.join(self.root_folder, ".pwf_runstamp")
         if self.rank == 0:
@@ -540,12 +680,35 @@ class AbstractWorkflowCoordinator(abc.ABC):
 
     def get_configs(
         self,
-        report_name,
-        root_folder,
-        cell_type=None,
-        cell_name=None,
-        camera_info=None,
-    ):
+        report_name: str,
+        root_folder: str,
+        cell_type: str | None = None,
+        cell_name: str | None = None,
+        camera_info: dict | None = None,
+    ) -> tuple[dict, dict]:
+        """Build reporter and analysis config dicts for one workflow run.
+
+        The result location is nested under ``root_folder`` by ``cell_type``
+        and ``cell_name`` when those are provided.
+
+        Parameters
+        ----------
+        report_name : str
+            Name of the report (and Confluence parent page).
+        root_folder : str
+            Root result folder for the analysis.
+        cell_type, cell_name : str, optional
+            Optional nesting levels for the result location.
+        camera_info : dict, optional
+            Camera metadata passed through to the analysis config.
+
+        Returns
+        -------
+        reporter_config : dict
+            Reporter configuration including Confluence settings.
+        analysis_config : dict
+            General analysis configuration.
+        """
         if cell_type is None:
             result_location = root_folder
         elif cell_name is None:
@@ -554,16 +717,18 @@ class AbstractWorkflowCoordinator(abc.ABC):
             result_location = os.path.join(root_folder, cell_type, cell_name)
         os.makedirs(result_location, exist_ok=True)
 
-        reporter_config = {
-            "report_name": report_name,
-            "ConfluenceReporter": {
+        reporter_config = {"report_name": report_name}
+        if self.document_confluence:
+            reporter_config["ConfluenceReporter"] = {
                 "base_url": self.confluence_url,
                 "space_key": self.confluence_space,
                 "parent_page_title": report_name,
                 "username": self.confluence_username,
                 "token": self.confluence_token,
-            },
-        }
+            }
+        if self.document_html:
+            # report_dir defaults to each run's own result folder
+            reporter_config["HTMLReporter"] = {}
 
         # if camera_info is None:
         #     camera_info = {
@@ -583,33 +748,38 @@ class AbstractWorkflowCoordinator(abc.ABC):
 
     def build_overview_body(
         self,
-        title,
-        result_folder,
-        workflow_config=None,
-        ntiles=None,
-        intro_html="",
-    ):
-        """Assemble a run-overview page body (run metadata + an optional
-        collapsible config snapshot) via confluence.overview_body.
+        title: str,
+        result_folder: str,
+        workflow_config: dict | None = None,
+        ntiles: int | None = None,
+        intro_html: str = "",
+    ) -> str:
+        """Assemble a run-overview page body.
 
-        Gathers SLURM job / node, host, software versions and folder
-        locations so the page is self-describing. Shared across coordinators
-        so single and aggregation overview pages stay consistent; the actual
-        storage-format rendering lives in confluence.overview_body.
+        Combines run metadata and an optional collapsible config snapshot via
+        :func:`confluence.overview_body`. Gathers SLURM job/node, host,
+        software versions and folder locations so the page is self-describing.
+        Shared across coordinators so single and aggregation overview pages
+        stay consistent; the actual storage-format rendering lives in
+        :func:`confluence.overview_body`.
 
-        Args:
-            title : str
-                page heading
-            result_folder : str
-                full path to the run's results & script folder
-            workflow_config : dict or None
-                workflow definition, rendered as a collapsible YAML snapshot
-            ntiles : int or None
-                number of single datasets (shown only when provided)
-            intro_html : str
-                optional intro paragraph(s), valid storage-format HTML
-        Returns:
-            str : Confluence storage-format HTML body
+        Parameters
+        ----------
+        title : str
+            Page heading.
+        result_folder : str
+            Full path to the run's results and script folder.
+        workflow_config : dict, optional
+            Workflow definition, rendered as a collapsible YAML snapshot.
+        ntiles : int, optional
+            Number of single datasets (shown only when provided).
+        intro_html : str, optional
+            Optional intro paragraph(s) as valid storage-format HTML.
+
+        Returns
+        -------
+        str
+            Confluence storage-format HTML body.
         """
         env = os.environ
         gpus = (
@@ -657,9 +827,8 @@ class AbstractWorkflowCoordinator(abc.ABC):
 
 
 class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
-    """A class to coordinate the analysis of a single measurement, e.g.
-    one Exchange round.
-    """
+    """Coordinate the analysis of a single measurement (e.g. one Exchange
+    round)."""
 
     def __init__(
         self,
@@ -675,6 +844,8 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         always_save=False,
         profile_space=None,
         profile_basepage=None,
+        document_confluence=True,
+        document_html=False,
     ):
         if src_loc_file is None:
             # "no input files" mode: run the workflow exactly once, with
@@ -703,17 +874,29 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             always_save=always_save,
             profile_space=profile_space,
             profile_basepage=profile_basepage,
+            document_confluence=document_confluence,
+            document_html=document_html,
         )
 
     def prepare_analysis(
-        self, workflow_modules, continue_previous_runners=False
-    ):
-        """
-        Args:
-            workflow_modules:
-                list of tuple, defining modules to run
-        Returns:
-            run_wr_kwargs
+        self,
+        workflow_modules: list[tuple],
+        continue_previous_runners: bool = False,
+    ) -> list[dict]:
+        """Tile the workflow over datasets and build per-dataset runners.
+
+        Parameters
+        ----------
+        workflow_modules : list of tuple
+            The modules to run, as ``(module_name, parameters)``.
+        continue_previous_runners : bool, optional
+            Whether to continue previously aborted runners. Default is False.
+
+        Returns
+        -------
+        list of dict
+            One ``{"wr": WorkflowRunner, "dataset_name": str}`` entry per
+            dataset handled by this rank.
         """
         # make sure different nodes query confluence at different times
         time.sleep(3 * self.rank)
@@ -763,7 +946,20 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             )
         return run_wr_kwargs
 
-    def run_analysis(self, workflow_modules, continue_previous_runners=False):
+    def run_analysis(
+        self,
+        workflow_modules: list[tuple],
+        continue_previous_runners: bool = False,
+    ) -> None:
+        """Prepare and run the per-dataset workflows handled by this rank.
+
+        Parameters
+        ----------
+        workflow_modules : list of tuple
+            The modules to run, as ``(module_name, parameters)``.
+        continue_previous_runners : bool, optional
+            Whether to continue previously aborted runners. Default is False.
+        """
         run_wr_kwargs = self.prepare_analysis(
             workflow_modules, continue_previous_runners
         )
@@ -781,7 +977,16 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             if self.profiler is not None:
                 self.profiler.append_profile_page(kwargs["wr"].all_results)
 
-    def run_wr(self, wr, dataset_name):
+    def run_wr(self, wr: WorkflowRunner, dataset_name: str) -> None:
+        """Run a single :class:`WorkflowRunner` and close figures afterwards.
+
+        Parameters
+        ----------
+        wr : WorkflowRunner
+            The configured runner to execute.
+        dataset_name : str
+            Dataset tag, used only for logging.
+        """
         logger.debug(f"starting to analyse {dataset_name}")
         wr.run()
         logger.debug(f"finished analysing {dataset_name}")
@@ -789,8 +994,10 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
 
 
 class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
-    """A class to coordinate the analysis of a measurement of one FOV with multiple
-    targets, e.g. labeling efficiency of one cell.
+    """Coordinate the analysis of one FOV with multiple targets.
+
+    For example, the labeling efficiency of one cell across several imaging
+    targets.
     """
 
     def __init__(
@@ -808,6 +1015,8 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         always_save=False,
         profile_space=None,
         profile_basepage=None,
+        document_confluence=True,
+        document_html=False,
     ):
         # src_loc_file is a picasso-info like yaml file, representing a list of
         # dicts, with keys "#tags" and #filepath
@@ -835,26 +1044,37 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             always_save=always_save,
             profile_space=profile_space,
             profile_basepage=profile_basepage,
+            document_confluence=document_confluence,
+            document_html=document_html,
         )
 
     def prepare_analysis(
         self,
-        workflow_modules_sgl,
-        workflow_modules_agg,
-        continue_previous_runners=False,
-    ):
-        """
-        Args:
-            workflow_modules_multi : dict of
-                single_dataset_tileparameters
-                single_dataset_modules:
-                    list of tuple, defining modules to run in the first stage
-                    of evaluation of the individual rounds
-                aggregation_modules:
-                    list of tuple, defining modules to run in the second strage
-                    of the evaluation, across the varous rounds
-        Returns:
-            run_wr_kwargs
+        workflow_modules_sgl: list[tuple],
+        workflow_modules_agg: list[tuple],
+        continue_previous_runners: bool = False,
+    ) -> list[dict]:
+        """Build the per-group aggregation runners for this rank.
+
+        Distributes whole aggregation groups across SLURM ranks when there are
+        at least as many groups as ranks; otherwise all ranks cooperate on
+        each group (single workflows are distributed inside
+        :meth:`AggregationWorkflowRunner.run`).
+
+        Parameters
+        ----------
+        workflow_modules_sgl : list of tuple
+            Modules run in the first stage (per individual round).
+        workflow_modules_agg : list of tuple
+            Modules run in the second stage (aggregation across rounds).
+        continue_previous_runners : bool, optional
+            Whether to continue previously aborted runners. Default is False.
+
+        Returns
+        -------
+        list of dict
+            One ``{"awr": AggregationWorkflowRunner, "report_name": str}``
+            entry per aggregation group handled by this rank.
         """
         # make sure different nodes query confluence at different times
         time.sleep(3 * self.rank)
@@ -969,10 +1189,21 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
 
     def run_analysis(
         self,
-        workflow_modules_sgl,
-        workflow_modules_agg,
-        continue_previous_runners=False,
-    ):
+        workflow_modules_sgl: list[tuple],
+        workflow_modules_agg: list[tuple],
+        continue_previous_runners: bool = False,
+    ) -> None:
+        """Prepare and run the aggregation workflows handled by this rank.
+
+        Parameters
+        ----------
+        workflow_modules_sgl : list of tuple
+            Modules run in the first stage (per individual round).
+        workflow_modules_agg : list of tuple
+            Modules run in the second stage (aggregation across rounds).
+        continue_previous_runners : bool, optional
+            Whether to continue previously aborted runners. Default is False.
+        """
         run_awr_kwargs = self.prepare_analysis(
             workflow_modules_sgl,
             workflow_modules_agg,
@@ -987,7 +1218,18 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             if self.profiler is not None:
                 self.profiler.append_profile_page(kwargs["awr"].all_results)
 
-    def run_awr(self, awr, report_name):
+    def run_awr(
+        self, awr: AggregationWorkflowRunner, report_name: str
+    ) -> None:
+        """Run one :class:`AggregationWorkflowRunner` and close figures.
+
+        Parameters
+        ----------
+        awr : AggregationWorkflowRunner
+            The configured aggregation runner to execute.
+        report_name : str
+            Report name, used only for logging.
+        """
         logger.debug(f"starting to analyse {report_name}")
         awr.run()
         logger.debug(f"finished analysing {report_name}")
@@ -995,8 +1237,9 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
 
 
 class InvestigationCoordinator(AbstractWorkflowCoordinator):
-    """A class to coordinate the analysis of a measurement series, i.e.
-    multiple conditions / cell types, cells, target molecules.
+    """Coordinate the analysis of a measurement series.
+
+    Covers multiple conditions / cell types, cells and target molecules.
     """
 
     def __init__(
@@ -1017,12 +1260,23 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         underscores=[1, 0, 0, 0],
         profile_space=None,
         profile_basepage=None,
+        document_confluence=True,
+        document_html=False,
     ):
-        """
-        Args:
-            iterations : int
-                potentially call the workflow on the same data multple times
-                with an iterator (e.g. to select different cells)
+        """Initialize the investigation coordinator.
+
+        Parameters
+        ----------
+        iterations : int, optional
+            Number of times to call the workflow on the same data with an
+            iterator (e.g. to select different cells). Default is 1.
+
+        Notes
+        -----
+        Remaining parameters mirror those of
+        :class:`AbstractWorkflowCoordinator` plus the source location
+        (``src_loc``), the ``receptors`` to analyse and the per-level
+        ``underscores`` used to parse the source.
         """
         self.dataset_filepaths, self.tags = PathParser().parse_source(
             src_loc,
@@ -1052,16 +1306,23 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             always_save=always_save,
             profile_space=profile_space,
             profile_basepage=profile_basepage,
+            document_confluence=document_confluence,
+            document_html=document_html,
         )
 
-    def prepare_sglcell_analysis(self, get_workflow_modules):
-        """
-        Args:
-            get_workflow_modules:
-                Callable taking arguments cell_type, report_name, datasets
-                and returning workflow_modules_multi
-        Returns:
-            run_awr_kwargs
+    def prepare_sglcell_analysis(self, get_workflow_modules) -> list[dict]:
+        """Build per-cell aggregation runners for this rank.
+
+        Parameters
+        ----------
+        get_workflow_modules : callable
+            Callable taking ``cell_type, report_name, datasets`` (and ``i``)
+            and returning the ``workflow_modules_multi`` dict.
+
+        Returns
+        -------
+        list of dict
+            One runner kwargs entry per cell handled by this rank.
         """
         # make sure different nodes query confluence at different times
         time.sleep(3 * self.rank)
@@ -1170,14 +1431,21 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
                     )
         return run_awr_kwargs
 
-    def prepare_mergecell_analysis(self, get_mergecell_workflow_modules):
-        """
-        Args:
-            get_mergecell_workflow_modules:
-                Callable taking arguments cell_type, report_name, datasets
-                and returning workflow_modules_multi
-        Returns:
-            run_awr_kwargs
+    def prepare_mergecell_analysis(
+        self, get_mergecell_workflow_modules
+    ) -> list[dict]:
+        """Build per-cell-type "merge cell" aggregation runners for this rank.
+
+        Parameters
+        ----------
+        get_mergecell_workflow_modules : callable
+            Callable taking ``cell_type, fp_workflows, report_names, datasets``
+            and returning the ``workflow_modules_multi`` dict.
+
+        Returns
+        -------
+        list of dict
+            One runner kwargs entry per cell type handled by this rank.
         """
         # make sure different nodes query confluence at different times
         time.sleep(3 * self.rank)
@@ -1249,7 +1517,40 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             )
         return run_awr_kwargs
 
-    def run_awr(self, awr, cell_type, cell_name, queue, lock, fp_dfa2):
+    def run_awr(
+        self,
+        awr: AggregationWorkflowRunner,
+        cell_type: str,
+        cell_name: str,
+        queue,
+        lock,
+        fp_dfa2: str,
+    ) -> tuple:
+        """Run one cell's aggregation and record per-module success.
+
+        Runs the aggregation workflow, then appends a success row per module
+        to the shared ``fp_dfa2`` spreadsheet (guarded by ``lock``) and pushes
+        the result onto ``queue``.
+
+        Parameters
+        ----------
+        awr : AggregationWorkflowRunner
+            The configured aggregation runner to execute.
+        cell_type, cell_name : str
+            Identifiers used for logging and the success spreadsheet.
+        queue : multiprocessing.Queue
+            Queue the ``(cell_type, cell_name, successes)`` result is put on.
+        lock : multiprocessing.Lock
+            Lock serialising writes to the shared spreadsheet.
+        fp_dfa2 : str
+            Path to the per-module success spreadsheet (``.xlsx``).
+
+        Returns
+        -------
+        tuple
+            ``(cell_type, cell_name, successes)`` where ``successes`` maps
+            module name to its success flag.
+        """
         logger.debug(f"starting to analyse {cell_type}, {cell_name}")
         awr.run()
         logger.debug(f"finished analysing {cell_type}, {cell_name}")
@@ -1258,10 +1559,8 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
         successes = {}
         for mod, res in agg_results.items():
             successes[mod] = res.get("success", False)
-            logger.debug(
-                f"""{cell_type}, {cell_name}, {mod}:
-                {res.get('success', False)}"""
-            )
+            logger.debug(f"""{cell_type}, {cell_name}, {mod}:
+                {res.get('success', False)}""")
         return_val = (cell_type, cell_name, successes)
         queue.put(return_val)
         with lock:
@@ -1292,9 +1591,25 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
     def initialize_summary_pages(
         self,
         ci,
-        summary_page_title,
-        summary_columns,
-    ):
+        summary_page_title: str,
+        summary_columns: list[str],
+    ) -> str:
+        """Create a Confluence summary page with a header table.
+
+        Parameters
+        ----------
+        ci : confluence.ConfluenceInterface
+            Interface used to create the page.
+        summary_page_title : str
+            Title of the summary page.
+        summary_columns : list of str
+            Column headers (besides the leading ``Dataset`` column).
+
+        Returns
+        -------
+        str
+            The summary page title (unchanged), for convenient chaining.
+        """
         # rcode = generate_random_code(6)
         # summary_page_title = f"{summary_page_title}-{rcode}"
         text = f"<b>{summary_page_title}</b>"
@@ -1314,17 +1629,24 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             logger.debug("Could not create summary page. Probably exists")
         return summary_page_title
 
-    def extract_fpfig_from_results(self, awr, figloc):
-        """From the allresults attribute of the mergecell
-        AggregationWorkflowRunner, extract filepaths to figures to put
-        onto the summary page
-        Args:
-            awr : AggregationWorkflowRunner
-                the Runner to extract results from
-            figloc : list of list of str
-                outer list: For each column in the summary page
-                inner list: location within results. e.g.
-                    ["aggregation", "00_ripleysk_average2", "fp_figmeanvals"]
+    def extract_fpfig_from_results(
+        self, awr: AggregationWorkflowRunner, figloc: list[list[str]]
+    ) -> list[str]:
+        """Extract figure filepaths from a runner's ``all_results``.
+
+        Parameters
+        ----------
+        awr : AggregationWorkflowRunner
+            The runner to extract results from.
+        figloc : list of list of str
+            One entry per summary-page column; each inner list is the key
+            path within ``all_results``, e.g.
+            ``["aggregation", "00_ripleysk_average2", "fp_figmeanvals"]``.
+
+        Returns
+        -------
+        list of str
+            The extracted figure filepaths, one per column.
         """
         fp_figs = [
             reduce(lambda d, key: d[key], loc, awr.all_results)
@@ -1334,23 +1656,27 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
 
     def add_to_summary_page(
         self,
-        summary_page_title,
-        dataset,
-        data_list,
-        data_types="img",
-    ):
-        """
-        Args:
-            data_list : list
-                list of data to enter into the summary table
-            data_types : str or list of str of list of dict
-                the data types to enter.
-                "img": image (file path). Image is uploaded and displayed
-                any other: values are directly entered
-                if str, all values are the same type
-            data_fmt : dict, optional
-                for each data_type, formatting options can be given.
-                default values are
+        summary_page_title: str,
+        dataset: str,
+        data_list: list,
+        data_types: str | list = "img",
+    ) -> None:
+        """Append a dataset row to a Confluence summary table.
+
+        Parameters
+        ----------
+        summary_page_title : str
+            Title of the summary page to append to.
+        dataset : str
+            Row label for the dataset.
+        data_list : list
+            Data to enter into the summary table, one item per column.
+        data_types : str or list, optional
+            The data type(s) of the entries. ``"img"`` uploads and displays an
+            image from a file path; any other type is entered directly. If a
+            single str, it applies to all entries; a list may also contain
+            per-entry dicts with a required ``"type"`` key and optional
+            formatting keys. Default is ``"img"``.
         """
         pagid, pagtit = self.ci.get_page_properties(summary_page_title)
 
@@ -1425,11 +1751,28 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
     def run_sglcell_analysis(
         self,
         get_sglcell_workflow_modules,
-        summary_page_title=None,
-        summary_columns=None,
-        figloc=None,
-        data_types={"type": "img"},
-    ):
+        summary_page_title: str | None = None,
+        summary_columns: list[str] | None = None,
+        figloc: list[list[str]] | None = None,
+        data_types: dict | str = {"type": "img"},
+    ) -> None:
+        """Run the per-cell analyses and populate the summary page.
+
+        Parameters
+        ----------
+        get_sglcell_workflow_modules : callable
+            Callable returning the ``workflow_modules_multi`` for a cell.
+        summary_page_title : str, optional
+            Base title of the summary page; the analysis name is appended.
+        summary_columns : list of str, optional
+            Column headers for the summary table.
+        figloc : list of list of str, optional
+            Key paths into each runner's ``all_results`` for the figures to
+            display, one per column (see :meth:`extract_fpfig_from_results`).
+        data_types : dict or str, optional
+            Data type spec for the summary entries. Default
+            ``{"type": "img"}``.
+        """
         try:
             summary_page_title = f"{summary_page_title} - {self.analysis_name}"
             if self.rank == 0:
@@ -1463,11 +1806,27 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
     def run_mergecell_analysis(
         self,
         get_mergecell_workflow_modules,
-        summary_page_title,
-        summary_columns,
-        figloc,
-        data_types="img",
-    ):
+        summary_page_title: str,
+        summary_columns: list[str],
+        figloc: list[list[str]],
+        data_types: str | list = "img",
+    ) -> None:
+        """Run the per-cell-type "merge cell" analyses and fill the summary.
+
+        Parameters
+        ----------
+        get_mergecell_workflow_modules : callable
+            Callable returning the ``workflow_modules_multi`` for a cell type.
+        summary_page_title : str
+            Base title of the summary page; the analysis name is appended.
+        summary_columns : list of str
+            Column headers for the summary table.
+        figloc : list of list of str
+            Key paths into each runner's ``all_results`` for the figures to
+            display, one per column.
+        data_types : str or list, optional
+            Data type spec for the summary entries. Default is ``"img"``.
+        """
         summary_page_title = f"{summary_page_title} - {self.analysis_name}"
         if self.rank == 0:
             summary_page_title = self.initialize_summary_pages(
@@ -1497,14 +1856,29 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
 
 
 class PerformanceProfiler:
+    """Collect per-module resource-usage metrics onto a Confluence page."""
+
     def __init__(
         self,
-        confluence_url,
-        confluence_space,
-        base_page,
-        confluence_username,
-        confluence_token,
+        confluence_url: str,
+        confluence_space: str,
+        base_page: str,
+        confluence_username: str | None,
+        confluence_token: str | None,
     ):
+        """Initialize the profiler's Confluence interface.
+
+        Parameters
+        ----------
+        confluence_url : str
+            Base URL of the Confluence instance.
+        confluence_space : str
+            Key of the Confluence space.
+        base_page : str
+            Title of the parent page for the profiling page.
+        confluence_username, confluence_token : str or None
+            Confluence credentials.
+        """
         self.ci = confluence.ConfluenceInterface(
             confluence_url,
             confluence_space,
@@ -1515,8 +1889,21 @@ class PerformanceProfiler:
 
     def init_profile_page(
         self,
-        page_title="Cluster Performance Profiling",
-    ):
+        page_title: str = "Cluster Performance Profiling",
+    ) -> str:
+        """Create the profiling page with its header table.
+
+        Parameters
+        ----------
+        page_title : str, optional
+            Title of the profiling page. Default is
+            ``"Cluster Performance Profiling"``.
+
+        Returns
+        -------
+        str
+            The page title (unchanged), for convenient chaining.
+        """
         self.page_title = page_title
         self.gen_columns = ["cluster", "module", "Confluence page"]
         self.data_columns = [
@@ -1547,7 +1934,15 @@ class PerformanceProfiler:
             pass
         return page_title
 
-    def append_profile_page(self, all_results):
+    def append_profile_page(self, all_results: dict) -> None:
+        """Append resource-usage rows for one run to the profiling page.
+
+        Parameters
+        ----------
+        all_results : dict
+            A runner's ``all_results``; each module's metrics are read from
+            the configured data columns and appended as a table row.
+        """
         pagid, pagtit = self.ci.get_page_properties(self.page_title)
 
         entry_rows = []

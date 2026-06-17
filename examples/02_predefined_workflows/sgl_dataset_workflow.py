@@ -8,9 +8,9 @@ Description: This module shows an example of how to use a predefined standard
     In order to get the example to work, you need to have the system set up
     as described in the headers in the 01_intro examples.
 """
+
 import os
 from picasso_workflow import WorkflowRunner, standard_singledataset_workflows
-
 
 # the URL of your confluence instance
 confluence_url = ""

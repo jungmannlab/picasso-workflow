@@ -5,7 +5,6 @@ Created on Thu Nov  3 16:06:35 2022
 @author: reinhardt
 """
 
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -205,7 +204,6 @@ def gen_mask(
         ax3.set_ylim(y0, y0 + length)
 
     # "Zoom" (upsample) the mask to reach the final binsize ("mask_resolution") of the mask
-    length_rounded = np.around(length)
     factor = int(binsize_px / mask_resolution_px)
     mask_zoomed = ndi.zoom(np.array(mask, dtype=float), factor)
 
@@ -297,7 +295,6 @@ def gen_mask(
     )
 
     # Mask area and density
-    frac_of_area_with_molec = mask_final.sum() / mask_final.shape[0] ** 2
     mask_area = mask_final.sum() * (mask_resolution / 1000) ** 2
 
     observed_density = pos_exp.shape[0] / mask_area
@@ -735,7 +732,7 @@ def CSR_sim_in_mask(
     pos_CSR = pos_CSR[pos_CSR[:, 0] < xedges[-1]]
     pos_CSR = pos_CSR[pos_CSR[:, 1] < yedges[-1]]
 
-    ### Apply mask
+    # Apply mask
     # Identify in which bin of the mask each datapoint is located
     # convert to an integer version of pos (in multiples of dx)
     pos_aux = (pos_CSR - np.array([xedges[0], yedges[0]])) / dx

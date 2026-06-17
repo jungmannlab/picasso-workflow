@@ -19,6 +19,9 @@ dependencies = [
     "picassosr>=0.10.1",
     # GUI uses PyQt6 directly; keep in sync with picasso's constraint
     "PyQt6>=6.10.2,<7",
+    # Embedded HTML report viewer in the GUI Results tab (QWebEngineView);
+    # keep the major/minor in sync with PyQt6.
+    "PyQt6-WebEngine>=6.10,<7",
     # NVML bindings for GPU CUDA-core count in analysis_documentation
     # (nvidia-smi cannot report cores). Harmless without an NVIDIA driver.
     "nvidia-ml-py>=12.0.0",
@@ -86,24 +89,16 @@ exclude = '''
 strict = true
 
 [tool.flake8]
-max-line-length = 79
-exclude = ".tox,.git,__pycache__,docs"
-ignore = "E203,W503"
-select = "C,E,F,W,B,B9,I"
-# C: complexity
-# E: pycodestyle errors
-# F: pyflakes errors
-# W: pycodestyle warnings
-# B: bugbear errors
-# B9: bugbear warnings
-# I: isort errors
-# Plugins
-require-code = "True"
-ban-relative-imports = "True"
-docstring-convention = "google"
-# flake8-bugbear
-# flake8-eradicate
-# flake8-docstrings
+# Stock flake8 only (E/W = pycodestyle, F = pyflakes, C90 = complexity). Line
+# length is owned by black, so E501 is ignored here (black already wraps code;
+# long strings/comments/HTML it can't split are intentional). E203/W503 are
+# the standard black-compatibility ignores.
+max-line-length = 88  # informational; E501 is ignored
+extend-ignore = "E203,E501,W503"
+# extend-exclude keeps flake8's sensible defaults and additionally skips the
+# generated/snapshot test fixtures and the isolated experimental modules
+# (not imported by the package) that still carry WIP F-codes.
+extend-exclude = "docs,picasso_workflow/spinna_mle.py,picasso_workflow/spinna_mle_2.py,picasso_workflow/nn_redistribution.py,picasso_workflow/tests/TestData"
 
 [tool.bandit]
 exclude = "/tests"
@@ -119,9 +114,15 @@ fail_under = 80
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q"
+# Local default: run only the fast unit tests. The heavy `integration`
+# tests (synthetic pipeline + template smoke) are deselected here so a bare
+# `pytest -v` stays quick during development. Opt back in explicitly with
+# `pytest -m integration` (or run them on the cluster via
+# tools/cluster_tests/submit_all.sh). The cluster tier sbatch scripts pass
+# their own `-m ...`, which overrides this default (last `-m` wins).
+addopts = "-ra -q -m 'not integration'"
 testpaths = ["picasso_workflow/tests"]
 markers = [
-    "integration: tests that run the real picasso pipeline (deselect with '-m not integration')",
+    "integration: tests that run the real picasso pipeline (run with '-m integration'; deselected by default)",
     "real_data: tests that require acquired datasets from the lab network volumes (set PW_TEST_DATA_DIR)",
 ]

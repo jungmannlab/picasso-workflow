@@ -20,6 +20,8 @@ Algorithm:
 Author: Generated for picasso-workflow
 """
 
+from __future__ import annotations
+
 # import logging
 from loguru import logger
 
@@ -30,19 +32,19 @@ from scipy.ndimage import gaussian_filter
 
 
 def split_localizations_random(locs, seed=None):
-    """Split localizations into two random independent subsets
+    """Split localizations into two random independent subsets.
 
-    Args:
-        locs : structured array or DataFrame
-            Localization data with 'x' and 'y' fields
-        seed : int or None
-            Random seed for reproducibility
+    Parameters
+    ----------
+    locs : structured array or DataFrame
+        Localization data with ``x`` and ``y`` fields.
+    seed : int or None, optional
+        Random seed for reproducibility.
 
-    Returns:
-        locs_1 : structured array
-            First subset (approximately half)
-        locs_2 : structured array
-            Second subset (approximately half)
+    Returns
+    -------
+    locs_1, locs_2 : structured array
+        The two subsets (each approximately half).
     """
     if seed is not None:
         np.random.seed(seed)
@@ -52,7 +54,7 @@ def split_localizations_random(locs, seed=None):
     split = n // 2
 
     # Handle both DataFrame and structured array indexing
-    if hasattr(locs, 'iloc'):
+    if hasattr(locs, "iloc"):
         # DataFrame indexing
         locs_1 = locs.iloc[indices[:split]]
         locs_2 = locs.iloc[indices[split:]]
@@ -71,25 +73,27 @@ def split_localizations_random(locs, seed=None):
 def render_image_histogram(
     locs, pixelsize, pixelsize_render, bounds=None, smoothing_sigma=None
 ):
-    """Render localizations into a super-resolution image using histogram
+    """Render localizations into a super-resolution histogram image.
 
-    Args:
-        locs : structured array
-            Localization data with 'x' and 'y' fields (in camera pixels)
-        pixelsize : float
-            Camera pixel size in nm
-        pixelsize_render : float
-            Rendered pixel size in nm
-        bounds : tuple of 4 floats or None
-            (x_min, x_max, y_min, y_max) in nm. If None, auto-calculate
-        smoothing_sigma : float or None
-            Gaussian smoothing sigma in pixels. If None, no smoothing
+    Parameters
+    ----------
+    locs : structured array
+        Localization data with ``x`` and ``y`` fields (in camera pixels).
+    pixelsize : float
+        Camera pixel size in nm.
+    pixelsize_render : float
+        Rendered pixel size in nm.
+    bounds : tuple of float or None, optional
+        ``(x_min, x_max, y_min, y_max)`` in nm; auto-calculated if None.
+    smoothing_sigma : float or None, optional
+        Gaussian smoothing sigma in pixels; no smoothing if None.
 
-    Returns:
-        image : ndarray
-            Rendered 2D image
-        bounds : tuple
-            Actual bounds used (x_min, x_max, y_min, y_max) in nm
+    Returns
+    -------
+    image : ndarray
+        The rendered 2D image.
+    bounds : tuple
+        The actual bounds used, ``(x_min, x_max, y_min, y_max)`` in nm.
     """
     # Convert to physical coordinates (nm)
     x_nm = locs["x"] * pixelsize
@@ -129,15 +133,17 @@ def render_image_histogram(
 
 
 def compute_fft(image):
-    """Compute 2D Fourier transform of image
+    """Compute the 2D Fourier transform of an image.
 
-    Args:
-        image : ndarray
-            2D input image
+    Parameters
+    ----------
+    image : ndarray
+        2D input image.
 
-    Returns:
-        fft_shifted : ndarray (complex)
-            Shifted 2D FFT with DC component at center
+    Returns
+    -------
+    fft_shifted : ndarray of complex
+        Shifted 2D FFT with the DC component at the center.
     """
     # Compute FFT
     fft = np.fft.fft2(image)
@@ -151,21 +157,21 @@ def compute_fft(image):
 
 
 def compute_frc_curve(fft1, fft2, pixelsize_render):
-    """Compute Fourier Ring Correlation curve
+    """Compute the Fourier Ring Correlation curve.
 
-    Args:
-        fft1 : ndarray (complex)
-            Shifted FFT of first image
-        fft2 : ndarray (complex)
-            Shifted FFT of second image
-        pixelsize_render : float
-            Pixel size of rendered images in nm
+    Parameters
+    ----------
+    fft1, fft2 : ndarray of complex
+        Shifted FFTs of the two images.
+    pixelsize_render : float
+        Pixel size of the rendered images in nm.
 
-    Returns:
-        frc_values : ndarray
-            FRC values for each radial bin
-        spatial_frequencies : ndarray
-            Spatial frequencies in 1/nm
+    Returns
+    -------
+    frc_values : ndarray
+        FRC values for each radial bin.
+    spatial_frequencies : ndarray
+        Spatial frequencies in 1/nm.
     """
     # Get image dimensions and center
     shape = fft1.shape
@@ -214,21 +220,23 @@ def compute_frc_curve(fft1, fft2, pixelsize_render):
 
 
 def extract_resolution(frc_values, spatial_frequencies, threshold=1 / 7):
-    """Extract resolution from FRC curve
+    """Extract resolution from an FRC curve.
 
-    Args:
-        frc_values : ndarray
-            FRC values
-        spatial_frequencies : ndarray
-            Spatial frequencies in 1/nm
-        threshold : float
-            FRC threshold for resolution cutoff (default: 1/7)
+    Parameters
+    ----------
+    frc_values : ndarray
+        FRC values.
+    spatial_frequencies : ndarray
+        Spatial frequencies in 1/nm.
+    threshold : float, optional
+        FRC threshold for the resolution cutoff. Default is 1/7.
 
-    Returns:
-        resolution : float
-            Resolution in nm
-        cutoff_frequency : float
-            Cutoff spatial frequency in 1/nm
+    Returns
+    -------
+    resolution : float
+        Resolution in nm.
+    cutoff_frequency : float
+        Cutoff spatial frequency in 1/nm.
     """
     # Remove NaN values
     valid = ~np.isnan(frc_values)
@@ -282,37 +290,32 @@ def compute_frc_resolution(
     seed=None,
     max_frc_range_nm=None,
 ):
-    """Complete FRC resolution analysis pipeline
+    """Run the complete FRC resolution-analysis pipeline.
 
-    Args:
-        locs : structured array
-            Localization data
-        pixelsize : float
-            Camera pixel size in nm
-        pixelsize_render : float
-            Rendered pixel size in nm (default: 5 nm)
-        smoothing_sigma : float or None
-            Gaussian smoothing sigma in pixels
-        threshold : float
-            FRC threshold (default: 1/7)
-        seed : int or None
-            Random seed
-        max_frc_range_nm : float or None
-            Maximum resolution to compute (in nm). If specified, only compute
-            FRC up to this resolution. Useful for speeding up computation.
-            Default: None (compute full curve)
+    Parameters
+    ----------
+    locs : structured array
+        Localization data.
+    pixelsize : float
+        Camera pixel size in nm.
+    pixelsize_render : float, optional
+        Rendered pixel size in nm. Default is 5.
+    smoothing_sigma : float or None, optional
+        Gaussian smoothing sigma in pixels.
+    threshold : float, optional
+        FRC threshold. Default is 1/7.
+    seed : int or None, optional
+        Random seed.
+    max_frc_range_nm : float or None, optional
+        Maximum resolution (nm) to compute; limits the FRC range for speed.
+        Default is None (full curve).
 
-    Returns:
-        results : dict
-            Dictionary containing:
-                - resolution : float (nm)
-                - cutoff_frequency : float (1/nm)
-                - frc_curve : ndarray
-                - spatial_frequencies : ndarray
-                - threshold : float
-                - image_1 : ndarray
-                - image_2 : ndarray
-                - bounds : tuple
+    Returns
+    -------
+    results : dict
+        With ``resolution`` (nm), ``cutoff_frequency`` (1/nm), ``frc_curve``,
+        ``spatial_frequencies``, ``threshold``, ``image_1``, ``image_2`` and
+        ``bounds``.
     """
     logger.debug("Computing FRC resolution...")
 
@@ -382,35 +385,36 @@ def render_image_chunked_parallel(
     overlap_nm=500,
     n_processes=4,
 ):
-    """Render large image using overlapping spatial chunks (memory-efficient)
+    """Render a large image via overlapping spatial chunks (low memory).
 
-    This method divides the field-of-view into overlapping spatial tiles,
-    renders each tile independently in parallel, and stitches them together
-    with smooth transitions in overlap regions.
+    Divides the FOV into overlapping spatial tiles, renders each tile in
+    parallel and stitches them with smooth transitions in the overlap regions.
 
-    Args:
-        locs : structured array
-            Localization data with 'x' and 'y' fields (in camera pixels)
-        pixelsize : float
-            Camera pixel size in nm
-        pixelsize_render : float
-            Rendered pixel size in nm
-        bounds : tuple of 4 floats or None
-            (x_min, x_max, y_min, y_max) in nm. If None, auto-calculate
-        smoothing_sigma : float or None
-            Gaussian smoothing sigma in pixels
-        chunk_size_nm : float
-            Size of each spatial chunk in nm (default: 10000 nm = 10 μm)
-        overlap_nm : float
-            Overlap between adjacent chunks in nm (default: 500 nm)
-        n_processes : int
-            Number of parallel processes
+    Parameters
+    ----------
+    locs : structured array
+        Localization data with ``x`` and ``y`` fields (in camera pixels).
+    pixelsize : float
+        Camera pixel size in nm.
+    pixelsize_render : float
+        Rendered pixel size in nm.
+    bounds : tuple of float or None, optional
+        ``(x_min, x_max, y_min, y_max)`` in nm; auto-calculated if None.
+    smoothing_sigma : float or None, optional
+        Gaussian smoothing sigma in pixels.
+    chunk_size_nm : float, optional
+        Size of each spatial chunk in nm. Default is 10000 (10 µm).
+    overlap_nm : float, optional
+        Overlap between adjacent chunks in nm. Default is 500.
+    n_processes : int, optional
+        Number of parallel processes. Default is 4.
 
-    Returns:
-        image : ndarray
-            Rendered 2D image
-        bounds : tuple
-            Actual bounds used (x_min, x_max, y_min, y_max) in nm
+    Returns
+    -------
+    image : ndarray
+        The rendered 2D image.
+    bounds : tuple
+        The actual bounds used, ``(x_min, x_max, y_min, y_max)`` in nm.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -583,28 +587,27 @@ def render_image_chunked_parallel(
 def compute_frc_curve_vectorized(
     fft1, fft2, pixelsize_render, max_frc_range_nm=None
 ):
-    """Compute Fourier Ring Correlation curve using vectorized operations
+    """Compute the FRC curve using vectorized operations.
 
-    This fully vectorized implementation uses np.bincount for radial averaging,
-    providing 10-100× speedup compared to the loop-based approach.
+    Fully vectorized via ``np.bincount`` for radial averaging, giving a
+    10-100x speedup over the loop-based approach.
 
-    Args:
-        fft1 : ndarray (complex)
-            Shifted FFT of first image
-        fft2 : ndarray (complex)
-            Shifted FFT of second image
-        pixelsize_render : float
-            Pixel size of rendered images in nm
-        max_frc_range_nm : float or None
-            Maximum range to compute (in nm). If specified, only compute
-            FRC up to this resolution, skipping high-frequency rings.
-            Default: None (compute full curve)
+    Parameters
+    ----------
+    fft1, fft2 : ndarray of complex
+        Shifted FFTs of the two images.
+    pixelsize_render : float
+        Pixel size of the rendered images in nm.
+    max_frc_range_nm : float or None, optional
+        Maximum resolution (nm) to compute, skipping high-frequency rings.
+        Default is None (full curve).
 
-    Returns:
-        frc_values : ndarray
-            FRC values for each radial bin
-        spatial_frequencies : ndarray
-            Spatial frequencies in 1/nm
+    Returns
+    -------
+    frc_values : ndarray
+        FRC values for each radial bin.
+    spatial_frequencies : ndarray
+        Spatial frequencies in 1/nm.
     """
     # Get image dimensions and center
     shape = fft1.shape
@@ -715,7 +718,7 @@ def compute_frc_curve_vectorized(
 
     # Compute FRC for each ring (vectorized)
     # FRC = |sum(F1 * conj(F2))| / sqrt(sum(|F1|^2) * sum(|F2|^2))
-    numerator = np.sqrt(cross_real_sum ** 2 + cross_imag_sum ** 2)
+    numerator = np.sqrt(cross_real_sum**2 + cross_imag_sum**2)
     denominator = np.sqrt(power1_sum * power2_sum)
 
     # Avoid division by zero
@@ -740,28 +743,27 @@ def compute_frc_curve_vectorized(
 
 
 def compute_frc_curve_parallel(fft1, fft2, pixelsize_render, n_processes=4):
-    """DEPRECATED: Use compute_frc_curve_vectorized instead
+    """Compute the FRC curve with parallel ring processing (deprecated).
 
-    Compute Fourier Ring Correlation curve with parallel ring processing
+    .. deprecated::
+        Kept for backwards compatibility; use
+        :func:`compute_frc_curve_vectorized` for 10-100x better performance.
 
-    This function is deprecated and kept for backwards compatibility.
-    Use compute_frc_curve_vectorized() for 10-100× better performance.
+    Parameters
+    ----------
+    fft1, fft2 : ndarray of complex
+        Shifted FFTs of the two images.
+    pixelsize_render : float
+        Pixel size of the rendered images in nm.
+    n_processes : int, optional
+        Number of parallel threads (ignored, kept for compatibility).
 
-    Args:
-        fft1 : ndarray (complex)
-            Shifted FFT of first image
-        fft2 : ndarray (complex)
-            Shifted FFT of second image
-        pixelsize_render : float
-            Pixel size of rendered images in nm
-        n_processes : int
-            Number of parallel threads (ignored, kept for compatibility)
-
-    Returns:
-        frc_values : ndarray
-            FRC values for each radial bin
-        spatial_frequencies : ndarray
-            Spatial frequencies in 1/nm
+    Returns
+    -------
+    frc_values : ndarray
+        FRC values for each radial bin.
+    spatial_frequencies : ndarray
+        Spatial frequencies in 1/nm.
     """
     import warnings
 
@@ -787,55 +789,56 @@ def compute_frc_averaged(
     max_frc_range_nm=None,
     parallel_splits=False,
 ):
-    """Compute FRC resolution averaged over multiple random splits
+    """Compute FRC resolution averaged over multiple random splits.
 
-    This provides more robust resolution estimates by averaging over multiple
-    random data splits, with standard deviation as uncertainty estimate.
+    Gives more robust resolution estimates by averaging over multiple random
+    data splits, using the standard deviation as an uncertainty estimate.
 
-    Performance notes:
-    - If use_chunking=True: Rendering is already parallelized, so parallel_splits
-      should typically be False to avoid oversubscription
-    - If use_chunking=False: Set parallel_splits=True for speedup with multiple cores
+    Parameters
+    ----------
+    locs : structured array
+        Localization data.
+    pixelsize : float
+        Camera pixel size in nm.
+    pixelsize_render : float, optional
+        Rendered pixel size in nm. Default is 5.0.
+    smoothing_sigma : float or None, optional
+        Gaussian smoothing sigma in pixels.
+    threshold : float, optional
+        FRC threshold. Default is ``1/7``.
+    n_splits : int, optional
+        Number of random splits to average. Default is 5.
+    n_processes : int, optional
+        Number of parallel processes for rendering chunks (when
+        ``use_chunking=True``) or for parallel splits (when
+        ``parallel_splits=True``). Default is 4.
+    use_chunking : bool, optional
+        Use chunked rendering for large images. Default is False.
+    chunk_size_nm : float, optional
+        Chunk size for chunked rendering in nm. Default is 10000.
+    max_frc_range_nm : float or None, optional
+        Maximum resolution (nm) to compute, useful for speeding up
+        computation. Default is None (full curve).
+    parallel_splits : bool, optional
+        Process splits in parallel. Default is False. Only beneficial when
+        ``use_chunking=False``; a warning is issued if combined with
+        ``use_chunking=True``.
 
-    Args:
-        locs : structured array
-            Localization data
-        pixelsize : float
-            Camera pixel size in nm
-        pixelsize_render : float
-            Rendered pixel size in nm (default: 5 nm)
-        smoothing_sigma : float or None
-            Gaussian smoothing sigma in pixels
-        threshold : float
-            FRC threshold (default: 1/7)
-        n_splits : int
-            Number of random splits to average (default: 5)
-        n_processes : int
-            Number of parallel processes for rendering chunks (if use_chunking=True)
-            or for parallel splits (if parallel_splits=True)
-        use_chunking : bool
-            Use chunked rendering for large images (default: False)
-        chunk_size_nm : float
-            Chunk size for chunked rendering (default: 10000 nm)
-        max_frc_range_nm : float or None
-            Maximum range to compute (in nm). If specified, only compute
-            FRC up to this resolution. Useful for speeding up computation.
-            Default: None (compute full curve)
-        parallel_splits : bool
-            Process splits in parallel (default: False). Only beneficial when
-            use_chunking=False. If True and use_chunking=True, a warning is issued.
+    Returns
+    -------
+    results : dict
+        Dictionary with keys ``resolution`` (float, mean resolution in nm),
+        ``resolution_std`` (float), ``resolutions_per_split`` (list),
+        ``frc_curve_mean`` (ndarray), ``frc_curve_std`` (ndarray),
+        ``spatial_frequencies`` (ndarray), ``threshold`` (float) and
+        ``n_splits`` (int).
 
-    Returns:
-        results : dict
-            Dictionary containing:
-                - resolution : float (mean resolution in nm)
-                - resolution_std : float (standard deviation)
-                - resolutions_per_split : list (resolution for each split)
-                - frc_curve_mean : ndarray (mean FRC curve)
-                - frc_curve_std : ndarray (std of FRC curves)
-                - spatial_frequencies : ndarray
-                - threshold : float
-                - n_splits : int
+    Notes
+    -----
+    When ``use_chunking=True`` rendering is already parallelized, so
+    ``parallel_splits`` should usually be False to avoid oversubscription.
+    When ``use_chunking=False`` set ``parallel_splits=True`` for a speedup on
+    multi-core machines.
     """
     logger.debug(
         f"Computing FRC resolution with {n_splits} splits averaging..."
@@ -847,23 +850,28 @@ def compute_frc_averaged(
 
     # Determine rendering function
     if use_chunking:
-        render_func = lambda locs_subset, bounds: render_image_chunked_parallel(
-            locs_subset,
-            pixelsize,
-            pixelsize_render,
-            bounds=bounds,
-            smoothing_sigma=smoothing_sigma,
-            chunk_size_nm=chunk_size_nm,
-            n_processes=n_processes,
-        )
+
+        def render_func(locs_subset, bounds):
+            return render_image_chunked_parallel(
+                locs_subset,
+                pixelsize,
+                pixelsize_render,
+                bounds=bounds,
+                smoothing_sigma=smoothing_sigma,
+                chunk_size_nm=chunk_size_nm,
+                n_processes=n_processes,
+            )
+
     else:
-        render_func = lambda locs_subset, bounds: render_image_histogram(
-            locs_subset,
-            pixelsize,
-            pixelsize_render,
-            bounds=bounds,
-            smoothing_sigma=smoothing_sigma,
-        )
+
+        def render_func(locs_subset, bounds):
+            return render_image_histogram(
+                locs_subset,
+                pixelsize,
+                pixelsize_render,
+                bounds=bounds,
+                smoothing_sigma=smoothing_sigma,
+            )
 
     # Determine bounds from full dataset (without rendering)
     # This is much faster than rendering the full image
@@ -920,7 +928,6 @@ def compute_frc_averaged(
 
     # Process splits (parallel or sequential)
     if parallel_splits and n_splits > 1:
-        import os
         from concurrent.futures import ProcessPoolExecutor
 
         # Limit processes to avoid oversubscription
@@ -1000,10 +1007,12 @@ def compute_frc_averaged(
 
 
 def _get_memory_usage_mb():
-    """Get current process memory usage and available system memory in MB
+    """Get current process and available system memory in MB.
 
-    Returns:
-        tuple: (process_rss_mb, available_mb)
+    Returns
+    -------
+    tuple of float
+        ``(process_rss_mb, available_mb)``.
     """
     import os
 
@@ -1019,31 +1028,29 @@ def _get_memory_usage_mb():
         available_mb = virtual_mem.available / 1024 / 1024
 
         return process_mb, available_mb
-    except:
+    except Exception:
         return -1, -1  # If psutil not available
 
 
 def _process_tile_worker_minimal(tile_task):
-    """Worker function for processing a single spatial tile
+    """Process a single spatial tile (parallel worker).
 
-    This worker receives pre-filtered localizations for just this tile,
-    minimizing serialization overhead.
+    Receives pre-filtered localizations for just this tile, minimizing
+    serialization overhead.
 
-    Args:
-        tile_task : dict
-            Contains:
-                - id : tuple (i, j)
-                - bounds : tuple (x_min, x_max, y_min, y_max)
-                - locs : structured array (pre-filtered to this tile, or None)
-                - pixelsize : float
-                - pixelsize_render : float
-                - smoothing_sigma : float or None
-                - threshold : float
-                - min_locs_per_region : int
-                - max_frc_range_nm : float or None
+    Parameters
+    ----------
+    tile_task : dict
+        Task description with keys ``id`` (tuple ``(i, j)``), ``bounds``
+        (tuple ``(x_min, x_max, y_min, y_max)``), ``locs`` (structured array
+        pre-filtered to this tile, or None), ``pixelsize``,
+        ``pixelsize_render``, ``smoothing_sigma``, ``threshold``,
+        ``min_locs_per_region`` and ``max_frc_range_nm``.
 
-    Returns:
-        dict : Processing results with success flag
+    Returns
+    -------
+    dict
+        Processing results, including a ``success`` flag.
     """
     try:
         tile_id = tile_task["id"]
@@ -1235,54 +1242,50 @@ def compute_frc_spatial(
     n_processes=4,
     smoothing_window=0.005,
 ):
-    """Compute FRC resolution using spatial tiling approach
+    """Compute FRC resolution using a spatial tiling approach.
 
-    Divides the field-of-view into spatial regions, computes FRC for each
-    region independently, and averages the FRC curves. This approach:
-    - Reduces memory requirements (smaller images per region)
-    - Provides better statistics through spatial averaging
-    - Preserves high spatial frequencies within each region
-    - Enables efficient multiprocessing
+    Divides the FOV into spatial regions, computes FRC for each region
+    independently and averages the FRC curves. This reduces memory
+    requirements, gives better statistics through spatial averaging,
+    preserves high spatial frequencies within each region and enables
+    efficient multiprocessing.
 
-    Args:
-        locs : structured array
-            Localization data with 'x' and 'y' fields
-        pixelsize : float
-            Camera pixel size in nm
-        pixelsize_render : float
-            Rendered pixel size in nm (default: 5 nm)
-        smoothing_sigma : float or None
-            Gaussian smoothing sigma in pixels
-        threshold : float
-            FRC threshold (default: 1/7)
-        region_size : float
-            Size of each spatial region in micrometers (default: 10.0 µm)
-        min_locs_per_region : int
-            Minimum localizations per region (skip sparse regions, default: 500)
-        max_frc_range_nm : float or None
-            Maximum FRC range to compute in nm (default: None = full range)
-        n_processes : int
-            Number of parallel processes (default: 4)
-        smoothing_window : float
-            Moving average window size in spatial frequency units (1/nm)
-            for smoothing the averaged FRC curve (default: 0.005 1/nm)
+    Parameters
+    ----------
+    locs : structured array
+        Localization data with ``x`` and ``y`` fields.
+    pixelsize : float
+        Camera pixel size in nm.
+    pixelsize_render : float, optional
+        Rendered pixel size in nm. Default is 5.0.
+    smoothing_sigma : float or None, optional
+        Gaussian smoothing sigma in pixels.
+    threshold : float, optional
+        FRC threshold. Default is ``1/7``.
+    region_size : float, optional
+        Size of each spatial region in micrometers. Default is 10.0.
+    min_locs_per_region : int, optional
+        Minimum localizations per region; sparser regions are skipped.
+        Default is 500.
+    max_frc_range_nm : float or None, optional
+        Maximum FRC range to compute in nm. Default is None (full range).
+    n_processes : int, optional
+        Number of parallel processes. Default is 4.
+    smoothing_window : float, optional
+        Moving-average window size in spatial-frequency units (1/nm) used to
+        smooth the averaged FRC curve. Default is 0.005.
 
-    Returns:
-        results : dict
-            Dictionary containing:
-                - resolution : float (final resolution from smoothed curve in nm)
-                - resolution_std : float (standard deviation)
-                - resolution_unsmoothed : float (resolution from raw mean curve)
-                - resolutions_per_region : list (resolution for each region)
-                - frc_curve_mean : ndarray (mean FRC curve)
-                - frc_curve_smoothed : ndarray (smoothed mean FRC curve)
-                - frc_curve_std : ndarray (std of FRC curves)
-                - spatial_frequencies : ndarray
-                - threshold : float
-                - n_regions : int (number of valid regions used)
-                - n_regions_total : int (total regions attempted)
-                - n_regions_x : int (number of regions along x)
-                - n_regions_y : int (number of regions along y)
+    Returns
+    -------
+    results : dict
+        Dictionary with keys ``resolution`` (float, final resolution from the
+        smoothed curve in nm), ``resolution_std`` (float),
+        ``resolution_unsmoothed`` (float), ``resolutions_per_region`` (list),
+        ``frc_curve_mean`` (ndarray), ``frc_curve_smoothed`` (ndarray),
+        ``frc_curve_std`` (ndarray), ``spatial_frequencies`` (ndarray),
+        ``threshold`` (float), ``n_regions`` (int, valid regions used),
+        ``n_regions_total`` (int), ``n_regions_x`` (int) and ``n_regions_y``
+        (int).
     """
     from concurrent.futures import ProcessPoolExecutor
 
@@ -1331,7 +1334,7 @@ def compute_frc_spatial(
     # Generate spatial tiles with pre-filtered localizations
     # This approach: filter locs for each tile BEFORE serialization
     # Memory: N_tiles × (locs_per_tile) instead of N_workers × (total_locs)
-    logger.debug(f"  Pre-filtering localizations for each tile...")
+    logger.debug("  Pre-filtering localizations for each tile...")
 
     tile_tasks = []
     for i in range(n_regions_x):
@@ -1576,28 +1579,25 @@ def compute_frc_spatial(
 
 
 def create_frc_plot(frc_results, results_folder, threshold=1 / 7):
-    """Create and save FRC curve plot
+    """Create and save an FRC curve plot.
 
-    Args:
-        frc_results : dict
-            Results dictionary from compute_frc_spatial containing:
-                - frc_curve_mean : ndarray
-                - frc_curve_smoothed : ndarray
-                - frc_curve_std : ndarray
-                - spatial_frequencies : ndarray
-                - resolution : tuple or float
-                - resolution_unsmoothed : float
-                - n_regions : int
-                - n_regions_x : int
-                - n_regions_y : int
-        results_folder : str
-            Path to folder where plot should be saved
-        threshold : float
-            FRC threshold for resolution cutoff (default: 1/7)
+    Parameters
+    ----------
+    frc_results : dict
+        Results dictionary from :func:`compute_frc_spatial`, with keys
+        ``frc_curve_mean``, ``frc_curve_smoothed``, ``frc_curve_std``,
+        ``spatial_frequencies``, ``resolution`` (tuple or float),
+        ``resolution_unsmoothed``, ``n_regions``, ``n_regions_x`` and
+        ``n_regions_y``.
+    results_folder : str
+        Path to the folder where the plot should be saved.
+    threshold : float, optional
+        FRC threshold for the resolution cutoff. Default is ``1/7``.
 
-    Returns:
-        plot_path : str
-            Path to saved plot file
+    Returns
+    -------
+    plot_path : str
+        Path to the saved plot file.
     """
     import os
 
@@ -1644,7 +1644,7 @@ def create_frc_plot(frc_results, results_folder, threshold=1 / 7):
         color="r",
         linestyle="--",
         linewidth=2,
-        label=f"Threshold (1/7)",
+        label="Threshold (1/7)",
     )
 
     # Mark smoothed resolution
@@ -1652,7 +1652,6 @@ def create_frc_plot(frc_results, results_folder, threshold=1 / 7):
     # Handle both tuple and float return values
     if isinstance(resolution, tuple):
         resolution = resolution[0]
-    resolution_unsmoothed = frc_results["resolution_unsmoothed"]
     if not np.isnan(resolution):
         resolution_freq = 1.0 / resolution
         ax.axvline(

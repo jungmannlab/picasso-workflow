@@ -18,16 +18,14 @@ Description: This script defines parameters and runs a multi-level analysis
         srun python3 start_workflow.py condition
     )
 """
+
 import os
-import sys
 import shutil
-import numpy as np
-from picasso_workflow.metaworkflow import InvestigationCoordinator
 
 # DNA-PAINT targets imaged
 receptors = 2
 
-analysis_name = "LE-investigation-gold-SMLM"#-2"
+analysis_name = "LE-investigation-gold-SMLM"  # -2"
 
 investigation_description = f"""
 <b>{analysis_name}</b>
@@ -35,8 +33,8 @@ investigation_description = f"""
 This is an investigation of multiple labeling efficiency measurements,
 of different targets.
 """
-#In this test 2, we are trying channel alignment with too few/no gold beads.
-#"""
+# In this test 2, we are trying channel alignment with too few/no gold beads.
+# """
 
 # yaml file with a list (len 1) of dicts with keys describing the dataset
 # with A_B_C_D, A_B describing the sample/condition, C the cell/FOV ID,
@@ -60,7 +58,7 @@ dest_machine = "hpcl8"
 #      "CONFLUENCE_BASE_PAGE",
 #      "test reporting", [EnvironmentVariableTarget]::User)
 confluence_url = os.getenv("CONFLUENCE_URL")
-confluence_token = os.getenv("CONFLUENCE_BEARER")
+confluence_token = os.getenv("CONFLUENCE_TOKEN")
 confluence_space = os.getenv("CONFLUENCE_SPACE")
 base_page = os.getenv("CONFLUENCE_BASE_PAGE")
 
@@ -94,18 +92,18 @@ def get_workflow(datasets):
             "undrift_rcc",
             {
                 "segmentation": 1000,
-                "dimensions": ['x', 'y'],
+                "dimensions": ["x", "y"],
                 "filename": "drift_rcc.txt",
-            }
+            },
         ),
-        ( # 03
+        (  # 03
             "find_gold",
             {
                 "diameter": 2,
                 "std_range": 1.4,
-                "mean_rmsd": .4,
-                "remove_gold": False
-            }
+                "mean_rmsd": 0.4,
+                "remove_gold": False,
+            },
         ),
         (  # 04
             "undrift_from_picked",
@@ -114,32 +112,32 @@ def get_workflow(datasets):
                     "$get_previous_module_result",  # get from previous module res
                     "fp_gold",
                 ),
-            }
+            },
         ),
         (  # 05
             "find_gold",
             {
                 "diameter": 2,
                 "std_range": 1.4,
-                "mean_rmsd": .4,
-                "remove_gold": True
-            }
+                "mean_rmsd": 0.4,
+                "remove_gold": True,
+            },
         ),
         (  # 06
             "filter_locs",
             {
                 "field": ["sx", "sy"],
-                "minval": [.8, .8],
+                "minval": [0.8, 0.8],
                 "maxval": [1.15, 1.15],
-            }
+            },
         ),
         (  # 07
             "filter_locs",
             {
                 "field": "ellipticity",
                 "minval": 0,
-                "maxval": .1,
-            }
+                "maxval": 0.1,
+            },
         ),
         (  # 08
             "render",
@@ -147,7 +145,7 @@ def get_workflow(datasets):
                 "fullfov_pixelsize": 400,
                 "ctrmass_fov_nm": 20000,
                 "ctrmass_pixelsize": 200,
-            }
+            },
         ),
         (  # 09
             "summarize_dataset",
@@ -181,7 +179,8 @@ def get_workflow(datasets):
             {
                 "radius": (
                     "$get_previous_module_result *2.2",
-                    "nena, nena-nm"),
+                    "nena, nena-nm",
+                ),
                 "min_locs": 16,
                 "basic_fa": False,
             },
@@ -189,17 +188,18 @@ def get_workflow(datasets):
         (  # 11
             "filter_transient_binding",
             {
-                "meanframe_cutoff": .1,
-                "stdframe_cutoff": .16,
+                "meanframe_cutoff": 0.1,
+                "stdframe_cutoff": 0.16,
                 "fp_locs": (
                     "$get_previous_module_result",
-                    "fp_clustered_locs"),
-            }
+                    "fp_clustered_locs",
+                ),
+            },
         ),
         (  # 12
             "nneighbor",
             {
-                "dims": ['x', 'y'],
+                "dims": ["x", "y"],
                 "nth_NN": 4,
                 "nth_rdf": 6,
                 "subsample_1stNN": 20,
@@ -210,16 +210,14 @@ def get_workflow(datasets):
         (  # 13
             "fit_csr",
             {
-                "nneighbors": (
-                    "$get_previous_module_result",
-                    "nneighbors"),
+                "nneighbors": ("$get_previous_module_result", "nneighbors"),
                 "dimensionality": 2,
                 "min_dist": 50,
                 "max_dist": 300,
-                "bkg_fraction": .01,
+                "bkg_fraction": 0.01,
                 "kmin": 2,
                 "save_locs": True,
-            }
+            },
         ),
         (  # 14
             "save_single_dataset",
@@ -238,7 +236,8 @@ def get_workflow(datasets):
             "load_datasets_to_aggregate",
             {
                 "tags": ("$$map", "#tags"),
-                "filepaths": ("$$get_prior_result",
+                "filepaths": (
+                    "$$get_prior_result",
                     "all_results, single_dataset, $$all,"
                     + f"{idx_last_sgl_module:02d}_save_single_dataset, filepath",
                 ),
@@ -261,7 +260,8 @@ def get_workflow(datasets):
             {
                 "fp_fiducials": (
                     "$get_previous_module_result",
-                    "fp_fiducials"),
+                    "fp_fiducials",
+                ),
                 "save_locs": True,
                 "align_pars": {
                     "max_shift": 4,
@@ -292,10 +292,10 @@ def get_workflow(datasets):
                 "binsize": 20,
                 "blursize": 400,
                 "mask_pixel_size": 10,
-                "threshold": .85,
+                "threshold": 0.85,
                 "select_cell": True,
                 "fill_holes": True,
-                "nth_largest_cell": 1,   # i
+                "nth_largest_cell": 1,  # i
                 "dilate_nm": 500,
                 "apply_to_locs": True,
                 "save_locs": True,
@@ -307,29 +307,28 @@ def get_workflow(datasets):
                 "binsize": 1500,
                 "blursize": 10,
                 "mask_pixel_size": 1500,
-                "threshold": .5,
+                "threshold": 0.5,
                 "select_cell": False,
                 # "fill_holes": False,
                 "apply_to_locs": True,
                 "save_locs": False,
             },
         ),
-        (  # 05
-            "save_datasets_aggregated",
-            {}
-        ),
+        ("save_datasets_aggregated", {}),  # 05
         (  # 06
             "load_datasets_to_aggregate",
             {
                 "tags": ("$$map", "#tags"),
-                "filepaths": ("$get_previous_module_result", "filepaths")
-            }
+                "filepaths": ("$get_previous_module_result", "filepaths"),
+            },
         ),
         (
             "refine_mask_by_density",
             {
                 "fp_mask": (
-                    "$get_prior_result", "results, 04_create_mask2, fp_mask"),
+                    "$get_prior_result",
+                    "results, 04_create_mask2, fp_mask",
+                ),
                 # "min_density": (
                 #     "$sum *0.8",
                 #     (
@@ -349,12 +348,12 @@ def get_workflow(datasets):
                 "nth_largest": 0,
                 "apply_to_locs": True,
                 "smoothe_nm": 1500,
-            }
+            },
         ),
         (  # 07
             "nneighbor",
             {
-                "dims": ['x', 'y'],
+                "dims": ["x", "y"],
                 "nth_NN": 4,
                 "nth_rdf": 6,
                 "subsample_1stNN": 10,
@@ -365,17 +364,15 @@ def get_workflow(datasets):
         (  # 08
             "fit_csr",
             {
-                "nneighbors": (
-                    "$get_previous_module_result",
-                    "nneighbors"),
+                "nneighbors": ("$get_previous_module_result", "nneighbors"),
                 "dimensionality": 2,
                 "min_dist": 30,
                 # "max_dist": 350,
-                "bkg_fraction": .01,
+                "bkg_fraction": 0.01,
                 "kmin": 2,
                 "save_locs": True,
                 "fit_bkg": True,
-            }
+            },
         ),
         (  # 09
             "labeling_efficiency_analysis",
@@ -391,7 +388,10 @@ def get_workflow(datasets):
                     "density",
                 ),
                 "pair_distance": 10,
-                "labeling_uncertainty": {("$$index 0", "#tags"): 6, ("$$index 1", "#tags"): 4},
+                "labeling_uncertainty": {
+                    ("$$index 0", "#tags"): 6,
+                    ("$$index 1", "#tags"): 4,
+                },
                 "n_simulate": 500000,
                 "granularity": 100,
                 "sim_repeats": 10,
@@ -412,19 +412,21 @@ if __name__ == "__main__":
     working_folder = os.path.dirname(os.path.abspath(__file__))
 
     coordinator = AggregationWorkflowCoordinator(
-        src_loc, analysis_name, working_folder,
-        confluence_url, confluence_space, confluence_token,
+        src_loc,
+        analysis_name,
+        working_folder,
+        confluence_url,
+        confluence_space,
+        confluence_token,
         base_page,
-        always_save=False)
+        always_save=False,
+    )
 
     datasets = io.load_info(src_loc)
     workflow_modules_multi = get_workflow(datasets)
 
-    coordinator.run_analysis(
-        workflow_modules_sgl, workflow_modules_agg
-    )
+    coordinator.run_analysis(workflow_modules_sgl, workflow_modules_agg)
     # copy this file to save the settings/parameters
     srcloc = os.path.abspath(__file__)
-    destloc = os.path.join(
-        coordinator.root_folder, os.path.split(srcloc)[1])
+    destloc = os.path.join(coordinator.root_folder, os.path.split(srcloc)[1])
     shutil.copyfile(srcloc, destloc)

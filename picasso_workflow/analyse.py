@@ -1,17 +1,18 @@
 #!/usr/bin/env python
-"""
-Module Name: analyse.py
+"""The picasso interface of picasso-workflow.
+
+Defines :class:`AutoPicasso`, which implements every analysis module of the
+:class:`~picasso_workflow.util.AbstractModuleCollection` contract on top of
+the picasso library.
+
 Author: Heinrich Grabmayr
-Initial Date: March 7, 2024
-Description: This is the picasso interface of picasso-workflow
+Initial date: March 7, 2024
 """
-from picasso import lib, io, localize, gausslq, postprocess, clusterer
-from picasso import aim, spinna
+
+from __future__ import annotations
 
 # from picasso_workflow.outpost_modules import g5m
 from picasso import g5m
-from picasso import __version__ as picassoversion
-from picasso import CONFIG as pCONFIG
 import picasso
 import copy
 import gc
@@ -37,7 +38,7 @@ import numpy as np
 import pandas as pd
 import psutil
 import yaml
-from matplotlib import cm, colormaps
+from matplotlib import colormaps
 from memory_profiler import memory_usage
 from picasso import CONFIG as pCONFIG
 from picasso import __version__ as picassoversion
@@ -63,7 +64,18 @@ try:
 except ImportError:
     # Fallback implementation if scipy version issues
     def wasserstein_distance(u_values, v_values):
-        """Manual implementation of 1D Wasserstein distance"""
+        """Compute the 1D Wasserstein distance (manual fallback).
+
+        Parameters
+        ----------
+        u_values, v_values : array-like
+            The two 1D distributions to compare.
+
+        Returns
+        -------
+        float
+            The 1D Wasserstein distance between the distributions.
+        """
         u_sorted = np.sort(u_values)
         v_sorted = np.sort(v_values)
         n = len(u_sorted)
@@ -102,24 +114,57 @@ from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
 
 def generate_random_code(length):
+    """Return a random string of ASCII letters of the given length.
+
+    Parameters
+    ----------
+    length : int
+        The number of characters to generate.
+
+    Returns
+    -------
+    str
+        The random code.
+    """
     letters = string.ascii_letters
     random_code = "".join(random.choices(letters, k=length))
     return random_code
 
 
 def create_unique_filename(folder, fn, len_code=6):
+    """Build a filename in ``folder`` made unique by a random code.
+
+    Parameters
+    ----------
+    folder : str
+        The destination folder.
+    fn : str
+        The base filename.
+    len_code : int, optional
+        Length of the random uniquifying code. Default is 6.
+
+    Returns
+    -------
+    str
+        The unique file path.
+    """
     rcode = generate_random_code(len_code)
     fparts = os.path.split(fn)
     return os.path.join(folder, f"{fparts[0]}_{rcode}{fparts[1]}")
 
 
 def get_memory_of(obj):
-    """
-    Recursively calculate the memory usage of an object, including its
-    contents.
-    Returns:
-        size : int
-            size in bytes
+    """Recursively calculate the memory usage of an object and its contents.
+
+    Parameters
+    ----------
+    obj : object
+        The object to measure.
+
+    Returns
+    -------
+    size : int
+        The size in bytes.
     """
     seen_ids = set()
 
@@ -140,17 +185,26 @@ def get_memory_of(obj):
 
 
 def profile_resource_usage(method):
-    """
-        Decorator that profiles peak memory and CPU usage of a function.
-        Returns results in a dictionary with values in GB and core count.
-        Compatible with Linux, MacOS, and Windows.
+    """Decorate a module to profile its peak memory and CPU usage.
 
-        Intended to be used "outside" the module_wrapper, e.g.
+    Results are added to the module's ``results`` dict with values in GB and
+    core count. Compatible with Linux, macOS and Windows. Intended to wrap
+    *outside* the :func:`module_decorator`, e.g.::
 
-    #    @profile_resource_usage
+        @profile_resource_usage
         @module_decorator
         def undrift(self, i, parameters, results):
             pass
+
+    Parameters
+    ----------
+    method : callable
+        The module method to wrap.
+
+    Returns
+    -------
+    callable
+        The wrapped method.
     """
 
     @wraps(method)
@@ -246,6 +300,24 @@ def profile_resource_usage(method):
 
 
 def module_decorator(method):
+    """Wrap a module to manage its result folder and timing.
+
+    Creates the module's result directory, seeds the ``results`` dict with
+    ``folder`` and ``start time``, runs the module, then fills in ``success``
+    (saving locs if requested), ``end time`` and ``duration``, and closes open
+    figures.
+
+    Parameters
+    ----------
+    method : callable
+        The module method to wrap.
+
+    Returns
+    -------
+    callable
+        The wrapped method.
+    """
+
     def module_wrapper(
         self, i, parameters, calling_module_dir=None, suffix=""
     ):
@@ -303,8 +375,11 @@ def module_decorator(method):
 
 
 class AutoPicasso(util.AbstractModuleCollection):
-    """A class to automatically evaluate datasets.
-    Each module that runs saves their results into a separate folder.
+    """Automatically evaluate datasets via the picasso pipeline.
+
+    Implements every module of the
+    :class:`~picasso_workflow.util.AbstractModuleCollection` contract. Each
+    module that runs saves its results into a separate folder.
     """
 
     # for single-dataset analysis
@@ -320,28 +395,32 @@ class AutoPicasso(util.AbstractModuleCollection):
     channel_tags = None
 
     def __init__(self, results_folder, analysis_config):
-        """
-        Args:
-            results_folder : str
-                the folder all analysis modules save their respective results
-                to.
-            analysis_config : dict
-                the general configuration. necessary items:
-                    gpufit_installed : bool
-                        whether the machine has gpufit installed
-                (potentially) optional items
-                    camera_info : dict
-                        as used by picasso. Only necessary if not loaded by
-                        module load_dataset
-                    always_save : bool
-                        whether every module should end in saving the current
-                        locs
+        """Initialize the analyzer.
+
+        Parameters
+        ----------
+        results_folder : str
+            The folder all analysis modules save their results to.
+        analysis_config : dict
+            The general configuration. Required keys:
+
+            ``gpufit_installed`` : bool
+                Whether the machine has gpufit installed.
+
+            Optional keys:
+
+            ``camera_info`` : dict
+                Camera metadata as used by picasso; only needed if not loaded
+                by the ``load_dataset`` module.
+            ``always_save`` : bool
+                Whether every module should end by saving the current locs.
         """
         self.results_folder = os.path.normpath(results_folder)
         self.analysis_config = analysis_config
 
     @property
     def info_mm_entry(self):
+        """The first metadata entry (single- or multi-dataset)."""
         try:
             infofirst = self.info[0]
         except IndexError:
@@ -354,6 +433,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @property
     def camera_name(self):
+        """The camera name from metadata, or None for simulations."""
         infofirst = self.info_mm_entry
         try:
             cam_name = infofirst["Camera"]
@@ -366,6 +446,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @property
     def em_wavelength(self):
+        """The emission wavelength, resolved via the camera config."""
         cam_name = self.camera_name
         filter_config = pCONFIG["Cameras"][cam_name].get("Channel Device")
         filterturret_label = filter_config["Name"]
@@ -379,6 +460,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @property
     def camera_info(self):
+        """Camera info dict, from the config or derived from picasso CONFIG."""
         if camera_info := self.analysis_config.get("camera_info"):
             return camera_info
         else:
@@ -444,7 +526,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     "Qe": 1,  # relevant are detected, not incident photons
                     "Pixelsize": cam_config["Pixelsize"],
                 }
-                for category in cam_config.get("Sensitivity Categories"):
+                for category in cam_config.get("Sensitivity Categories") or []:
                     category_key = f"{cam_name}-{category}"
 
                     category_value = self.info[0].get(category_key)
@@ -457,6 +539,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @property
     def pixelsize(self):
+        """The pixel size in nm, from metadata or the camera info."""
         try:
             for infopart in self.info:
                 pixelsize = infopart.get("Pixelsize")
@@ -479,6 +562,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @property
     def frames(self):
+        """The number of frames, from single- or multi-dataset metadata."""
         try:
             for infopart in self.info:
                 frames = infopart.get("Frames")
@@ -500,33 +584,27 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def dummy_module(self, i, parameters, results):
-        """A module that does nothing, for quickly removing
-        modules in a workflow without having to renumber the
-        following result idcs. Only for workflow debugging,
-        remove when done.
+        """Do nothing; a placeholder to disable a module without renumbering.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys: (none)
-                Optional keys: (none)
-            results : dict
-                Automatic keys (provided by decorator):
-                    start time : str
-                        Module execution start timestamp
-                    end time : str
-                        Module execution end timestamp
-                    duration : float
-                        Module execution duration in seconds
-                    folder : str
-                        Output folder for module results
+        Lets a module be removed from a workflow without renumbering the
+        following result indices. For workflow debugging only.
 
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results (unchanged)
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Uses no keys.
+        results : dict
+            Module results (decorator-provided keys ``start time``,
+            ``end time``, ``duration``, ``folder``).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Input results, unchanged.
         """
         return parameters, results
 
@@ -535,39 +613,39 @@ class AutoPicasso(util.AbstractModuleCollection):
     def conditional_branch(self, i, parameters, results):
         """Execute different sub-module sequences based on a condition.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    condition : dict
-                        condition dictionary with keys:
-                            - "left": value or parameter command tuple
-                            - "operator": str (>, <, >=, <=, ==, !=)
-                            - "right": value or parameter command tuple
-                        or logical condition with "and"/"or" keys
-                    if_true : list of tuples
-                        list of (module_name, module_parameters) tuples
-                        to execute if condition is True
-                    if_false : list of tuples
-                        list of (module_name, module_parameters) tuples
-                        to execute if condition is False
-                optional keys:
-                    parameter_command_executor : ParameterCommandExecutor
-                        if provided, will be used for resolving parameter
-                        commands in condition values
-            results : dict
-                the results this function generates
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
 
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results including:
-                    - condition_result : bool
-                    - branch_taken : str ("if_true" or "if_false")
-                    - if_branch : dict of sub-module results
-                    - branch_modules : dict of flat-indexed results
+            ``condition`` : dict
+                Either a comparison with ``"left"`` (value or parameter
+                command tuple), ``"operator"`` (one of ``>``, ``<``, ``>=``,
+                ``<=``, ``==``, ``!=``) and ``"right"``, or a logical condition
+                with ``"and"``/``"or"`` keys.
+            ``if_true``, ``if_false`` : list of tuple
+                ``(module_name, module_parameters)`` tuples to run if the
+                condition is True / False.
+
+            Optional keys:
+
+            ``parameter_command_executor`` : ParameterCommandExecutor
+                If provided, used to resolve parameter commands in condition
+                values.
+        results : dict
+            Module results (decorator-provided keys; see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``condition_result`` (bool), ``branch_taken``
+            (``"if_true"``/``"if_false"``), ``if_branch`` (sub-module results)
+            and ``branch_modules`` (flat-indexed results).
         """
         # Get the parameter command executor from workflow runner if available
         pce = parameters.get("parameter_command_executor", None)
@@ -695,44 +773,29 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def analysis_documentation(self, i, parameters, results):
-        """This module documents where and how analysis is being performed
-        Args:
-            parameters : dict
-                This module does not use any parameters
-        Returns:
-            parameters : dict
-                as input, unchanged
-            results : dict
-                the analysis results, updated with:
-                    picasso version : str
-                        version of picasso library used
-                    picasso-workflow version : str
-                        version of picasso-workflow
-                    Architecture : str
-                        machine architecture
-                    OS : str
-                        operating system
-                    host : str
-                        hostname of machine
-                    processor : str
-                        processor information
-                    CPU Frequency [MHz] : float
-                        current CPU frequency
-                    CPU cores : int
-                        number of CPU cores
-                    Memory total [GB] : int
-                        total system memory in GB
-                    Memory available [GB] : int
-                        available system memory in GB
-                    GPU : str
-                        GPU name(s) or "N/A"
-                    GPU memory [GB] : int
-                        total GPU memory in GB or 0 if no GPU
-                    GPU clock [MHz] : int or str
-                        maximum SM (CUDA) clock, or "N/A" if no GPU
-                    GPU cores : int or str
-                        total number of CUDA cores (via NVML), or "N/A"
-                        if no GPU / NVML unavailable
+        """Document where and how the analysis is being performed.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Uses no keys.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results updated with ``picasso version``, ``picasso-workflow
+            version``, ``Architecture``, ``OS``, ``host``, ``processor``,
+            ``CPU Frequency [MHz]``, ``CPU cores``, ``Memory total [GB]``,
+            ``Memory available [GB]``, ``GPU`` (name(s) or ``"N/A"``), ``GPU
+            memory [GB]``, ``GPU clock [MHz]`` (max SM clock) and ``GPU cores``
+            (CUDA cores via NVML, or ``"N/A"``).
         """
         results["picasso version"] = picassoversion
         results["picasso-workflow version"] = picassoworkflowversion
@@ -764,9 +827,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         requested via --gres=gpu / --gpus. nvidia-smi reflects the cgroup-
         allocated devices, so this documents what the job actually got.
 
-        Returns:
-            dict : with keys "GPU", "GPU memory [GB]", "GPU clock [MHz]"
-                and "GPU cores"
+        Returns
+        -------
+        dict
+            With keys ``"GPU"``, ``"GPU memory [GB]"``, ``"GPU clock [MHz]"``
+            and ``"GPU cores"``.
         """
         info = {
             "GPU": "N/A",
@@ -847,25 +912,35 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def convert_zeiss_movie(self, i, parameters, results):
-        """Converts a DNA-PAINT movie into .raw, as supported by picasso.
-        Args:
-            parameters : dict
-                necessary items:
-                    filepath : str
-                        the czi file name to load.
-                optional items:
-                    filename_raw : str
-                        the raw file name to write to
-                    info : dict, information as used by picasso
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    filepath_raw : str
-                        full path to the output raw file
-                    filename_raw : str
-                        name of the output raw file
+        """Convert a DNA-PAINT movie into picasso-supported ``.raw``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``filepath`` : str
+                The czi file to load.
+
+            Optional keys:
+
+            ``filename_raw`` : str
+                The raw file to write to.
+            ``info`` : dict
+                Metadata as used by picasso.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``filepath_raw`` (full path) and
+            ``filename_raw``.
         """
         filepath_czi = parameters["filepath"]
         filename_raw = parameters.get("filename_raw")
@@ -885,51 +960,39 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def load_dataset_movie(self, i, parameters, results):
-        """Loads a DNA-PAINT dataset in a format supported by picasso.
+        """Load a DNA-PAINT movie dataset in a picasso-supported format.
 
-        Loads DNA-PAINT movie data and metadata into memory for subsequent
-        analysis. Optionally creates sample movies and loads camera
-        configuration. The data is saved in self.movie and self.info.
+        Loads movie data and metadata into ``self.movie`` and ``self.info``.
+        Optionally creates sample movies and loads camera configuration.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    filename : str
-                        Path to the movie file to load
-                Optional keys:
-                    sample_movie : dict
-                        Parameters for creating a subsampled movie
-                    load_camera_info : bool
-                        Whether to load camera configuration from
-                        picasso.CONFIG
-            results : dict
-                Automatic keys (provided by decorator):
-                    start time : str
-                        Module execution start timestamp
-                    end time : str
-                        Module execution end timestamp
-                    duration : float
-                        Module execution duration in seconds
-                    folder : str
-                        Output folder for module results
-                    folder : str
-                        Output folder for generated files
-                Results updated with:
-                    picasso version : str
-                        Version of picasso library used
-                    movie.shape : tuple
-                        Movie dimensions (frames, width, height)
-                    sample_movie : dict
-                        Results from subsampled movie creation (if requested)
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
 
-        Returns:
-            parameters : dict
-                Input parameters, potentially modified (sample_movie paths
-                updated)
-            results : dict
-                Input results with added movie information and metadata
+            ``filename`` : str
+                Path to the movie file to load.
+
+            Optional keys:
+
+            ``sample_movie`` : dict
+                Parameters for creating a subsampled movie.
+            ``load_camera_info`` : bool
+                Whether to load camera configuration from ``picasso.CONFIG``.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly modified (``sample_movie`` paths
+            updated).
+        results : dict
+            Results updated with ``picasso version``, ``movie.shape`` (frames,
+            width, height) and, if requested, ``sample_movie``.
         """
         results["picasso version"] = picassoversion
         self.movie, self.info = io.load_movie(parameters["filename"])
@@ -1025,16 +1088,30 @@ class AutoPicasso(util.AbstractModuleCollection):
         max_quantile=0.9998,
         fps=1,
     ):
-        """Create a subsampled movie of the movie loaded. The movie is saved
-        to disk and referenced by filename.
-        Args:
-            filename : str
-                the file name to save the subsamled movie as (.mp4)
-            start_sample_pct : float
-                percentage of movie frames from which to start sampling
-                This can be useful if the first frames are different due to
-                residual autofluorescence or such.
-            rest: as in save_movie
+        """Create and save a subsampled movie of the loaded movie.
+
+        The movie is saved to disk and referenced by ``filename``.
+
+        Parameters
+        ----------
+        filename : str
+            The file name to save the subsampled movie as (``.mp4``).
+        start_sample_pct : float, optional
+            Percentage of movie frames from which to start sampling, useful
+            if the first frames differ (e.g. residual autofluorescence).
+            Default is 0.
+        n_sample : int, optional
+            Number of frames to sample. Default is 30.
+        min_quantile, max_quantile : float, optional
+            Contrast quantiles, as in :func:`process_brightfield.save_movie`.
+        fps : float, optional
+            Playback speed in frames per second. Default is 1.
+
+        Returns
+        -------
+        dict
+            With keys ``sample_frame_idx`` (sampled frame indices) and
+            ``filename`` (the saved movie path).
         """
         results = {}
         if len(self.movie) < n_sample:
@@ -1060,25 +1137,29 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def load_dataset_localizations(self, i, parameters, results):
-        """Loads a DNA-PAINT dataset in a format supported by picasso.
-        The data is saved in
-            self.locs
-            self.info
-        Args:
-            parameters : dict
-                necessary items:
-                    filename : str
-                        the (main) file name to load. This can be image files,
-                        or hdf5.
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    picasso version : str
-                        version of picasso library used
-                    nlocs : int
-                        number of localizations loaded
+        """Load a DNA-PAINT localizations dataset in a picasso format.
+
+        The data is saved in ``self.locs`` and ``self.info``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``filename`` : str
+                The (main) file to load (image files or HDF5).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``picasso version`` and ``nlocs``.
         """
         results["picasso version"] = picassoversion
         self.locs, self.info = io.load_locs(parameters["filename"])
@@ -1100,32 +1181,31 @@ class AutoPicasso(util.AbstractModuleCollection):
         localizations, assume the background (of random local maxima without a
         localization signal) to be Gaussian distributed. Assume the background
         peak in the histogram is the highest value. The threshold net_gradient
-        will be determined as zscore bacground standard deviations above the
+        is determined as ``zscore`` background standard deviations above the
         peak.
 
-        Args:
-            box_size : int
-                the box size for evaluation
-            frame_numbers : list
-                the frame indexes to analyze
-            filename : str, default None
-                the file name of the plot to be created
-                no plot generated if None
-            start_ng : float
-                the minimum net gradient to accept for the histogram.
-                this should be below zero, to capture all net gradient
-                values that exist in the data
-            zscore : float
-                the number of sigmas above the background net gradient peak
-                to set as the estimated min net gradient threshold
-            bins : None, int or array
-                specify the bins of the histogram
-        Returns:
-            results : dict; with
-                filename : string
-                    filename of the generated plot
-                estd_net_grad : float
-                    the estimated min net gradient
+        Parameters
+        ----------
+        box_size : int
+            The box size for evaluation.
+        frame_numbers : list or int
+            The frame indices to analyze (or a count to subsample).
+        filename : str, optional
+            The plot filename to create; no plot is generated if None.
+        start_ng : float, optional
+            The minimum net gradient to accept for the histogram; should be
+            below zero to capture all net-gradient values. Default is -3000.
+        zscore : float, optional
+            Number of sigmas above the background net-gradient peak to set as
+            the estimated min net-gradient threshold. Default is 5.
+        bins : None, int or array, optional
+            The histogram bins.
+
+        Returns
+        -------
+        results : dict
+            With keys ``filename`` (the generated plot) and ``estd_net_grad``
+            (the estimated min net gradient).
         """
         results = {}
         identifications = []
@@ -1242,27 +1322,30 @@ class AutoPicasso(util.AbstractModuleCollection):
         sample_spots_rows=4,
         sample_spots_cols=12,
     ):
-        """Pull up example spots at the threshold net_grad for
-        visualizing the automatically found min net gradient.
-        Args:
-            identifications : np recarray
-                identifications from subsampled frames with
-                very low min net gradient.
-            estd_net_grad : float
-                the estimated min net gradient
-            box_size : uneven int
-                the box size to display
-            sample_spots_rows : int
-                the number of rows of spots to display
-            sample_spots_cols : int
-                the number of cols of spots to display
-        Returns:
-            canvas : 2D array
-                the canvas with spots to display
-            ng_start : float
-                the lowest net gradient shown (upper left spot)
-            ng_end : float
-                the highest net gradient shown (lower right spot)
+        """Assemble example spots near the threshold net gradient.
+
+        Used to visualize the automatically found min net gradient.
+
+        Parameters
+        ----------
+        identifications : np.recarray
+            Identifications from subsampled frames with a very low min net
+            gradient.
+        estd_net_grad : float
+            The estimated min net gradient.
+        box_size : int
+            The (odd) box size to display.
+        sample_spots_rows, sample_spots_cols : int, optional
+            The number of rows/columns of spots to display. Defaults 4 and 12.
+
+        Returns
+        -------
+        canvas : 2D array
+            The canvas with the spots to display.
+        ng_start : float
+            The lowest net gradient shown (upper-left spot).
+        ng_end : float
+            The highest net gradient shown (lower-right spot).
         """
         n_spots = sample_spots_cols * sample_spots_rows
         sample_idxs = np.argsort(
@@ -1309,69 +1392,45 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def identify(self, i, parameters, results):
-        """Identifies localizations in a loaded dataset.
+        """Identify localization sites in the loaded movie.
 
-        Identifies potential localization sites in the loaded movie using
-        net gradient thresholding. Optionally performs automatic net gradient
-        detection and creates identification vs frame plots.
-        The data is saved in self.identifications.
+        Detects candidate sites by net-gradient thresholding, optionally
+        performing automatic net-gradient detection and
+        identifications-vs-frame plots. The result is saved in
+        ``self.identifications``.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    box_size : int
-                        Size of the detection box in pixels
-                    min_gradient : float
-                        Minimum net gradient threshold for detection
-                        (required unless auto_netgrad is provided)
-                Optional keys:
-                    auto_netgrad : dict
-                        Parameters for automatic net gradient detection:
-                            box_size : int
-                                Box size for auto detection
-                            frame_numbers : list or int
-                                Frame range for analysis
-                            filename : str
-                                Output filename for auto-detection plot
-                            start_ng : float
-                                Starting net gradient value
-                            zscore : float
-                                Z-score threshold for detection
-                            bins : int
-                                Number of histogram bins
-                    ids_vs_frame : dict
-                        Parameters for plotting identifications vs time:
-                            filename : str
-                                Output filename for plot
-            results : dict
-                Automatic keys (provided by decorator):
-                    start time : str
-                        Module execution start timestamp
-                    end time : str
-                        Module execution end timestamp
-                    duration : float
-                        Module execution duration in seconds
-                    folder : str
-                        Output folder for module results
-                    folder : str
-                        Output folder for generated files
-                Results updated with:
-                    num_identifications : int
-                        Total number of identifications found
-                    auto_netgrad : dict
-                        Results from automatic net gradient detection (if
-                        requested)
-                    ids_vs_frame : dict
-                        Results from identifications vs frame analysis (if
-                        requested)
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
 
-        Returns:
-            parameters : dict
-                Input parameters, potentially with updated min_gradient
-            results : dict
-                Input results with identification statistics and optional plots
+            ``box_size`` : int
+                Size of the detection box in pixels.
+            ``min_gradient`` : float
+                Minimum net-gradient detection threshold (required unless
+                ``auto_netgrad`` is provided).
+
+            Optional keys:
+
+            ``auto_netgrad`` : dict
+                Automatic net-gradient detection parameters: ``box_size``,
+                ``frame_numbers`` (list or int), ``filename``, ``start_ng``,
+                ``zscore`` and ``bins``.
+            ``ids_vs_frame`` : dict
+                Identifications-vs-time plot parameters: ``filename``.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly with an updated ``min_gradient``.
+        results : dict
+            Results updated with ``num_identifications`` and, if requested,
+            ``auto_netgrad`` and ``ids_vs_frame``.
         """
         # auto-detect net grad if required:
         if (autograd_pars := parameters.get("auto_netgrad")) is not None:
@@ -1437,7 +1496,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     def _plot_ids_vs_frame(self, filename):
-        """Plot identifications vs frame index"""
+        """Plot the number of identifications vs frame index.
+
+        Parameters
+        ----------
+        filename : str
+            The path to save the plot to.
+
+        Returns
+        -------
+        dict
+            With key ``filename`` (the saved plot path).
+        """
         results = {}
         frames = np.arange(len(self.movie))
         bins = np.arange(len(self.movie) + 1) - 0.5
@@ -1454,35 +1524,41 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def localize(self, i, parameters, results):
-        """Localizes Spots previously identified.
-        The data is saved in
-            self.locs
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    box_size : as always
-                    fit_parallel : bool
-                        whether to fit on multiple cores
-                optional items:
-                    locs_vs_frame : dict
-                        for plotting locs vs time
-                        items correspond to arguments of _plot_locs_vs_frame
-                    save_locs : dict
-                        if saving localizations is requested.
-                        Items correpsond to arguments of save_locs
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    locs_vs_frame : dict
-                        plot results if locs_vs_frame parameter was provided
-                    locs_columns : list
-                        list of column names in the localizations array
+        """Localize the spots previously identified.
+
+        The result is saved in ``self.locs``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``box_size`` : int
+                Detection box size in pixels.
+            ``fit_parallel`` : bool
+                Whether to fit on multiple cores.
+
+            Optional keys:
+
+            ``locs_vs_frame`` : dict
+                Plot-vs-time parameters (arguments of
+                :meth:`_plot_locs_vs_frame`).
+            ``save_locs`` : dict
+                If saving localizations is requested (arguments of
+                ``save_locs``).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``locs_vs_frame`` (if requested) and
+            ``locs_columns`` (the localization column names).
         """
         em = self.camera_info["Gain"] > 1
         spots = localize.get_spots(
@@ -1557,34 +1633,38 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @module_decorator
     def zfit(self, i, parameters, results):
-        """Fits z positions to previously localized spots.
+        """Fit z positions of the previously localized spots.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    magnification_factor : float
-                        the magnification factor for z calibration
-                optional items:
-                    fp_calibration : str
-                        filepath to the 3D calibration yaml file
-                        if not given
-                    save_locs : dict
-                        if saving localizations is requested.
-                        Items correpsond to arguments of save_locs
-            results : dict
-                the results dict, created by the module_decorator
-                    fp_calibration : str
-                        the filepath to the calibration that has been used.
-                        Either as given, or as loaded from config
-                    fp_calibration_fig : str
-                        filepath to the calbiration graph, if loaded
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``magnification_factor`` : float
+                The magnification factor for z calibration.
+
+            Optional keys:
+
+            ``fp_calibration`` : str
+                Filepath to the 3D calibration YAML file; if not given, it is
+                resolved from the picasso config via camera and wavelength.
+            ``save_locs`` : dict
+                If saving localizations is requested (arguments of
+                ``save_locs``).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``fp_calibration`` (calibration used),
+            ``fp_calibration_fig`` (calibration graph, if found) and
+            ``fp_fig_zhist`` (z-distribution histogram).
         """
         import shutil
         from picasso import zfit
@@ -1622,7 +1702,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         with open(path, "r") as f:
             z_calibration = yaml.full_load(f)
 
-        N = len(self.locs)
         fs = zfit.fit_z_parallel(
             self.locs,
             self.info,
@@ -1659,6 +1738,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     def _plot_locs_vs_frame(self, filename):
+        """Plot per-frame mean photons and PSF widths (sx, sy).
+
+        Parameters
+        ----------
+        filename : str
+            The path to save the plot to.
+
+        Returns
+        -------
+        dict
+            With key ``filename`` (the saved plot path).
+        """
         results = {}
         frames = np.arange(len(self.movie))
         # bins = np.arange(len(self.movie) + 1) - .5
@@ -1707,24 +1798,29 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @module_decorator
     def load_picassoconfig(self, i, parameters, results):
-        """
-        Loads a specific picasso configuration file, as opposed to the default
-        version residing in the picasso installation folder.
+        """Load a specific picasso configuration file.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    fp_config : str
-                        filepath to a config file.
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
+        Used instead of the default config in the picasso installation folder.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_config`` : str
+                Filepath to a config file.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``fp_config`` (path to the saved config copy).
         """
         global pCONFIG
 
@@ -1746,35 +1842,36 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def export_brightfield(self, i, parameters, results):
-        """Opens a single-plane tiff image and saves it to png with
-        contrast adjustment.
+        """Open single-plane tiff image(s) and save as PNG with contrast.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    filepath : str or list of str or dict
-                        the tiff file(s) to load. The converted file(s) will
-                        have the same name, but with .png extension
-                        if dict: keys are labels
-                optional items:
-                    min_quantile : float, default: 0
-                        the quantile below which pixels are shown black
-                    max_quantile : float, default: 1
-                        the quantile above which pixels are shown white
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    labeled filepaths : dict
-                        keys : labels
-                        values : filepaths
-                    success : bool
-                        whether the export was successful
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``filepath`` : str or list of str or dict
+                The tiff file(s) to load; converted files keep the name with a
+                ``.png`` extension. If a dict, its keys are labels.
+
+            Optional keys:
+
+            ``min_quantile`` : float
+                Quantile below which pixels are shown black. Default is 0.
+            ``max_quantile`` : float
+                Quantile above which pixels are shown white. Default is 1.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``labeled filepaths`` (label -> filepath) and
+            ``success``.
         """
         fps_in = parameters["filepath"]
         if isinstance(fps_in, str):
@@ -1804,36 +1901,41 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def render(self, i, parameters, results):
-        """Renders localizations on the whole field of view, and on
-        a zoom in around the center of mass of localizations.
+        """Render localizations on the full FOV and a center-of-mass zoom.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                optional items:
-                    ctrmass_fov_nm : Field of view of the zoom in rendering
-                        around the center of mass in nm
-                    fullfov_pixelsize : The rendered pixel size [nm] of the
-                        full FOV rendering
-                    ctrmass_pixelsize : The rendered pixel size [nm] of the
-                        zoom in rendering around the center of mass
-                    ctrmass_blur_method : Blur method
-                    ctrmass_min_blur_width : min blur with
-                    ctrmass_ang : angle
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    fp_scene_fullfov : str
-                        filepath to full FOV rendering
-                    fp_scene_ctrmass : str
-                        filepath to center of mass zoom rendering (conditional, only if ctrmass_fov_nm provided)
-                    fp_scene_tiles : list of lists of str
-                        filepaths to the 5x5 tiled renderings
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
+
+            ``ctrmass_fov_nm`` : float
+                Field of view (nm) of the zoom rendering around the center of
+                mass.
+            ``fullfov_pixelsize`` : float
+                Rendered pixel size (nm) of the full-FOV rendering.
+            ``ctrmass_pixelsize`` : float
+                Rendered pixel size (nm) of the center-of-mass zoom.
+            ``ctrmass_blur_method`` : str
+                Blur method.
+            ``ctrmass_min_blur_width`` : float
+                Minimum blur width.
+            ``ctrmass_ang`` : tuple
+                Rotation angle.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``fp_scene_fullfov`` (full-FOV rendering),
+            ``fp_scene_ctrmass`` (center-of-mass zoom; only if
+            ``ctrmass_fov_nm`` is given) and ``fp_scene_tiles`` (the 5x5 tiled
+            renderings).
         """
         pixelsize = self.pixelsize
         rcode = generate_random_code(6)
@@ -2073,7 +2175,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         elif parameters.get("ctrmass_fov_nm"):
             # Draw standard Zoom-In outline on overview image
             import matplotlib.patches as patches
-            import matplotlib.pyplot as plt
 
             fov_half = parameters.get("ctrmass_fov_nm") / 2
             x_min_zoom = x_mean_clipped - fov_half / pixelsize
@@ -2113,8 +2214,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                     edgecolor="none",
                 ),
             )
-
-        import matplotlib.pyplot as plt
 
         fig_overview.savefig(
             results["fp_scene_fullfov"], bbox_inches="tight", pad_inches=0
@@ -2158,41 +2257,42 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def undrift_aim(self, i, parameters, results):
-        """Unrift localized data using the AIM algorithm
-        drift is saved in
-        self.drift
+        """Undrift localized data using the AIM algorithm.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    segmentation : int
-                        the number of frames segmented
-                    intersect_d : float
-                        Intersect distance in nanometers.
-                    roi_r : float
-                        Radius of the local search region in nanometers.
-                        Should be larger than the maximum expected drift wihtin
-                        segmentation.
-                    dimensions : list of str
-                        the dimensions undrifted, typically ['x', 'y'].
-                optional items:
-                    progress : callback function
-                        progress callback for status updates
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    success : bool
-                        whether undrifting was successful
-                    fp_driftfile : str
-                        filepath to drift txt file
-                    fp_fig : str
-                        filepath to drift plot png
+        The drift is saved in ``self.drift``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``segmentation`` : int
+                Number of frames per segment.
+            ``intersect_d`` : float
+                Intersect distance in nanometers.
+            ``roi_r`` : float
+                Radius of the local search region in nm; should exceed the
+                maximum expected drift within a segment.
+            ``dimensions`` : list of str
+                The dimensions to undrift, typically ``['x', 'y']``.
+
+            Optional keys:
+
+            ``progress`` : callable
+                Progress callback for status updates.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``success``, ``fp_driftfile`` (drift txt
+            file) and ``fp_fig`` (drift plot PNG).
         """
         pixelsize = self.pixelsize
         progress = parameters.get("progress", None)
@@ -2236,38 +2336,39 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def undrift_rcc(self, i, parameters, results):
-        """Undrifts localized data using redundant cross correlation.
-        drift is saved in
-        self.drift
+        """Undrift localized data using redundant cross-correlation (RCC).
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    segmentation : int
-                        the number of frames segmented for RCC
-                optional items:
-                    max_iter_segmentations : int, default: 3
-                        maximum number of iterations to adaptively increase segmentation if RCC fails
-                    filename : str
-                        the drift txt file name
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-                Note: dimensions parameter is set to ['x', 'y'] by this module
-            results : dict
-                the analysis results, updated with:
-                    success : bool
-                        whether undrifting was successful
-                    message : str
-                        error or warning messages if any
-                    filepath_driftfile : str
-                        filepath to drift txt file (conditional, only if undrifting succeeded)
-                    filepath_plot : str
-                        filepath to drift plot png (conditional, only if undrifting succeeded)
+        The drift is saved in ``self.drift``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``segmentation`` : int
+                Number of frames per segment for RCC.
+
+            Optional keys:
+
+            ``max_iter_segmentations`` : int
+                Max iterations to adaptively increase segmentation if RCC
+                fails. Default is 3.
+            ``filename`` : str
+                The drift txt file name.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency. This module
+            sets ``dimensions`` to ``['x', 'y']``.
+        results : dict
+            Results updated with ``success``, ``message`` and, only if
+            undrifting succeeded, ``filepath_driftfile`` and ``filepath_plot``.
         """
         pixelsize = self.pixelsize
 
@@ -2292,9 +2393,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     f"""RCC with segmentation {parameters["segmentation"]}
                     raised an error. Doubling."""
                 )
-                results[
-                    "message"
-                ] = f"""Initial Segmentation of {seg_init}
+                results["message"] = f"""Initial Segmentation of {seg_init}
                     was too low."""
         else:  # did not work until the end
             logger.error(
@@ -2307,9 +2406,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 parameters["segmentation"]
                 / 2 ** parameters["max_iter_segmentations"]
             )
-            results[
-                "message"
-            ] = f"""
+            results["message"] = f"""
                     Undrifting did not work in
                     {parameters['max_iter_segmentations']} iterations
                     up to a segmentation of {max_segmentation}."""
@@ -2354,7 +2451,20 @@ class AutoPicasso(util.AbstractModuleCollection):
     # Multiprocessing helper functions for undrift_rsso
     @staticmethod
     def _process_drift_block(args):
-        """Stateless helper function for processing drift blocks in parallel"""
+        """Process one drift block in parallel (stateless helper).
+
+        Parameters
+        ----------
+        args : tuple
+            ``(locs_data, frames, block_start, block_end, toff_block_size,
+            max_shift, min_locs_per_block, save_all_rsso_plots, plot_dir)``.
+
+        Returns
+        -------
+        tuple or None
+            ``(block_start, block_end, shift_x, shift_y, quality,
+            uncertainty_x, uncertainty_y)``, or None for the reference block.
+        """
         (
             locs_data,
             frames,
@@ -2404,13 +2514,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             plot_histogram=save_all_rsso_plots,
             plot_dir=plot_dir,
         )
-        logger.debug(
-            f"""
+        logger.debug(f"""
             coarse undrift of block {current_min_frame} to {current_max_frame}
             shift x: {shift_x}; shift y: {shift_y};
             uncertainty info: {uncertainty_info}
-            """
-        )
+            """)
 
         if shift_x is not None and shift_y is not None:
             quality = len(prev_block_locs) + len(current_block_locs)
@@ -2453,18 +2561,47 @@ class AutoPicasso(util.AbstractModuleCollection):
         plot_dir,
         use_spline_interpolation,
     ):
-        """Adaptive drift correction with variable window sizes based on local statistics
+        """Adaptive drift correction with locally variable window sizes.
 
-        This method uses time series cross validation principles to adaptively
-        choose window sizes, with larger windows in stable regions and smaller
-        windows in rapidly changing regions.
+        Uses time-series cross-validation principles to adaptively choose
+        window sizes -- larger in stable regions, smaller in rapidly changing
+        ones.
 
-        Returns:
-            tuple: (drift_x_fine, drift_y_fine, uncertainty_x_fine,
-                   uncertainty_y_fine, drift_quality)
+        Parameters
+        ----------
+        frames : numpy.ndarray
+            The localization frame numbers.
+        max_shift : float
+            Maximum expected drift per step in pixels.
+        min_locs_per_frame : int
+            Minimum localizations per frame for a reliable estimate.
+        min_window_size, max_window_size : int
+            Bounds on the adaptive window size.
+        confidence_threshold : float
+            Confidence threshold for windowing.
+        outlier_detection_enabled : bool
+            Whether to detect and handle temporal outliers.
+        outlier_z_threshold : float
+            Z-score threshold for temporal outlier detection.
+        change_point_sensitivity : float
+            Sensitivity for change-point detection.
+        min_signal_to_noise : float
+            Minimum signal-to-noise ratio for drift measurements.
+        n_processes : int or None
+            Number of parallel processes.
+        save_all_rsso_plots : bool
+            Whether to save all RSSO diagnostic plots.
+        plot_dir : str
+            Directory for the plots.
+        use_spline_interpolation : bool
+            Whether to use spline (vs linear) interpolation.
+
+        Returns
+        -------
+        tuple
+            ``(drift_x_fine, drift_y_fine, uncertainty_x_fine,
+            uncertainty_y_fine, drift_quality)``.
         """
-        from scipy import stats
-        from scipy.signal import find_peaks
 
         n_frames = len(frames)
 
@@ -2570,7 +2707,25 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _get_coarse_drift_estimates(
         self, frames, max_shift, min_locs_per_frame, window_size
     ):
-        """Get initial coarse drift estimates for change point detection"""
+        """Get initial coarse drift estimates for change-point detection.
+
+        Parameters
+        ----------
+        frames : numpy.ndarray
+            The localization frame numbers.
+        max_shift : float
+            Maximum expected drift per step in pixels.
+        min_locs_per_frame : int
+            Minimum localizations per window for an estimate.
+        window_size : int
+            Fixed sliding-window size for the coarse estimation.
+
+        Returns
+        -------
+        dict
+            Lists keyed by ``drift_x``, ``drift_y``, ``uncertainty_x``,
+            ``uncertainty_y``, ``quality`` and ``frame_indices``.
+        """
         n_frames = len(frames)
         coarse_estimates = {
             "drift_x": [],
@@ -2637,16 +2792,28 @@ class AutoPicasso(util.AbstractModuleCollection):
         return coarse_estimates
 
     def _filter_temporal_outliers(self, coarse_estimates, z_threshold=3.5):
-        """Filter temporal outliers from coarse drift estimates using local consistency
+        """Filter temporal outliers from coarse drift estimates.
 
-        This method identifies and removes drift measurements that are inconsistent
-        with their temporal neighbors, which often result from RSSO fit failures.
+        Identifies and removes drift measurements inconsistent with their
+        temporal neighbours (often from RSSO fit failures), using a local
+        moving-median consistency check.
+
+        Parameters
+        ----------
+        coarse_estimates : dict
+            Coarse estimates as returned by
+            :meth:`_get_coarse_drift_estimates`.
+        z_threshold : float, optional
+            Modified z-score threshold above which a point is an outlier.
+            Default is 3.5.
+
+        Returns
+        -------
+        dict
+            A copy of ``coarse_estimates`` with outliers set to NaN.
         """
         drift_x = np.array(coarse_estimates["drift_x"])
         drift_y = np.array(coarse_estimates["drift_y"])
-        uncertainties_x = np.array(coarse_estimates["uncertainty_x"])
-        uncertainties_y = np.array(coarse_estimates["uncertainty_y"])
-        qualities = np.array(coarse_estimates["quality"])
 
         # Create filtered copy
         filtered_estimates = {
@@ -2730,7 +2897,24 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _check_trend_inconsistency(
         self, current_idx, start_idx, end_idx, drift_x, drift_y, valid_mask
     ):
-        """Check if a measurement is inconsistent with local trend"""
+        """Check whether a measurement is inconsistent with the local trend.
+
+        Parameters
+        ----------
+        current_idx : int
+            Index of the measurement being checked.
+        start_idx, end_idx : int
+            Bounds of the local window.
+        drift_x, drift_y : numpy.ndarray
+            The coarse drift estimates.
+        valid_mask : numpy.ndarray of bool
+            Which estimates are valid.
+
+        Returns
+        -------
+        bool
+            Whether the measurement deviates from the local linear trend.
+        """
         try:
             # Get local valid indices
             local_indices = np.arange(start_idx, end_idx)
@@ -2788,7 +2972,21 @@ class AutoPicasso(util.AbstractModuleCollection):
         return False
 
     def _detect_change_points(self, coarse_estimates, sensitivity):
-        """Detect change points in drift patterns using statistical methods"""
+        """Detect change points in the drift pattern.
+
+        Parameters
+        ----------
+        coarse_estimates : dict
+            Coarse estimates as returned by
+            :meth:`_get_coarse_drift_estimates`.
+        sensitivity : float
+            Detection sensitivity.
+
+        Returns
+        -------
+        list
+            Frame indices of the detected change points.
+        """
         drift_x = np.array(coarse_estimates["drift_x"])
         drift_y = np.array(coarse_estimates["drift_y"])
         frame_indices = np.array(coarse_estimates["frame_indices"])
@@ -2889,7 +3087,27 @@ class AutoPicasso(util.AbstractModuleCollection):
         max_window_size,
         confidence_threshold,
     ):
-        """Calculate optimal window sizes for each frame based on local stability"""
+        """Calculate per-frame optimal window sizes from local stability.
+
+        Parameters
+        ----------
+        frames : numpy.ndarray
+            The localization frame numbers.
+        change_points : list
+            Frame indices of detected change points.
+        coarse_estimates : dict
+            Coarse estimates as returned by
+            :meth:`_get_coarse_drift_estimates`.
+        min_window_size, max_window_size : int
+            Bounds on the window size.
+        confidence_threshold : float
+            Confidence above which larger windows are used.
+
+        Returns
+        -------
+        numpy.ndarray
+            The optimal window size per frame.
+        """
         n_frames = len(frames)
         optimal_windows = np.full(n_frames, min_window_size)
 
@@ -2970,7 +3188,33 @@ class AutoPicasso(util.AbstractModuleCollection):
         outlier_detection_enabled=True,
         min_signal_to_noise=0.5,
     ):
-        """Estimate drift using adaptive window sizes for each frame"""
+        """Estimate drift per frame using the adaptive window sizes.
+
+        Parameters
+        ----------
+        frames : numpy.ndarray
+            The localization frame numbers.
+        optimal_windows : numpy.ndarray
+            Per-frame window sizes from :meth:`_calculate_adaptive_windows`.
+        max_shift : float
+            Maximum expected drift per step in pixels.
+        min_locs_per_frame : int
+            Minimum localizations per window for an estimate.
+        save_all_rsso_plots : bool
+            Whether to save all RSSO diagnostic plots.
+        plot_dir : str
+            Directory for the plots.
+        outlier_detection_enabled : bool, optional
+            Whether to detect outliers. Default is True.
+        min_signal_to_noise : float, optional
+            Minimum signal-to-noise ratio. Default is 0.5.
+
+        Returns
+        -------
+        tuple
+            ``(drift_x_fine, drift_y_fine, uncertainty_x_fine,
+            uncertainty_y_fine, drift_quality)``.
+        """
         n_frames = len(frames)
 
         drift_x_fine = np.zeros(n_frames)
@@ -3080,14 +3324,31 @@ class AutoPicasso(util.AbstractModuleCollection):
         outlier_detection_enabled=True,
         min_signal_to_noise=0.5,
     ):
-        """Helper function to estimate drift between two groups of localizations using RSSO
+        """Estimate the drift between two groups of localizations via RSSO.
 
-        Enhanced with RSSO fit failure detection and outlier filtering.
+        Enhanced with RSSO fit-failure detection and outlier filtering.
 
-        Returns:
-            shift_x, shift_y: drift measurements (None if failed/outlier)
-            quality: quality metric based on number of localizations
-            uncertainty_x, uncertainty_y: estimated uncertainties in shift measurements
+        Parameters
+        ----------
+        locs_ref, locs_target : np.rec.array
+            The reference and target localizations.
+        max_shift : float
+            Maximum expected drift in pixels.
+        min_locs : int
+            Minimum localizations required in each group.
+        outlier_detection_enabled : bool, optional
+            Whether to apply failure/outlier detection. Default is True.
+        min_signal_to_noise : float, optional
+            Minimum signal-to-noise ratio. Default is 0.5.
+
+        Returns
+        -------
+        shift_x, shift_y : float or None
+            Drift measurements (None if failed or flagged as an outlier).
+        quality : int
+            Quality metric based on the number of localizations.
+        uncertainty_x, uncertainty_y : float or None
+            Estimated uncertainties in the shift measurements.
         """
         from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
 
@@ -3158,18 +3419,29 @@ class AutoPicasso(util.AbstractModuleCollection):
         quality,
         min_signal_to_noise=0.5,
     ):
-        """Detect RSSO fit failures and false drift outliers
+        """Detect RSSO fit failures and false drift outliers.
 
-        Args:
-            shift_x, shift_y: Estimated drift values
-            uncertainty_x, uncertainty_y: Uncertainty estimates
-            shift_magnitude: Magnitude of drift vector
-            max_shift: Maximum expected drift per comparison
-            fit_successful: Whether the Gaussian fit was successful
-            quality: Quality metric (number of localizations)
+        Parameters
+        ----------
+        shift_x, shift_y : float
+            Estimated drift values.
+        uncertainty_x, uncertainty_y : float
+            Uncertainty estimates.
+        shift_magnitude : float
+            Magnitude of the drift vector.
+        max_shift : float
+            Maximum expected drift per comparison.
+        fit_successful : bool
+            Whether the Gaussian fit succeeded.
+        quality : int
+            Quality metric (number of localizations).
+        min_signal_to_noise : float, optional
+            Minimum signal-to-noise ratio. Default is 0.5.
 
-        Returns:
-            bool: True if measurement should be considered an outlier/failure
+        Returns
+        -------
+        bool
+            Whether the measurement should be treated as an outlier/failure.
         """
 
         # Criterion 1: Gaussian fit failure
@@ -3231,7 +3503,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         plot_dir,
         use_spline_interpolation,
     ):
-        """Generate comprehensive drift analysis plot showing local drift, confidence, and window sizes"""
+        """Plot the adaptive drift analysis.
+
+        Shows the local drift trajectory, confidence intervals, adaptive window
+        sizes and detected change points across four stacked panels, and saves
+        the figure to ``plot_dir``.
+
+        Returns
+        -------
+        str
+            The filepath of the saved analysis figure.
+        """
         import os
 
         import matplotlib.pyplot as plt
@@ -3340,7 +3622,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Plot drift rate
         ax2_twin = ax2.twinx()
-        line1 = ax2.plot(
+        ax2.plot(
             frame_indices[1:],
             drift_rate_magnitude,
             "g-",
@@ -3354,7 +3636,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             if np.max(drift_quality) > 0
             else drift_quality
         )
-        line2 = ax2_twin.bar(
+        ax2_twin.bar(
             frame_indices,
             quality_normalized,
             alpha=0.4,
@@ -3536,7 +3818,16 @@ class AutoPicasso(util.AbstractModuleCollection):
         change_points,
         plot_dir,
     ):
-        """Generate summary statistics plot for drift correction performance"""
+        """Plot summary statistics of drift-correction performance.
+
+        Saves a 2x2 panel of drift-magnitude, uncertainty and window-size
+        summaries to ``plot_dir``.
+
+        Returns
+        -------
+        str
+            The filepath of the saved summary figure.
+        """
         import os
 
         import matplotlib.pyplot as plt
@@ -3653,13 +3944,37 @@ class AutoPicasso(util.AbstractModuleCollection):
         smoothing_factor,
         min_blocks_for_spline,
     ):
-        """Cubic spline-based long-timescale drift correction using block centers as anchor points
+        """Cubic-spline long-timescale drift correction from block centers.
 
-        This method estimates drift at the center of each toff-sized time block, then uses
-        cubic spline interpolation to create a smooth drift trajectory over all frames.
+        Estimates drift at the center of each ``toff``-sized time block, then
+        cubic-spline-interpolates a smooth drift trajectory over all frames.
 
-        Returns:
-            tuple: (drift_x_coarse, drift_y_coarse, uncertainty_x_coarse, uncertainty_y_coarse)
+        Parameters
+        ----------
+        frames : numpy.ndarray
+            The localization frame numbers.
+        toff : float
+            Time-block size in frames (anchor spacing).
+        max_shift : float
+            Maximum expected drift per block in pixels.
+        min_locs_per_block : int
+            Minimum localizations per block for an anchor.
+        n_processes : int or None
+            Number of parallel processes.
+        save_all_rsso_plots : bool
+            Whether to save all RSSO diagnostic plots.
+        plot_dir : str
+            Directory for the plots.
+        smoothing_factor : float
+            Spline smoothing factor.
+        min_blocks_for_spline : int
+            Minimum number of anchor blocks required to fit a spline.
+
+        Returns
+        -------
+        tuple
+            ``(drift_x_coarse, drift_y_coarse, uncertainty_x_coarse,
+            uncertainty_y_coarse)``.
         """
         from scipy.interpolate import UnivariateSpline
 
@@ -3919,7 +4234,25 @@ class AutoPicasso(util.AbstractModuleCollection):
         uncertainties_y,
         n_frames,
     ):
-        """Fallback to linear interpolation when spline fitting fails"""
+        """Interpolate drift linearly as a fallback when spline fitting fails.
+
+        Parameters
+        ----------
+        anchor_frames : numpy.ndarray
+            Frame indices of the anchor points.
+        drifts_x, drifts_y : numpy.ndarray
+            Drift values at the anchors.
+        uncertainties_x, uncertainties_y : numpy.ndarray
+            Uncertainties at the anchors.
+        n_frames : int
+            Total number of frames to interpolate over.
+
+        Returns
+        -------
+        tuple
+            ``(drift_x, drift_y, uncertainty_x, uncertainty_y)`` over all
+            frames.
+        """
         from scipy.interpolate import interp1d
 
         logger.debug("Using linear interpolation fallback")
@@ -3993,7 +4326,16 @@ class AutoPicasso(util.AbstractModuleCollection):
         anchor_uncertainties_y,
         plot_dir,
     ):
-        """Generate diagnostic plots for spline fitting quality"""
+        """Plot diagnostics for the spline-fit drift correction.
+
+        Saves a 2x2 panel comparing the spline fit to the anchor points to
+        ``plot_dir``.
+
+        Returns
+        -------
+        str
+            The filepath of the saved diagnostics figure.
+        """
         import os
 
         import matplotlib.pyplot as plt
@@ -4120,7 +4462,27 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _process_linear_block_results(
         self, block_results, n_frames, toff_block_size, drift_quality
     ):
-        """Process block results using original linear distribution approach"""
+        """Accumulate per-block drift results into per-frame trajectories.
+
+        Uses the original linear-distribution approach.
+
+        Parameters
+        ----------
+        block_results : list
+            Per-block results from :meth:`_process_drift_block`.
+        n_frames : int
+            Total number of frames.
+        toff_block_size : int
+            Block size in frames.
+        drift_quality : numpy.ndarray
+            Per-frame quality array to fill.
+
+        Returns
+        -------
+        tuple
+            ``(drift_x_coarse, drift_y_coarse, uncertainty_x_coarse,
+            uncertainty_y_coarse)``.
+        """
         # Initialize arrays
         drift_x_coarse = np.zeros(n_frames)
         drift_y_coarse = np.zeros(n_frames)
@@ -4207,8 +4569,19 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @staticmethod
     def _process_fine_drift_chunk(args):
-        """Stateless helper function for processing fine drift chunks
-        in parallel"""
+        """Process a chunk of fine (per-frame) drift estimates in parallel.
+
+        Parameters
+        ----------
+        args : tuple
+            ``(locs_data, frames, chunk_frames, max_shift,
+            min_locs_per_frame, save_all_rsso_plots, plot_dir, ...)``.
+
+        Returns
+        -------
+        list
+            Per-frame fine drift estimates for the chunk.
+        """
         (
             locs_data,
             frames,
@@ -4283,74 +4656,67 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def undrift_rsso(self, i, parameters, results):
-        """Undrift localized data using iterative RSSO-based drift correction
+        """Undrift localized data using iterative RSSO drift correction.
 
-        This method applies an iterative RSSO (Redundant Spot Shift
-        Overrepresentation) approach where each frame is compared against
-        the whole dataset to compute total drift for that frame. The process
-        is repeated iteratively with the undrifted dataset to improve accuracy.
-        Includes uncertainty analysis, confidence evaluation, windowing and
-        outlier detection.
+        Applies an iterative RSSO (Redundant Spot Shift Overrepresentation)
+        approach in which each frame is compared against the whole dataset to
+        compute that frame's total drift, repeated on the undrifted dataset to
+        improve accuracy. Includes uncertainty analysis, confidence evaluation,
+        windowing and outlier detection.
 
-        Args:
-            i : int
-                the module index in the protocol
-            parameters : dict
-                necessary items:
-                    ton : float
-                        Half-life of localization in frames (how long a spot
-                        stays visible)
-                    toff : float
-                        Time in frames for a spot to reappear after
-                        disappearing
-                    max_shift : float
-                        Maximum expected drift per frame in pixels
-                optional items:
-                    min_locs_per_frame : int
-                        Minimum localizations per frame for reliable drift
-                        estimation (default: 10)
-                    max_iterations : int
-                        Maximum number of iterative refinement rounds (default: 5)
-                    convergence_threshold : float
-                        RMS drift change threshold for convergence in nm (default: 0.1)
-                    plot_drift : bool
-                        Whether to save drift plots (default: True)
-                    save_locs : bool
-                        Whether to save undrifted localizations (default: True)
-                    n_processes : int or None
-                        Number of processes for parallel computation (default: auto)
-                    confidence_threshold : float
-                        Confidence threshold for windowing analysis (default: 0.8)
-                    outlier_detection_enabled : bool
-                        Enable RSSO failure and outlier detection (default: True)
-                    outlier_z_threshold : float
-                        Z-score threshold for temporal outlier detection (default: 3.5)
-                    min_signal_to_noise : float
-                        Minimum signal-to-noise ratio for drift measurements (default: 0.5)
-                    windowing_enabled : bool
-                        Enable adaptive windowing for low-confidence frames (default: True)
-                    window_size_range : tuple
-                        Min and max window sizes for adaptive windowing (default: (3, 20))
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
 
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results including:
-                    success : bool
-                        whether drift correction succeeded
-                    drift_x, drift_y : ndarray
-                        total drift trajectories in nm for each frame
-                    uncertainty_x, uncertainty_y : ndarray
-                        uncertainty estimates for drift measurements
-                    drift_quality : ndarray
-                        quality/confidence metrics per frame
-                    n_iterations : int
-                        number of iterations performed
-                    convergence_rms : float
-                        final RMS change indicating convergence
-                    drift_plots : str
-                        path to drift visualization plots
+            ``ton`` : float
+                Half-life of a localization in frames.
+            ``toff`` : float
+                Frames for a spot to reappear after disappearing.
+            ``max_shift`` : float
+                Maximum expected drift per frame in pixels.
+
+            Optional keys (defaults in parentheses):
+
+            ``min_locs_per_frame`` : int
+                Min localizations per frame for a reliable estimate (10).
+            ``max_iterations`` : int
+                Max iterative refinement rounds (5).
+            ``convergence_threshold`` : float
+                RMS drift-change convergence threshold in nm (0.1).
+            ``plot_drift`` : bool
+                Whether to save drift plots (True).
+            ``save_locs`` : bool
+                Whether to save undrifted localizations (True).
+            ``n_processes`` : int or None
+                Processes for parallel computation (auto).
+            ``confidence_threshold`` : float
+                Confidence threshold for windowing analysis (0.8).
+            ``outlier_detection_enabled`` : bool
+                Enable RSSO failure and outlier detection (True).
+            ``outlier_z_threshold`` : float
+                Z-score threshold for temporal outlier detection (3.5).
+            ``min_signal_to_noise`` : float
+                Min signal-to-noise ratio for drift measurements (0.5).
+            ``windowing_enabled`` : bool
+                Enable adaptive windowing for low-confidence frames (True).
+            ``window_size_range`` : tuple
+                Min and max window sizes for adaptive windowing ((3, 20)).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``success``, ``drift_x``/``drift_y`` (total
+            drift trajectories in nm), ``uncertainty_x``/``uncertainty_y``,
+            ``drift_quality``, ``n_iterations``, ``convergence_rms`` and
+            ``drift_plots``.
         """
         from picasso_workflow.outpost_modules.undrift_rsso import (
             compute_undrift_rsso,
@@ -4379,7 +4745,24 @@ class AutoPicasso(util.AbstractModuleCollection):
         drift=None,
         uncertainty=None,
     ):
-        """Plot drift with confidence intervals"""
+        """Plot the drift trajectory with confidence intervals.
+
+        Parameters
+        ----------
+        filename : str
+            Path to save the plot to.
+        dimensions : list of str
+            The drift dimensions to plot (e.g. ``['x', 'y']``).
+        pixelsize : float
+            Pixel size in nm, for converting drift to nm.
+        method : str, optional
+            Name of the undrift method, shown in the title.
+        drift : array-like, optional
+            The drift to plot; defaults to ``self.drift``.
+        uncertainty : array-like, optional
+            Per-frame drift uncertainty; defaults to
+            ``self.drift_uncertainty`` if present.
+        """
         if drift is None:
             drift = self.drift
         if uncertainty is None:
@@ -4451,7 +4834,21 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _plot_drift(
         self, filename, dimensions, pixelsize, method="", drift=None
     ):
-        """Legacy drift plotting method for compatibility"""
+        """Plot the drift trajectory (legacy, no confidence intervals).
+
+        Parameters
+        ----------
+        filename : str
+            Path to save the plot to.
+        dimensions : list of str
+            The drift dimensions to plot.
+        pixelsize : float
+            Pixel size in nm.
+        method : str, optional
+            Name of the undrift method, shown in the title.
+        drift : array-like, optional
+            The drift to plot; defaults to ``self.drift``.
+        """
         if drift is None:
             drift = self.drift
         fig, ax = plt.subplots()
@@ -4472,7 +4869,17 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _plot_channel_alignment_with_confidence(
         self, shifts, shift_uncertainties, filename
     ):
-        """Plot channel alignment shifts with confidence intervals"""
+        """Plot per-channel alignment shifts with confidence intervals.
+
+        Parameters
+        ----------
+        shifts : numpy.ndarray
+            The per-channel shifts, shape ``(dims, channels)``.
+        shift_uncertainties : dict
+            Uncertainty information for the channel shifts.
+        filename : str
+            Path to save the plot to.
+        """
         import matplotlib.pyplot as plt
 
         n_channels = shifts.shape[1]
@@ -4560,24 +4967,30 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def manual(self, i, parameters, results):
-        """Handles a manual step: if the files required are not
-        present, prompt the user to provide them. if they are, move
-        to the next step.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    prompt : str
-                        the user prompt
-                    filename : str
-                        the file the user should provide.
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Handle a manual step that waits for user-provided files.
+
+        If the required file is not present, prompt the user to provide it; if
+        it is, move on to the next step.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``prompt`` : str
+                The user prompt.
+            ``filename`` : str
+                The file the user should provide.
+
+            Optional keys:
+
+            ``save_locs`` : bool
+                Whether to save the locs into the results folder.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         filepath = os.path.join(results["folder"], parameters["filename"])
         if os.path.exists(filepath):
@@ -4598,45 +5011,36 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def summarize_dataset(self, i, parameters, results):
-        """Summarize dataset using various analysis methods
+        """Summarize a dataset using various quality-metric methods.
 
-        Computes dataset quality metrics such as NeNa (Nearest Neighbor Analysis)
-        and median localization precision.
+        Computes metrics such as NeNa (nearest-neighbour analysis) and median
+        localization precision.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    methods : dict
-                        Dictionary of analysis methods to run. Keys are method names,
-                        values are method-specific parameter dicts.
-                        Supported methods:
-                            "nena" : dict (no parameters)
-                                Performs Nearest Neighbor Analysis to estimate localization precision
-                            "median-loc-precision" : dict
-                                Calculates median localization precision
-                                Optional keys:
-                                    qe_correction : float
-                                        Quantum efficiency correction factor (default: 1)
-            results : dict
-                the results dict, created by the module_decorator
-        Returns:
-            parameters : dict
-                as input, potentially changed values, for consistency
-            results : dict
-                the analysis results, updated with:
-                    nena : dict (if nena method used)
-                        Dictionary with keys:
-                            res : str - all best fit values
-                            NeNa : str - formatted NeNa result
-                            nena-px : float - NeNa value in pixels
-                            nena-nm : float - NeNa value in nanometers
-                            filepath_plot : str - path to NeNa plot
-                    median-loc-precision : dict (if median-loc-precision method used)
-                        Dictionary with keys:
-                            median_lp-px : float - median localization precision in pixels
-                            median_lp-nm : float - median localization precision in nanometers
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``methods`` : dict
+                Analysis methods to run, mapping method name to a
+                method-specific parameter dict. Supported: ``"nena"`` (no
+                parameters) and ``"median-loc-precision"`` (optional
+                ``qe_correction``, default 1).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated, depending on the methods used, with ``nena``
+            (keys ``res``, ``NeNa``, ``nena-px``, ``nena-nm``,
+            ``filepath_plot``) and ``median-loc-precision`` (keys
+            ``median_lp-px``, ``median_lp-nm``).
         """
         pixelsize = self.pixelsize
         for meth, meth_pars in parameters["methods"].items():
@@ -4690,6 +5094,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     def _plot_nena(self, nena_result, filepath_plot, pixelsize=None):
+        """Plot the NeNa fit of the nearest-neighbour distance distribution.
+
+        Parameters
+        ----------
+        nena_result : object
+            The NeNa fit result from ``postprocess.nena``.
+        filepath_plot : str
+            Path to save the plot to.
+        pixelsize : float, optional
+            Pixel size in nm, for a secondary nm axis.
+        """
         fig, ax = plt.subplots()
         d = nena_result["d"]
         if pixelsize is None:
@@ -4732,20 +5147,25 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def density(self, i, parameters, results):
-        """Calculate local localization density
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    radius : float
-                        the radius for calculating local density
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Calculate the local localization density.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``radius`` : float
+                The radius for calculating local density.
+
+            Optional keys:
+
+            ``save_locs`` : bool
+                Whether to save the locs into the results folder.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         self.locs = postprocess.compute_local_density(
             self.locs, self.info, parameters["radius"]
@@ -4761,54 +5181,45 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def dbscan(self, i, parameters, results):
-        """Perform clustering using dbscan.
+        """Cluster localizations using DBSCAN.
 
-        Applies DBSCAN clustering algorithm to localizations, optionally
-        replacing localizations with cluster centers for subsequent analysis.
-        After this module, the standard locs will be the cluster centers.
+        Optionally replaces localizations with cluster centers for subsequent
+        analysis; after this module the standard locs are the cluster centers.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    radius : float
-                        The DBSCAN radius parameter in nm
-                    min_samples : int
-                        Number of localizations within radius to consider a given point
-                        a core sample.
-                    min_locs : int
-                        Minimum number of localizations in a cluster. Clusters with
-                        fewer localizations will be removed. Default is 0.
-                    continue_with_centers : bool
-                        Whether to replace localizations with cluster centers
-                Optional keys:
-                    save_locs : bool
-                        Whether to save clustered localization data to results
-                        folder
-            results : dict
-                Automatic keys (provided by decorator):
-                    start time : str
-                        Module execution start timestamp
-                    end time : str
-                        Module execution end timestamp
-                    duration : float
-                        Module execution duration in seconds
-                    folder : str
-                        Output folder for module results
-                    folder : str
-                        Output folder for generated files
-                Results updated with:
-                    fp_fig_clustersizes : str
-                        Filepath to cluster size distribution figure
-                    fp_centers : str
-                        Filepath to cluster centers file
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
 
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with clustering outputs and file paths
+            ``radius`` : float
+                The DBSCAN radius parameter in nm.
+            ``min_samples`` : int
+                Number of localizations within ``radius`` for a point to be a
+                core sample.
+            ``min_locs`` : int
+                Minimum localizations in a cluster; smaller clusters are
+                removed. Default is 0.
+            ``continue_with_centers`` : bool
+                Whether to replace localizations with cluster centers.
+
+            Optional keys:
+
+            ``save_locs`` : bool
+                Whether to save clustered localization data to the results
+                folder.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results updated with ``fp_fig_clustersizes`` (cluster-size
+            distribution figure) and ``fp_centers`` (cluster centers file).
         """
         pixelsize = int(self.pixelsize)
         radius = parameters["radius"] / pixelsize
@@ -4855,23 +5266,29 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def hdbscan(self, i, parameters, results):
-        """Perform hdbscan clustering. After this module, the standard
-        locs will be the cluster centers.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    min_cluster : float
-                        the hdbscan min_cluster
-                    min_samples : float
-                        the hdbscan min_sample
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Cluster localizations using HDBSCAN.
+
+        After this module the standard locs are the cluster centers.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``min_cluster`` : float
+                The HDBSCAN ``min_cluster_size``.
+            ``min_samples`` : float
+                The HDBSCAN ``min_samples``.
+
+            Optional keys:
+
+            ``save_locs`` : bool
+                Whether to save the locs into the results folder.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         min_cluster = parameters["min_cluster"]
         min_samples = parameters["min_samples"]
@@ -4899,22 +5316,28 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def binding_event_analysis(self, i, parameters, results):
-        """Evaluate binding events according to Philipp Steen's methods
+        """Evaluate binding events following Steen et al.
 
-        Steen, P.R., Unterauer, E.M., Masullo, L.A. et al.
-        The DNA-PAINT palette: a comprehensive performance analysis
-        of fluorescent dyes.
-        Nat Methods (2024).
-        https://doi.org/10.1038/s41592-024-02374-8
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_locs : str
-                        file path to input locs
-                    n_frames
+            ``fp_locs`` : str
+                File path to the input locs.
+            ``n_frames`` : int
+                Number of frames in the acquisition.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        References
+        ----------
+        Steen, P.R., Unterauer, E.M., Masullo, L.A. et al. The DNA-PAINT
+        palette: a comprehensive performance analysis of fluorescent dyes.
+        Nat Methods (2024). https://doi.org/10.1038/s41592-024-02374-8
         """
         folder_in, file_in = os.path.split(parameters["fp_locs"])
         file_nameonly, _ = os.path.splitext(file_in)
@@ -4956,55 +5379,46 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def resolution_analysis(self, i, parameters, results):
-        """Perform resolution analysis using point pattern autocorrelation
+        """Estimate spatial resolution via point-pattern autocorrelation.
 
-        This method calculates the spatial resolution of localizations
-        by computing a 2D autocorrelation function and fitting a Gaussian to
-        extract resolution metrics. The analysis includes 2D Gaussian fitting,
-        radial profile computation, and 1D Gaussian fitting to the radial profile.
+        Computes a 2D autocorrelation function and fits a Gaussian to extract
+        resolution metrics, including 2D Gaussian fitting, radial profile
+        computation and a 1D Gaussian fit to the radial profile.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                with optional keys:
-                    delta_r : float
-                        grid spacing for autocorrelation (default: 5 nm)
-                    r_max : float
-                        maximum radius for autocorrelation (default: 100 nm)
-                    batch_size : int or None
-                        number of data points per batch for chunking (auto-calculated if None)
-                    n_processes : int or None
-                        number of parallel processes (auto-detected if None, capped at 4)
-                    use_chunking : bool
-                        enable memory-efficient chunking for large datasets (default: True)
-                    use_sparse : bool
-                        use sparse matrices for very large grids (default: False)
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
 
-        Results:
-            resolution : float
-                average resolution in nm (FWHM)
-            sigma_x, sigma_y : float
-                Gaussian standard deviations in x,y directions
-            fwhm_x, fwhm_y : float
-                Full-width half-maximum in x,y directions
-            fit_quality : float
-                R-squared goodness of fit
-            autocorr_map : ndarray
-                2D autocorrelation intensity map
-            radial_profile : ndarray
-                radial profile of autocorrelation
-            radial_distances : ndarray
-                distance values for radial profile
-            resolution_radial : float
-                resolution from radial Gaussian fit (FWHM)
-            resolution_dblradial : float
-                resolution from double Gaussian fit (FWHM)
-            fig_resolution : str
-                path to resolution plot
-            fig_radial : str
-                path to radial profile plot
+            ``delta_r`` : float
+                Grid spacing for autocorrelation (default 5 nm).
+            ``r_max`` : float
+                Maximum radius for autocorrelation (default 100 nm).
+            ``batch_size`` : int or None
+                Data points per batch for chunking (auto if None).
+            ``n_processes`` : int or None
+                Number of parallel processes (auto if None, capped at 4).
+            ``use_chunking`` : bool
+                Memory-efficient chunking for large datasets (default True).
+            ``use_sparse`` : bool
+                Use sparse matrices for very large grids (default False).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``resolution`` (average FWHM, nm),
+            ``sigma_x``/``sigma_y``, ``fwhm_x``/``fwhm_y``, ``fit_quality``
+            (R-squared), ``autocorr_map``, ``radial_profile``,
+            ``radial_distances``, ``resolution_radial`` (radial-fit FWHM),
+            ``resolution_dblradial`` (double-Gaussian FWHM), ``fig_resolution``
+            and ``fig_radial``.
         """
         from picasso_workflow.picasso_outpost import (
             analyse_resolution_ppac,
@@ -5055,22 +5469,24 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # Compute radial profile (optimized vectorized version)
         def compute_radial_profile(autocorr_map, sampling_resolution):
-            """Compute radial profile of autocorrelation map using vectorized binning
+            """Compute the radial profile of an autocorrelation map.
 
-            This optimized version uses np.digitize and np.bincount for 5-10x
-            speedup compared to loop-based binning.
+            Uses vectorized binning (``np.digitize`` + ``np.bincount``) for a
+            5-10x speedup over loop-based binning.
 
-            Args:
-                autocorr_map : ndarray
-                    2D autocorrelation map
-                sampling_resolution : float
-                    pixel size in nm
+            Parameters
+            ----------
+            autocorr_map : ndarray
+                2D autocorrelation map.
+            sampling_resolution : float
+                Pixel size in nm.
 
-            Returns:
-                radial_profile : ndarray
-                    averaged intensity values at each radial distance
-                radial_distances : ndarray
-                    distance values in nm
+            Returns
+            -------
+            radial_profile : ndarray
+                Averaged intensity values at each radial distance.
+            radial_distances : ndarray
+                Distance values in nm.
             """
             center = np.array(autocorr_map.shape) // 2
             y, x = np.ogrid[: autocorr_map.shape[0], : autocorr_map.shape[1]]
@@ -5328,14 +5744,21 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @staticmethod
     def _compute_frame_to_dataset_shift(frame_data):
-        """Compute RSSO shift of single frame against whole dataset (multiprocessing worker)
+        """Compute the RSSO shift of one frame vs the whole dataset.
 
-        Args:
-            frame_data : tuple
-                (frame_idx, frame_locs, dataset_locs, max_shift, min_locs_per_frame, ton, toff)
+        Multiprocessing worker.
 
-        Returns:
-            tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
+        Parameters
+        ----------
+        frame_data : tuple
+            ``(frame_idx, frame_locs, dataset_locs, max_shift,
+            min_locs_per_frame, ton, toff)``.
+
+        Returns
+        -------
+        tuple
+            ``(frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y,
+            confidence, quality)``.
         """
         from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
 
@@ -5374,9 +5797,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
                 # Calculate confidence based on number of localizations and uncertainty
                 n_locs_frame = len(frame_locs)
-                n_locs_dataset = len(dataset_locs)
 
-                # Simple confidence metric based on localization count and uncertainty
+                # Simple confidence metric based on loc count and uncertainty
                 if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
                     confidence = min(
                         1.0,
@@ -5412,14 +5834,21 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @staticmethod
     def _compute_frame_to_dataset_shift_memory_efficient(frame_data):
-        """Memory-efficient RSSO shift computation using frame indices instead of data copies
+        """Compute the RSSO shift memory-efficiently via frame indices.
 
-        Args:
-            frame_data : tuple
-                (frame_idx, locs_array, target_frame, max_shift, min_locs_per_frame, ton, toff)
+        Avoids copying localization data into each worker.
 
-        Returns:
-            tuple : (frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y, confidence, quality)
+        Parameters
+        ----------
+        frame_data : tuple
+            ``(frame_idx, locs_array, target_frame, max_shift,
+            min_locs_per_frame, ton, toff)``.
+
+        Returns
+        -------
+        tuple
+            ``(frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y,
+            confidence, quality)``.
         """
         import numpy as np
 
@@ -5504,14 +5933,21 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     @staticmethod
     def _process_autocorr_chunk(chunk_data):
-        """Process a single spatial chunk for autocorrelation analysis (multiprocessing worker)
+        """Process one spatial chunk for autocorrelation analysis.
 
-        Args:
-            chunk_data : tuple
-                (chunk_bounds, x_coords, y_coords, sampling_res, max_shift_pixels, min_locs_per_chunk, chunk_idx)
+        Multiprocessing worker.
 
-        Returns:
-            dict or None : Chunk result with autocorr, n_locs, bounds, and chunk_idx
+        Parameters
+        ----------
+        chunk_data : tuple
+            ``(chunk_bounds, x_coords, y_coords, sampling_res,
+            max_shift_pixels, min_locs_per_chunk, chunk_idx)``.
+
+        Returns
+        -------
+        dict or None
+            Chunk result with ``autocorr``, ``n_locs``, ``bounds`` and
+            ``chunk_idx``.
         """
         (
             chunk_bounds,
@@ -5596,47 +6032,44 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def resolution_autocorr(self, i, parameters, results):
-        """Calculate resolution using 2D autocorrelation analysis
+        """Estimate resolution via chunked 2D autocorrelation analysis.
 
-        This method estimates spatial resolution by creating small spatial chunks,
-        computing autocorrelation on each chunk, then combining them weighted by
-        localization count. This preserves exact sampling resolution while managing memory.
+        Creates small spatial chunks, computes autocorrelation on each and
+        combines them weighted by localization count, preserving exact
+        sampling resolution while managing memory.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with optional keys:
-                    sampling_res : float
-                        histogram sampling resolution in nm (default: 0.5)
-                    max_shift : float
-                        maximum autocorrelation shift in nm (default: 10.0)
-                    chunk_size_nm : float
-                        spatial chunk size in nm (default: 5000, i.e., 5 μm)
-                    min_locs_per_chunk : int
-                        minimum localizations per chunk (default: 500)
-                    max_memory_gb : float
-                        maximum memory limit in GB (default: 2.0)
-                    n_processes : int or None
-                        number of parallel processes (auto-detected if None)
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
 
-        Results:
-            resolution : float
-                estimated resolution in nm (FWHM)
-            sigma_x, sigma_y : float
-                Gaussian standard deviations in x,y directions
-            fwhm_x, fwhm_y : float
-                Full-width half-maximum in x,y directions
-            autocorr_2d : ndarray
-                2D autocorrelation map (weighted average)
-            radial_profile : ndarray
-                radial profile of autocorrelation
-            radial_distances : ndarray
-                distance values for radial profile
-            fig_autocorr_2d : str
-                path to 2D autocorrelation plot
-            fig_radial : str
-                path to radial profile plot
+            ``sampling_res`` : float
+                Histogram sampling resolution in nm (default 0.5).
+            ``max_shift`` : float
+                Maximum autocorrelation shift in nm (default 10.0).
+            ``chunk_size_nm`` : float
+                Spatial chunk size in nm (default 5000, i.e. 5 µm).
+            ``min_locs_per_chunk`` : int
+                Minimum localizations per chunk (default 500).
+            ``max_memory_gb`` : float
+                Maximum memory limit in GB (default 2.0).
+            ``n_processes`` : int or None
+                Number of parallel processes (auto if None).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``resolution`` (FWHM, nm), ``sigma_x``/
+            ``sigma_y``, ``fwhm_x``/``fwhm_y``, ``autocorr_2d`` (weighted
+            average), ``radial_profile``, ``radial_distances``,
+            ``fig_autocorr_2d`` and ``fig_radial``.
         """
         from scipy.optimize import curve_fit
 
@@ -5655,7 +6088,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if n_processes is None:
             n_processes = min(mp.cpu_count(), 4)  # Limit processes for memory
 
-        logger.debug(f"Computing resolution using autocorrelation analysis...")
+        logger.debug("Computing resolution using autocorrelation analysis...")
         logger.debug(
             f"  Sampling resolution: {sampling_res} nm (preserved exactly)"
         )
@@ -5686,7 +6119,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Memory estimate per chunk
         chunk_pixels = int(chunk_size_nm / sampling_res)
         max_shift_pixels = int(np.ceil(max_shift / sampling_res))
-        autocorr_size = 2 * max_shift_pixels + 1
 
         chunk_memory_gb = (chunk_pixels**2 * 4 * 8) / (
             1024**3
@@ -5784,7 +6216,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         f"      Chunk {chunk_idx}: {result['n_locs']} locs, peak: {result['autocorr'].max():.3f}"
                     )
 
-        logger.debug(f"  Parallel processing completed.")
+        logger.debug("  Parallel processing completed.")
         gc.collect()  # Clean up after multiprocessing
 
         total_locs_processed = sum(r["n_locs"] for r in chunk_results)
@@ -6095,10 +6527,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 linewidth=2,
                 label="Double Fit",
             )
-            ax2.set_title(
-                f"Radial Profile (FWHM: {resolution_radial:.2f} nm \
-                | {resolution_dblradial:.2f})"
-            )
+            ax2.set_title(f"Radial Profile (FWHM: {resolution_radial:.2f} nm \
+                | {resolution_dblradial:.2f})")
         else:
             ax2.set_title("Radial Profile")
 
@@ -6144,65 +6574,57 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def resolution_frc(self, i, parameters, results):
-        """Calculate resolution using Fourier Ring Correlation (FRC)
+        """Estimate resolution using Fourier Ring Correlation (FRC).
 
-        This method splits localizations into two random subsets, renders them
-        into images, and computes their Fourier ring correlation to estimate
-        spatial resolution.
+        Splits localizations into two random subsets, renders them into images
+        and computes their Fourier ring correlation to estimate spatial
+        resolution. Supports chunked rendering, multi-split averaging, an FRC
+        range limit and parallel split processing.
 
-        Phase 2 optimizations:
-        - use_chunking: Enables memory-efficient chunked rendering for large FOVs
-        - n_splits: Averages over multiple random splits for robustness
-        - max_frc_range_nm: Limit FRC calculation range for speedup
-        - parallel_splits: Parallelize split processing (best when use_chunking=False)
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with optional keys:
-                    pixelsize_render : float
-                        pixel size for rendered images in nm (default: 5 nm)
-                    smoothing_sigma : float or None
-                        Gaussian smoothing sigma in pixels (default: None)
-                    threshold : float
-                        FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
-                    seed : int or None
-                        random seed for reproducibility (default: None)
-                    use_chunking : bool
-                        use chunked rendering for large images (default: False)
-                    chunk_size_nm : float
-                        chunk size in nm for chunked rendering (default: 10000)
-                    n_splits : int
-                        number of splits to average (default: 1, set >1 for robustness)
-                    n_processes : int
-                        number of parallel processes (default: 4)
-                    max_frc_range_nm : float or None
-                        maximum range to compute in nm (default: None = full range)
-                        Setting this (e.g., 25 nm) speeds up FRC calculation
-                    parallel_splits : bool
-                        process splits in parallel (default: False)
-                        Only beneficial when use_chunking=False
+            ``pixelsize_render`` : float
+                Pixel size for rendered images in nm (default 5).
+            ``smoothing_sigma`` : float or None
+                Gaussian smoothing sigma in pixels (default None).
+            ``threshold`` : float
+                FRC threshold for the resolution cutoff (default 1/7 ≈ 0.143).
+            ``seed`` : int or None
+                Random seed for reproducibility (default None).
+            ``use_chunking`` : bool
+                Use chunked rendering for large images (default False).
+            ``chunk_size_nm`` : float
+                Chunk size in nm for chunked rendering (default 10000).
+            ``n_splits`` : int
+                Number of random splits to average (default 1; >1 for
+                robustness).
+            ``n_processes`` : int
+                Number of parallel processes (default 4).
+            ``max_frc_range_nm`` : float or None
+                Maximum range to compute in nm (default None = full range);
+                setting it (e.g. 25 nm) speeds up the calculation.
+            ``parallel_splits`` : bool
+                Process splits in parallel (default False; only beneficial
+                when ``use_chunking`` is False).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
 
-        Results:
-            resolution_frc : float
-                FRC-based resolution in nm
-            resolution_std : float
-                standard deviation (only if n_splits > 1)
-            cutoff_frequency : float
-                spatial frequency at resolution cutoff (1/nm)
-            frc_curve : ndarray
-                FRC values as function of spatial frequency
-            frc_curve_std : ndarray
-                std of FRC curve (only if n_splits > 1)
-            spatial_frequencies : ndarray
-                spatial frequency values (1/nm)
-            threshold : float
-                threshold used
-            fig_frc : str
-                path to FRC curve plot
-            fig_images : str
-                path to split images comparison plot (only if n_splits=1)
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``resolution_frc`` (nm), ``resolution_std``
+            (if ``n_splits`` > 1), ``cutoff_frequency`` (1/nm), ``frc_curve``,
+            ``frc_curve_std`` (if ``n_splits`` > 1), ``spatial_frequencies``,
+            ``threshold``, ``fig_frc`` and ``fig_images`` (if ``n_splits`` ==
+            1).
         """
         from picasso_workflow.outpost_modules.resolution_frc import (
             compute_frc_averaged,
@@ -6399,57 +6821,50 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def resolution_frc_spatial(self, i, parameters, results):
-        """Calculate resolution using spatial FRC approach
+        """Estimate resolution using a spatial FRC approach.
 
-        This method divides the FOV into spatial regions, computes FRC for each
-        region independently, and averages the results. Benefits:
-        - Lower memory usage (smaller images per region)
-        - Better statistics through spatial averaging
-        - Efficient multiprocessing (fully independent regions)
-        - Preserves high spatial frequencies
+        Divides the FOV into spatial regions, computes FRC for each region
+        independently and averages the results. This lowers memory usage,
+        improves statistics through spatial averaging, parallelises well and
+        preserves high spatial frequencies.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with optional keys:
-                    pixelsize_render : float
-                        pixel size for rendered images in nm (default: 5 nm)
-                    smoothing_sigma : float or None
-                        Gaussian smoothing sigma in pixels (default: None)
-                    threshold : float
-                        FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
-                    region_size : float
-                        size of each spatial region in micrometers (default: 10.0 µm)
-                    min_locs_per_region : int
-                        minimum localizations per region to process (default: 500)
-                    max_frc_range_nm : float or None
-                        maximum FRC range in nm (default: None = full range)
-                    n_processes : int
-                        number of parallel processes (default: 4)
-                    smoothing_window : float
-                        moving average window size for FRC smoothing in 1/nm
-                        (default: 0.005)
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
 
-        Results:
-            resolution_frc_spatial : float
-                mean FRC-based resolution in nm
-            resolution_std : float
-                standard deviation across regions
-            n_regions : int
-                number of valid regions processed
-            cutoff_frequency : float
-                mean spatial frequency at resolution cutoff (1/nm)
-            frc_curve_mean : ndarray
-                mean FRC curve across regions
-            frc_curve_std : ndarray
-                std of FRC curves
-            spatial_frequencies : ndarray
-                spatial frequency values (1/nm)
-            threshold : float
-                threshold used
-            fig_frc : str
-                path to FRC curve plot
+            ``pixelsize_render`` : float
+                Pixel size for rendered images in nm (default 5).
+            ``smoothing_sigma`` : float or None
+                Gaussian smoothing sigma in pixels (default None).
+            ``threshold`` : float
+                FRC threshold for the resolution cutoff (default 1/7 ≈ 0.143).
+            ``region_size`` : float
+                Size of each spatial region in micrometers (default 10.0 µm).
+            ``min_locs_per_region`` : int
+                Minimum localizations per region to process (default 500).
+            ``max_frc_range_nm`` : float or None
+                Maximum FRC range in nm (default None = full range).
+            ``n_processes`` : int
+                Number of parallel processes (default 4).
+            ``smoothing_window`` : float
+                Moving-average window size for FRC smoothing in 1/nm
+                (default 0.005).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``resolution_frc_spatial`` (mean FRC
+            resolution, nm), ``resolution_std``, ``n_regions``,
+            ``cutoff_frequency`` (1/nm), ``frc_curve_mean``, ``frc_curve_std``,
+            ``spatial_frequencies``, ``threshold`` and ``fig_frc``.
         """
         from picasso_workflow.outpost_modules.resolution_frc import (
             compute_frc_spatial,
@@ -6508,53 +6923,50 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def resolution_decorr_spatial(self, i, parameters, results):
-        """Calculate resolution using spatial image decorrelation approach
+        """Estimate resolution using spatial image decorrelation.
 
-        This method implements the image decorrelation analysis from
-        Descloux et al., Nature Methods 2019. It divides the FOV into spatial
-        regions and computes decorrelation-based resolution for each region.
+        Implements the image-decorrelation analysis of Descloux et al.
+        (Nat Methods 2019), dividing the FOV into spatial regions and
+        computing a decorrelation-based resolution for each.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with optional keys:
-                    pixelsize_render : float
-                        pixel size for rendered images in nm (default: 5 nm)
-                    smoothing_sigma : float or None
-                        Gaussian smoothing sigma in pixels (default: None)
-                    region_size : float
-                        size of each spatial region in micrometers (default: 10.0 µm)
-                    min_locs_per_region : int
-                        minimum localizations per region to process (default: 500)
-                    n_processes : int
-                        number of parallel processes (default: 4)
-                    r_min : float
-                        minimum normalized frequency (default: 0.0)
-                    r_max : float
-                        maximum normalized frequency (default: 1.0)
-                    n_r : int
-                        number of radial sampling points (default: 50)
-                    n_gauss : int
-                        number of Gaussian filter strengths (default: 10)
-                    apod_edge_width : int
-                        edge apodization width in pixels (default: 20)
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
 
-        Results:
-            resolution_decorr_spatial : float
-                mean decorrelation-based resolution in nm
-            resolution_std : float
-                standard deviation across regions
-            n_regions : int
-                number of valid regions processed
-            decorr_curve_mean : ndarray
-                mean decorrelation curve across regions
-            decorr_curve_std : ndarray
-                std of decorrelation curves
-            r_values : ndarray
-                normalized radius values
-            fig_decorr : str
-                path to decorrelation curve plot
+            ``pixelsize_render`` : float
+                Pixel size for rendered images in nm (default 5).
+            ``smoothing_sigma`` : float or None
+                Gaussian smoothing sigma in pixels (default None).
+            ``region_size`` : float
+                Size of each spatial region in micrometers (default 10.0 µm).
+            ``min_locs_per_region`` : int
+                Minimum localizations per region to process (default 500).
+            ``n_processes`` : int
+                Number of parallel processes (default 4).
+            ``r_min``, ``r_max`` : float
+                Min/max normalized frequency (defaults 0.0 and 1.0).
+            ``n_r`` : int
+                Number of radial sampling points (default 50).
+            ``n_gauss`` : int
+                Number of Gaussian filter strengths (default 10).
+            ``apod_edge_width`` : int
+                Edge apodization width in pixels (default 20).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``resolution_decorr_spatial`` (mean
+            resolution, nm), ``resolution_std``, ``n_regions``,
+            ``decorr_curve_mean``, ``decorr_curve_std``, ``r_values`` and
+            ``fig_decorr``.
         """
         from picasso_workflow.outpost_modules.resolution_decorrelation import (
             compute_decorr_spatial,
@@ -6679,27 +7091,33 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def smlm_clusterer(self, i, parameters, results):
-        """Perform smlm clustering. After this module, the standard
-        locs will be the cluster centers.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    radius : float
-                        the smlm radius, in nm
-                    min_locs : float
-                        the smlm min_locs
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-                    basic_fa : bool
-                        the smlm basic fa, default: False
-                    radius_z : float
-                        the smlm radius_z, default: None
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Cluster localizations using the SMLM clusterer.
+
+        After this module the standard locs are the cluster centers.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``radius`` : float
+                The SMLM radius in nm.
+            ``min_locs`` : float
+                The SMLM ``min_locs``.
+
+            Optional keys:
+
+            ``save_locs`` : bool
+                Whether to save the locs into the results folder.
+            ``basic_fa`` : bool
+                The SMLM ``basic_fa`` (default False).
+            ``radius_z`` : float
+                The SMLM ``radius_z`` (default None).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         pixelsize = self.pixelsize
         radius = parameters["radius"] / pixelsize
@@ -6808,56 +7226,54 @@ class AutoPicasso(util.AbstractModuleCollection):
     @profile_resource_usage
     @module_decorator
     def gaussian_mixture_cluster(self, i, parameters, results):
-        """Perform clustering using gaussian mixture models. After this module,
-        the standard locs will be the Gaussian centers.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    locs : np.recarray
-                        Localizations.
-                    info : list
-                        Information dictionaries.
-                    min_locs : int
-                        Minimum number of localizations per component. Used
-                        to filter out components with too few localizations
-                        that likely represent background.
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-                    max_rounds_without_best_bic : int
-                        (default=3)
-                        Maximum number of rounds without BIC improvement to
-                        terminate the optimal GMM search.
-                    bootstrap_check : bool (default=False)
-                        If True, the standard error of the means (SEM) is
-                        calculated using bootstrapping. If False, the
-                        standard, single Gaussian SEM is used as
-                        approximation.
-                    calibration : dict (default=None)
-                        Calibration dictionary with x and y coefficients, z
-                        step size and the number of frames. Only required for
-                        3D data.
-                    asynch : bool (default=True)
-                        If True, the GMM search is run in parallel using
-                        multiprocessing. If False, the GMM search is run
-                        without multiprocessing.
-                    callback_parent : function (default='silent')
-                        Callback function's parent object for displaying
-                        progress bar. If None, the progress bar displayed
-                        directly to the console. If 'silent', no progress
-                        is displayed
-                    sigma_bounds : tuple of float (not recommended)
-                        Minimum standard deviation of the Gaussian components
-                        in nanometers. Useful for avoiding overfitting within
-                        a single localization cloud. Now using individual
-                        loc precision, so min_sigma is not recommended.
-                    loc_prec_handle : Literal["local", "global", "abs"]
-                        default: local
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Cluster localizations using Gaussian mixture models.
+
+        After this module the standard locs are the Gaussian centers.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``locs`` : np.recarray
+                Localizations.
+            ``info`` : list
+                Information dictionaries.
+            ``min_locs`` : int
+                Minimum localizations per component, used to filter out
+                components with too few localizations (likely background).
+
+            Optional keys:
+
+            ``save_locs`` : bool
+                Whether to save the locs into the results folder.
+            ``max_rounds_without_best_bic`` : int
+                Max rounds without BIC improvement before terminating the
+                optimal-GMM search (default 3).
+            ``bootstrap_check`` : bool
+                If True, compute the standard error of the means via
+                bootstrapping; otherwise use the single-Gaussian SEM
+                approximation (default False).
+            ``calibration`` : dict
+                Calibration with x/y coefficients, z step size and number of
+                frames. Required only for 3D data (default None).
+            ``asynch`` : bool
+                If True, run the GMM search in parallel via multiprocessing
+                (default True).
+            ``callback_parent`` : function
+                Parent object for the progress-bar callback. If None, the bar
+                is shown on the console; if ``'silent'``, nothing is shown
+                (default ``'silent'``).
+            ``sigma_bounds`` : tuple of float
+                Minimum Gaussian-component standard deviation in nm (not
+                recommended now that individual loc precision is used).
+            ``loc_prec_handle`` : {"local", "global", "abs"}
+                How to handle localization precision (default ``"local"``).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         pixelsize = self.pixelsize
         required_args = ["min_locs"]
@@ -6874,10 +7290,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         try:
             kwargs = {k: parameters[k] for k in required_args}
         except KeyError as e:
-            logger.error(
-                f"""All of the following arguments are required for
-                picasso.g5m.g5m: {required_args}"""
-            )
+            logger.error(f"""All of the following arguments are required for
+                picasso.g5m.g5m: {required_args}""")
             raise e
         # sigma values are given in nm in parameters but px in gmm
         if "min_sigma" in kwargs.keys():
@@ -6950,32 +7364,36 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def nneighbor(self, i, parameters, results):
-        """Perform nearest neighbor calculation
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    dims : list of str
-                        the distance dimensions, e.g. ['x', 'y']
-                        or ['x', 'y', 'z']
-                    nth_NN : int
-                        calculate the 1st to nth nearest neighbor distances
-                    nth_rdf : int
-                        calculate distances up to the 95th percile of the
-                        nth_rdf nearest neighbor
-                    subsample_1stNN : int
-                        by how much fold to subsample distances from the
-                        median of the 1st nearest nteighbor. Default is 20
-                    add_column : bool
-                        whether to add a column of nearest neighbor distance
-                        to the locs
-                and optional keys:
-                    save_locs : bool
-                        whether to save the locs into the results folder
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Compute nearest-neighbour distances.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``dims`` : list of str
+                Distance dimensions, e.g. ``['x', 'y']`` or
+                ``['x', 'y', 'z']``.
+            ``nth_NN`` : int
+                Compute the 1st to nth nearest-neighbour distances.
+            ``nth_rdf`` : int
+                Compute distances up to the 95th percentile of the
+                ``nth_rdf`` nearest neighbour.
+            ``subsample_1stNN`` : int
+                Fold by which to subsample distances from the median of the
+                1st nearest neighbour (default 20).
+            ``add_column`` : bool
+                Whether to add a nearest-neighbour-distance column to the locs.
+
+            Optional keys:
+
+            ``save_locs`` : bool
+                Whether to save the locs into the results folder.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         if self.locs is not None:
             locs_list = [self.locs]
@@ -6991,6 +7409,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         density_results = []
         nn_fps = []
         fp_figs = []
+        warnings_list = []
         for i, (tag, locs) in enumerate(zip(tags, locs_list)):
             fig, ax = plt.subplots(nrows=2)
             # points = np.array(
@@ -7005,6 +7424,38 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             # logger.debug(points)
             # logger.debug(points.shape)
+            # Nearest-neighbour distances up to the nth neighbour need at
+            # least nth + 1 localizations; skip gracefully otherwise.
+            min_pts = max(
+                2,
+                parameters["nth_NN"] + 1,
+                parameters["nth_rdf"] + 1,
+            )
+            if points.shape[0] < min_pts:
+                msg = (
+                    f"Channel '{tag}' has {points.shape[0]} localization(s); "
+                    f"skipping nearest-neighbour analysis (needs at least "
+                    f"{min_pts})."
+                )
+                logger.warning(msg)
+                warnings_list.append(msg)
+                ax[0].set_title(f"{tag}: too few localizations")
+                ax[1].set_title(f"{tag} Nearest Neighbor Histogram")
+                rcode = generate_random_code(6)
+                fp_fig = os.path.join(
+                    results["folder"], f"{tag}_nndist_{rcode}.png"
+                )
+                plt.tight_layout()
+                fig.savefig(fp_fig)
+                out_path = os.path.join(
+                    results["folder"], f"{tag}_nneighbors.txt"
+                )
+                np.savetxt(out_path, np.empty((0, 0)), newline="\r\n")
+                density_results.append(np.nan)
+                nn_fps.append(out_path)
+                fp_figs.append(fp_fig)
+                continue
+
             if len(locs) < 10000:
                 alldist = distance.cdist(points, points)
                 logger.debug("found all distances")
@@ -7108,11 +7559,40 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["nneighbors"] = nn_fps
             results["fp_fig"] = fp_figs
 
+        if warnings_list:
+            results["warnings"] = warnings_list
+
         return parameters, results
 
     def _calc_radial_distribution_function_legacy(
         self, alldist, deltar, rmax, nspots, d=2, ax=None
     ):
+        """Compute the radial distribution function (legacy histogram method).
+
+        Parameters
+        ----------
+        alldist : numpy.ndarray
+            All pairwise distances to bin.
+        deltar : float
+            Radial bin width in nm.
+        rmax : float
+            Maximum radius in nm.
+        nspots : int
+            Number of spots, used to normalize the density.
+        d : int, optional
+            Dimensionality. Default is 2.
+        ax : matplotlib.axes.Axes, optional
+            Axes to plot the RDF on.
+
+        Returns
+        -------
+        rs : numpy.ndarray
+            Radial bin centers.
+        rdf : numpy.ndarray
+            The radial distribution function.
+        density : float
+            The bulk density estimated from the RDF's second half.
+        """
         rs = np.arange(
             0,
             rmax + deltar,
@@ -7153,6 +7633,32 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _calc_radial_distribution_function(  # _KD(
         self, locs, deltar, rmax, nspots, d=2, ax=None
     ):
+        """Compute the radial distribution function via a KD-tree.
+
+        Parameters
+        ----------
+        locs : array-like
+            Coordinates to build the KD-tree from.
+        deltar : float
+            Radial bin width in nm.
+        rmax : float
+            Maximum radius in nm.
+        nspots : int
+            Number of spots, used to normalize the density.
+        d : int, optional
+            Dimensionality. Default is 2.
+        ax : matplotlib.axes.Axes, optional
+            Axes to plot the RDF on.
+
+        Returns
+        -------
+        rs : numpy.ndarray
+            Radial bin centers.
+        rdf : numpy.ndarray
+            The radial distribution function.
+        density : float
+            The bulk density estimated from the RDF's second half.
+        """
         rs = np.arange(
             0,
             rmax + deltar,
@@ -7182,68 +7688,50 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def fit_csr(self, i, parameters, results):
-        """Fit a Completely Spatially Random Distribution to nearest neighbors.
+        """Fit a complete-spatial-randomness model to nearest neighbours.
 
-        Fits CSR model to nearest neighbor distance distributions and evaluates
-        goodness-of-fit using statistical measures and visualization.
+        Fits a CSR model to nearest-neighbour distance distributions and
+        evaluates goodness-of-fit with statistical measures and visualization.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    nneighbors : str or numpy.ndarray or list
-                        If str: filepath to nearest neighbor data file
-                        If array: 2D array (N, k) of kth nearest neighbor
-                        distances
-                        If list: multiple datasets or file paths
-                    dimensionality : int
-                        Spatial dimensionality (2 or 3) for CSR model
-                Optional keys:
-                    kmin : int
-                        Minimum k-th nearest neighbor order to fit (default: 1)
-                    min_dist : float
-                        Minimum observable distance in nm due to technical
-                        limits
-                    max_dist : float
-                        Maximum distance for filtering analysis
-                    bkg_fraction : float
-                        Background fraction for fitting
-                    fit_bkg : bool
-                        Whether to fit background (default: False)
-            results : dict
-                Automatic keys (provided by decorator):
-                    start time : str
-                        Module execution start timestamp
-                    end time : str
-                        Module execution end timestamp
-                    duration : float
-                        Module execution duration in seconds
-                    folder : str
-                        Output folder for module results
-                    folder : str
-                        Output folder for generated files
-                Results updated with:
-                    density : float or list
-                        Fitted spatial density value(s) in units^(-d)
-                    bkg_fraction : list
-                        Background fraction values
-                    fp_fig : str or list
-                        Filepath(s) to CSR fit visualization figure(s)
-                    wasserstein_distances_per_k : list
-                        Wasserstein distances for each k-th nearest neighbor
-                        order
-                    mean_wasserstein_distance : float or list
-                        Mean Wasserstein distance across all k orders
-                    ks_pvalues_per_k : list
-                        Kolmogorov-Smirnov p-values for each k-th NN order
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
 
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Input results with CSR fitting results and goodness-of-fit
-                metrics
+            ``nneighbors`` : str or numpy.ndarray or list
+                A filepath to a nearest-neighbour data file, a 2D ``(N, k)``
+                array of kth nearest-neighbour distances, or a list of
+                multiple datasets / file paths.
+            ``dimensionality`` : int
+                Spatial dimensionality (2 or 3) for the CSR model.
+
+            Optional keys:
+
+            ``kmin`` : int
+                Minimum kth nearest-neighbour order to fit (default 1).
+            ``min_dist`` : float
+                Minimum observable distance in nm due to technical limits.
+            ``max_dist`` : float
+                Maximum distance for filtering analysis.
+            ``bkg_fraction`` : float
+                Background fraction for fitting.
+            ``fit_bkg`` : bool
+                Whether to fit the background (default False).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results updated with ``density`` (fitted spatial density in
+            units^(-d)), ``bkg_fraction``, ``fp_fig`` (CSR fit figure(s)),
+            ``wasserstein_distances_per_k``, ``mean_wasserstein_distance`` and
+            ``ks_pvalues_per_k``.
         """
         if isinstance(parameters["nneighbors"], str):
             nneighbor_list = [np.loadtxt(parameters["nneighbors"])]
@@ -7560,19 +8048,22 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def save_single_dataset(self, i, parameters, results):
-        """Saves the locs and info of a single dataset; makes loading
-        for the aggregation workflow more straightforward.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                        filename : str
-                            the name of the dataset
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Save the locs and info of a single dataset.
+
+        Makes loading for the aggregation workflow more straightforward.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``filename`` : str
+                The name of the dataset.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         results["filepath"] = os.path.join(
             results["folder"], parameters["filename"]
@@ -7588,6 +8079,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     def _save_locs(self, filename):
+        """Save ``self.locs``/``self.info`` to an HDF5 file.
+
+        Parameters
+        ----------
+        filename : str
+            Destination HDF5 file path.
+
+        Returns
+        -------
+        dict
+            With key ``duration`` (seconds taken to save).
+        """
         t00 = time.time()
 
         io.save_locs(filename, self.locs, self.info)
@@ -7610,20 +8113,22 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def load_datasets_to_aggregate(self, i, parameters, results):
-        """Loads the results of single-dataset workflows
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    filepaths : list of str
-                        the hdf5 files to load.
-                    tags : list of str
-                        the tags to name the datasets
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Load the results of single-dataset workflows for aggregation.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``filepaths`` : list of str
+                The hdf5 files to load.
+            ``tags`` : list of str
+                The tags naming the datasets.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         self.channel_locs = []
         self.channel_info = []
@@ -7651,36 +8156,36 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def align_channels(self, i, parameters, results):
-        """Aligns multiple channels to each other (part of an aggregation
-        workflow)
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                and optional keys:
-                    filepaths : list of str
-                        the previously saved hdf5 files to be loaded and
-                        aligned. if not given, the last processed data is used
-                    align_pars : dict
-                        kwargs of picasso_outpost.align_channels
-                            max_iterations, convergence
-                    fp_fiducials : list of str
-                        the previously saved hdf5 files of fiducial markers
-                        to be loaded and aligned.
-                    fig_filename : str
-                        the location to save the drift figure to
-                    crop_boundaries : bool
-                        whether to crop the localizations according to the
-                        image boundaries (after shifting)
-                    fp_co_shift_channel_locs : list of str
-                        hdf5 files not in the 'main workflow' that should
-                        be shifted as well. This could e.g. be clustered
-                        localizations when the workflow has continued with
-                        cluster centers
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Align multiple channels to each other (aggregation workflow).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
+
+            ``filepaths`` : list of str
+                Previously saved hdf5 files to load and align. If omitted, the
+                last processed data is used.
+            ``align_pars`` : dict
+                Kwargs of ``picasso_outpost.align_channels``
+                (``max_iterations``, ``convergence``).
+            ``fp_fiducials`` : list of str
+                Previously saved hdf5 files of fiducial markers to load and
+                align.
+            ``fig_filename`` : str
+                Where to save the drift figure.
+            ``crop_boundaries`` : bool
+                Whether to crop localizations to the image boundaries after
+                shifting.
+            ``fp_co_shift_channel_locs`` : list of str
+                hdf5 files outside the main workflow to shift as well (e.g.
+                clustered localizations when the workflow continued with
+                cluster centers).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         pixelsize = self.pixelsize
         rcode = generate_random_code(6)
@@ -7858,21 +8363,22 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def combine_channels(self, i, parameters, results):
-        """Combines multiple channels into one dataset. This is relevant
-        e.g. for RESI.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                and optional keys:
-                    tag : str
-                        the tag / name of the combined dataset
-                    combine_col : str
-                        the column name for the IDs to the different datasets
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Combine multiple channels into one dataset (e.g. for RESI).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
+
+            ``tag`` : str
+                The tag / name of the combined dataset.
+            ``combine_col`` : str
+                The column name for the IDs of the different datasets.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         combine_map = {tag: i for i, tag in enumerate(self.channel_tags)}
         results["combine_map"] = combine_map
@@ -7907,29 +8413,27 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def save_datasets_aggregated(self, i, parameters, results):
-        """Save data of multiple single-dataset workflows from one
-        aggregation workflow.
+        """Save data of all single-dataset workflows in an aggregation.
 
         Saves all channel localization data and metadata from the aggregated
         workflow to individual files in the results folder.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys: (none)
-                Optional keys: (none)
-            results : dict
-                The results dictionary, updated with:
-                    filepaths : list
-                        List of all saved file paths from the aggregated
-                        datasets
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Uses no keys.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
 
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Updated results dictionary with saved file paths
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results updated with ``filepaths`` (all saved file paths).
         """
         allfps = self._save_datasets_agg(results["folder"])
         results["filepaths"] = allfps
@@ -7939,16 +8443,18 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _save_datasets_agg(self, folder):
         """Save aggregated channel datasets to individual HDF5 files.
 
-        Internal helper method that iterates through all channels and saves
-        their localization data and metadata to separate files.
+        Iterates through all channels and saves their localization data and
+        metadata to separate files.
 
-        Args:
-            folder : str
-                Target folder path where files will be saved
+        Parameters
+        ----------
+        folder : str
+            Target folder where the files are saved.
 
-        Returns:
-            allfps : list of str
-                List of all saved file paths
+        Returns
+        -------
+        allfps : list of str
+            All saved file paths.
         """
         allfps = []
         for locs, info, tag in zip(
@@ -7962,57 +8468,58 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def spinna(self, i, parameters, results):
-        """Direct implementation of spinna batch analysis.
-        The current locs file(s) are saved into the results folder, and
-        a template csv file is created. This csv needs to be filled out by the
-        user in a manual step before the spinna analysis is carried out.
+        """Run a direct SPINNA batch analysis.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    labeling_efficiency : dict of float, range 0-1
-                        labeling efficiency, for all targets
-                    labeling_uncertainty : float or dict of floats
-                        labeling uncertainty [nm]; good value is e.g. 5
-                        assumed the same value for all targets
-                    n_simulate : int
-                        number of target molecules to simulated;
-                        good value is e.g. 50000
-                    structures : str or list of dict
-                        if str: filepath to a yaml file with the structures.
-                        if list of dict:
-                        SPINNA structures. Each structure dict has
-                            "Molecular targets": list of str,
-                            "Structure title": str,
-                            "TARGET_x": list of float,
-                            "TARGET_y": list of float,
-                            "TARGET_z": list of float,
-                        where TARGET is one each of the target names in
-                        "Molecular targets"
-                    fp_mask_dict : str
-                        the filepath to the mask_dict file
-                    density : list of float
-                        density to simulate in 1/nm^d;
-                        area density if 2D; volume density if 3D
-                        (required: either density or density_app)
-                    random_rot_mode : '2D', or '3D'
-                        Mode of molecule rotation in simulation
-                    sim_repeats : int
-                        number of simulation repeats
-                    fit_NND_bin : float
-                        bin size of fits
-                    fit_NND_maxdist : float
-                        max of histogram
-                    n_nearest_neighbors : int
-                        number of nearest neighbors to evaluate
-                    granularity : int
-                    the spinna granularity
-                optional keys:
-                    density_app : list of float
-                        apparent density in 1/nm^2;
-                        this is the product of 'real' density & lbl efficiency
+        The current locs file(s) are saved into the results folder and a
+        template csv is created, which the user fills out in a manual step
+        before the SPINNA analysis is carried out.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``labeling_efficiency`` : dict of float
+                Labeling efficiency (range 0-1) for all targets.
+            ``labeling_uncertainty`` : float or dict of float
+                Labeling uncertainty in nm (e.g. 5); a scalar is applied to
+                all targets.
+            ``n_simulate`` : int
+                Number of target molecules to simulate (e.g. 50000).
+            ``structures`` : str or list of dict
+                A filepath to a structures YAML, or SPINNA structures as a
+                list of dicts, each with ``"Molecular targets"``,
+                ``"Structure title"`` and ``"TARGET_x"`` / ``"TARGET_y"`` /
+                ``"TARGET_z"`` for each target named in ``"Molecular
+                targets"``.
+            ``fp_mask_dict`` : str
+                Filepath to the mask_dict file.
+            ``density`` : list of float
+                Density to simulate in 1/nm^d (area in 2D, volume in 3D).
+                Either ``density`` or ``density_app`` is required.
+            ``random_rot_mode`` : {"2D", "3D"}
+                Mode of molecule rotation in the simulation.
+            ``sim_repeats`` : int
+                Number of simulation repeats.
+            ``fit_NND_bin`` : float
+                Bin size of the fits.
+            ``fit_NND_maxdist`` : float
+                Maximum of the histogram.
+            ``n_nearest_neighbors`` : int
+                Number of nearest neighbours to evaluate.
+            ``granularity`` : int
+                The SPINNA granularity.
+
+            Optional keys:
+
+            ``density_app`` : list of float
+                Apparent density in 1/nm^2 (the product of the real density
+                and the labeling efficiency).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         if isinstance(parameters["structures"], str):
             structures = io.load_info(parameters["structures"])
@@ -8310,32 +8817,28 @@ class AutoPicasso(util.AbstractModuleCollection):
         ``picasso.__main__._spinna_batch_analysis`` for the columns
         expected in the config file.
 
-        Args:
-            i : int
-                the index of the module
-            parameters : dict
-                with required keys:
-                    fp_spinna_batch_config : str
-                        path to the user-prepared spinna batch
-                        analysis config csv file.
-                with optional keys:
-                    use_workflow_locs : bool
-                        if True, save this workflow's current locs and
-                        inject their paths into the batch config under
-                        ``exp_data_<channel-tag>``. If False, use the
-                        ``exp_data_*`` paths from the config csv
-                        unchanged. Default: False.
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper. Keys populated here:
-                    fp_spinna_batch_config : str
-                        path to the config csv copy actually used
-                    result_dir : str
-                        folder containing the spinna results
-                    fp_summary : str
-                        filepath of the summary csv file
-                    fp_figs : list of str
-                        filepaths of the NND figures
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_spinna_batch_config`` : str
+                Path to the user-prepared SPINNA batch-analysis config csv.
+
+            Optional keys:
+
+            ``use_workflow_locs`` : bool
+                If True, save this workflow's current locs and inject their
+                paths into the batch config under ``exp_data_<channel-tag>``.
+                If False, use the config's ``exp_data_*`` paths unchanged.
+                Default is False.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+            Populated here with ``fp_spinna_batch_config`` (the config copy
+            used), ``result_dir``, ``fp_summary`` and ``fp_figs``.
         """
         cfg_fp = parameters["fp_spinna_batch_config"]
         use_workflow_locs = parameters.get("use_workflow_locs", False)
@@ -8396,14 +8899,23 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _create_spinna_structure(
         self, names, multimers, distance, dimensionality=2
     ):
-        """
-        Args:
-            names : list of str
-                the names of proteins
-            multimers : list of list of int
-                for each name, the homo-multimers to implement
-            distance : float
-                distance between entities, in nm
+        """Build SPINNA homo-multimer structures on a cubic lattice.
+
+        Parameters
+        ----------
+        names : list of str
+            The protein names.
+        multimers : list of list of int
+            For each name, the homo-multimers to implement.
+        distance : float
+            Distance between entities, in nm.
+        dimensionality : int, optional
+            Spatial dimensionality. Default is 2.
+
+        Returns
+        -------
+        list of dict
+            The generated SPINNA structure definitions.
         """
         spinna_structs = []
         for tag, name_multimers in zip(names, multimers):
@@ -8437,31 +8949,38 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def ripleysk(self, i, parameters, results):
-        """Perforn Ripley's K analysis between the channels using
-        Magdalena's code.
-        Args:
-            parameters:
-                ripleys_n_random_controls : int
-                    number of random controls, default: 100
-                ripleys_rmax : int
-                    the maximum radius, default 200
-                ripleys_dr : float
-                    the radius interval, default 5
-                radii : 1D np array
-                    the radius values. If given, ripleys_rmax and
-                    ripleys_dr are ignored.
-                ripleys_threshold : float
-                    the threshold of ripleys integrals above which the
-                    interaction is deemed significant.
-                fp_combined_locs : str
-                    filepath to the combined locs of all channel_locs
-                atype : str
-                    the type of analysis: 'Ripleys' for the standard
-                    Ripley's K analysis, or 'RDF' for calculation of the
-                    radial distribution function instead of K, and random
-                    controls by relocating each point by a random x/y in a
-                    circle with the currently investigated r, which preserves
-                    the density fluctuations (instead of CSR simulation)
+        """Perform a Ripley's K analysis between the channels.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Keys:
+
+            ``ripleys_n_random_controls`` : int
+                Number of random controls (default 100).
+            ``ripleys_rmax`` : int
+                The maximum radius (default 200).
+            ``ripleys_dr`` : float
+                The radius interval (default 5).
+            ``radii`` : 1D np.ndarray
+                The radius values; if given, ``ripleys_rmax`` and
+                ``ripleys_dr`` are ignored.
+            ``ripleys_threshold`` : float
+                Threshold on the Ripley's integrals above which the
+                interaction is deemed significant.
+            ``fp_combined_locs`` : str
+                Filepath to the combined locs of all ``channel_locs``.
+            ``atype`` : str
+                Analysis type: ``'Ripleys'`` for standard Ripley's K, or
+                ``'RDF'`` to compute the radial distribution function instead
+                and generate controls by relocating each point within a
+                circle of the current radius (preserving density
+                fluctuations rather than simulating CSR).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         nRandomControls = parameters.get("ripleys_n_random_controls", 100)
         # radii = np.concatenate(
@@ -8735,64 +9254,61 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def ripleysk2(self, i, parameters, results):
-        """Perforn Ripley's K analysis between the channels using
-        Rafal's code.
-        Args:
-            parameters:
-                ripleys_n_random_controls : int
-                    number of random controls, default: 100
-                ripleys_rmax : int
-                    the maximum radius, default 200
-                ripleys_dr : float
-                    the radius interval, default 5
-                radii : 1D np array
-                    the radius values. If given, ripleys_rmax and
-                    ripleys_dr are ignored.
-                ripleys_threshold : float
-                    the threshold of ripleys integrals above which the
-                    interaction is deemed significant.
-                area : float
-                    the cell area in µm^2
-                    optional. only used with controltype=CSR
-                fp_mask : str
-                    the filepath to the cell mask.
-                    optional, only used with CSR. can be binary or density mask
-                mask_pixel_size : float
-                    the pixel size of mask pixels (move to mask class which
-                    internally keeps this information)
-                    optional, only used with controltype=CSR
-                metric : str
-                    the type of analysis: 'RK' for the standard
-                    Ripley's K analysis, or 'RDF' for calculation of the
-                    radial distribution function instead of K, and random
-                    controls by relocating each point by a random x/y in a
-                    circle with the currently investigated r, which preserves
-                    the density fluctuations (instead of CSR simulation)
-                    Alternatively, "FRC" for fraction of molecular types
-                    within the radii.
-                controltype : str
-                    "CSR" or "RND". Control n_random_controls by either
-                    CSR simulation within the density mask, or randomizing
-                    the real data
-                randomization_radius : float
-                    for controltype "RND", the radius [nm] by which
-                    to randomize.
-                    optional.
-                shuffle_self : bool
-                    for metric "FRC", whether to shuffle only other types or
-                    also the self type
-                relocate_self : bool
-                    for metric "FRC", whether to relocate centerpoints to
-                    'type_self' after shuffling.
-                fraction_exclude
-                significance_threshold : float
-                    threshold above which heatmap entries are colored
-                normalization : str
-                edge_correction : bool
-                    if True, only locs further from mask edges than max radius
-                    are used for evaluation
-                showControlEnvelope : bool
+        """Perform a Ripley's K analysis between the channels (Rafal's code).
 
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Keys:
+
+            ``ripleys_n_random_controls`` : int
+                Number of random controls (default 100).
+            ``ripleys_rmax`` : int
+                Maximum radius (default 200).
+            ``ripleys_dr`` : float
+                Radius interval (default 5).
+            ``radii`` : 1D np.ndarray
+                Radius values; if given, ``ripleys_rmax``/``ripleys_dr`` are
+                ignored.
+            ``ripleys_threshold`` : float
+                Threshold on the integrals above which an interaction is
+                significant.
+            ``area`` : float
+                Cell area in µm^2 (only with ``controltype='CSR'``).
+            ``fp_mask`` : str
+                Filepath to the cell mask (binary or density; only with CSR).
+            ``mask_pixel_size`` : float
+                Pixel size of the mask (only with ``controltype='CSR'``).
+            ``metric`` : str
+                ``'RK'`` (standard Ripley's K), ``'RDF'`` (radial distribution
+                function with density-preserving controls) or ``'FRC'``
+                (fraction of molecular types within the radii).
+            ``controltype`` : str
+                ``'CSR'`` (CSR simulation within the density mask) or
+                ``'RND'`` (randomize the real data).
+            ``randomization_radius`` : float
+                For ``controltype='RND'``, the radius (nm) to randomize by.
+            ``shuffle_self`` : bool
+                For ``metric='FRC'``, whether to shuffle the self type too.
+            ``relocate_self`` : bool
+                For ``metric='FRC'``, whether to relocate centerpoints to
+                ``type_self`` after shuffling.
+            ``fraction_exclude`` :
+                Types to exclude from the FRC fraction.
+            ``significance_threshold`` : float
+                Threshold above which heatmap entries are colored.
+            ``normalization`` : str
+                The normalization to apply.
+            ``edge_correction`` : bool
+                If True, only locs further from the mask edges than the max
+                radius are used.
+            ``showControlEnvelope`` : bool
+                Whether to show the control envelope in plots.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         nRandomControls = parameters.get("ripleys_n_random_controls", 100)
         # radii = np.concatenate(
@@ -8967,6 +9483,33 @@ class AutoPicasso(util.AbstractModuleCollection):
         suffix="",
         significance_threshold=None,
     ):
+        """Plot a heatmap of the mean Ripley's K integrals between channels.
+
+        Parameters
+        ----------
+        ripleysMeanVal : numpy.ndarray
+            The channel-by-channel mean integral matrix.
+        folder : str
+            Folder to save the figure in.
+        channel_tags : list of str
+            The channel names, used as axis labels.
+        metric, controltype : str
+            The metric and control type, shown in the title/filename.
+        threshold : float, optional
+            Colormap saturation value; defaults to the data maximum.
+        std : numpy.ndarray, optional
+            Per-cell standard deviations, annotated on the heatmap.
+        suffix : str, optional
+            Suffix for the output filename.
+        significance_threshold : float, optional
+            Entries with absolute value at or below this are zeroed before
+            plotting.
+
+        Returns
+        -------
+        str
+            The filepath of the saved heatmap.
+        """
         fig, ax = plt.subplots()
         plot_ripleysMeanVal = ripleysMeanVal.copy()
         if threshold is None:
@@ -9014,6 +9557,22 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _find_ripleys_significant(
         self, ripleysIntegrals, threshold, channel_tags
     ):
+        """Return channel pairs whose Ripley's integral exceeds a threshold.
+
+        Parameters
+        ----------
+        ripleysIntegrals : numpy.ndarray
+            The channel-by-channel integral matrix.
+        threshold : float or None
+            Significance threshold; if None, no pairs are returned.
+        channel_tags : list of str
+            The channel names.
+
+        Returns
+        -------
+        list of tuple
+            The significant ``(tag_i, tag_j)`` channel pairs.
+        """
         # elucidate significant pairs
         significant_pairs = []
         if threshold is None:
@@ -9029,36 +9588,39 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def ripleysk_average(self, i, parameters, results):
-        """Average the results of multiple Ripley's K Analyses, analyse
-        the significant pairs after averaging, and save them into the
-        separate workflow manual folders (for further analysis there)
-        Args:
-            parameters:
-                # fp_ripleys_integrals : list of str
-                #     the various single analyses to average, e.g. of
-                #     different workflows
-                fp_workflows : list of str
-                    the paths to the folders of separate workflows
-                    where the separate ripleys analyses have been done
-                report_names : list of str
-                    the report names of those worklfows
-                ripleys_threshold : float
-                    the threshold of ripleys integrals above which the
-                    interaction is deemed significant.
-                atype : str
-                    "Ripleys" or "RDF"
-                # output_folders : list of str
-                #     folders to write the significant pairs into. This can
-                #     e.g. be the 'manual' results folders of the
-                #     workflows, so these can proceed.
-            optional:
-                swkfl_ripleysk_key : str
-                    the results key of the ripleysk module.
-                    e.g. '05_ripleysk'
-                swkfl_manual_key : str
-                    the results key of the manual module to save the
-                    integrals to
-                if those two are not given, saving is not performed
+        """Average multiple Ripley's K analyses and find significant pairs.
+
+        Averages the integrals across analyses, finds the significant pairs
+        and (optionally) saves them into the separate workflows' manual
+        folders for further analysis there.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_workflows`` : list of str
+                Paths to the folders of the separate workflows where the
+                individual Ripley's analyses were done.
+            ``report_names`` : list of str
+                The report names of those workflows.
+            ``ripleys_threshold`` : float
+                Threshold above which an interaction is significant.
+            ``atype`` : str
+                ``"Ripleys"`` or ``"RDF"``.
+
+            Optional keys:
+
+            ``swkfl_ripleysk_key`` : str
+                Results key of the ripleysk module (e.g. ``'05_ripleysk'``).
+            ``swkfl_manual_key`` : str
+                Results key of the manual module to save the integrals to.
+                If these two are absent, saving is not performed.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         # from picasso_workflow.workflow import WorkflowRunner
 
@@ -9185,48 +9747,45 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def ripleysk_average2(self, i, parameters, results):
-        """Average the results of multiple Ripley's K Analyses, analyse
-        the significant pairs after averaging, and save them into the
-        separate workflow manual folders (for further analysis there)
-        Args:
-            parameters:
-                # fp_ripleys_integrals : list of str
-                #     the various single analyses to average, e.g. of
-                #     different workflows
-                fp_workflows : list of str
-                    the paths to the folders of separate workflows
-                    where the separate ripleys analyses have been done
-                report_names : list of str
-                    the report names of those worklfows
-                ripleys_threshold : float
-                    the threshold of ripleys integrals above which the
-                    interaction is deemed significant.
-                metric : str
-                    the type of analysis: 'RK' for the standard
-                    Ripley's K analysis, or 'RDF' for calculation of the
-                    radial distribution function instead of K, and random
-                    controls by relocating each point by a random x/y in a
-                    circle with the currently investigated r, which preserves
-                    the density fluctuations (instead of CSR simulation)
-                controltype : str
-                    "CSR" or "RND". Control n_random_controls by either
-                    CSR simulation within the density mask, or randomizing
-                    the real data
-                randomization_radius : float
-                    for controltype "RND", the radius [nm] by which to
-                    randomize.
-                # output_folders : list of str
-                #     folders to write the significant pairs into. This can
-                #     e.g. be the 'manual' results folders of the
-                #     workflows, so these can proceed.
-            optional:
-                swkfl_ripleysk_key : str
-                    the results key of the ripleysk module.
-                    e.g. '05_ripleysk'
-                swkfl_manual_key : str
-                    the results key of the manual module to save the
-                    integrals to
-                if those two are not given, saving is not performed
+        """Average multiple Ripley's K analyses (Rafal's variant).
+
+        Averages the integrals across analyses, finds the significant pairs
+        and (optionally) saves them into the separate workflows' manual
+        folders for further analysis there.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_workflows`` : list of str
+                Paths to the folders of the separate workflows where the
+                individual Ripley's analyses were done.
+            ``report_names`` : list of str
+                The report names of those workflows.
+            ``ripleys_threshold`` : float
+                Threshold above which an interaction is significant.
+            ``metric`` : str
+                ``'RK'`` (standard Ripley's K) or ``'RDF'`` (radial
+                distribution function with density-preserving controls).
+            ``controltype`` : str
+                ``'CSR'`` (CSR simulation within the density mask) or
+                ``'RND'`` (randomize the real data).
+            ``randomization_radius`` : float
+                For ``controltype='RND'``, the radius (nm) to randomize by.
+
+            Optional keys:
+
+            ``swkfl_ripleysk_key`` : str
+                Results key of the ripleysk module (e.g. ``'05_ripleysk'``).
+            ``swkfl_manual_key`` : str
+                Results key of the manual module to save the integrals to.
+                If these two are absent, saving is not performed.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         # from picasso_workflow.workflow import WorkflowRunner
 
@@ -9453,45 +10012,47 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def protein_interactions(self, i, parameters, results):
-        """Perform interaction analysis on those dataset pairs that showed
-        significance in Ripley's K analysis. The interaction analysis consists
-        of
-        (1) calculating proportion of singly or doubly co-occurring instances
-            of the single receptors (in clusters)
-        (2) calculating the co-occurrence of these single or double events of
-            one receptor with single or double events of another receptor
-            within a cluster (where Ripley's K showed significance)
-        This approach stems from a time of early development of SPINNA.
-        Nowadays, this could be done directly but potentially with slightly
-        different results.
-        Fixed to 2D. Fixed to only using 1st nearest neighbor
-        Args:
-            parameters:
-                channel_map : dict
-                    maps between channels (protein names, tags before
-                    combining) and index in the combine_id column of combined
-                    locs
-                labeling_efficiency : dict, channel tag to float, range 0-100
-                    labeling efficiency percentage, default for all targets
-                labeling_uncertainty : dict, channel tag to float
-                    labeling uncertainty [nm]; good value is e.g. 5
-                n_simulate : int
-                    number of target molecules to be simulated;
-                    good value is e.g. 50000
-                density : dict, channel tag to float
-                    density to simulate [nm^2 or nm^3];
-                    area density if 2D; volume density if 3D
-                nn_nth : int
-                    number of nearest neighbors to analyse
-                structure_distance : float
-                    the protein distance between each other in nm
-                res_factor : float
-                    the spinna res_factor
-                sim_repeats : int
-                    number of simulation repeats, for noise reduction
-                interaction_pairs: list of list of two strings, or str
-                    pairs that are able to interact
-                    if str: filepath to a yaml file with list of tuples
+        """Analyse interactions for pairs significant in Ripley's K.
+
+        For each significant dataset pair, the analysis (1) computes the
+        proportion of singly or doubly co-occurring instances of the single
+        receptors within clusters, and (2) the co-occurrence of these single
+        or double events between the two receptors. This stems from early
+        SPINNA development; today it could be done directly, with potentially
+        slightly different results. Fixed to 2D and the 1st nearest neighbour.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Keys:
+
+            ``channel_map`` : dict
+                Maps channels (protein names / pre-combine tags) to the index
+                in the ``combine_id`` column of the combined locs.
+            ``labeling_efficiency`` : dict
+                Channel tag -> labeling efficiency percentage (0-100).
+            ``labeling_uncertainty`` : dict
+                Channel tag -> labeling uncertainty in nm (e.g. 5).
+            ``n_simulate`` : int
+                Number of target molecules to simulate (e.g. 50000).
+            ``density`` : dict
+                Channel tag -> density to simulate (area in 2D, volume in 3D).
+            ``nn_nth`` : int
+                Number of nearest neighbours to analyse.
+            ``structure_distance`` : float
+                The inter-protein distance in nm.
+            ``res_factor`` : float
+                The SPINNA res_factor.
+            ``sim_repeats`` : int
+                Number of simulation repeats, for noise reduction.
+            ``interaction_pairs`` : list of [str, str] or str
+                Pairs that can interact; a str is a filepath to a YAML file
+                with a list of tuples.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         logger.debug("Molecular interactions")
 
@@ -9789,11 +10350,22 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     def _plot_direct_interaction(self, direct_interaction, folder, std=None):
-        """
-        Args:
-            direct_interaction : DataFrame
-                index, columns: channel_tags
-                values: percentage of interaction
+        """Plot a heatmap of the direct interaction percentages.
+
+        Parameters
+        ----------
+        direct_interaction : pd.DataFrame
+            Index and columns are channel tags; values are interaction
+            percentages.
+        folder : str
+            Folder to save the figure in.
+        std : pd.DataFrame, optional
+            Per-cell standard deviations, annotated on the heatmap.
+
+        Returns
+        -------
+        str
+            The filepath of the saved interaction-map figure.
         """
         fig, ax = plt.subplots()
         heatmap = ax.imshow(
@@ -9829,20 +10401,29 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def protein_interactions_average(self, i, parameters, results):
-        """Average the results of multiple "protein_interactions" analyses.
-        Create a bar plot with mean and stddev of the different proportions
-        of interaction partners.
-        Args:
-            parameters:
-                fp_workflows : list of str
-                    the paths to the folders of separate workflows
-                    where the separate ripleys analyses have been done
-                report_names : list of str
-                    the report names of those worklfows
-                swkfl_protint_key : str
-                    the results key of the protein interactions module.
-                    e.g. '05_protein_interactions'
-            optional:
+        """Average multiple ``protein_interactions`` analyses.
+
+        Creates a bar plot with the mean and standard deviation of the
+        interaction-partner proportions.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_workflows`` : list of str
+                Paths to the folders of the separate workflows where the
+                individual analyses were done.
+            ``report_names`` : list of str
+                The report names of those workflows.
+            ``swkfl_protint_key`` : str
+                Results key of the protein-interactions module (e.g.
+                ``'05_protein_interactions'``).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         # check single intregals based on workflow file
         fp_proportions = []
@@ -9903,39 +10484,38 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def create_mask(self, i, parameters, results):
-        """
-        This is Susanne's implementation of calculating a cell mask,
-        written (ni part?) for the initial version of the DC-Atlas.
-        May be obsolete with create_mask2, but kept for backwards
-        compatibility. To be deprecated on the long run.
+        """Calculate a cell mask (Susanne's original DC-Atlas implementation).
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_channel_map : str
-                        filepath to the map from 'combine_channels' module,
-                        which is a dict from channel name to ID int in the
-                        locs['combine_id']
-                    fp_combined_locs : str
-                        filepath to the locs combined in 'combine_channels'
-                        module
-                    margin : float
-                        Size of the added empty margin to the FOV, in nm
-                    binsize : float
-                        Size o fthe 2D histogram bins of the first step, in nm
-                    sigma_mask_blur : int
-                        parameter of the gaussian blur in binsize units
-                    mask_resolution : float
-                        Controls the digital resolution of the mask, in nm
-                    combine_col : str
-                        the name of the combine column, e.g. 'combine_id'
-                        or 'protein'. Same as used in 'combine_channels' module
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        Kept for backwards compatibility; may be obsolete given
+        :meth:`create_mask2` and is slated for eventual deprecation.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_channel_map`` : str
+                Filepath to the channel map from the ``combine_channels``
+                module (channel name -> ID int in ``locs['combine_id']``).
+            ``fp_combined_locs`` : str
+                Filepath to the locs combined in the ``combine_channels``
+                module.
+            ``margin`` : float
+                Size of the empty margin added to the FOV, in nm.
+            ``binsize`` : float
+                Size of the first-step 2D histogram bins, in nm.
+            ``sigma_mask_blur`` : int
+                Gaussian-blur parameter, in binsize units.
+            ``mask_resolution`` : float
+                Digital resolution of the mask, in nm.
+            ``combine_col`` : str
+                Name of the combine column (e.g. ``'combine_id'`` or
+                ``'protein'``).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         from picasso_workflow.dbscan_molint import mask
 
@@ -10016,57 +10596,53 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def create_mask2(self, i, parameters, results):
-        """
-        This is Rafal's implementation of cell masking, written for the
-        3rd version of the DC Atlas. It is (mostly?) identical with an
-        implementation of it in spinna, which will be integrated into
-        picasso soon. Evaluate deprecation (or moving source from
-        outpost_modules/ripleys to picasso/spinna) at that time.
+        """Calculate a cell mask (Rafal's DC-Atlas v3 implementation).
 
-        the locs must be protein positions at this stage.
+        Largely identical to an implementation in spinna that will be
+        integrated into picasso; evaluate deprecation (or moving the source
+        from ``outpost_modules/ripleys`` to ``picasso/spinna``) at that time.
+        The locs must be protein positions at this stage.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    binsize : float
-                        the bin size in nanometers. A good value is 20
-                    blursize : float
-                        the gaussian blur to apply in nanometers.
-                        A good value is 400
-                    mask_pixel_size : float
-                        the pixelsize of the final mask, in nanometers.
-                        Often used: 10
-                    threshold : float
-                        the threshold value below which the mask is set
-                        to zero. For example 1 / 3
-                    binary : boolean
-                        whether to create a binary or density mask
-                    select_cell : boolean
-                        whether to select the largest connected component,
-                        assumed to be the cell of interest.
-                    fill_holes : boolean
-                        whether to fill holes in the cell mask
-                    dilate_nm : float
-                        the nanometers to dilate the mask (useful if a large
-                        threshold has been used)
-                    apply_to_locs : boolean
-                        whether to drop all localizations outside the area
-                and optional keys:
-                    fp_combined_locs : str default: None or ''
-                        filepath to the locs combined in 'combine_channels'
-                        module. If None or '', loaded channel_locs is used
-                    fp_channel_map : str
-                        filepath to the map from 'combine_channels' module,
-                        which is a dict from channel name to ID int in the
-                        locs['combine_id']
-                    combine_col : str
-                        the name of the combine column, e.g. 'combine_id'
-                        or 'protein'. Same as used in 'combine_channels' module
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``binsize`` : float
+                Bin size in nm (a good value is 20).
+            ``blursize`` : float
+                Gaussian blur to apply in nm (a good value is 400).
+            ``mask_pixel_size`` : float
+                Pixel size of the final mask in nm (often 10).
+            ``threshold`` : float
+                Threshold below which the mask is set to zero (e.g. 1/3).
+            ``binary`` : bool
+                Whether to create a binary (vs density) mask.
+            ``select_cell`` : bool
+                Whether to keep the largest connected component.
+            ``fill_holes`` : bool
+                Whether to fill holes in the cell mask.
+            ``dilate_nm`` : float
+                Nanometers to dilate the mask (useful with a large threshold).
+            ``apply_to_locs`` : bool
+                Whether to drop localizations outside the area.
+
+            Optional keys:
+
+            ``fp_combined_locs`` : str
+                Filepath to the locs combined in the ``combine_channels``
+                module. If None or ``''``, the loaded ``channel_locs`` is used.
+            ``fp_channel_map`` : str
+                Filepath to the channel map (channel name -> ID int in
+                ``locs['combine_id']``).
+            ``combine_col`` : str
+                Name of the combine column (e.g. ``'combine_id'`` or
+                ``'protein'``).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         logger.debug("before creating mask")
         xmin = [locs["x"].min() for locs in self.channel_locs]
@@ -10197,38 +10773,39 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def refine_mask_by_density(self, i, parameters, results):
-        """
-        This module analyses and refines a previously created mask.
-        Particularly, the density histogram of the mask bins are plotted,
-        and an area of homogeneous density can be selected
+        """Analyse and refine a previously created mask by density.
 
-        the locs must be protein positions at this stage.
+        Plots the density histogram of the mask bins so an area of homogeneous
+        density can be selected. The locs must be protein positions at this
+        stage.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_mask : str
-                        the file path to the mask
-                    min_density, max_density : float
-                        the density range to select, in µm^(-2)
-                and optional keys:
-                    nbins : int
-                        the number of bins for plotting
-                    nth_largest : int
-                        select the nth largest area in density range.
-                        1-based: set 1 for largest.
-                    apply_to_locs : bool
-                        whether to apply the created mask to the locs
-                    smoothe_nm : float
-                        the number of nanometers to dilate and erode
-                        the mask. This can be useful to remove excessive
-                        holes and ragging in the mask due to the
-                        density thresholding
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_mask`` : str
+                Filepath to the mask.
+            ``min_density``, ``max_density`` : float
+                The density range to select, in µm^(-2).
+
+            Optional keys:
+
+            ``nbins`` : int
+                Number of bins for plotting.
+            ``nth_largest`` : int
+                Select the nth largest area in the density range (1-based; 1
+                for the largest).
+            ``apply_to_locs`` : bool
+                Whether to apply the created mask to the locs.
+            ``smoothe_nm`` : float
+                Nanometers to dilate and erode the mask, useful to remove
+                excessive holes and ragging from density thresholding.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         pixelsize = self.pixelsize
         # nth_largest is 1-based (1 = largest); converted to a 0-based
@@ -10260,15 +10837,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             median_density = median_nlocs / mask_pixel_area
             min_density = min_nlocs / mask_pixel_area
             max_density = max_nlocs / mask_pixel_area
-            logger.debug(
-                f"median nlocs {median_nlocs}, poisson std\
-                {np.sqrt(median_nlocs)}"
-            )
+            logger.debug(f"median nlocs {median_nlocs}, poisson std\
+                {np.sqrt(median_nlocs)}")
             logger.debug(f"min nlocs {min_nlocs}, max nlocs {max_nlocs}")
-            logger.debug(
-                f"median density {median_density}, poisson std \
-                {np.sqrt(median_density)}"
-            )
+            logger.debug(f"median density {median_density}, poisson std \
+                {np.sqrt(median_density)}")
             logger.debug(
                 f"min density {min_density}, max density {max_density}"
             )
@@ -10438,35 +11011,33 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def dbscan_molint(self, i, parameters, results):
-        """TO BE CLEANED UP
-        dbscan implementation for molecular interactions workflow
+        """Run DBSCAN for the molecular-interactions workflow.
 
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_channel_map : str
-                        filepath to the map from 'combine_channels' module,
-                        which is a dict from channel name to ID int in the
-                        locs['combine_id']
-                    epsilon_nm : float
-                        dbscan epsilon in nm
-                    minpts : int
-                        minimum number of points
-                    sigma_linker : float
-                        ... in nm
-                    fp_merge_mask : str
-                        filepath to the merge mask (generated in module
-                        'create_mask')
-                    thresh_type : str
-                        ...
-                    cell_name : str
-                        the name of the cell currently analyzed
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_channel_map`` : str
+                Filepath to the channel map from the ``combine_channels``
+                module (channel name -> ID int in ``locs['combine_id']``).
+            ``epsilon_nm`` : float
+                DBSCAN epsilon in nm.
+            ``minpts`` : int
+                Minimum number of points.
+            ``sigma_linker`` : float
+                Linker size in nm.
+            ``fp_merge_mask`` : str
+                Filepath to the merge mask (from the ``create_mask`` module).
+            ``thresh_type`` : str
+                Threshold type.
+            ``cell_name`` : str
+                Name of the cell currently analyzed.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         # from picasso_workflow.dbscan_molint import dbscan
         # get map
@@ -10502,32 +11073,30 @@ class AutoPicasso(util.AbstractModuleCollection):
         search_keys=None,
         search_parameter_keys=None,
     ):
-        """Load result data from a different workflow
-        Args:
-            fp_workflow : str
-                the root folder of the other workflow
-            report_name : str
-                the report name of the other workflow. The
-                workflow result data will be in
-                fp_workflow/report_name_[postfix]
-            search_keys : tuple of
-                1st : str
-                    the module keys (e.g. '04_manual')
-                2nd : str
-                    the result entries (e.g. 'filepath')
-                set this None or search_parameter_keys None
-            search_parameter_keys: tuple of
-                1st : str
-                    the module keys (e.g. '04_manual')
-                2nd : str
-                    the result entries (e.g. 'filepath')
-        Returns:
-            loaded_data : dict
-                keys : tuple of (str, str)
-                    tuple of search key & value
-                values : the corresponding loaded data
-            channel_tags : list of str
-                the channel tags
+        """Load result data from a different workflow.
+
+        Parameters
+        ----------
+        fp_workflow : str
+            The root folder of the other workflow.
+        report_name : str
+            The report name of the other workflow; its result data is in
+            ``fp_workflow/report_name_[postfix]``.
+        search_keys : list of tuple, optional
+            ``(module_key, result_entry)`` pairs (e.g.
+            ``('04_manual', 'filepath')``) to load from the results. Mutually
+            exclusive with ``search_parameter_keys``.
+        search_parameter_keys : list of tuple, optional
+            ``(module_key, parameter_entry)`` pairs to load from the module
+            parameters instead.
+
+        Returns
+        -------
+        loaded_data : dict
+            Maps each ``(search_key, value)`` tuple to the corresponding
+            loaded data.
+        channel_tags : list of str
+            The channel tags.
         """
         from picasso_workflow.workflow import WorkflowRunner
 
@@ -10584,35 +11153,34 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def CSR_sim_in_mask(self, i, parameters, results):
-        """TO BE CLEANED UP
-        simulate CSR within a density mask, and perform dbscan as well
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_channel_map : str
-                        filepath to the map from 'combine_channels' module,
-                        which is a dict from channel name to ID int in the
-                        locs['combine_id']
-                    fp_mask_dict : str
-                        filepath to the mask_dict.pkl file generated in
-                        the 'create_mask' module
-                    N_repeats : int
-                        number of simulation repeats
-                    epsilon_nm : float
-                        dbscan epsilon in nm
-                    minpts : int
-                        minimum number of points
-                    sigma_linker : float
-                        ... in nm
-                    fp_merge_mask : str
-                        filepath to the merge mask (generated in module
-                        'create_mask')
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Simulate CSR within a density mask and run DBSCAN on it.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_channel_map`` : str
+                Filepath to the channel map from the ``combine_channels``
+                module (channel name -> ID int in ``locs['combine_id']``).
+            ``fp_mask_dict`` : str
+                Filepath to the ``mask_dict.pkl`` from the ``create_mask``
+                module.
+            ``N_repeats`` : int
+                Number of simulation repeats.
+            ``epsilon_nm`` : float
+                DBSCAN epsilon in nm.
+            ``minpts`` : int
+                Minimum number of points.
+            ``sigma_linker`` : float
+                Linker size in nm.
+            ``fp_merge_mask`` : str
+                Filepath to the merge mask (from the ``create_mask`` module).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         from picasso_workflow.dbscan_molint import mask
 
@@ -10675,28 +11243,27 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def plot_densities(self, i, parameters, results):
-        """Aggregate densities and cell areas of multiple datasets and
-        plot them
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_workflows : list of str
-                        the paths to the folders of separate workflows
-                        where the separate ripleys analyses have been done
-                    report_names : list of str
-                        the report names of those worklfows
-                    swkfl_create_mask_key : str
-                        the results key of the dbscan module.
-                        e.g. '11_create_mask'
-                    swkfl_protint_key : str
-                        the results key of the protein_interactions module.
-                        e.g. '09_protein_interactions'
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Aggregate and plot densities and cell areas across datasets.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_workflows`` : list of str
+                Paths to the folders of the separate workflows.
+            ``report_names`` : list of str
+                The report names of those workflows.
+            ``swkfl_create_mask_key`` : str
+                Results key of the mask module (e.g. ``'11_create_mask'``).
+            ``swkfl_protint_key`` : str
+                Results key of the ``protein_interactions`` module (e.g.
+                ``'09_protein_interactions'``).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         # get density and channel tags
         fp_density = []  # workflow, multiple CSR sims are done
@@ -10807,38 +11374,37 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def find_cluster_motifs(self, i, parameters, results):
-        """Analyses the binary barcode results of _do_dbscan_molint.
-        Compares experimental to CSR data.
-        Merged for multiple cells
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_workflows : list of str
-                        the paths to the folders of separate workflows
-                        where the separate ripleys analyses have been done
-                    report_names : list of str
-                        the report names of those worklfows
-                    swkfl_dbscan_molint_key : str
-                        the results key of the dbscan module.
-                        e.g. '09_dbscan_molint'
-                    swkfl_CSR_sim_in_mask_key : str
-                        the results key of the CSR dbscan module.
-                        e.g. '10_CSR_sim_in_mask'
-                    population_threshold : float, 0 - 1
-                        only select barcodes with a relative population
-                        larger than this
-                    ttest_pvalue_max : float, < 0
-                        the pvalue below which the difference between number
-                        of clusters found for a barcode between exp and csr
-                        is deemed significant
-                    channel_colors : list of str
-                        colors to describe the receptors with
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Analyse the binary barcode results of the molint DBSCAN.
+
+        Compares experimental to CSR data, merged over multiple cells.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_workflows`` : list of str
+                Paths to the folders of the separate workflows.
+            ``report_names`` : list of str
+                The report names of those workflows.
+            ``swkfl_dbscan_molint_key`` : str
+                Results key of the DBSCAN module (e.g. ``'09_dbscan_molint'``).
+            ``swkfl_CSR_sim_in_mask_key`` : str
+                Results key of the CSR DBSCAN module (e.g.
+                ``'10_CSR_sim_in_mask'``).
+            ``population_threshold`` : float
+                Only select barcodes with a relative population above this
+                (range 0-1).
+            ``ttest_pvalue_max`` : float
+                The p-value below which the experiment-vs-CSR difference in
+                cluster count for a barcode is deemed significant.
+            ``channel_colors`` : list of str
+                Colors describing the receptors.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         channel_tags = None
         fp_exp_bc = []  # will be a list of strings (1 for each cell)
@@ -11139,37 +11705,37 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def interaction_graph(self, i, parameters, results):
-        """Plot the interaction graph, displaying the different targets
-        and their interactions in a graph. The node sizes denote the
-        density, and the ripley interaction matrix is represented in the
-        edges.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_workflows : list of str
-                        the paths to the folders of separate workflows
-                        where the separate ripleys analyses have been done
-                    report_names : list of str
-                        the report names of those worklfows
-                    swkfl_protint_key : str
-                        the results key of the protein_interactions module.
-                        e.g. '09_protein_interactions'
-                    fp_density : str
-                        fp to the denfsities of the channels.
-                    fp_ripleys_meanvals : str
-                        the filepath to the interaction matrix
-                    edge_factor : float
-                        factor to display useful sizes
-                    node_factor : float
-                        factor to display useful sizes
-                    channel_colors : list of str
-                        colors to describe the receptors with
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Plot the target-interaction graph.
+
+        Displays the targets and their interactions as a graph: node sizes
+        encode density and the Ripley interaction matrix is represented in
+        the edges.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_workflows`` : list of str
+                Paths to the folders of the separate workflows.
+            ``report_names`` : list of str
+                The report names of those workflows.
+            ``swkfl_protint_key`` : str
+                Results key of the ``protein_interactions`` module (e.g.
+                ``'09_protein_interactions'``).
+            ``fp_density`` : str
+                Filepath to the channel densities.
+            ``fp_ripleys_meanvals`` : str
+                Filepath to the interaction matrix.
+            ``edge_factor``, ``node_factor`` : float
+                Scaling factors for useful display sizes.
+            ``channel_colors`` : list of str
+                Colors describing the receptors.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         # get density and channel tags
         fp_density = []  # workflow, multiple CSR sims are done
@@ -11224,27 +11790,28 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def find_gold(self, i, parameters, results):
-        """Find localizations stemming from gold beads based on blinking
-        kinetics.
-        The metrics used are number of locs and rms deviation from mean
-        frame
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                and optional keys:
-                    remove_gold : bool
-                        if present and set to True, the gold locs
-                        are discarded and self.locs is set to the
-                        nongold-locs
-                    diameter : float
-                        the pick similar diameter for identifying gold
-                    std_range, mean_rmsd : float
-                        the pick similar parameters identifying gold
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Find localizations from gold beads via blinking kinetics.
+
+        The metrics used are the number of locs and the RMS deviation from
+        the mean frame.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
+
+            ``remove_gold`` : bool
+                If True, discard the gold locs and set ``self.locs`` to the
+                non-gold locs.
+            ``diameter`` : float
+                The pick-similar diameter for identifying gold.
+            ``std_range``, ``mean_rmsd`` : float
+                The pick-similar parameters identifying gold.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         logger.debug(f"# locs: {len(self.locs)}")
         # search for xy positions that look like gold ('pick similar')
@@ -11258,11 +11825,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         logger.debug(f"# gold particles found: {len(gold_picks)}")
 
         if len(gold_picks) <= 2:
-            logger.debug(
-                """
+            logger.debug("""
                 Not engouh gold particles found. Skipping further undrifting
-                steps for this file" continue without gold undrifting"""
-            )
+                steps for this file" continue without gold undrifting""")
             gold_locs = pd.DataFrame(columns=self.locs.columns)
             nongold_locs = self.locs
         else:
@@ -11314,35 +11879,32 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def find_similar(self, i, parameters, results):
-        """pick similar in nlocs/rmsd space (with specified limits in
-        that space).
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    diameter : float
-                        the pick similar diameter for identifying gold
-                and optional keys:
-                    min_n_locs_per_frame : float, range 0-1
-                        the min percentage of frames with events in the pick
-                        region to pick. default: 0.01
-                    max_n_locs_per_frame : float, range 0-1
-                        the max percentage of frames with events in the pick
-                        region to pick. default: 0.01
-                    min_rmsd : float
-                        the minimum root mean square distance from pick center
-                        to pick
-                    max_rmsd : float
-                        the maximum root mean square distance from pick center
-                        to pick
-                    n_plot_structures : int
-                        the number of structures to plot
-                    display_pixelsize : float
-                        the pixelsize for display in nm, default: 1
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Pick-similar in nlocs/rmsd space within specified limits.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``diameter`` : float
+                The pick-similar diameter for identifying gold.
+
+            Optional keys:
+
+            ``min_n_locs_per_frame``, ``max_n_locs_per_frame`` : float
+                Min/max percentage (range 0-1) of frames with events in the
+                pick region to pick. Default 0.01.
+            ``min_rmsd``, ``max_rmsd`` : float
+                Minimum/maximum RMS distance from the pick center to pick.
+            ``n_plot_structures`` : int
+                Number of structures to plot.
+            ``display_pixelsize`` : float
+                Pixel size for display in nm (default 1).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         logger.debug(f"# locs: {len(self.locs)}")
         # search for xy positions that look like gold ('pick similar')
@@ -11355,7 +11917,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             "max_rmsd": parameters["max_rmsd"],
         }
         # print(self.locs.dtype)
-        (picks, nlocs, rmsds, labels) = picasso_outpost.pick_similar(
+        picks, nlocs, rmsds, labels = picasso_outpost.pick_similar(
             self.locs, self.info, **kwargs
         )
         # print(self.locs.dtype)
@@ -11430,10 +11992,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 fp=results["fp_picked_fullfov"],
             )
         else:
-            logger.debug(
-                """
-                Not many picks found in specified phase space."""
-            )
+            logger.debug("""
+                Not many picks found in specified phase space.""")
             try:
                 # dt_orig = self.locs.dtype
                 # if not isinstance(dt_orig, list) and len(dt_orig) == 2:
@@ -11517,31 +12077,37 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def find_structures(self, i, parameters, results):
-        """pick similar on clusters in nlocs/rmsd space.
-        This may be useful for automated picking of origamis, and may
-        help for defining parameters for finding gold
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    diameter : float
-                        the pick similar diameter for identifying gold
-                and optional keys:
-                    min_n_locs_per_frame : float
-                        the percentage of frames with events in the pick
-                        region below which there is noise. default: 0.01
-                    n_plot_structures : int
-                        the number of structures to plot
-                    display_pixelsize : float
-                        the pixelsize for display in nm, default: 1
-                    xi : float
-                        the xi parameter for clustering. default 0.05
-                    min_cluster_size : float
-                        the minimun cluster size (fract). default .05
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Pick-similar on clusters in nlocs/rmsd space.
+
+        Useful for automated picking of origamis, and to help define
+        parameters for finding gold.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``diameter`` : float
+                The pick-similar diameter for identifying gold.
+
+            Optional keys:
+
+            ``min_n_locs_per_frame`` : float
+                Percentage of frames with events in the pick region below
+                which there is noise (default 0.01).
+            ``n_plot_structures`` : int
+                Number of structures to plot.
+            ``display_pixelsize`` : float
+                Pixel size for display in nm (default 1).
+            ``xi`` : float
+                The OPTICS ``xi`` clustering parameter (default 0.05).
+            ``min_cluster_size`` : float
+                Minimum cluster size as a fraction (default 0.05).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         logger.debug(f"# locs: {len(self.locs)}")
         # search for xy positions that look like gold ('pick similar')
@@ -11687,20 +12253,21 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def undrift_from_picked(self, i, parameters, results):
-        """Performs undrift from piced locs.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    fp_picked_locs : str
-                        filepath to the picked locs to undrift from
-                        (.hdf5 file of list of locs, with 'group' column
-                         to describe picks)
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Undrift using picked localizations.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``fp_picked_locs`` : str
+                Filepath to the picked locs to undrift from (an hdf5 file of
+                locs with a ``'group'`` column describing the picks).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         pixelsize = self.pixelsize
         picked_locs, info = io.load_locs(parameters["fp_picked_locs"])
@@ -11743,30 +12310,29 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def filter_locs(self, i, parameters, results):
-        """Filter localizations to lie within a min-max range of a metric.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    field : str or list of str
-                        the field(s) to filter on
-                and optional keys:
-                    minval : dtype of field (or list of it)
-                        the minimum value(s) to accept
-                    maxval : dtype of field (or list of it)
-                        the maximum value(s) to accept
-                    mode : str
-                        the mode of threshold application:
-                         - absolute: minval and maxval are values
-                            in units of the field
-                         - zscore: minval and maxval are in units of
-                            standard deviations from the mean
-                            (-2, 2 means cut off at 2*std from mean)
-                         - quantile: minval and maxval are quantiles
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Filter localizations to a min-max range of a metric.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``field`` : str or list of str
+                The field(s) to filter on.
+
+            Optional keys:
+
+            ``minval``, ``maxval`` : dtype of field (or list thereof)
+                The minimum/maximum value(s) to accept.
+            ``mode`` : str
+                How thresholds are applied: ``"absolute"`` (values in the
+                field's units), ``"zscore"`` (standard deviations from the
+                mean; ``-2, 2`` cuts at 2*std) or ``"quantile"`` (quantiles).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         all_field = parameters["field"]
         all_xmin = parameters.get("minval")
@@ -11838,29 +12404,33 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def filter_transient_binding(self, i, parameters, results):
-        """Filter molecule positions (after clustering or Gaussian Mixture)
-        for those who show transient binding. Specifically, the mean frame
-        should not be at extreme positions
-        (default, 0.1 > mean frame / nframes > 0.9), and std of frames
-        (default: 0.3 > std frame).
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                and optional keys:
-                    meanframe_cutoff : float (0-1, default .1)
-                        filter out positions at more extreme temporal positions
-                    stdframe_cutoff : float
-                        filter out positions with lower std than .16
-                    fp_locs : str
-                        the filepath to the underlying localizations
-                        (self.locs are centers). If given, these are filtered
-                        as well and saved with the same filename in the current
-                        results folder
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Filter molecule positions for transient binding.
+
+        Keeps positions (after clustering or Gaussian mixture) whose mean
+        frame is not at extreme temporal positions (default
+        ``0.1 > mean_frame / nframes`` or ``> 0.9``) and whose frame standard
+        deviation is large enough.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
+
+            ``meanframe_cutoff`` : float
+                Filter out positions at more extreme temporal positions
+                (range 0-1, default 0.1).
+            ``stdframe_cutoff`` : float
+                Filter out positions with a lower frame std than this
+                (default 0.16).
+            ``fp_locs`` : str
+                Filepath to the underlying localizations (``self.locs`` are
+                centers). If given, these are filtered as well and saved under
+                the same filename in the current results folder.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         results["nlocs_before"] = len(self.locs)
 
@@ -11916,13 +12486,19 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     def plot_heatmaps(self, fields):
-        """Plot headmaps between all tuples of fields given
+        """Plot heatmaps for all pairs of the given fields.
 
-        Args:
-            fields : list of str
+        Parameters
+        ----------
+        fields : list of str
+            The localization fields to cross-plot.
 
-        Returns:
-            fig, ax: fig and ax of all tuples of fields
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+            The figure.
+        ax : matplotlib.axes.Axes or numpy.ndarray of Axes
+            The axes for all field pairs.
         """
         if len(fields) == 1:
             fig, ax = plt.subplots()
@@ -11946,19 +12522,20 @@ class AutoPicasso(util.AbstractModuleCollection):
     @module_decorator
     def link_locs(self, i, parameters, results):
         """Link localizations.
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    d_max : int
-                        maximum distance to link [px]
-                    tolerance : int
-                        maximum transient dark time [frames]
-                and optional keys:
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``d_max`` : int
+                Maximum distance to link, in pixels.
+            ``tolerance`` : int
+                Maximum transient dark time, in frames.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         self.locs = postprocess.link(
             self.locs, self.info, parameters["d_max"], parameters["tolerance"]
@@ -11979,36 +12556,37 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def pairwise_module_executor(self, i, parameters, results):
-        """Calls another module (as a sub-module) for all pairs in the
-        channel_locs
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    module_name : str
-                        the module to call
-                    param_target1 : str
-                        parameter name of the first target to set for the
-                        module
-                    param_target2 : str
-                        parameter name of the second target to set for the
-                        module
-                    module_kwargs : dict
-                        the other arguments to the module
-                and optional keys:
-                    result_scalar : str
-                        the key to display in a heatmap as main result
-                    scalar_threshold : float
-                        the saturation value in the heatmap
-                    scalar_minval : float
-                        the minimum value for color in the heatmap
-                    result_fpfig : str or list of str
-                        the key to the filepath of one or more figures
-                        generated to display for documentation
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+        """Call another module as a sub-module for all channel pairs.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``module_name`` : str
+                The module to call.
+            ``param_target1``, ``param_target2`` : str
+                Parameter names of the first and second targets to set on the
+                sub-module.
+            ``module_kwargs`` : dict
+                The other arguments to the sub-module.
+
+            Optional keys:
+
+            ``result_scalar`` : str
+                Results key to display in a heatmap as the main result.
+            ``scalar_threshold`` : float
+                Saturation value in the heatmap.
+            ``scalar_minval`` : float
+                Minimum value for color in the heatmap.
+            ``result_fpfig`` : str or list of str
+                Results key(s) of figure filepath(s) to display for
+                documentation.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         fun_name = parameters["module_name"]
         sub_results = {}
@@ -12083,34 +12661,30 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def random_val(self, i, parameters, results):
-        """Generate random values and plot for debugging and testing the
-        pairwise module.
+        """Generate a random value and test plot for debugging.
 
-        Creates a random value and generates a test plot with random data
-        for debugging purposes in pairwise module workflows.
+        Used to debug and test the pairwise-module machinery.
 
-        Args:
-            i : int
-                The index of the module in the workflow
-            parameters : dict
-                Required keys:
-                    xlabel : str
-                        Label for the x-axis of the test plot
-                    ylabel : str
-                        Label for the y-axis of the test plot
-                Optional keys: (none)
-            results : dict
-                The results dictionary, updated with:
-                    random_val : float
-                        A random value between 0 and 1
-                    fp_fig : str
-                        Filepath to the generated test figure
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
 
-        Returns:
-            parameters : dict
-                Input parameters (unchanged)
-            results : dict
-                Updated results dictionary with random value and figure path
+            ``xlabel``, ``ylabel`` : str
+                Axis labels for the test plot.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results updated with ``random_val`` (a value in [0, 1]) and
+            ``fp_fig`` (the generated test figure).
         """
         results["random_val"] = np.random.rand()
         fig, ax = plt.subplots()
@@ -12129,95 +12703,71 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def labeling_efficiency_analysis(self, i, parameters, results):
-        """Analyse for labeling efficiency.
-        Perform 3 component SPINNA analysis for monomers and heterodimers
-        of target (A) and reference (B). For the analysis, we enter a
-        labeling efficiency of 1, yielding proportions of monomers and
-        dimers as seen in the data. The real labeling efficiency is then
+        """Analyse labeling efficiency via a 3-component SPINNA analysis.
 
-        Model:
-        Binders A and B bind to an engineered construct A*-anchor-B*.
+        Performs a 3-component SPINNA analysis for monomers and heterodimers
+        of target (A) and reference (B). The analysis is run with a labeling
+        efficiency of 1, yielding the proportions of monomers and dimers seen
+        in the data; the real labeling efficiency is then derived as in the
+        Notes.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``reference_name`` : str
+                Channel tag of the reference.
+            ``target_name`` : str
+                Channel tag of the target queried for labeling efficiency.
+            ``pair_distance`` : float
+                Real distance of a pair of tags, in nm (e.g. 10).
+            ``labeling_uncertainty`` : dict
+                Channel tag -> labeling uncertainty in nm (e.g. 5).
+            ``n_simulate`` : int
+                Number of target molecules to simulate (e.g. 50000).
+            ``density`` : dict
+                Channel tag -> density to simulate (area in 2D, volume in 3D).
+            ``granularity`` : int
+                The SPINNA granularity.
+            ``sim_repeats`` : int
+                Number of simulation repeats, for noise reduction.
+
+            Optional keys:
+
+            ``nn_nth`` : int
+                Number of nearest neighbours to analyse (default 1).
+            ``NND_bin`` : int
+                Bin size in nm (auto-calculated if None or 0).
+            ``NND_maxdist`` : int
+                Maximum histogram distance in nm (auto-calculated if None
+                or 0).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Notes
+        -----
+        Binders A and B bind to an engineered construct ``A*-anchor-B*``::
+
             A <-> A*-anchor-B* <-> B
-        There are four possible configurations:
-            A_only: AA*-anchor-B*
-            AB: AA*-anchor-B*B
-            B_only: A*-anchor-B*B
-            None (invisible in data): A*-anchor-B*
-        Number of total constructs with A, or B, respectively:
-            #A_tot = #A_only + #AB
-            #B_tot = #B_only + #AB
 
-        Proportions can be given in terms of #structures, or in terms
-        of #molecules, e.g.
-        with proportions given in terms of #structures
-         10 monomers, 10 dimers (20molecules in dimers) -> p_m = 50%, p_d=50%
+        with four configurations: ``A_only`` (``AA*-anchor-B*``), ``AB``
+        (``AA*-anchor-B*B``), ``B_only`` (``A*-anchor-B*B``) and ``None``
+        (``A*-anchor-B*``, invisible). With
 
-        with proportions given in terms of #molecules
-         10 monomers, 10 dimers (20molecules in dimers) -> p_m = 33%, p_d=66%
+        ::
 
-        in terms of #structures
-        prop_A^S = #A_only / (#A_only + #B_only + #AB)
-        prop_B^S = #B_only / (#A_only + #B_only + #AB)
-        prop_AB^S = #AB / (#A_only + #B_only + #AB)
-        in terms of #molecules
-        prop_A^S = #A_only / (#A_only + #B_only + 2 #AB)
-        prop_B^S = #B_only / (#A_only + #B_only + 2 #AB)
-        prop_AB^S = 2 #AB / (#A_only + #B_only + 2 #AB)
+            #AB     = #anchor * LE_A * LE_B
+            #A_only = #anchor * LE_A * (1 - LE_B)
+            #B_only = #anchor * LE_B * (1 - LE_A)
 
-        #AB = #anchor * LE_A * LE_B
-        #A_tot = #anchor * LE_A
-        #B_tot = #anchor * LE_B
-        #A_only = #A_tot - #AB = #anchor * LE_A * (1 - LE_B)
-        #B_only = #B_tot - #AB = #anchor * LE_B * (1 - LE_A)
+        and SPINNA proportions expressed per #molecules::
 
-        THUS, finally, the labeling efficiency can be calculated by
-
-        with proportions given in terms of #structures
-        LE_A = prop(AB) / (prop(B) + prop(AB))
-        LE_B = prop(AB) / (prop(A) + prop(AB))
-
-        with proportions given in terms of #molecules
-        LE_A = prop(AB) / (2 * prop(B) + prop(AB))
-        LE_B = prop(AB) / (2 * prop(A) + prop(AB))
-
-        SPINNA outputs propportions in terms of #molecules, so the last
-        formulae are used below.
-
-        Args:
-            i : int
-                the index of the module
-            parameters: dict
-                with required keys:
-                    reference_name : str
-                        the channgel_tag of the reference
-                    target_name : str
-                        the channel_tag of the target queried for LE
-                    pair_distance: 10 # real distance of pair of tags in nm
-                    labeling_uncertainty : dict, channel tag to float
-                        labeling uncertainty [nm]; good value is e.g. 5
-                    n_simulate : int
-                        number of target molecules to be simulated;
-                        good value is e.g. 50000
-                    density : dict, channel tag to float
-                        density to simulate [nm^2 or nm^3];
-                        area density if 2D; volume density if 3D
-                    granularity : int
-                        the spinna granularity
-                    sim_repeats : int
-                        number of simulation repeats, for noise reduction
-                and optional keys:
-                    nn_nth : int
-                        number of nearest neighbors to analyse
-                        default: 1
-                    NND_bin : int
-                        bin size (nm)
-                        auto-calculated if None or 0
-                    NND_maxdist : int
-                        maximum distance in histogram (nm)
-                        auto-calculated if None or 0
-            results : dict
-                the results this function generates. This is created
-                in the decorator wrapper
+            LE_A = prop(AB) / (2 * prop(B) + prop(AB))
+            LE_B = prop(AB) / (2 * prop(A) + prop(AB))
         """
         if not parameters.get("nn_nth"):
             parameters["nn_nth"] = 2
@@ -12274,7 +12824,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ).T
                 # dim = 2
 
-        compound_density = density_gt[target] / 1 + density_gt[reference] / 1  # in nm^-2
+        compound_density = (
+            density_gt[target] / 1 + density_gt[reference] / 1
+        )  # in nm^-2
         # area = parameters["n_simulate"] / (compound_density / 1e6)
         # area = parameters["n_simulate"] / (compound_density)
         area = parameters["n_simulate"] / (compound_density * 1e6)  # in µm^2
@@ -12452,12 +13004,12 @@ class AutoPicasso(util.AbstractModuleCollection):
 
 
 class AutoPicassoError(Exception):
-    pass
+    """Base error raised by :class:`AutoPicasso` analysis modules."""
 
 
 class ManualInputLackingError(AutoPicassoError):
-    pass
+    """Raised when a manual step's required input file is missing."""
 
 
 class PicassoConfigError(AutoPicassoError):
-    pass
+    """Raised when the picasso configuration is missing or invalid."""

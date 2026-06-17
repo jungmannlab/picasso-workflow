@@ -40,9 +40,9 @@ Description: This module shows an example of how to use a single dataset
     For a list of available modules, check out
     util.AbstractModuleCollection
 """
+
 import os
 from picasso_workflow import WorkflowRunner
-
 
 # the URL of your confluence instance
 confluence_url = ""

@@ -1,19 +1,19 @@
 #!/usr/bin/env python
-"""
-Module Name: render.py
+"""Wrap ``picasso.gui.render`` and ``picasso.render`` for matplotlib plotting.
+
 Author: Heinrich Grabmayr
-Initial Date: Jan 22, 2025
-Description: wrapping picasso.gui.render and pricasso.render
-    for matplotlib plotting
+Initial date: Jan 22, 2025
 """
+
+from __future__ import annotations
+
 # import logging
 from loguru import logger
 
-from picasso import render
+from picasso import render, lib
 import matplotlib.pyplot as plt
 import numpy as np
 import colorsys
-
 
 # logger = logging.getLogger(__name__)
 
@@ -92,6 +92,25 @@ def render_scene(kwargs, locs, info, viewport=None):
     return bgra
 
 
+def _oversampling_to_disp_px_size(render_args, info):
+    """Translate the deprecated picasso ``oversampling`` render kwarg into
+    ``disp_px_size`` (picasso >= 0.10). Modifies ``render_args`` in place.
+
+    The result is byte-identical to passing ``oversampling`` directly:
+    picasso computes ``oversampling = Pixelsize / disp_px_size`` internally,
+    so ``disp_px_size = Pixelsize / oversampling`` round-trips exactly.
+    """
+    if (
+        "oversampling" in render_args
+        and render_args.get("disp_px_size") is None
+    ):
+        pixelsize = lib.get_from_metadata(info, "Pixelsize", raise_error=True)
+        render_args["disp_px_size"] = pixelsize / render_args.pop(
+            "oversampling"
+        )
+    return render_args
+
+
 def render_single_channel(kwargs, locs, info, n_group_colors=8, cmap="magma"):
     """
     Renders single channel localizations.
@@ -124,6 +143,7 @@ def render_single_channel(kwargs, locs, info, n_group_colors=8, cmap="magma"):
     render_args = kwargs.copy()
     render_args.pop("cmap", None)
     render_args.pop("n_group_colors", None)
+    _oversampling_to_disp_px_size(render_args, info)
     n_locs, image = render.render(locs, info, **render_args)
 
     # adjust contrast and convert to 8 bits
@@ -193,6 +213,7 @@ def render_multi_channel(
     render_args = kwargs.copy()
     render_args.pop("cmap", None)
     render_args.pop("n_group_colors", None)
+    _oversampling_to_disp_px_size(render_args, info)
     if len(locs) == 1:
         renderings = [render.render(_, info, **render_args) for _ in locs]
     else:
@@ -331,9 +352,7 @@ def get_default_render_kwargs(channel_locs, image_px_size, cam_px_size):
         y_mins.append(locs["y"][finite].min())
         y_maxs.append(locs["y"][finite].max())
     if not x_mins:
-        raise ValueError(
-            "no localizations with finite coordinates to render"
-        )
+        raise ValueError("no localizations with finite coordinates to render")
     x_min, x_max = min(x_mins), max(x_maxs)
     y_min, y_max = min(y_mins), max(y_maxs)
 
@@ -357,12 +376,33 @@ def plot_scene(
     y_offset=0,
     title="",
 ):
-    """Plot a scene in the locs
-    Args:
-        render_kwargs : dict, default None
-           optional keys:
-            oversampling, viewport, blur_method, min_blur_width, ang,
-            n_group_colors, cmap
+    """Render and plot a scene from the localizations.
+
+    Parameters
+    ----------
+    channel_locs : recarray or list of recarray
+        The per-channel localizations to render.
+    image_px_size : float
+        Rendered (display) pixel size in nm.
+    cam_px_size : float
+        Camera pixel size in nm.
+    fp : str, optional
+        If given, the figure is saved to this filepath.
+    render_kwargs : dict, optional
+        Overrides for the default render kwargs; optional keys
+        ``oversampling``, ``viewport``, ``blur_method``, ``min_blur_width``,
+        ``ang``, ``n_group_colors`` and ``cmap``.
+    x_offset, y_offset : float, optional
+        Offsets applied to the scene. Default 0.
+    title : str, optional
+        Figure title.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure.
+    ax : matplotlib.axes.Axes
+        The axes.
     """
     if not isinstance(channel_locs, list):
         channel_locs = [channel_locs]

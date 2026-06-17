@@ -14,34 +14,10 @@ def ensure_temp_folder():
         os.mkdir(results_folder)
 
 
-def set_test_confluence_vars():
-    """When loading the .env file in the GitHub Actions Runner from
-    C:\\actions-runner\\.env via the .github\\workflows\\run-unittests.yml,
-    the variables are in quotes. Remove these and set the variables anew.
-    """
-    confluence_url = os.getenv("TEST_CONFLUENCE_URL")
-    confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
-    confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
-    confluence_page = os.getenv("TEST_CONFLUENCE_PAGE")
-    confluence_username = os.getenv("TEST_CONFLUENCE_USERNAME")
-
-    if confluence_url.startswith('"') and confluence_url.endswith('"'):
-        confluence_url = confluence_url[1:-1]
-        os.environ["TEST_CONFLUENCE_URL"] = confluence_url
-    if confluence_token.startswith('"') and confluence_token.endswith('"'):
-        confluence_token = confluence_token[1:-1]
-        os.environ["TEST_CONFLUENCE_TOKEN"] = confluence_token
-    if confluence_space.startswith('"') and confluence_space.endswith('"'):
-        confluence_space = confluence_space[1:-1]
-        os.environ["TEST_CONFLUENCE_SPACE"] = confluence_space
-    if confluence_page.startswith('"') and confluence_page.endswith('"'):
-        confluence_page = confluence_page[1:-1]
-        os.environ["TEST_CONFLUENCE_PAGE"] = confluence_page
-    if isinstance(confluence_username, str):
-        if confluence_username.startswith('"') and confluence_username.endswith('"'):
-            confluence_username = confluence_username[1:-1]
-            os.environ["TEST_CONFLUENCE_USERNAME"] = confluence_username
-
-
+# Confluence test credentials are resolved on demand via
+# picasso_workflow.confluence.resolve_confluence_credentials("ConfluenceTest")
+# -- non-secret fields come from config.yaml's ConfluenceTest section (each
+# overridable by a TEST_CONFLUENCE_* env var) and the token from the
+# TEST_CONFLUENCE_TOKEN env var. The resolver strips any surrounding quotes,
+# so no separate env-var sanitisation step is needed here.
 ensure_temp_folder()
-set_test_confluence_vars()
