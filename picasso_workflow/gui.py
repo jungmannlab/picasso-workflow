@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from picasso_workflow import util, CONFIG
 from picasso_workflow.modulespec import MODULE_REGISTRY, Scope
+from picasso_workflow import workflow_references as wfref
 from loguru import logger
 import subprocess
 import os
@@ -9011,6 +9012,15 @@ class Window(QtWidgets.QMainWindow):
         move_down_button = QtWidgets.QPushButton("Move down")
         workflow_buttons.addWidget(move_down_button)
         move_down_button.clicked.connect(self.move_down)
+        check_consistency_button = QtWidgets.QPushButton("Check consistency")
+        check_consistency_button.setToolTip(
+            "Verify that all '$get_prior_result' back-references in the "
+            "single and aggregation workflows point at the correct modules."
+        )
+        workflow_buttons.addWidget(check_consistency_button)
+        check_consistency_button.clicked.connect(
+            self.check_workflow_consistency
+        )
 
         self.addl_options_widget = QtWidgets.QWidget()
         self.addl_options_layout = QtWidgets.QHBoxLayout(
@@ -11209,6 +11219,79 @@ class Window(QtWidgets.QMainWindow):
         # Default: plain value, no command
         return str(param_value), ""
 
+    def _remap_references_after_change(self, scope, index_map):
+        """Keep ``$get_prior_result`` back-references valid after a change.
+
+        Inserting/removing/moving a module renumbers the position-prefixed
+        locators (e.g. ``09_find_gold``). This rewrites the affected locators
+        across both workflow lists in place and logs each rewrite.
+
+        Parameters
+        ----------
+        scope : str
+            Which workflow changed (``wfref.SINGLE``/``wfref.AGGREGATION``).
+        index_map : dict of int to int
+            Old-to-new module index mapping for the changed workflow.
+
+        Returns
+        -------
+        list
+            The ``(old_locator, new_locator)`` rewrites that were applied.
+        """
+        if not index_map:
+            return []
+        new_single, new_agg, changes = wfref.update_after_index_change(
+            self.single_workflow_modules,
+            self.aggregation_workflow_modules,
+            scope,
+            index_map,
+        )
+        # Slice-assign so list identities held elsewhere stay valid.
+        self.single_workflow_modules[:] = new_single
+        self.aggregation_workflow_modules[:] = new_agg
+        for old_loc, new_loc in changes:
+            logger.info(
+                f"Workflow edit: updated reference '{old_loc}' -> "
+                f"'{new_loc}'."
+            )
+            self._log_workflow_config_event(
+                "modules.reference_remap",
+                scope=scope,
+                old=old_loc,
+                new=new_loc,
+            )
+        return changes
+
+    def check_workflow_consistency(self):
+        """Validate ``$get_prior_result`` back-references and report problems.
+
+        Reports any locator (in either workflow) whose position prefix no
+        longer matches the module it names -- e.g. left dangling after a
+        module was removed, or hand-edited incorrectly.
+        """
+        # Flush any pending editor changes so the live model is validated.
+        self._update_editing_workflow_item()
+        errors = wfref.validate_references(
+            self.single_workflow_modules,
+            self.aggregation_workflow_modules,
+        )
+        if not errors:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Workflow consistency",
+                "All prior-result references resolve correctly.",
+            )
+            return
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        box.setWindowTitle("Workflow consistency")
+        box.setText(
+            f"Found {len(errors)} broken prior-result reference(s). "
+            "See details."
+        )
+        box.setDetailedText("\n\n".join(f"- {e}" for e in errors))
+        box.exec()
+
     def add_module(self):
         """Add the selected module after the currently selected workflow item.
 
@@ -11243,8 +11326,20 @@ class Window(QtWidgets.QMainWindow):
 
         # Insert after the current selection (append when nothing selected).
         current_row = list_widget.currentRow()
+        old_len = len(modules)
         insert_idx = current_row + 1 if current_row >= 0 else len(modules)
         modules.insert(insert_idx, (module_name, param_values))
+
+        # Inserting renumbers later modules, so shift any back-references that
+        # point at them (in this workflow, and aggregation->single refs).
+        scope = wfref.SINGLE if current_tab_index == 0 else wfref.AGGREGATION
+        ref_changes = self._remap_references_after_change(
+            scope, wfref.insertion_index_map(insert_idx, old_len)
+        )
+        # If the new module's own references were renumbered, refresh the
+        # editor so a later flush cannot write back the stale locators.
+        if ref_changes:
+            self._populate_stored_parameters(modules[insert_idx][1])
 
         # Mutate the list widget with signals blocked, then point the editing
         # state at the new row and select it (without a stale save/reload).
@@ -11673,6 +11768,12 @@ class Window(QtWidgets.QMainWindow):
             modules[from_row],
         )
 
+        # The two rows swapped positions; remap references accordingly.
+        scope = wfref.SINGLE if tab_index == 0 else wfref.AGGREGATION
+        ref_changes = self._remap_references_after_change(
+            scope, {from_row: to_row, to_row: from_row}
+        )
+
         # Refresh the displayed numbering/labels.
         self._renumber_workflow_items(list_widget, modules)
 
@@ -11684,6 +11785,10 @@ class Window(QtWidgets.QMainWindow):
         list_widget.blockSignals(True)
         list_widget.setCurrentRow(to_row)
         list_widget.blockSignals(False)
+        # If the moved module's own references were renumbered, refresh the
+        # editor so a later flush cannot write back the stale locators.
+        if ref_changes:
+            self._populate_stored_parameters(modules[to_row][1])
         # Selection was moved with signals blocked; refresh palette explicitly.
         self._refresh_module_palette()
 
@@ -11701,11 +11806,24 @@ class Window(QtWidgets.QMainWindow):
         self.editing_workflow_index = -1
         self.editing_workflow_tab = -1
 
+        old_len = len(modules)
         list_widget.blockSignals(True)
         list_widget.takeItem(row)
         list_widget.blockSignals(False)
         del modules[row]
         self._renumber_workflow_items(list_widget, modules)
+
+        # Removing renumbers the following modules; shift references to them.
+        # References to the removed module itself are left dangling on purpose
+        # and surface in the consistency check.
+        scope = (
+            wfref.SINGLE
+            if modules is self.single_workflow_modules
+            else wfref.AGGREGATION
+        )
+        self._remap_references_after_change(
+            scope, wfref.deletion_index_map(row, old_len)
+        )
 
         # Restore a valid selection (and reload the editor) if any modules
         # remain, clamping to the last row when the tail item was removed.

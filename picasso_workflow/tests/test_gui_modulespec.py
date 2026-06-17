@@ -182,6 +182,45 @@ def test_selecting_existing_row_enters_save_mode(window):
     assert window.add_module_button.text() == "Save module"
 
 
+def test_reference_remap_helper_updates_both_workflows(window):
+    """_remap_references_after_change rewrites cross-workflow refs in place."""
+    from picasso_workflow import workflow_references as wfref
+
+    window.single_workflow_modules[:] = [
+        ("identify", {}),
+        ("save_single_dataset", {}),
+    ]
+    window.aggregation_workflow_modules[:] = [
+        (
+            "load_to_aggregate",
+            {
+                "fp": (
+                    "$$get_prior_result",
+                    "all_results, single_dataset, $$all, "
+                    "01_save_single_dataset, filepath",
+                )
+            },
+        ),
+    ]
+    sgl_id = id(window.single_workflow_modules)
+    agg_id = id(window.aggregation_workflow_modules)
+
+    # Insert a single-workflow module at index 0: save moves 01 -> 02.
+    changes = window._remap_references_after_change(
+        wfref.SINGLE, wfref.insertion_index_map(0, 2)
+    )
+
+    # List identities are preserved (slice-assign, not reassignment).
+    assert id(window.single_workflow_modules) == sgl_id
+    assert id(window.aggregation_workflow_modules) == agg_id
+    # The aggregation -> single cross-reference was bumped.
+    assert (
+        "02_save_single_dataset"
+        in window.aggregation_workflow_modules[0][1]["fp"][1]
+    )
+    assert len(changes) == 1
+
+
 if __name__ == "__main__":
     import sys
 
