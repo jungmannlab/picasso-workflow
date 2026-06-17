@@ -526,7 +526,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     "Qe": 1,  # relevant are detected, not incident photons
                     "Pixelsize": cam_config["Pixelsize"],
                 }
-                for category in cam_config.get("Sensitivity Categories"):
+                for category in cam_config.get("Sensitivity Categories") or []:
                     category_key = f"{cam_name}-{category}"
 
                     category_value = self.info[0].get(category_key)
