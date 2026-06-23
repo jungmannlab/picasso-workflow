@@ -39,6 +39,11 @@ module load anaconda/3/2023.03
 source ~/.bashrc
 conda activate picasso-workflow
 
+# Confluence (test) credentials live in a dedicated secrets file rather than
+# ~/.bashrc, whose non-interactive guard would `return` before reaching any
+# exports inside a batch job. The file has no such guard, so it always runs.
+[ -f ~/.picasso_secrets ] && source ~/.picasso_secrets
+
 python -m pytest \
     -m "not integration" \
     --junit-xml="$RUN_DIR/tier1_2_${SLURM_JOB_ID}.xml" \
