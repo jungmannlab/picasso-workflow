@@ -235,14 +235,39 @@ pytest suite, CI, and GUI-launched workflows):
 
 - **Local (laptop)** — export in your shell (or `picasso_workflow/.env`, which
   is loaded automatically at import by python-dotenv).
-- **Cluster** — set it so both the login node *and* SLURM jobs see it. Two
-  robust options:
-  - a `.env` next to the installed package (loaded at `import picasso_workflow`,
-    so it works identically in interactive shells and batch jobs), or
-  - an `export` sourced unconditionally from `~/.bashrc` (above any
-    non-interactive guard). `tools/cluster_tests/submit_all.sh` submits with
-    `--export=ALL` and the sbatch scripts `source ~/.bashrc`, so both paths
-    propagate into jobs.
+- **Cluster** — set it so both the login node *and* SLURM jobs see it.
+
+  > **Pitfall:** plain `export`s in `~/.bashrc` usually do **not** reach a
+  > batch job. A distro-default `~/.bashrc` starts with a non-interactive
+  > guard (`case $- in *i*) ;; *) return;; esac`) that `return`s before any
+  > later lines run. SLURM job scripts run non-interactively, so a
+  > `source ~/.bashrc` inside them bails out before reaching your exports —
+  > and `--export=ALL` only carries variables that were actually *exported*
+  > into the submitting environment.
+
+  **Recommended:** keep the credentials in a dedicated secrets file,
+  `~/.picasso_secrets`, that contains only `export` lines and has no
+  interactivity guard, so it runs the same way in interactive and batch
+  shells:
+
+  ```bash
+  cat > ~/.picasso_secrets <<'EOF'
+  export CONFLUENCE_TOKEN='…'        # operational (real workflow runs)
+  export TEST_CONFLUENCE_TOKEN='…'   # pytest suite
+  EOF
+  chmod 600 ~/.picasso_secrets
+  ```
+
+  Both job paths source this file unconditionally
+  (`[ -f ~/.picasso_secrets ] && source ~/.picasso_secrets`): the test
+  tiers under `tools/cluster_tests/` and the `run_workflow_slurm.sh` scripts
+  the GUI generates for `start_workflow.py`. `submit_all.sh` additionally
+  submits with `--export=ALL`, so anything exported on the login node is
+  carried in too.
+
+  Alternative: a `.env` next to the installed package, loaded at
+  `import picasso_workflow` by python-dotenv, which also works identically
+  in interactive shells and batch jobs.
 - **CI** — the runner provides only the token env var; the non-secret test
   settings come from the bundled `ConfluenceTest` section.
 
