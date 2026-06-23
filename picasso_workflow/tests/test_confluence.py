@@ -1458,6 +1458,80 @@ def test_confluence_call_raises_after_exhausting_retries(monkeypatch):
     assert d.calls == confluence._STALE_STATE_RETRIES + 1
 
 
+def test_is_transient_error_detection():
+    """Recognize HTTP 429 and 5xx as transient, reject 4xx and 409."""
+    from requests.exceptions import HTTPError
+
+    for code in (429, 500, 502, 503):
+        resp = MagicMock(status_code=code)
+        assert confluence._is_transient_error(HTTPError("x", response=resp))
+
+    for code in (400, 401, 404, 409):
+        resp = MagicMock(status_code=code)
+        assert not confluence._is_transient_error(
+            HTTPError("x", response=resp)
+        )
+
+    # No response object: fall back to message text.
+    assert confluence._is_transient_error(HTTPError("Too Many Requests"))
+    assert not confluence._is_transient_error(HTTPError("unauthorized"))
+
+
+def test_confluence_call_retries_on_transient_error(monkeypatch):
+    """A transient 5xx is retried, then succeeds."""
+    from requests.exceptions import HTTPError
+
+    monkeypatch.setattr(confluence, "_TRANSIENT_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+    transient = HTTPError("x", response=MagicMock(status_code=503))
+
+    class Dummy:
+        def __init__(self):
+            self.calls = 0
+
+        def connect(self):
+            pass
+
+        @confluence.confluence_call
+        def write(self):
+            self.calls += 1
+            if self.calls < 3:
+                raise transient
+            return "ok"
+
+    d = Dummy()
+    assert d.write() == "ok"
+    assert d.calls == 3
+
+
+def test_confluence_call_raises_after_exhausting_transient_retries(
+    monkeypatch,
+):
+    """Persistent transient errors raise after the retry budget is spent."""
+    from requests.exceptions import HTTPError
+
+    monkeypatch.setattr(confluence, "_TRANSIENT_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+    transient = HTTPError("x", response=MagicMock(status_code=500))
+
+    class Dummy:
+        def __init__(self):
+            self.calls = 0
+
+        def connect(self):
+            pass
+
+        @confluence.confluence_call
+        def write(self):
+            self.calls += 1
+            raise transient
+
+    d = Dummy()
+    with pytest.raises(confluence.ConfluenceInterfaceError):
+        d.write()
+    assert d.calls == confluence._TRANSIENT_RETRIES + 1
+
+
 # ---------------------------------------------------------------------------
 # Eventual-consistency page-lookup retry -- no network needed.
 # ---------------------------------------------------------------------------

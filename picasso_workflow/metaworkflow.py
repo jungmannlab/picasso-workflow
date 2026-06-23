@@ -1113,19 +1113,24 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             if rname := datasets.get("report_name"):
                 report_name = rname + "_" + runstamp
                 dedicated_page = True
-                # create the corresponding confluence page (page owner only)
+                # Create the aggregation's dedicated Confluence page (page
+                # owner only). Every child single-dataset workflow -- on this
+                # rank and, in cooperative mode, on the other ranks -- uses
+                # this page as its parent, so if it is missing they all fail
+                # later with a confusing "page not found". Create-or-reuse,
+                # then confirm it is actually queryable (get_page_properties
+                # retries for eventual consistency) so a silently dropped
+                # creation surfaces here, loudly, on the owning rank instead
+                # of cascading across every child.
                 if owns_page:
                     try:
-                        ci = confluence.ConfluenceInterface(
-                            self.confluence_url,
-                            self.confluence_space,
-                            self.root_page,
-                            username=self.confluence_username,
-                            token=self.confluence_token,
+                        self.ci.create_page(report_name, "")
+                    except confluence.ConfluenceInterfaceError as e:
+                        logger.warning(
+                            f"create_page for '{report_name}' failed "
+                            f"({e}); the page may already exist -- verifying."
                         )
-                        ci.create_page(report_name, "")
-                    except Exception:
-                        pass
+                    self.ci.get_page_properties(page_title=report_name)
             else:
                 report_name = self.analysis_name
                 dedicated_page = False

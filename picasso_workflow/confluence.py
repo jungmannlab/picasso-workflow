@@ -4722,6 +4722,38 @@ _STALE_STATE_BACKOFF = 0.5
 _PAGE_LOOKUP_RETRIES = 6
 _PAGE_LOOKUP_BACKOFF = 0.5
 
+# Confluence intermittently returns transient server-side failures (HTTP 5xx)
+# or rate-limits (HTTP 429), e.g. while a page create/request is briefly
+# delayed. These are not the caller's fault and usually succeed on retry.
+_TRANSIENT_RETRIES = 5
+_TRANSIENT_BACKOFF = 0.5
+
+
+def _is_transient_error(error):
+    """Return True for a retryable transient Confluence server error.
+
+    Covers HTTP 429 (rate limited) and 5xx (server-side) responses, which
+    are transient and typically succeed when the call is retried after a
+    short backoff. Distinct from :func:`_is_stale_state_conflict`, which
+    handles the 409 optimistic-locking case.
+
+    Parameters
+    ----------
+    error : Exception
+        The exception raised by the Confluence API call.
+
+    Returns
+    -------
+    bool
+        Whether the error is a retryable transient server error.
+    """
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is not None:
+        return status == 429 or 500 <= status < 600
+    text = str(error).lower()
+    return "too many requests" in text or "internal server error" in text
+
 
 def _is_stale_state_conflict(error):
     """Return True for a Confluence optimistic-locking version conflict.
@@ -4770,6 +4802,7 @@ def confluence_call(method):
 
     def confluence_call_wrapper(self, *args, **kwargs):
         attempt = 0
+        transient_attempt = 0
         while True:
             try:
                 # call the confluence api
@@ -4792,6 +4825,21 @@ def confluence_call(method):
                         f"conflict (attempt {attempt}/{_STALE_STATE_RETRIES}"
                         f"); refetching page version and retrying in "
                         f"{wait:.1f}s."
+                    )
+                    time.sleep(wait)
+                    continue
+                if (
+                    _is_transient_error(e)
+                    and transient_attempt < _TRANSIENT_RETRIES
+                ):
+                    transient_attempt += 1
+                    wait = min(
+                        _TRANSIENT_BACKOFF * 2 ** (transient_attempt - 1), 8.0
+                    )
+                    logger.warning(
+                        f"{method.__name__} hit a transient Confluence error "
+                        f"(attempt {transient_attempt}/{_TRANSIENT_RETRIES}); "
+                        f"retrying in {wait:.1f}s. ({str(e)})"
                     )
                     time.sleep(wait)
                     continue
