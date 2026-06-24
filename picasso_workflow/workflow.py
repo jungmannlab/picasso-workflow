@@ -351,6 +351,7 @@ class AggregationWorkflowRunner:
         parent_page_title: str,
         username: str | None = None,
         token: str | None = None,
+        parent_page_id: str | None = None,
     ) -> None:
         """Create the Confluence interface used to publish the overview page.
 
@@ -364,6 +365,9 @@ class AggregationWorkflowRunner:
             Title of the page under which new pages are nested.
         username, token : str, optional
             Confluence credentials.
+        parent_page_id : str, optional
+            Id of the parent page; when given, skips the title-based lookup
+            (see :class:`~picasso_workflow.confluence.ConfluenceInterface`).
         """
         self.ci = ConfluenceInterface(
             base_url=base_url,
@@ -371,6 +375,7 @@ class AggregationWorkflowRunner:
             parent_page_title=parent_page_title,
             username=username,
             token=token,
+            parent_page_id=parent_page_id,
         )
 
     def run(self) -> bool | None:

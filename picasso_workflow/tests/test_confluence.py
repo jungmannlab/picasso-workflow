@@ -1532,6 +1532,115 @@ def test_confluence_call_raises_after_exhausting_transient_retries(
     assert d.calls == confluence._TRANSIENT_RETRIES + 1
 
 
+def test_confluence_call_retries_on_connection_error(monkeypatch):
+    """A dropped connection is reconnected and retried with backoff."""
+    from requests.exceptions import ConnectionError as ReqConnectionError
+
+    monkeypatch.setattr(confluence, "_CONNECTION_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+
+    class Dummy:
+        def __init__(self):
+            self.calls = 0
+            self.connects = 0
+
+        def connect(self):
+            self.connects += 1
+
+        @confluence.confluence_call
+        def write(self):
+            self.calls += 1
+            if self.calls < 3:
+                raise ReqConnectionError("Connection aborted.")
+            return "ok"
+
+    d = Dummy()
+    assert d.write() == "ok"
+    assert d.calls == 3
+    assert d.connects == 2  # reconnected before each retry
+
+
+def test_confluence_call_connection_retries_exhausted(monkeypatch):
+    """Persistent connection drops raise after the reconnect budget."""
+    from requests.exceptions import ConnectionError as ReqConnectionError
+
+    monkeypatch.setattr(confluence, "_CONNECTION_BACKOFF", 0.0)
+    monkeypatch.setattr(confluence.time, "sleep", lambda *_a, **_k: None)
+
+    class Dummy:
+        def __init__(self):
+            self.calls = 0
+
+        def connect(self):
+            pass
+
+        @confluence.confluence_call
+        def write(self):
+            self.calls += 1
+            raise ReqConnectionError("Connection aborted.")
+
+    d = Dummy()
+    with pytest.raises(confluence.ConfluenceInterfaceError):
+        d.write()
+    assert d.calls == confluence._CONNECTION_RETRIES + 1
+
+
+# ---------------------------------------------------------------------------
+# Parent-page id passthrough -- skip the eventually-consistent title lookup.
+# ---------------------------------------------------------------------------
+
+
+def test_confluence_interface_uses_given_parent_page_id(monkeypatch):
+    """A supplied parent_page_id skips the title-based parent lookup."""
+    calls = {"lookup": 0}
+
+    def fake_lookup(self, page_title="", page_id=""):
+        calls["lookup"] += 1
+        return "should-not-be-used", page_title
+
+    monkeypatch.setattr(
+        confluence.ConfluenceInterface, "connect", lambda self: None
+    )
+    monkeypatch.setattr(
+        confluence.ConfluenceInterface, "get_page_properties", fake_lookup
+    )
+
+    ci = confluence.ConfluenceInterface(
+        "http://example/wiki",
+        "SPC",
+        "ParentTitle",
+        token="tok",
+        parent_page_id="42",
+    )
+    assert ci.parent_page_id == "42"
+    assert calls["lookup"] == 0
+
+
+def test_confluence_interface_falls_back_to_title_lookup(monkeypatch):
+    """Without parent_page_id, the parent is resolved by title."""
+    calls = {"lookup": 0}
+
+    def fake_lookup(self, page_title="", page_id=""):
+        calls["lookup"] += 1
+        return "99", page_title
+
+    monkeypatch.setattr(
+        confluence.ConfluenceInterface, "connect", lambda self: None
+    )
+    monkeypatch.setattr(
+        confluence.ConfluenceInterface, "get_page_properties", fake_lookup
+    )
+
+    ci = confluence.ConfluenceInterface(
+        "http://example/wiki",
+        "SPC",
+        "ParentTitle",
+        token="tok",
+    )
+    assert ci.parent_page_id == "99"
+    assert calls["lookup"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Eventual-consistency page-lookup retry -- no network needed.
 # ---------------------------------------------------------------------------

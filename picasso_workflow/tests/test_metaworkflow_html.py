@@ -77,3 +77,57 @@ def test_null_confluence_interface_is_inert(tmp_path):
     assert ci.get_page_body("page") == ""
     assert ci.update_page_content("p", "id", "body") is None
     assert ci.upload_attachment("id", "/some/fig.png") == "fig.png"
+
+
+@patch("picasso_workflow.confluence.ConfluenceInterface")
+def test_get_configs_threads_parent_page_id(mock_ci, tmp_path):
+    """A given parent_page_id lands in the ConfluenceReporter config."""
+    coord = SingleWorkflowCoordinator(
+        None,
+        "myrun",
+        str(tmp_path),
+        "http://confluence",
+        "SPACE",
+        "token",
+        document_confluence=True,
+    )
+    reporter_config, _ = coord.get_configs(
+        "myrun", str(tmp_path / "root"), parent_page_id="4242"
+    )
+    assert reporter_config["ConfluenceReporter"]["parent_page_id"] == "4242"
+
+
+def test_publish_and_await_page_id_roundtrip(tmp_path):
+    """A published page id is read back by _await_page_id (rank barrier)."""
+    coord = SingleWorkflowCoordinator(
+        None,
+        "myrun",
+        str(tmp_path),
+        None,
+        None,
+        None,
+        document_confluence=False,
+    )
+    coord.root_folder = str(tmp_path)
+
+    coord._publish_page_id("260119_some-report_260623-1633", "778899")
+    assert coord._await_page_id("260119_some-report_260623-1633") == "778899"
+
+
+def test_publish_page_id_noop_for_missing_id(tmp_path):
+    """Publishing a falsy id writes nothing (no file to read back)."""
+    coord = SingleWorkflowCoordinator(
+        None,
+        "myrun",
+        str(tmp_path),
+        None,
+        None,
+        None,
+        document_confluence=False,
+    )
+    coord.root_folder = str(tmp_path)
+
+    coord._publish_page_id("report", None)
+    import os
+
+    assert not os.path.exists(coord._page_id_file("report"))

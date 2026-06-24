@@ -329,6 +329,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         report_name: str,
         username: str | None = None,
         token: str | None = None,
+        parent_page_id: str | None = None,
     ):
         """Initialize the reporter and create (or reuse) its report page.
 
@@ -344,11 +345,22 @@ class ConfluenceReporter(AbstractModuleCollection):
             Title of the report page to create or reuse.
         username, token : str, optional
             Confluence credentials.
+        parent_page_id : str, optional
+            Id of the parent page. When given, the title-based parent lookup
+            is skipped -- used on multi-rank runs where a cooperating rank
+            already created the parent and shared its id, avoiding the
+            eventually-consistent title lookup that would otherwise race
+            page creation.
         """
         logger.debug("Initializing ConfluenceReporter.")
 
         self.ci = ConfluenceInterface(
-            base_url, space_key, parent_page_title, username, token
+            base_url,
+            space_key,
+            parent_page_title,
+            username,
+            token,
+            parent_page_id=parent_page_id,
         )
 
         # create page
@@ -4728,6 +4740,12 @@ _PAGE_LOOKUP_BACKOFF = 0.5
 _TRANSIENT_RETRIES = 5
 _TRANSIENT_BACKOFF = 0.5
 
+# The Confluence connection is occasionally dropped mid-request (the server
+# closes the keep-alive socket -> RemoteDisconnected/ConnectionError).
+# Reconnect and retry with backoff rather than failing the whole workflow.
+_CONNECTION_RETRIES = 5
+_CONNECTION_BACKOFF = 0.5
+
 
 def _is_transient_error(error):
     """Return True for a retryable transient Confluence server error.
@@ -4803,14 +4821,29 @@ def confluence_call(method):
     def confluence_call_wrapper(self, *args, **kwargs):
         attempt = 0
         transient_attempt = 0
+        conn_attempt = 0
         while True:
             try:
                 # call the confluence api
                 return method(self, *args, **kwargs)
             except ConnectionError as e:
-                logger.exception(e)
-                self.connect()
-                return method(self, *args, **kwargs)
+                if conn_attempt < _CONNECTION_RETRIES:
+                    conn_attempt += 1
+                    wait = min(
+                        _CONNECTION_BACKOFF * 2 ** (conn_attempt - 1), 8.0
+                    )
+                    logger.warning(
+                        f"{method.__name__} lost the Confluence connection "
+                        f"(attempt {conn_attempt}/{_CONNECTION_RETRIES}); "
+                        f"reconnecting and retrying in {wait:.1f}s. ({str(e)})"
+                    )
+                    time.sleep(wait)
+                    self.connect()
+                    continue
+                raise ConfluenceInterfaceError(
+                    f"Calling {method.__name__} failed after "
+                    f"{_CONNECTION_RETRIES} reconnect attempts: {str(e)}"
+                )
             except HTTPError as e:
                 if "unauthorized" in str(e).lower():
                     raise e
@@ -4877,7 +4910,13 @@ class ConfluenceInterface:
     """
 
     def __init__(
-        self, base_url, space_key, parent_page_title, username=None, token=None
+        self,
+        base_url,
+        space_key,
+        parent_page_title,
+        username=None,
+        token=None,
+        parent_page_id=None,
     ):
         """ """
         if token is None:
@@ -4899,7 +4938,17 @@ class ConfluenceInterface:
 
         self.connect()
 
-        self.parent_page_id, _ = self.get_page_properties(parent_page_title)
+        if parent_page_id:
+            # The caller already knows the parent page id (e.g. a cooperating
+            # SLURM rank that created the page). Use it directly and skip the
+            # title-based lookup, which is eventually consistent and can
+            # transiently fail to find a just-created page (or race the rank
+            # that creates it).
+            self.parent_page_id = parent_page_id
+        else:
+            self.parent_page_id, _ = self.get_page_properties(
+                parent_page_title
+            )
 
     def connect(self):
         """Connect to confluence (cloud or server) by authentification depending
