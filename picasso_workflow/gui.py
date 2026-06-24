@@ -7146,6 +7146,13 @@ class SlurmCommunicator:
 
         commands.append("source ~/.bashrc")
 
+        # Confluence credentials live in a dedicated secrets file rather than
+        # ~/.bashrc, whose non-interactive guard would `return` before
+        # reaching any exports inside a batch job. The file has no such
+        # guard, so it always runs (and is a no-op if absent).
+        secrets_file = "~/.picasso_secrets"
+        commands.append(f"[ -f {secrets_file} ] && source {secrets_file}")
+
         commands.append("source /etc/profile.d/modules.sh")
         # if use_pw_module:
         #     commands.append(f"module load {pw_module}")

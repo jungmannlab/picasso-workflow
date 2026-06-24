@@ -678,6 +678,75 @@ class AbstractWorkflowCoordinator(abc.ABC):
             "Timed out waiting for the shared run timestamp from rank 0."
         )
 
+    def _page_id_file(self, report_name: str) -> str:
+        """Path of the shared file holding a created page's id.
+
+        Parameters
+        ----------
+        report_name : str
+            The page's title (also its result-folder name).
+
+        Returns
+        -------
+        str
+            Absolute path of the per-page id file under the root folder.
+        """
+        return os.path.join(self.root_folder, f".pwf_pageid_{report_name}")
+
+    def _publish_page_id(self, report_name: str, page_id: str | None) -> None:
+        """Publish a created page's id for cooperating ranks to pick up.
+
+        On multi-node aggregation the page owner (rank 0) creates the parent
+        page and shares its id here so the other ranks can attach their child
+        workflows to it by id, rather than racing an eventually-consistent
+        title lookup.
+
+        Parameters
+        ----------
+        report_name : str
+            The page's title.
+        page_id : str or None
+            The created page's id. A no-op when None.
+        """
+        if not page_id:
+            return
+        os.makedirs(self.root_folder, exist_ok=True)
+        with open(self._page_id_file(report_name), "w") as f:
+            f.write(str(page_id))
+
+    def _await_page_id(self, report_name: str) -> str | None:
+        """Wait for the page owner to publish ``report_name``'s page id.
+
+        Acts as a barrier so a worker rank does not start child workflows
+        before the owning rank has created the shared parent page.
+
+        Parameters
+        ----------
+        report_name : str
+            The page's title.
+
+        Returns
+        -------
+        str or None
+            The published page id, or None if it does not appear within the
+            wait window (the caller then falls back to a title lookup).
+        """
+        page_id_file = self._page_id_file(report_name)
+        for _ in range(600):
+            try:
+                with open(page_id_file) as f:
+                    page_id = f.read().strip()
+                if page_id:
+                    return page_id
+            except FileNotFoundError:
+                pass
+            time.sleep(1)
+        logger.warning(
+            f"Timed out waiting for the page id of '{report_name}' from the "
+            "page owner; falling back to a title lookup."
+        )
+        return None
+
     def get_configs(
         self,
         report_name: str,
@@ -685,6 +754,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
         cell_type: str | None = None,
         cell_name: str | None = None,
         camera_info: dict | None = None,
+        parent_page_id: str | None = None,
     ) -> tuple[dict, dict]:
         """Build reporter and analysis config dicts for one workflow run.
 
@@ -701,6 +771,11 @@ class AbstractWorkflowCoordinator(abc.ABC):
             Optional nesting levels for the result location.
         camera_info : dict, optional
             Camera metadata passed through to the analysis config.
+        parent_page_id : str, optional
+            Id of the Confluence parent page. When given it is threaded into
+            the reporter config so child workflows resolve the parent by id
+            instead of by title -- avoiding the eventually-consistent title
+            lookup that races page creation across ranks.
 
         Returns
         -------
@@ -723,6 +798,7 @@ class AbstractWorkflowCoordinator(abc.ABC):
                 "base_url": self.confluence_url,
                 "space_key": self.confluence_space,
                 "parent_page_title": report_name,
+                "parent_page_id": parent_page_id,
                 "username": self.confluence_username,
                 "token": self.confluence_token,
             }
@@ -1110,28 +1186,46 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             else:
                 runner_rank, runner_size = self.rank, self.size
 
+            parent_page_id = None
             if rname := datasets.get("report_name"):
                 report_name = rname + "_" + runstamp
                 dedicated_page = True
-                # create the corresponding confluence page (page owner only)
+                # Create the aggregation's dedicated Confluence page (page
+                # owner only). Every child single-dataset workflow -- on this
+                # rank and, in cooperative mode, on the other ranks -- uses
+                # this page as its parent, so if it is missing they all fail
+                # later with a confusing "page not found". Create-or-reuse,
+                # then confirm it is actually queryable (get_page_properties
+                # retries for eventual consistency) so a silently dropped
+                # creation surfaces here, loudly, on the owning rank instead
+                # of cascading across every child.
                 if owns_page:
                     try:
-                        ci = confluence.ConfluenceInterface(
-                            self.confluence_url,
-                            self.confluence_space,
-                            self.root_page,
-                            username=self.confluence_username,
-                            token=self.confluence_token,
+                        self.ci.create_page(report_name, "")
+                    except confluence.ConfluenceInterfaceError as e:
+                        logger.warning(
+                            f"create_page for '{report_name}' failed "
+                            f"({e}); the page may already exist -- verifying."
                         )
-                        ci.create_page(report_name, "")
-                    except Exception:
-                        pass
+                    parent_page_id, _ = self.ci.get_page_properties(
+                        page_title=report_name
+                    )
+                    # In cooperative mode the other ranks attach their child
+                    # workflows to this same page. Publish its id so they use
+                    # it directly instead of an eventually-consistent title
+                    # lookup that can race this creation.
+                    if not distribute_groups:
+                        self._publish_page_id(report_name, parent_page_id)
+                else:
+                    # Cooperative worker rank: block until the page owner has
+                    # created the parent page and published its id.
+                    parent_page_id = self._await_page_id(report_name)
             else:
                 report_name = self.analysis_name
                 dedicated_page = False
 
             reporter_config, analysis_config = self.get_configs(
-                report_name, self.root_folder
+                report_name, self.root_folder, parent_page_id=parent_page_id
             )
 
             workflow_modules_multi = {
