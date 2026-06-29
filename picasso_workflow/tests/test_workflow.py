@@ -199,10 +199,16 @@ class TestWorkflow(unittest.TestCase):
         shutil.rmtree(awr.result_folder)
 
     # @unittest.skip('')
-    @patch("picasso_workflow.workflow.ConfluenceInterface", MagicMock)
+    @patch("picasso_workflow.workflow.ConfluenceInterface")
     @patch("picasso_workflow.workflow.WorkflowRunner")
     @patch("picasso_workflow.workflow.ParameterTiler")
-    def test_b02_AggregationWR_save_load(self, mock_parameter_tiler, mock_WR):
+    def test_b02_AggregationWR_save_load(
+        self, mock_parameter_tiler, mock_WR, mock_ci
+    ):
+        # create_page returns the new page's id (a string); the runner now
+        # stores it in the reporter config, so the mock must return a
+        # serializable value rather than a bare MagicMock.
+        mock_ci.return_value.create_page.return_value = "12345"
         mock_parameter_tiler = MagicMock()
         mock_parameter_tiler.ntiles = 3
         mock_parameter_tiler.return_value = {"the_parameters": [0, 1, 2]}

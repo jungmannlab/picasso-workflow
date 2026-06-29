@@ -265,9 +265,16 @@ class AggregationWorkflowRunner:
             # orchestration context. Here we only ensure the page exists.
             # On multi-node runs only rank 0 creates it; worker ranks still
             # set parent_page_title so their child pages nest correctly.
+            # Resolve the parent page by id (returned by create_page, or
+            # already supplied by the coordinator) rather than by title:
+            # Confluence Cloud's title search index lags page creation, so a
+            # title lookup in a child workflow can fail to find a page that
+            # was just created on this (or another) rank.
+            parent_page_id = confluence_config.get("parent_page_id")
             if instance.rank == 0:
                 try:
-                    instance.ci.create_page(report_name, "")
+                    created_id = instance.ci.create_page(report_name, "")
+                    parent_page_id = parent_page_id or created_id
                 except ConfluenceInterfaceError:
                     logger.debug(
                         "Error creating page, it already exists. Continuing"
@@ -275,6 +282,9 @@ class AggregationWorkflowRunner:
             reporter_config["ConfluenceReporter"][
                 "parent_page_title"
             ] = report_name
+            reporter_config["ConfluenceReporter"][
+                "parent_page_id"
+            ] = parent_page_id
             instance.cpage_names.append(report_name)
 
         # HTML reporting: every child WorkflowRunner writes its own

@@ -1201,15 +1201,25 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 # of cascading across every child.
                 if owns_page:
                     try:
-                        self.ci.create_page(report_name, "")
+                        # create_page returns the new page's id directly,
+                        # which is immediately valid. A title lookup, by
+                        # contrast, hits Confluence Cloud's search index,
+                        # which lags page creation by seconds to minutes --
+                        # the root cause of the cross-rank "page not found"
+                        # races. So resolve the id from the creation itself
+                        # and only fall back to a title lookup when the page
+                        # already exists (e.g. a re-run), where the older
+                        # page is already indexed.
+                        parent_page_id = self.ci.create_page(report_name, "")
                     except confluence.ConfluenceInterfaceError as e:
                         logger.warning(
                             f"create_page for '{report_name}' failed "
-                            f"({e}); the page may already exist -- verifying."
+                            f"({e}); the page may already exist -- "
+                            "resolving by title."
                         )
-                    parent_page_id, _ = self.ci.get_page_properties(
-                        page_title=report_name
-                    )
+                        parent_page_id, _ = self.ci.get_page_properties(
+                            page_title=report_name
+                        )
                     # In cooperative mode the other ranks attach their child
                     # workflows to this same page. Publish its id so they use
                     # it directly instead of an eventually-consistent title
@@ -1266,7 +1276,12 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                             "aggregation.</p>"
                         ),
                     )
-                    pgid, _ = self.ci.get_page_properties(report_name)
+                    # Reuse the id from creation above; the title is not
+                    # reliably indexed yet right after create_page.
+                    pgid = (
+                        parent_page_id
+                        or self.ci.get_page_properties(report_name)[0]
+                    )
                     self.ci.update_page_content(
                         report_name, pgid, body, replace=True
                     )
