@@ -419,11 +419,11 @@ needed. The tests are skipped automatically if `picassosr` is not installed.
 |---|---|
 | `Test_A::test_01` | `load → identify → localize` on a single 30 px / 1k-frame stack |
 | `Test_A::test_02` | same pipeline × 2 channels + `align_channels` aggregation |
-| `test_03_undrift_rcc` | full pipeline including `undrift_rcc` on a 5 000-frame synthetic movie |
+| `test_03_undrift_rcc` | full pipeline including `undrift_rcc` on a 2 500-frame synthetic movie |
 | `test_template_smoke[<name>]` | first safe modules of each snapshotted template, real data path substituted with bundled file |
 | `Test_B::test_01` | same as `test_01` but with a live Confluence reporter (requires env vars below) |
 
-The `test_03_undrift_rcc` test uses a **session-scoped synthetic movie** (5 000 frames, 128 × 128 px, ~20 Gaussian emitters on Poisson background) generated in `conftest.py`. It does not require any external data files.
+The `test_03_undrift_rcc` test uses a **session-scoped synthetic movie** (2 500 frames, 128 × 128 px, ~20 Gaussian emitters on Poisson background) generated in `conftest.py`, paired with `segmentation=250` so `undrift_rcc` still gets ~10 frame segments. It does not require any external data files.
 
 **Confluence integration** (optional, skipped when the test token is absent):
 

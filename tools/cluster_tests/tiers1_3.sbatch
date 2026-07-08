@@ -15,7 +15,7 @@
 # log report per-test wall-time, so the queue-wait-vs-compute split is visible.
 #
 # Requires picassosr in the conda environment (for the integration tier).
-# Uses a session-scoped 5 000-frame synthetic OME-TIFF (written to the node's
+# Uses a session-scoped 2 500-frame synthetic OME-TIFF (written to the node's
 # /tmp by pytest) and the minimal bundled datasets in
 # picasso_workflow/tests/TestData/integration/. No network volumes required.
 #
