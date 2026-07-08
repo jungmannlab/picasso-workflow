@@ -184,9 +184,17 @@ class Test_A_PicassoIntegration(unittest.TestCase):
             "03_save_single_dataset, filepath",
         )
 
+        # ConfluenceInterface.create_page returns the new page's id (a
+        # string), which AggregationWorkflowRunner now stores in its reporter
+        # config and later yaml-dumps in save().  A bare MagicMock return
+        # value is not serialisable and triggers a RecursionError on save, so
+        # the mock must return a real value.
+        mock_ci = MagicMock()
+        mock_ci.return_value.create_page.return_value = "mock-page-id"
+
         with (
             patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock),
-            patch("picasso_workflow.workflow.ConfluenceInterface", MagicMock),
+            patch("picasso_workflow.workflow.ConfluenceInterface", mock_ci),
         ):
             awr = AggregationWorkflowRunner.config_from_dicts(
                 _dummy_reporter_config("test_a02_minimal_channel_align"),
@@ -197,19 +205,19 @@ class Test_A_PicassoIntegration(unittest.TestCase):
 
 
 @pytest.mark.integration
-def test_03_undrift_rcc(synthetic_movie_5k, tmp_path):
+def test_03_undrift_rcc(synthetic_movie_2500, tmp_path):
     """Full pipeline — load → identify → localize → undrift_rcc → save —
-    on a 5 000-frame synthetic stack.
+    on a 2 500-frame synthetic stack.
 
     Uses a fixed net_gradient threshold (300 ADU) to avoid the auto_netgrad
     heuristic, which is tuned for real photon-count data.  The synthetic
-    emitters produce consistent localisations across all 5 000 frames, so
+    emitters produce consistent localisations across all 2 500 frames, so
     RCC converges to ~zero drift, confirming the algorithm runs end-to-end.
     """
     workflow_modules = [
         (
             "load_dataset_movie",
-            {"filename": str(synthetic_movie_5k)},
+            {"filename": str(synthetic_movie_2500)},
         ),
         (
             "identify",
@@ -221,12 +229,18 @@ def test_03_undrift_rcc(synthetic_movie_5k, tmp_path):
         ),
         (
             "localize",
-            {"fit_method": "lsq", "box_size": 7, "fit_parallel": False},
+            # fit_parallel spreads the ~40 k spot fits across the SLURM
+            # allocation's cores (OMP_NUM_THREADS / cpus-per-task); the LSQ
+            # result is identical to the serial path, so the pipeline still
+            # converges to ~zero drift — this only shortens wall-time.
+            {"fit_method": "lsq", "box_size": 7, "fit_parallel": True},
         ),
         (
             "undrift_rcc",
             {
-                "segmentation": 500,
+                # 2 500 frames / 250 = ~10 segments, matching the segment
+                # count the former 5 000-frame / segmentation=500 setup used.
+                "segmentation": 250,
                 "max_iter_segmentations": 4,
                 "filename": "drift.csv",
                 "save_locs": {"filename": "locs_undrift.hdf5"},

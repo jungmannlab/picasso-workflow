@@ -419,11 +419,11 @@ needed. The tests are skipped automatically if `picassosr` is not installed.
 |---|---|
 | `Test_A::test_01` | `load → identify → localize` on a single 30 px / 1k-frame stack |
 | `Test_A::test_02` | same pipeline × 2 channels + `align_channels` aggregation |
-| `test_03_undrift_rcc` | full pipeline including `undrift_rcc` on a 5 000-frame synthetic movie |
+| `test_03_undrift_rcc` | full pipeline including `undrift_rcc` on a 2 500-frame synthetic movie |
 | `test_template_smoke[<name>]` | first safe modules of each snapshotted template, real data path substituted with bundled file |
 | `Test_B::test_01` | same as `test_01` but with a live Confluence reporter (requires env vars below) |
 
-The `test_03_undrift_rcc` test uses a **session-scoped synthetic movie** (5 000 frames, 128 × 128 px, ~20 Gaussian emitters on Poisson background) generated in `conftest.py`. It does not require any external data files.
+The `test_03_undrift_rcc` test uses a **session-scoped synthetic movie** (2 500 frames, 128 × 128 px, ~20 Gaussian emitters on Poisson background) generated in `conftest.py`, paired with `segmentation=250` so `undrift_rcc` still gets ~10 frame segments. It does not require any external data files.
 
 **Confluence integration** (optional, skipped when the test token is absent):
 
@@ -491,28 +491,31 @@ intentionally excluded from the repository.
 ### Running all tiers on the SLURM cluster
 
 The scripts in `tools/cluster_tests/` let you run the full test suite as
-a SLURM job chain.  Each tier is submitted as a separate job; a tier starts
-only if the previous one passed (`--dependency=afterok`), so a Tier 1
-failure automatically cancels Tiers 2–4 without wasting compute time.
+a SLURM job chain.  Later stages start only if the previous one passed
+(`--dependency=afterok`), so a Tier 1 failure automatically cancels the
+rest without wasting compute time.
 
-Each detected template workflow is also submitted as its own end-to-end job,
-and a final **summary job** (`afterany` on everything) condenses the whole
-run into a single `SUMMARY.txt` — so you submit one command and read one
-file.
+Tiers 1-3 (unit + template validation + synthetic-data integration) run in a
+**single** job (`tiers1_3.sbatch`): the unit tier gates the integration tier
+*inside* the job, so the whole thing costs one queue wait and one conda-env
+bootstrap instead of two. Each detected template workflow is also submitted
+as its own end-to-end job, and a final **summary job** (`afterany` on
+everything) condenses the whole run into a single `SUMMARY.txt` — so you
+submit one command and read one file.
 
 ```
 submit_all.sh
     │
-    ├─► [job A] tier1_2.sbatch        unit + template validation
+    ├─► [job A] tiers1_3.sbatch       unit + template validation, then
+    │                                 integration (synthetic + bundled data);
+    │                                 unit tier gates integration in-job
     │         afterok:A ↓
-    ├─► [job B] tier3.sbatch          integration (synthetic + bundled data)
-    │         afterok:B ↓
     ├─► [job C] tier4.sbatch          real acquired data (skips if not mounted)
     │
     ├─► [job T1..Tn] <template>/run_workflow_slurm.sh
     │                                 one end-to-end run per detected template
-    │                                 (afterok:B; only if PW_TEST_DATA_DIR set)
-    │         afterany: A,B,C,T1..Tn ↓
+    │                                 (afterok:A; only if PW_TEST_DATA_DIR set)
+    │         afterany: A,C,T1..Tn ↓
     └─► [job S] summary.sbatch        writes SUMMARY.txt + summary.json
 ```
 
@@ -578,15 +581,14 @@ final report will appear:
 Project directory: /home/you/picasso-workflow
 Results directory: /home/you/picasso-workflow/test-results/20260608_..._master_b9e6d95
 
-Submitted Tier 1+2 (unit + template):  job 12345
-Submitted Tier 3  (integration):        job 12346  (depends on 12345)
-Submitted Tier 4  (real data):          job 12347  (depends on 12346)
+Submitted Tiers 1-3 (unit+template+integration):  job 12345
+Submitted Tier 4  (real data):          job 12347  (depends on 12345)
 Submitted template run:                 job 12350  (.../templates/eva-full)
 Submitted template run:                 job 12351  (.../templates/basic-loc)
 Submitted summary (report):             job 12352  (depends on all above)
 
-Monitor:  squeue -j 12345,12346,12347,12350,12351,12352
-Tail log: tail -f test-results/.../tier1_2_12345.log
+Monitor:  squeue -j 12345,12347,12350,12351,12352
+Tail log: tail -f test-results/.../tiers1_3_12345.log
 Report:   test-results/.../SUMMARY.txt  (written when summary job 12352 finishes)
           → also reachable at test-results/latest/SUMMARY.txt
 ```
@@ -595,10 +597,10 @@ Report:   test-results/.../SUMMARY.txt  (written when summary job 12352 finishes
 
 ```bash
 # Live queue view (refreshes every 2 s):
-watch -n 2 squeue -j 12345,12346,12347
+watch -n 2 squeue -j 12345,12347
 
-# Tail the log of the currently running tier:
-tail -f test-results/tier1_2_12345.log
+# Tail the log of the running tiers-1-3 job:
+tail -f test-results/tiers1_3_12345.log
 ```
 
 Common SLURM job states:
@@ -612,8 +614,10 @@ Common SLURM job states:
 | `F` | Failed (non-zero exit — pytest reported failures) |
 | `CA` | Cancelled — a dependency failed, so this tier was skipped |
 
-If Tier 3 shows `F`, Tier 4 will show `CA` — look at the Tier 3 log to
-find the failing test.
+If the tiers-1-3 job shows `F`, Tier 4 will show `CA` — look at the
+`tiers1_3_<jobid>.log` to find the failing test. (A unit-tier failure makes
+the job exit before the integration tier runs, so no `tier3_*.xml` is
+written in that case.)
 
 #### Reading the results
 
@@ -636,7 +640,7 @@ OVERALL: FAIL   (2/3 tiers passed, 1/2 template workflows ran through)
  Pytest tiers
  TIER       JOB    STATE      TESTS PASS FAIL SKIP  RESULT
  tier1_2    12345  COMPLETED    210  208    0    2  PASS
- tier3      12346  COMPLETED     18   17    1    0  FAIL
+ tier3      12345  COMPLETED     18   17    1    0  FAIL
  tier4      12347  COMPLETED      3    0    0    3  PASS (all skipped)
    tier3 failures:
      - test_z_integration.py::Test_A::test_02_minimal_channel_align
@@ -670,25 +674,25 @@ test-results/<run_id>/
     summary.json         # same data, machine-readable
     run_info.txt         # run metadata + job IDs
     jobs.tsv             # job manifest the summarizer reads
-    tier1_2_12345.log    # full pytest output + SLURM bookkeeping
-    tier1_2_12345.xml    # JUnit XML (machine-readable)
-    tier3_12346.log / .xml
+    tiers1_3_12345.log   # full pytest output (both tiers) + SLURM bookkeeping
+    tier1_2_12345.xml    # unit + template JUnit XML (machine-readable)
+    tier3_12345.xml      # integration JUnit XML (same job as tier1_2)
     tier4_12347.log / .xml
     summary_12352.log    # the report, echoed by the summary job
 # Each template workflow's own logs stay next to the template:
 #   <PW_TEST_DATA_DIR>/.../<template>/logs/picasso-workflow-job<jid>-rank*.log
 ```
 
-#### Resubmitting a single tier
+#### Resubmitting a single stage
 
-If only one tier needs to be re-run (e.g. after a bug fix):
+If only one stage needs to be re-run (e.g. after a bug fix):
 
 ```bash
 cd ~/picasso-workflow
 
-# Re-run Tier 3 only:
+# Re-run tiers 1-3 (unit + template + integration) only:
 sbatch --export=ALL,PW_PROJECT_DIR="$(pwd)" \
-       tools/cluster_tests/tier3.sbatch
+       tools/cluster_tests/tiers1_3.sbatch
 
 # Re-run Tier 4 with real data:
 export PW_TEST_DATA_DIR=/path/to/real/datasets
@@ -756,11 +760,9 @@ alongside `summary.json` and the JUnit XML.  Because the `tiers-1-3` and
 ```
 GitHub Actions runner (login node)
     │
-    ├─ sbatch tier1_2.sbatch  ──► compute node  [unit + template, ≤15 min]
-    │       afterok ↓
-    ├─ sbatch tier3.sbatch    ──► compute node  [integration,     ≤30 min]
+    ├─ sbatch tiers1_3.sbatch ──► compute node  [unit + template + integration,
+    │       afterok ↓                            ≤45 min; unit gates integration]
     │       (on push to master only)
-    │       afterok ↓
     └─ sbatch tier4.sbatch    ──► compute node  [real data,       ≤12 h  ]
 ```
 
@@ -830,7 +832,7 @@ python -c "import picasso; import picasso_workflow; print('OK')"
 
 If the module name `anaconda/3/2023.03` used in the `.sbatch` files does
 not exist on your cluster, edit the `module load` line in each file
-(`tools/cluster_tests/tier1_2.sbatch`, `tier3.sbatch`, `tier4.sbatch`).
+(`tools/cluster_tests/tiers1_3.sbatch`, `tier4.sbatch`).
 
 ### Enabling Tier 4 real-data tests in CI
 

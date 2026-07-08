@@ -41,35 +41,29 @@ jobs:
       - name: Create results directory
         run: mkdir -p "$GITHUB_WORKSPACE/test-results"
 
-      - name: Submit tiers 1+2 and 3 to SLURM
+      - name: Submit tiers 1-3 to SLURM
         id: submit
         run: |
-          COMMON=(
-            --parsable
-            --chdir="$GITHUB_WORKSPACE"
-            --export="ALL,PW_PROJECT_DIR=$GITHUB_WORKSPACE"
-          )
-
-          jid1=$(sbatch "${COMMON[@]}" tools/cluster_tests/tier1_2.sbatch)
-          echo "Submitted Tier 1+2: job $jid1"
-
-          jid2=$(sbatch "${COMMON[@]}" \
-            --dependency=afterok:"$jid1" \
-            tools/cluster_tests/tier3.sbatch)
-          echo "Submitted Tier 3:   job $jid2 (depends on $jid1)"
-
+          # Tiers 1+2 (unit + template) and tier 3 (integration) run in ONE
+          # SLURM allocation — one queue wait, one conda bootstrap. The unit
+          # tier gates the integration tier inside the job.
+          jid1=$(sbatch \
+            --parsable \
+            --chdir="$GITHUB_WORKSPACE" \
+            --export="ALL,PW_PROJECT_DIR=$GITHUB_WORKSPACE" \
+            tools/cluster_tests/tiers1_3.sbatch)
+          echo "Submitted Tiers 1-3: job $jid1"
           echo "jid1=$jid1" >> "$GITHUB_OUTPUT"
-          echo "jid2=$jid2" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for SLURM jobs to finish
+      - name: Wait for SLURM job to finish
         run: |
-          jobs="${{ steps.submit.outputs.jid1 }},${{ steps.submit.outputs.jid2 }}"
-          echo "Polling SLURM jobs: $jobs"
-          while squeue -j "$jobs" --noheader 2>/dev/null | grep -q .; do
+          jid="${{ steps.submit.outputs.jid1 }}"
+          echo "Polling SLURM job: $jid"
+          while squeue -j "$jid" --noheader 2>/dev/null | grep -q .; do
             echo "$(date -u '+%H:%M:%S') UTC — still running …"
             sleep 30
           done
-          echo "All jobs finished."
+          echo "Job finished."
 
       # Reuse the same summarizer as submit_all.sh to produce one consolidated
       # report. We synthesise the jobs.tsv manifest it expects from the job IDs
@@ -88,7 +82,7 @@ jobs:
           } > "$RUN_DIR/run_info.txt"
           {
             printf 'tier\t%s\ttier1_2\t-\n' "${{ steps.submit.outputs.jid1 }}"
-            printf 'tier\t%s\ttier3\t-\n'  "${{ steps.submit.outputs.jid2 }}"
+            printf 'tier\t%s\ttier3\t-\n'  "${{ steps.submit.outputs.jid1 }}"
           } > "$RUN_DIR/jobs.tsv"
           python3 tools/cluster_tests/summarize.py "$RUN_DIR" || true
           {
@@ -99,18 +93,15 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Check SLURM exit codes
+      - name: Check SLURM exit code
         run: |
-          failed=0
-          for jid in ${{ steps.submit.outputs.jid1 }} ${{ steps.submit.outputs.jid2 }}; do
-            state=$(sacct -j "$jid" --format=State --noheader -P | head -1 | tr -d ' ')
-            echo "Job $jid: $state"
-            if [[ "$state" != "COMPLETED" ]]; then
-              echo "::error::SLURM job $jid did not complete successfully (state=$state)"
-              failed=1
-            fi
-          done
-          exit $failed
+          jid="${{ steps.submit.outputs.jid1 }}"
+          state=$(sacct -j "$jid" --format=State --noheader -P | head -1 | tr -d ' ')
+          echo "Job $jid: $state"
+          if [[ "$state" != "COMPLETED" ]]; then
+            echo "::error::SLURM job $jid did not complete successfully (state=$state)"
+            exit 1
+          fi
 
       - name: Upload results
         if: always()

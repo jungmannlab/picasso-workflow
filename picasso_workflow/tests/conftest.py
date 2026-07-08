@@ -4,10 +4,10 @@ conftest.py — session-scoped pytest fixtures shared across the test suite.
 
 Synthetic data fixtures
 -----------------------
-synthetic_movie_5k
-    5 000-frame 128×128 OME-TIFF with ~20 persistent Gaussian emitters on a
+synthetic_movie_2500
+    2 500-frame 128×128 OME-TIFF with ~20 persistent Gaussian emitters on a
     Poisson background.  Sufficient for the full identify → localize →
-    undrift_rcc pipeline (segmentation=500 → 10 frame segments).
+    undrift_rcc pipeline (segmentation=250 → 10 frame segments).
 
 synthetic_locs_10k
     10 000 synthetic localisations in picasso HDF5 format, pre-clustered into
@@ -167,23 +167,27 @@ def dummy_reporter_config(report_name):
 
 
 @pytest.fixture(scope="session")
-def synthetic_movie_5k(tmp_path_factory):
-    """Return path to a 5 000-frame 128×128 OME-TIFF.
+def synthetic_movie_2500(tmp_path_factory):
+    """Return path to a 2 500-frame 128×128 OME-TIFF.
 
     Contains ~20 persistent Gaussian emitters (sigma=1.5 px, ~1 000 photons
     each) on a Poisson background (~100 counts).  Emitter positions are fixed
     across all frames (no drift), so undrift_rcc should converge to ~zero
     drift, which is a valid and reproducible test outcome.
 
+    2 500 frames paired with segmentation=250 gives undrift_rcc the same ~10
+    frame segments the former 5 000-frame / segmentation=500 fixture did, at
+    half the fixture-generation and localisation cost.
+
     The file is written once per session and shared between all tests that
     request it.
     """
     tifffile = pytest.importorskip(
-        "tifffile", reason="tifffile required for synthetic_movie_5k fixture"
+        "tifffile", reason="tifffile required for synthetic_movie_2500 fixture"
     )
 
     rng = np.random.default_rng(42)
-    n_frames, height, width = 5000, 128, 128
+    n_frames, height, width = 2500, 128, 128
     n_emitters = 20
     photons_mean = 1000
     bg_mean = 100
@@ -204,7 +208,7 @@ def synthetic_movie_5k(tmp_path_factory):
         / (2 * sigma**2)
     )
 
-    path = tmp_path_factory.mktemp("synthetic") / "movie_5k.ome.tif"
+    path = tmp_path_factory.mktemp("synthetic") / "movie_2500.ome.tif"
 
     # Pre-allocate uint16 stack; picasso's io.load_movie requires a
     # contiguous multi-page TIFF written in a single imwrite call so that
