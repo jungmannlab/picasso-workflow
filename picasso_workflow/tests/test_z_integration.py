@@ -229,7 +229,11 @@ def test_03_undrift_rcc(synthetic_movie_5k, tmp_path):
         ),
         (
             "localize",
-            {"fit_method": "lsq", "box_size": 7, "fit_parallel": False},
+            # fit_parallel spreads the ~85 k spot fits across the SLURM
+            # allocation's cores (OMP_NUM_THREADS / cpus-per-task); the LSQ
+            # result is identical to the serial path, so the pipeline still
+            # converges to ~zero drift — this only shortens wall-time.
+            {"fit_method": "lsq", "box_size": 7, "fit_parallel": True},
         ),
         (
             "undrift_rcc",

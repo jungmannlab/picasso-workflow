@@ -1,6 +1,8 @@
 #!/bin/bash
-# Submit all four test tiers to SLURM with afterok dependencies, so each
-# tier only starts if the previous one passed.
+# Submit the test tiers to SLURM with afterok dependencies, so each stage
+# only starts if the previous one passed. Tiers 1-3 (unit + template +
+# synthetic-data integration) run in a single allocation (tiers1_3.sbatch);
+# Tier 4 (real data) and any template workflow runs are gated on it.
 #
 # Usage (run from anywhere on the cluster login node):
 #
@@ -93,36 +95,27 @@ COMMON=(
 )
 
 # ---------------------------------------------------------------------------
-# Tier 1 + 2: unit tests + template validation (no picasso required)
+# Tiers 1-3: unit tests + template validation + synthetic-data integration,
+# all in one SLURM allocation (one queue wait, one conda bootstrap). The
+# unit/template tier gates the integration tier inside the job.
 # ---------------------------------------------------------------------------
 JID1=$(sbatch "${COMMON[@]}" \
-    --output="$RUN_DIR/tier1_2_%j.log" \
-    --error="$RUN_DIR/tier1_2_%j.log" \
-    "$SCRIPT_DIR/tier1_2.sbatch")
-echo "Submitted Tier 1+2 (unit + template):  job $JID1"
-
-# ---------------------------------------------------------------------------
-# Tier 3: integration tests with synthetic/bundled data
-# Starts only when Tier 1+2 passes (exit 0).
-# ---------------------------------------------------------------------------
-JID2=$(sbatch "${COMMON[@]}" \
-    --dependency=afterok:"$JID1" \
-    --output="$RUN_DIR/tier3_%j.log" \
-    --error="$RUN_DIR/tier3_%j.log" \
-    "$SCRIPT_DIR/tier3.sbatch")
-echo "Submitted Tier 3  (integration):        job $JID2  (depends on $JID1)"
+    --output="$RUN_DIR/tiers1_3_%j.log" \
+    --error="$RUN_DIR/tiers1_3_%j.log" \
+    "$SCRIPT_DIR/tiers1_3.sbatch")
+echo "Submitted Tiers 1-3 (unit+template+integration):  job $JID1"
 
 # ---------------------------------------------------------------------------
 # Tier 4: real acquired-data tests
-# Starts only when Tier 3 passes. Tests skip gracefully if PW_TEST_DATA_DIR
+# Starts only when Tiers 1-3 pass. Tests skip gracefully if PW_TEST_DATA_DIR
 # is not set or the directory is not mounted on the compute node.
 # ---------------------------------------------------------------------------
 JID3=$(sbatch "${COMMON[@]}" \
-    --dependency=afterok:"$JID2" \
+    --dependency=afterok:"$JID1" \
     --output="$RUN_DIR/tier4_%j.log" \
     --error="$RUN_DIR/tier4_%j.log" \
     "$SCRIPT_DIR/tier4.sbatch")
-echo "Submitted Tier 4  (real data):          job $JID3  (depends on $JID2)"
+echo "Submitted Tier 4  (real data):          job $JID3  (depends on $JID1)"
 
 # ---------------------------------------------------------------------------
 # Template workflow runs: submit each discovered run_workflow_slurm.sh as a
@@ -133,14 +126,14 @@ echo "Submitted Tier 4  (real data):          job $JID3  (depends on $JID2)"
 # cwd/logs anchoring in config_logger).
 #
 # A template is opted in simply by containing a run_workflow_slurm.sh under
-# PW_TEST_DATA_DIR. Gated on Tier 3 passing, like Tier 4.
+# PW_TEST_DATA_DIR. Gated on Tiers 1-3 passing, like Tier 4.
 # ---------------------------------------------------------------------------
 TEMPLATE_JOBS=()
 if [[ -n "${PW_TEST_DATA_DIR:-}" && -d "${PW_TEST_DATA_DIR:-}" ]]; then
     while IFS= read -r _script; do
         [[ -z "$_script" ]] && continue
         _tdir="$(cd "$(dirname "$_script")" && pwd)"
-        _jid=$(sbatch --parsable --dependency=afterok:"$JID2" "$_script")
+        _jid=$(sbatch --parsable --dependency=afterok:"$JID1" "$_script")
         TEMPLATE_JOBS+=("${_jid}|${_tdir}")
         echo "Submitted template run:                 job $_jid  ($_tdir)"
     done < <(
@@ -155,9 +148,12 @@ fi
 # to build the final report. Columns: kind <TAB> jobid <TAB> label <TAB> dir.
 # For tiers, dir is "-"; for templates it is the template folder (whose
 # logs/ holds the per-job logs scanned for the "ran through" verdict).
+# Tiers 1_2 and 3 now run in the SAME job ($JID1); we still emit one row per
+# tier so summarize.py reports them separately from their two JUnit XMLs
+# (tier1_2_<jobid>.xml and tier3_<jobid>.xml), both written by that one job.
 {
     printf 'tier\t%s\ttier1_2\t-\n' "$JID1"
-    printf 'tier\t%s\ttier3\t-\n' "$JID2"
+    printf 'tier\t%s\ttier3\t-\n' "$JID1"
     printf 'tier\t%s\ttier4\t-\n' "$JID3"
     for _tj in ${TEMPLATE_JOBS[@]+"${TEMPLATE_JOBS[@]}"}; do
         printf 'template\t%s\t%s\t%s\n' \
@@ -171,7 +167,7 @@ fi
 # all artefacts into one SUMMARY.txt. This is what makes the whole run a
 # "submit once, read one file" affair.
 # ---------------------------------------------------------------------------
-DEP_LIST="afterany:$JID1:$JID2:$JID3"
+DEP_LIST="afterany:$JID1:$JID3"
 for _tj in ${TEMPLATE_JOBS[@]+"${TEMPLATE_JOBS[@]}"}; do
     DEP_LIST+=":${_tj%%|*}"
 done
@@ -191,8 +187,7 @@ echo "Submitted summary (report):             job $JIDS  (depends on all above)"
     echo "git_branch:    $GIT_BRANCH"
     echo "git_sha:       $GIT_SHA"
     echo "test_data_dir: ${PW_TEST_DATA_DIR:-<not configured — tier 4 real_data skipped>}"
-    echo "tier1_2_job:   $JID1"
-    echo "tier3_job:     $JID2"
+    echo "tiers1_3_job:  $JID1  (tier1_2 + tier3 in one allocation)"
     echo "tier4_job:     $JID3"
     echo "summary_job:   $JIDS"
     if [[ ${#TEMPLATE_JOBS[@]} -gt 0 ]]; then
@@ -205,7 +200,7 @@ echo "Submitted summary (report):             job $JIDS  (depends on all above)"
 
 # Assemble the full job-id list (tiers + template runs + summary) for
 # monitoring.
-ALL_JIDS="$JID1,$JID2,$JID3"
+ALL_JIDS="$JID1,$JID3"
 for _tj in ${TEMPLATE_JOBS[@]+"${TEMPLATE_JOBS[@]}"}; do
     ALL_JIDS+=",${_tj%%|*}"
 done
@@ -213,7 +208,7 @@ ALL_JIDS+=",$JIDS"
 
 echo ""
 echo "Monitor:  squeue -j $ALL_JIDS"
-echo "Tail log: tail -f $RUN_DIR/tier1_2_${JID1}.log"
+echo "Tail log: tail -f $RUN_DIR/tiers1_3_${JID1}.log"
 echo "Report:   $RUN_DIR/SUMMARY.txt  (written when summary job $JIDS finishes)"
 echo "          → also reachable at test-results/latest/SUMMARY.txt"
 echo "Results:  $RUN_DIR  (or test-results/latest)"
