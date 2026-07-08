@@ -184,9 +184,17 @@ class Test_A_PicassoIntegration(unittest.TestCase):
             "03_save_single_dataset, filepath",
         )
 
+        # ConfluenceInterface.create_page returns the new page's id (a
+        # string), which AggregationWorkflowRunner now stores in its reporter
+        # config and later yaml-dumps in save().  A bare MagicMock return
+        # value is not serialisable and triggers a RecursionError on save, so
+        # the mock must return a real value.
+        mock_ci = MagicMock()
+        mock_ci.return_value.create_page.return_value = "mock-page-id"
+
         with (
             patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock),
-            patch("picasso_workflow.workflow.ConfluenceInterface", MagicMock),
+            patch("picasso_workflow.workflow.ConfluenceInterface", mock_ci),
         ):
             awr = AggregationWorkflowRunner.config_from_dicts(
                 _dummy_reporter_config("test_a02_minimal_channel_align"),
