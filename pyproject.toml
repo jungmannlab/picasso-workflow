@@ -126,3 +126,13 @@ markers = [
     "integration: tests that run the real picasso pipeline (run with '-m integration'; deselected by default)",
     "real_data: tests that require acquired datasets from the lab network volumes (set PW_TEST_DATA_DIR)",
 ]
+# picasso announces API changes (a default flipping, a function going private)
+# via DeprecationWarning, which Python hides by default -- so a picassosr bump
+# silently breaks the workflow at runtime on the cluster instead of here. Fail
+# the test run on them. Scoped to `picasso.*` so unrelated third-party
+# deprecations stay warnings; the pattern is a regex matched against the
+# emitting module's __name__, and "picasso\." excludes our own
+# "picasso_workflow.*" modules.
+filterwarnings = [
+    'error::DeprecationWarning:picasso\..*',
+]
