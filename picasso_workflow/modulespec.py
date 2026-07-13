@@ -301,7 +301,7 @@ _SPECS = [
         requires=["locs"],
         provides=["locs_z"],
         relation=W,
-        picasso_symbol="picasso.zfit.fit_z_parallel",
+        picasso_symbol="picasso.zfit.zfit",
         scopes=_SINGLE,
         summary="Fit z coordinates of localized spots via astigmatic calibration.",
     ),
