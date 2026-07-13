@@ -4434,7 +4434,7 @@ def pick_similar_analysis(
             y_r = y_r2
         for j, y_grid in enumerate(y):
             y_range = y_r[j]
-            n_block_locs = postprocess.n_block_locs_at(
+            n_block_locs = postprocess._n_block_locs_at(
                 x_range, y_range, K, L, block_starts, block_ends
             )
             if n_block_locs >= min_n_locs:

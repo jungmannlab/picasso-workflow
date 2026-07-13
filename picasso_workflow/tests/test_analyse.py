@@ -467,7 +467,7 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
-        mock_dbscan.return_value = self.ap.locs
+        mock_dbscan.return_value = (self.ap.locs, {})
         mock_fcc.return_value = self.ap.locs
 
         parameters = {
@@ -504,7 +504,7 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
-        mock_hdbscan.return_value = self.ap.locs
+        mock_hdbscan.return_value = (self.ap.locs, {})
         mock_fcc.return_value = self.ap.locs
 
         parameters = {"min_cluster": 5, "min_samples": 3}
@@ -542,7 +542,7 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
-        mock_clusterer.return_value = self.ap.locs
+        mock_clusterer.return_value = (self.ap.locs, {})
         mock_fcc.return_value = self.ap.locs
 
         parameters = {"radius": 5, "min_locs": 10}
