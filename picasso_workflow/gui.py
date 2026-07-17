@@ -8088,16 +8088,34 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.modify_value.valueChanged.connect(self._on_modify_value_changed)
         # modify_hlayout.addWidget(self.modify_value)
 
+        # Map/index keys: the built-in tile parameters plus any per-channel
+        # columns the user has declared in the dataset tree, so a module
+        # parameter can be bound to a per-channel value.
+        map_keys = ["filepath", "#tags"]
+        try:
+            map_keys += list(parent.tree_data.get("tile_params", {}))
+        except AttributeError:
+            pass  # parent without a tree (e.g. isolated dialog test)
+
         # Create widgets for "map" mode
         self.map_label = QtWidgets.QLabel("Map option:")
         self.map_combo = QtWidgets.QComboBox()
-        self.map_combo.addItems(["filepath", "#tags"])
+        self.map_combo.addItems(map_keys)
         self.map_combo.currentTextChanged.connect(self._on_map_option)
+
+        # Optional default, emitted as the third tuple element so the spec
+        # stays reusable when a deployment does not define this column.
+        self.map_default_label = QtWidgets.QLabel(
+            "Default (optional, used when a channel omits this value):"
+        )
+        self.map_default = QtWidgets.QLineEdit()
+        self.map_default.setPlaceholderText("e.g. 10 or 'auto'")
+        self.map_default.textChanged.connect(self._on_map_option)
 
         # Create widgets for "index" mode
         self.index_label = QtWidgets.QLabel("Index option:")
         self.index_combo = QtWidgets.QComboBox()
-        self.index_combo.addItems(["filepath", "#tags"])
+        self.index_combo.addItems(map_keys)
         self.index_combo.currentTextChanged.connect(self._on_index_option)
         self.index_spin = QtWidgets.QSpinBox()
         self.index_spin.setMinimum(0)
@@ -8156,6 +8174,8 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             # Show map option widgets
             self.dynamic_layout.addWidget(self.map_label)
             self.dynamic_layout.addWidget(self.map_combo)
+            self.dynamic_layout.addWidget(self.map_default_label)
+            self.dynamic_layout.addWidget(self.map_default)
         elif command_type == "index":
             self.dynamic_layout.addWidget(self.index_label)
             self.dynamic_layout.addWidget(self.index_combo)
@@ -8300,6 +8320,24 @@ class ParameterCmdDialog(QtWidgets.QDialog):
     #         result_name = self.result_combo.currentText()
     #         return module_index, result_name, command_type, timing
 
+    def _default_literal(self):
+        """Return the map default as a Python literal string, or None.
+
+        A value already parseable as a literal (``10``, ``1.5``, ``'auto'``)
+        is emitted verbatim; a bare word is quoted so the assembled command
+        round-trips through ``ast.literal_eval``.
+        """
+        import ast
+
+        text = self.map_default.text().strip()
+        if not text:
+            return None
+        try:
+            ast.literal_eval(text)
+            return text
+        except (ValueError, SyntaxError):
+            return repr(text)
+
     def get_command(self):
         command_type = self.command_combo.currentText()
         timing = "before" if self.timing_before_radio.isChecked() else "start"
@@ -8311,7 +8349,13 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         if command_type == "map":
             # For map command, return map option instead of module/result
             map_option = self.map_combo.currentText()
-            command_string = f"('{timing_cmd}map', '{map_option}')"
+            default = self._default_literal()
+            if default is None:
+                command_string = f"('{timing_cmd}map', '{map_option}')"
+            else:
+                command_string = (
+                    f"('{timing_cmd}map', '{map_option}', {default})"
+                )
         elif command_type == "index":
             map_option = self.index_combo.currentText()
             index = self.index_spin.value()
@@ -8372,6 +8416,192 @@ class ParameterCmdDialog(QtWidgets.QDialog):
 
             command_string = f"('{timing_cmd}get_previous_module_result{mod_str}', '{result_name}')"
         return command_string
+
+
+class TileParametersDialog(QtWidgets.QDialog):
+    """Declare and edit per-channel / per-cell tile parameters.
+
+    Per-channel parameters let different channels use different values for a
+    single-dataset module parameter (e.g. a per-channel cluster
+    ``min_locs``). Declared columns are stored in
+    ``window.tree_data["tile_params"]`` and are flattened into the
+    ``single_dataset_tileparameters`` dict. Bind a module parameter to a
+    column with the parameter row's "cmd" button (map command), which emits
+    ``("$$map", <name>, <default>)``.
+    """
+
+    def __init__(self, window, parent=None):
+        super().__init__(parent)
+        self.window = window
+        self.setWindowTitle("Per-channel parameters")
+        self.setModal(True)
+        self.resize(500, 440)
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        intro = QtWidgets.QLabel(
+            "Declare parameter columns that vary per channel (broadcast "
+            "across datasets) or per dataset x channel cell. Bind a module "
+            "parameter to a column with its 'cmd' button (map command). "
+            "Blank cells fall back to the column default."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        # Existing columns + removal
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Column:"))
+        self.column_combo = QtWidgets.QComboBox()
+        self.column_combo.currentTextChanged.connect(self._on_column_selected)
+        row.addWidget(self.column_combo, stretch=1)
+        self.remove_button = QtWidgets.QPushButton("Remove")
+        self.remove_button.clicked.connect(self._remove_column)
+        row.addWidget(self.remove_button)
+        layout.addLayout(row)
+
+        # Add new column
+        add_box = QtWidgets.QGroupBox("Add column")
+        add_layout = QtWidgets.QGridLayout(add_box)
+        add_layout.addWidget(QtWidgets.QLabel("Name:"), 0, 0)
+        self.name_edit = QtWidgets.QLineEdit()
+        add_layout.addWidget(self.name_edit, 0, 1, 1, 3)
+        add_layout.addWidget(QtWidgets.QLabel("Scope:"), 1, 0)
+        self.scope_channel = QtWidgets.QRadioButton("per channel")
+        self.scope_cell = QtWidgets.QRadioButton("per cell")
+        self.scope_channel.setChecked(True)
+        add_layout.addWidget(self.scope_channel, 1, 1)
+        add_layout.addWidget(self.scope_cell, 1, 2)
+        add_layout.addWidget(QtWidgets.QLabel("Default:"), 2, 0)
+        self.default_edit = QtWidgets.QLineEdit()
+        self.default_edit.setPlaceholderText("e.g. 10")
+        add_layout.addWidget(self.default_edit, 2, 1, 1, 2)
+        self.add_button = QtWidgets.QPushButton("Add")
+        self.add_button.clicked.connect(self._add_column)
+        add_layout.addWidget(self.add_button, 2, 3)
+        layout.addWidget(add_box)
+
+        # Value table
+        self.table = QtWidgets.QTableWidget()
+        self.table.itemChanged.connect(self._on_value_changed)
+        layout.addWidget(self.table, stretch=1)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Close
+        )
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
+
+        self._refresh_columns()
+
+    @staticmethod
+    def _coerce(text):
+        """Parse a cell entry as a Python literal, else keep it as text."""
+        import ast
+
+        text = text.strip()
+        if text == "":
+            return ""
+        try:
+            return ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return text
+
+    def _refresh_columns(self):
+        self.column_combo.blockSignals(True)
+        self.column_combo.clear()
+        names = list(self.window._tile_params())
+        self.column_combo.addItems(names)
+        self.column_combo.blockSignals(False)
+        self.remove_button.setEnabled(bool(names))
+        self._rebuild_table(self.column_combo.currentText())
+
+    def _add_column(self):
+        name = self.name_edit.text().strip()
+        if not name:
+            return
+        scope = "channel" if self.scope_channel.isChecked() else "cell"
+        default = self._coerce(self.default_edit.text())
+        try:
+            self.window.register_tile_param(name, scope, default)
+        except ValueError as e:
+            QtWidgets.QMessageBox.warning(self, "Invalid column", str(e))
+            return
+        self.name_edit.clear()
+        self.default_edit.clear()
+        self._refresh_columns()
+        self.column_combo.setCurrentText(name)
+
+    def _remove_column(self):
+        name = self.column_combo.currentText()
+        if not name:
+            return
+        self.window.unregister_tile_param(name)
+        self._refresh_columns()
+
+    def _on_column_selected(self, name):
+        self._rebuild_table(name)
+
+    def _rebuild_table(self, name):
+        self.table.blockSignals(True)
+        try:
+            self.table.clear()
+            params = self.window._tile_params()
+            channels = self.window.tree_data.get("channels", [])
+            datasets = self.window.tree_data.get("datasets", [])
+            if not name or name not in params:
+                self.table.setRowCount(0)
+                self.table.setColumnCount(0)
+                return
+            if params[name]["scope"] == "channel":
+                self.table.setColumnCount(2)
+                self.table.setHorizontalHeaderLabels(["channel", name])
+                self.table.setRowCount(len(channels))
+                for r, ch in enumerate(channels):
+                    self._set_key_item(r, 0, ch)
+                    self._set_value_item(r, 1, name, channel=ch, dataset=None)
+            else:
+                self.table.setColumnCount(3)
+                self.table.setHorizontalHeaderLabels(
+                    ["dataset", "channel", name]
+                )
+                self.table.setRowCount(len(datasets) * len(channels))
+                r = 0
+                for ds in datasets:
+                    for ch in channels:
+                        self._set_key_item(r, 0, ds)
+                        self._set_key_item(r, 1, ch)
+                        self._set_value_item(
+                            r, 2, name, channel=ch, dataset=ds
+                        )
+                        r += 1
+            self.table.resizeColumnsToContents()
+        finally:
+            self.table.blockSignals(False)
+
+    def _set_key_item(self, row, col, text):
+        item = QtWidgets.QTableWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.table.setItem(row, col, item)
+
+    def _set_value_item(self, row, col, name, channel, dataset):
+        val = self.window.resolve_tile_param(name, dataset, channel)
+        item = QtWidgets.QTableWidgetItem("" if val is None else str(val))
+        item.setData(Qt.ItemDataRole.UserRole, (channel, dataset))
+        self.table.setItem(row, col, item)
+
+    def _on_value_changed(self, item):
+        meta = item.data(Qt.ItemDataRole.UserRole)
+        if not meta:
+            return
+        channel, dataset = meta
+        name = self.column_combo.currentText()
+        if item.text().strip() == "":
+            self.window.unset_tile_param_value(name, channel, dataset=dataset)
+        else:
+            self.window.set_tile_param_value(
+                name, self._coerce(item.text()), channel, dataset=dataset
+            )
 
 
 class Window(QtWidgets.QMainWindow):
@@ -8912,12 +9142,32 @@ class Window(QtWidgets.QMainWindow):
         )
         self.files_stack.addWidget(self.files_tree_inv)
 
-        # Initialize tree data structure
+        # Initialize tree data structure.
+        #
+        # ``tile_params`` holds optional per-channel parameter columns
+        # (beyond the file path) that let different channels use different
+        # values for a single-dataset module parameter (e.g. a per-channel
+        # cluster ``min_locs``). Each entry is::
+        #
+        #     tile_params[name] = {
+        #         "scope": "channel" | "cell",
+        #         "default": <value used when a cell is left blank>,
+        #         "values": {channel: value}                 # scope "channel"
+        #                or {dataset: {channel: value}},      # scope "cell"
+        #     }
+        #
+        # They are flattened, one value per dataset x channel tile, into the
+        # ``single_dataset_tileparameters`` dict alongside ``#tags`` and
+        # ``filepath`` and referenced from a module spec via
+        # ``("$$map", <name>, <default>)``. Scope ``channel`` broadcasts one
+        # value across all datasets of a channel; scope ``cell`` holds a
+        # distinct value per (dataset, channel) cell.
         self.tree_data = {
             "datasets": [],
             "channels": [],
             "file_paths": {},
             "conditions": {},
+            "tile_params": {},
         }
 
         # Connect item changed signal for real-time updates
@@ -9185,6 +9435,110 @@ class Window(QtWidgets.QMainWindow):
             "tree.remove_channel", channel=channel_name
         )
 
+    # ------------------------------------------------------------------
+    # Per-channel / per-cell tile parameters
+    # ------------------------------------------------------------------
+    def _tile_params(self):
+        """Return the tile-parameter registry, tolerating older sessions."""
+        return self.tree_data.setdefault("tile_params", {})
+
+    def register_tile_param(self, name, scope="channel", default=None):
+        """Declare a per-channel/per-cell parameter column.
+
+        Parameters
+        ----------
+        name : str
+            Column name, referenced from a module spec via
+            ``("$$map", name, default)``. Reserved names ``filepath`` and
+            ``#tags`` are rejected.
+        scope : {"channel", "cell"}, optional
+            ``"channel"`` broadcasts one value across all datasets of a
+            channel; ``"cell"`` stores a distinct value per (dataset,
+            channel). Default ``"channel"``.
+        default : optional
+            Value used for cells the user leaves blank, and emitted as the
+            ``$$map`` default so the spec stays reusable.
+
+        Returns
+        -------
+        dict
+            The registry entry for ``name``.
+        """
+        if name in ("filepath", "#tags") or not name:
+            raise ValueError(
+                "'filepath' and '#tags' are built-in tile parameters."
+            )
+        if scope not in ("channel", "cell"):
+            raise ValueError(f"Unknown tile-parameter scope: {scope!r}")
+        entry = self._tile_params().setdefault(
+            name, {"scope": scope, "default": default, "values": {}}
+        )
+        entry["scope"] = scope
+        entry["default"] = default
+        self._sync_tile_params()
+        return entry
+
+    def unregister_tile_param(self, name):
+        """Remove a per-channel/per-cell parameter column."""
+        self._tile_params().pop(name, None)
+
+    def set_tile_param_value(self, name, value, channel, dataset=None):
+        """Set the value of a tile parameter for a channel or cell."""
+        entry = self._tile_params()[name]
+        if entry["scope"] == "channel":
+            entry["values"][channel] = value
+        else:
+            entry["values"].setdefault(dataset, {})[channel] = value
+
+    def unset_tile_param_value(self, name, channel, dataset=None):
+        """Clear an explicit value so the cell falls back to the default."""
+        entry = self._tile_params()[name]
+        if entry["scope"] == "channel":
+            entry["values"].pop(channel, None)
+        else:
+            entry["values"].get(dataset, {}).pop(channel, None)
+
+    def resolve_tile_param(self, name, dataset, channel):
+        """Resolve a tile parameter for one (dataset, channel) tile.
+
+        Returns the per-cell value, else the per-channel value, else the
+        column default (mirrors the runtime precedence of ``$$map`` with a
+        default).
+        """
+        entry = self._tile_params()[name]
+        values = entry["values"]
+        if entry["scope"] == "cell":
+            cell = values.get(dataset, {})
+            if channel in cell:
+                return cell[channel]
+        elif channel in values:
+            return values[channel]
+        return entry["default"]
+
+    def _sync_tile_params(self):
+        """Prune tile-parameter values for channels/datasets that are gone.
+
+        Missing entries are intentionally left absent: ``resolve_tile_param``
+        falls back to the column default, so channels added after a column
+        was declared simply take the default until edited.
+        """
+        channels = set(self.tree_data.get("channels", []))
+        datasets = set(self.tree_data.get("datasets", []))
+        for entry in self._tile_params().values():
+            values = entry["values"]
+            if entry["scope"] == "channel":
+                for ch in list(values):
+                    if ch not in channels:
+                        del values[ch]
+            else:
+                for ds in list(values):
+                    if ds not in datasets:
+                        del values[ds]
+                        continue
+                    for ch in list(values[ds]):
+                        if ch not in channels:
+                            del values[ds][ch]
+
     def rename_dataset(self):
         """Rename selected dataset with validation (no underscores)."""
         current_tree = self._get_current_tree_widget()
@@ -9256,6 +9610,11 @@ class Window(QtWidgets.QMainWindow):
             self.tree_data["conditions"][new_name] = self.tree_data[
                 "conditions"
             ].pop(old_name)
+
+        # Remap per-cell tile-parameter values keyed by dataset name
+        for entry in self._tile_params().values():
+            if entry["scope"] == "cell" and old_name in entry["values"]:
+                entry["values"][new_name] = entry["values"].pop(old_name)
 
         # Refresh tree
         self._populate_tree_from_data()
@@ -9337,6 +9696,16 @@ class Window(QtWidgets.QMainWindow):
                 self.tree_data["file_paths"][dataset][new_name] = (
                     self.tree_data["file_paths"][dataset].pop(old_name)
                 )
+
+        # Remap tile-parameter values keyed by channel name
+        for entry in self._tile_params().values():
+            if entry["scope"] == "channel":
+                if old_name in entry["values"]:
+                    entry["values"][new_name] = entry["values"].pop(old_name)
+            else:
+                for cell in entry["values"].values():
+                    if old_name in cell:
+                        cell[new_name] = cell.pop(old_name)
 
         # Refresh tree
         self._populate_tree_from_data()
@@ -9456,6 +9825,7 @@ class Window(QtWidgets.QMainWindow):
             "channels": [],
             "file_paths": {},
             "conditions": {},
+            "tile_params": {},
         }
         self._log_workflow_config_event("tree.clear")
 
@@ -9468,8 +9838,70 @@ class Window(QtWidgets.QMainWindow):
             return self.files_tree_inv
         return None
 
+    def _flatten_tree_to_datasets(self, host_cluster, with_conditions=False):
+        """Flatten the dataset x channel tree into a tileparameters dict.
+
+        Produces the ``single_dataset_tileparameters`` mapping used by the
+        aggregation/investigation workflows: ``#tags`` and ``filepath`` plus
+        one list per declared per-channel/per-cell tile parameter, all
+        aligned to the same dataset x channel tile order.
+
+        Parameters
+        ----------
+        host_cluster : str or None
+            Passed to the path parser to convert local paths for the run
+            host.
+        with_conditions : bool, optional
+            If True (Investigation workflow), prefix each tag with the
+            dataset's condition when one is set. Default False.
+
+        Returns
+        -------
+        dict
+            The tileparameters dict.
+        """
+        tags = []
+        filepaths = []
+        tile_names = list(self._tile_params())
+        columns = {name: [] for name in tile_names}
+
+        for dataset in self.tree_data["datasets"]:
+            condition = (
+                self.tree_data["conditions"].get(dataset, "")
+                if with_conditions
+                else ""
+            )
+            for channel in self.tree_data["channels"]:
+                if condition:
+                    tag = f"{condition}_{dataset}_{channel}"
+                else:
+                    tag = f"{dataset}_{channel}"
+                tags.append(tag)
+
+                file_path = self.tree_data["file_paths"][dataset][channel]
+                if (file_path[0] == "'" and file_path[-1] == "'") or (
+                    file_path[0] == '"' and file_path[-1] == '"'
+                ):
+                    file_path = file_path[1:-1]
+                file_path = self.pathparser.convert_path(
+                    file_path, host_cluster
+                )
+                filepaths.append(file_path)
+
+                for name in tile_names:
+                    columns[name].append(
+                        self.resolve_tile_param(name, dataset, channel)
+                    )
+
+        datasets = {"#tags": tags, "filepath": filepaths}
+        datasets.update(columns)
+        return datasets
+
     def _populate_tree_from_data(self):
         """Populate tree widget from self.tree_data."""
+        # Keep per-channel/per-cell tile-parameter values consistent with
+        # the current set of datasets and channels.
+        self._sync_tile_params()
         current_tree = self._get_current_tree_widget()
         if not current_tree:
             return
@@ -9854,6 +10286,14 @@ class Window(QtWidgets.QMainWindow):
             self.remove_dataset_button.clicked.connect(self.remove_tree_items)
             self.clear_tree_button = QtWidgets.QPushButton("Clear")
             self.clear_tree_button.clicked.connect(self.clear_tree)
+            self.tile_params_button = QtWidgets.QPushButton(
+                "Per-Channel Params…"
+            )
+            self.tile_params_button.setToolTip(
+                "Declare parameters that differ between channels (e.g. a "
+                "per-channel cluster min_locs) and edit their values."
+            )
+            self.tile_params_button.clicked.connect(self.manage_tile_params)
 
             self.file_buttons_layout.addWidget(self.add_dataset_button)
             self.file_buttons_layout.addWidget(self.add_channel_button)
@@ -9861,7 +10301,15 @@ class Window(QtWidgets.QMainWindow):
             self.file_buttons_layout.addWidget(self.rename_channel_button)
             self.file_buttons_layout.addWidget(self.remove_channel_button)
             self.file_buttons_layout.addWidget(self.remove_dataset_button)
+            self.file_buttons_layout.addWidget(self.tile_params_button)
             self.file_buttons_layout.addWidget(self.clear_tree_button)
+
+    def manage_tile_params(self):
+        """Open the per-channel / per-cell tile-parameter editor."""
+        dialog = TileParametersDialog(self, parent=self)
+        dialog.exec()
+        # Values may have changed; refresh validation/tree visuals.
+        self._populate_tree_from_data()
 
     def find_dataset_files(self):
         """Find dataset files (.tif, .ome.tif, .nd2) in a selected folder."""
@@ -11992,59 +12440,14 @@ class Window(QtWidgets.QMainWindow):
                     datasets[name].append(path)
 
         elif workflow_type_index == 1:  # Aggregation Workflow
-            # Build datasets from tree structure
-            tags = []
-            filepaths = []
-
-            for dataset in self.tree_data["datasets"]:
-                for channel in self.tree_data["channels"]:
-                    # Create tag in {dataset}_{channel} format
-                    tag = f"{dataset}_{channel}"
-                    tags.append(tag)
-
-                    # Get file path
-                    file_path = self.tree_data["file_paths"][dataset][channel]
-                    if (file_path[0] == "'" and file_path[-1] == "'") or (
-                        file_path[0] == '"' and file_path[-1] == '"'
-                    ):
-                        file_path = file_path[1:-1]
-                    file_path = self.pathparser.convert_path(
-                        file_path, host_cluster
-                    )
-                    filepaths.append(file_path)
-
-            # Assign datasets dict for Aggregation workflow
-            datasets = {"#tags": tags, "filepath": filepaths}
+            datasets = self._flatten_tree_to_datasets(
+                host_cluster, with_conditions=False
+            )
 
         else:  # Investigation Workflow
-            # Build datasets from tree structure
-            tags = []
-            filepaths = []
-
-            for dataset in self.tree_data["datasets"]:
-                # Get condition for this dataset
-                condition = self.tree_data["conditions"].get(dataset, "")
-
-                for channel in self.tree_data["channels"]:
-                    # Create tag with condition prefix if available
-                    if condition:
-                        tag = f"{condition}_{dataset}_{channel}"
-                    else:
-                        tag = f"{dataset}_{channel}"
-                    tags.append(tag)
-
-                    # Get file path
-                    file_path = self.tree_data["file_paths"][dataset][channel]
-                    if (file_path[0] == "'" and file_path[-1] == "'") or (
-                        file_path[0] == '"' and file_path[-1] == '"'
-                    ):
-                        file_path = file_path[1:-1]
-                    file_path = self.pathparser.convert_path(
-                        file_path, host_cluster
-                    )
-                    filepaths.append(file_path)
-
-            datasets = {"#tags": tags, "filepath": filepaths}
+            datasets = self._flatten_tree_to_datasets(
+                host_cluster, with_conditions=True
+            )
 
         # Helper function to format parameter values
         def format_value(value):

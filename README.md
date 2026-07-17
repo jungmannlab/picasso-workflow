@@ -17,6 +17,7 @@ A package for automated DNA-PAINT analysis workflows
 ## Table of Contents
 
 - [Features](#features)
+- [Per-channel parameters](#per-channel-parameters)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Testing](#testing)
@@ -34,6 +35,47 @@ via picassosr.
 	and clustered.
 	- Aggregation workflow: multiple datasets undergo a single-dataset
 	workflow and are then aggregated.
+
+## Per-channel parameters
+
+In an aggregation (or investigation) workflow, every channel is analyzed by
+the *same* `single_dataset_modules`. Sometimes a single module parameter must
+differ between channels — e.g. a cluster module's `min_locs` depends on the
+target density of each channel.
+
+The modules themselves stay channel-agnostic and reusable: they never name a
+channel. Instead, list the per-channel values as an extra column in
+`single_dataset_tileparameters` (one entry per channel, aligned to `#tags`)
+and reference the column from the module spec with a `$$map` command:
+
+```python
+workflow_modules_multi = {
+	"single_dataset_tileparameters": {
+		"#tags":    ["CD80", "CD86", "PDL1"],
+		"filepath": [fp0, fp1, fp2],
+		"min_locs": [10,    20,     15],      # per-channel column
+	},
+	"single_dataset_modules": [
+		# ... load / identify / localize ...
+		("smlm_clusterer", {"min_locs": ("$$map", "min_locs", 10), "radius": 4}),
+	],
+	"aggregation_modules": [ ... ],
+}
+```
+
+The channel-to-value binding lives entirely in the tileparameters table, so
+`("$$map", "min_locs", 10)` reads the value for the channel being processed.
+The optional third element (`10`) is a **default**: if a deployment does not
+define the `min_locs` column at all, the module still runs with the default,
+so one module spec is reusable across projects that do or don't vary that
+parameter. Resolution precedence at run time is *per-cell value → per-channel
+value → default*.
+
+**In the GUI**, click **Per-Channel Params…** in the aggregation/investigation
+file panel to declare a column (choose *per channel* to broadcast one value
+across all datasets, or *per cell* for a distinct value per dataset × channel)
+and fill in its values. Then bind a module parameter to the column with that
+parameter's **cmd** button → *map* command, optionally setting a default.
 
 ## Installation
 
