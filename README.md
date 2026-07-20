@@ -71,11 +71,33 @@ so one module spec is reusable across projects that do or don't vary that
 parameter. Resolution precedence at run time is *per-cell value → per-channel
 value → default*.
 
-**In the GUI**, click **Per-Channel Params…** in the aggregation/investigation
-file panel to declare a column (choose *per channel* to broadcast one value
-across all datasets, or *per cell* for a distinct value per dataset × channel)
-and fill in its values. Then bind a module parameter to the column with that
-parameter's **cmd** button → *map* command, optionally setting a default.
+**In the GUI**, the quickest route is straight from the parameter you want to
+vary: click that parameter's **cmd** button and choose the *map* command. The
+parameter's own name is offered as a ready-made per-channel column — select it
+and type one value per channel in the table that appears, optionally with a
+default. Reopening the **cmd** button later reopens on that mapping with the
+stored values shown. The dialog's help panel explains each option and flags a
+mismatched `$` / `$$` timing.
+
+Once a parameter is bound to a per-channel column, the parameters view shows
+what each channel receives on a summary line directly under that row — e.g.
+`⇄ per-channel: CD80 = 10, CD86 = 20, PDL1 = 15  (default 10)` — so a mapped
+parameter is recognizable at a glance instead of reading as an opaque tuple.
+With many channels the line is elided; the row's tooltip always lists every
+channel. Per-cell columns report how many cells have an explicit value, with
+the full dataset × channel breakdown in the tooltip.
+
+Alternatively, click **Per-Channel Params…** in the aggregation/investigation
+file panel to manage all columns at once (choose *per channel* to broadcast one
+value across all datasets, or *per cell* for a distinct value per dataset ×
+channel), then bind each module parameter to its column with the **cmd** button
+→ *map* command. Both routes edit the same underlying columns.
+
+The dataset table — file layout, conditions, and per-channel columns/values —
+is saved into the generated `start_workflow.py` and restored when that script
+is reloaded into the GUI, so a workflow round-trips exactly. Per-channel values
+are keyed by channel name: renaming a channel in the GUI carries its values
+across, while a channel whose name no longer matches falls back to the default.
 
 ## Installation
 

@@ -35,6 +35,10 @@ try:
 except ImportError:
     __GUIVERSION__ = "unknown"
 
+# Number of channels listed inline in a parameter row's per-channel
+# summary before it is elided. The tooltip always lists all of them.
+_SUMMARY_MAX_CHANNELS = 4
+
 
 def _read_text_safe(path):
     """Read a text file for logging. Returns a sentinel on any failure
@@ -7943,6 +7947,7 @@ class ParameterWidgetInfo:
         original_type,
         sub_parameters=None,
         toggle_function=None,
+        summary_label=None,
     ):
         """Initialize parameter widget info.
 
@@ -7955,12 +7960,15 @@ class ParameterWidgetInfo:
         original_type: Original type string ('int', 'float', 'bool', 'str', 'dict')
         sub_parameters: Dict of nested ParameterWidgetInfo for dict types (optional)
         toggle_function: Function to show/hide nested parameters (for dict types, optional)
+        summary_label: QLabel below the row, showing per-channel values
+            when the parameter is bound to a tile parameter column (optional)
         """
         self.widget = widget
         self.cmd_button = cmd_button
         self.row_widget = row_widget
         self.metadata = metadata
         self.original_type = original_type
+        self.summary_label = summary_label
         self.sub_parameters = (
             sub_parameters or {}
         )  # For nested dict parameters
@@ -7978,6 +7986,8 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         module_descriptor,
         current_module_index=0,
         parent=None,
+        param_name=None,
+        current_value=None,
     ):
         """Initialize the prior result dialog.
 
@@ -7987,9 +7997,25 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         module_descriptor: ModuleDescriptor instance to get result specs
         current_module_index: the index of the currently selected module
         parent: Parent widget
+        param_name: Name of the module parameter being assigned. Shown in the
+            title/help so it is clear the command fills this parameter, and
+            used as the suggested name for a new per-channel column.
+        current_value: The parameter's current value. If it is already a
+            command tuple (e.g. ``("$$map", "min_locs", 10)``), the dialog
+            opens pre-selected on that command so it can be reviewed/edited,
+            and any stored per-channel values are shown.
         """
         super().__init__(parent)
-        self.setWindowTitle("Select Command for parameter value")
+        self.param_name = param_name
+        self.current_value = current_value
+        # Per-channel columns auto-created during this dialog session (by
+        # selecting the parameter-named map option). Pruned on cancel if
+        # still empty, so idle clicks don't leave stray columns behind.
+        self._autocreated = set()
+        title = "Select command for parameter value"
+        if param_name:
+            title = f"Set parameter '{param_name}'"
+        self.setWindowTitle(title)
         self.setModal(True)
         self.workflow_modules = workflow_modules
         self.module_descriptor = module_descriptor
@@ -7998,6 +8024,16 @@ class ParameterCmdDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout(self)
 
+        if param_name:
+            heading = QtWidgets.QLabel(
+                f"Assigning a value to parameter <b>{param_name}</b> of the "
+                "module you selected."
+            )
+            heading.setTextFormat(Qt.TextFormat.RichText)
+            heading.setWordWrap(True)
+            layout.addWidget(heading)
+            layout.addSpacing(6)
+
         # Timing selection
         layout.addWidget(QtWidgets.QLabel("Value collection timing:"))
         self.timing_group = QtWidgets.QButtonGroup(self)
@@ -8005,8 +8041,18 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.timing_before_radio = QtWidgets.QRadioButton(
             "Collect directly before module execution ($)"
         )
+        self.timing_before_radio.setToolTip(
+            "Resolve the value right before this module runs, inside the "
+            "single-dataset workflow. Use for previous/prior results from "
+            "earlier modules in the same workflow."
+        )
         self.timing_start_radio = QtWidgets.QRadioButton(
             "Collect at start of workflow stage ($$)"
+        )
+        self.timing_start_radio.setToolTip(
+            "Resolve the value when the workflow stage is set up (tiling). "
+            "Required for per-channel map/index values, and for aggregation "
+            "lists collected across all single-dataset runs."
         )
         self.timing_before_radio.setChecked(True)  # Default
 
@@ -8028,12 +8074,22 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.command_combo.currentIndexChanged.connect(
             self._on_command_changed
         )
-        # self.command_combo.model().setData(
-        #     0, "Map different values onto workers (e.g. files to load)", Qt.ItemDataRole.ToolTipRole
-        # )  # Tooltip
-        # self.command_combo.model().setData(
-        #     1, "Load value from a result of a previous module in this or a previous workflow stage", Qt.ItemDataRole.ToolTipRole
-        # )  # Tooltip
+        # Per-item tooltips (shown while hovering the dropdown entries).
+        _cmd_tips = {
+            0: "map: insert a per-channel value from the dataset table "
+            "(filepath, #tags, or a Per-Channel Param).",
+            1: "index: insert one element, by position, of a per-channel "
+            "list column.",
+            2: "Previous Module Result: reuse a result of the module "
+            "immediately before this one.",
+            3: "Prior Result: reuse a result of any earlier module, or "
+            "collect it across all single-dataset runs as a list.",
+        }
+        _cmd_model = self.command_combo.model()
+        for _i, _tip in _cmd_tips.items():
+            _cmd_model.setData(
+                _cmd_model.index(_i, 0), _tip, Qt.ItemDataRole.ToolTipRole
+            )
         layout.addWidget(self.command_combo)
         layout.addSpacing(10)
 
@@ -8048,8 +8104,16 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.prior_thisstage = QtWidgets.QRadioButton(
             "Result from current stage"
         )
+        self.prior_thisstage.setToolTip(
+            "Reference a result produced by a module in the current "
+            "workflow stage."
+        )
         self.prior_singlestage_list = QtWidgets.QRadioButton(
             "Create list from the single stage entries"
+        )
+        self.prior_singlestage_list.setToolTip(
+            "Collect this result across all single-dataset runs into a list "
+            "(uses $all) - typically referenced from an aggregation module."
         )
         self.prior_thisstage.setChecked(True)  # Default
 
@@ -8080,6 +8144,10 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         self.modify_combo.addItems(
             ["", "multiply", "divide", "add", "subtract"]
         )
+        self.modify_combo.setToolTip(
+            "Optionally apply an arithmetic operation to the fetched value, "
+            "e.g. multiply a NeNa value by 2."
+        )
         self.modify_combo.currentIndexChanged.connect(
             self._on_modify_operator_selected
         )
@@ -8090,17 +8158,22 @@ class ParameterCmdDialog(QtWidgets.QDialog):
 
         # Map/index keys: the built-in tile parameters plus any per-channel
         # columns the user has declared in the dataset tree, so a module
-        # parameter can be bound to a per-channel value.
-        map_keys = ["filepath", "#tags"]
-        try:
-            map_keys += list(parent.tree_data.get("tile_params", {}))
-        except AttributeError:
-            pass  # parent without a tree (e.g. isolated dialog test)
+        # parameter can be bound to a per-channel value. When the dialog has
+        # a live parent window we also offer a sentinel entry that creates a
+        # new per-channel column on the fly.
+        self._builtin_keys = ["filepath", "#tags"]
+        self._has_tree = hasattr(parent, "register_tile_param") and hasattr(
+            parent, "tree_data"
+        )
 
         # Create widgets for "map" mode
         self.map_label = QtWidgets.QLabel("Map option:")
         self.map_combo = QtWidgets.QComboBox()
-        self.map_combo.addItems(map_keys)
+        self.map_combo.setToolTip(
+            "Dataset-table column to read this channel's value from. The "
+            "current parameter is offered as a ready-made per-channel column; "
+            "selecting it lets you fill one value per channel below."
+        )
         self.map_combo.currentTextChanged.connect(self._on_map_option)
 
         # Optional default, emitted as the third tuple element so the spec
@@ -8110,16 +8183,44 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         )
         self.map_default = QtWidgets.QLineEdit()
         self.map_default.setPlaceholderText("e.g. 10 or 'auto'")
-        self.map_default.textChanged.connect(self._on_map_option)
+        self.map_default.setToolTip(
+            "Value used when a channel leaves this blank or the column is "
+            "absent. Emitted as the third element: ('$$map', key, default)."
+        )
+        self.map_default.textChanged.connect(self._on_map_default_changed)
+
+        # Inline per-channel value editor: for a user-declared column, enter
+        # one value per channel here instead of visiting the separate
+        # 'Per-Channel Params…' dialog.
+        self.map_values_label = QtWidgets.QLabel("Per-channel values:")
+        self.map_values_table = QtWidgets.QTableWidget(0, 2)
+        self.map_values_table.setHorizontalHeaderLabels(["channel", "value"])
+        self.map_values_table.setMaximumHeight(160)
+        self.map_values_table.itemChanged.connect(self._on_map_value_changed)
+        # Clarify that these values are stored separately from the command.
+        self.map_values_hint = QtWidgets.QLabel(
+            "Saved to the dataset table and substituted per channel at run "
+            "time. The assembled command only references the column; blank "
+            "cells use the default."
+        )
+        self.map_values_hint.setWordWrap(True)
+        self.map_values_hint.setStyleSheet(
+            "QLabel { color: gray; font-style: italic; }"
+        )
 
         # Create widgets for "index" mode
         self.index_label = QtWidgets.QLabel("Index option:")
         self.index_combo = QtWidgets.QComboBox()
-        self.index_combo.addItems(map_keys)
         self.index_combo.currentTextChanged.connect(self._on_index_option)
+
+        # Populate both key dropdowns (and their sentinel).
+        self._rebuild_key_combos()
         self.index_spin = QtWidgets.QSpinBox()
         self.index_spin.setMinimum(0)
         self.index_spin.setValue(0)
+        self.index_spin.setToolTip(
+            "0-based position to read from the selected list column."
+        )
         self.index_spin.valueChanged.connect(self._on_index_spin)
 
         layout.addWidget(QtWidgets.QLabel("Assembled Command:"))
@@ -8127,8 +8228,26 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         layout.addSpacing(10)
         layout.addWidget(self.command_result)
 
+        # Contextual help panel: explains the current command-type / timing
+        # choice with a concrete example, and flags mismatched timing. Placed
+        # directly below the assembled command; kept in sync by
+        # _refresh_command() -> _update_help().
+        self.help_label = QtWidgets.QLabel()
+        self.help_label.setWordWrap(True)
+        self.help_label.setTextFormat(Qt.TextFormat.RichText)
+        self.help_label.setStyleSheet(
+            "QLabel { background: rgba(127, 127, 127, 0.12);"
+            " padding: 8px; border-radius: 4px; }"
+        )
+        layout.addSpacing(6)
+        layout.addWidget(self.help_label)
+        layout.addSpacing(10)
+
         # Initialize with first command type
         self._on_command_changed(0)
+
+        # If the parameter already holds a command, open on it.
+        self._prepopulate()
 
         # Buttons
         button_box = QtWidgets.QDialogButtonBox(
@@ -8140,20 +8259,267 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         layout.addWidget(button_box)
 
     def _on_timing_toggled(self, button, checked):
-        command = self.get_command()
-        self.command_result.setText(command)
+        self._refresh_command()
 
     def _on_map_option(self, option):
-        command = self.get_command()
-        self.command_result.setText(command)
+        # Selecting the parameter-named option creates its per-channel column
+        # on the fly. Selecting any user column loads its stored default into
+        # the field (field <- column); editing the field is handled below.
+        name = self.map_combo.currentText()
+        self._ensure_param_column(name)
+        if self._has_tree and name in self._user_columns():
+            self._load_default_field(name)
+        self._rebuild_value_table()
+        self._refresh_command()
+
+    def _on_map_default_changed(self, text):
+        # Editing the Default field writes through to the selected column
+        # (field -> column), so blank cells in the table resolve to it.
+        self._sync_column_default()
+        self._rebuild_value_table()
+        self._refresh_command()
+
+    def _load_default_field(self, name):
+        """Load the column's stored default into the Default field."""
+        entry = self.parent.tree_data["tile_params"].get(name)
+        default = entry["default"] if entry else None
+        if default is None:
+            text = ""
+        elif isinstance(default, str):
+            text = repr(default)
+        else:
+            text = str(default)
+        self.map_default.blockSignals(True)
+        self.map_default.setText(text)
+        self.map_default.blockSignals(False)
 
     def _on_index_option(self, option):
-        command = self.get_command()
-        self.command_result.setText(command)
+        self._refresh_command()
 
     def _on_index_spin(self, value):
-        command = self.get_command()
-        self.command_result.setText(command)
+        self._refresh_command()
+
+    def _prepopulate(self):
+        """Open on the parameter's existing command, if it has one.
+
+        Parses a ``("$…cmd", key, [default])`` value and pre-selects the
+        matching command type, key, default and timing. Map/index (the
+        per-channel commands) are fully restored, including showing the
+        stored per-channel values; other command types are restored to the
+        command type and timing.
+        """
+        val = self.current_value
+        if not (
+            isinstance(val, tuple)
+            and len(val) >= 2
+            and isinstance(val[0], str)
+            and val[0].startswith("$")
+        ):
+            return
+        head = val[0]
+        start = head.startswith("$$")
+        sign = "$$" if start else "$"
+        rest = head[len(sign) :]
+        cmd = rest.split(" ")[0]
+
+        radio = self.timing_start_radio if start else self.timing_before_radio
+        radio.setChecked(True)
+
+        if cmd == "map":
+            self._select_command("map")
+            self._preselect_key(self.map_combo, val[1])
+            if len(val) > 2:
+                d = val[2]
+                self.map_default.blockSignals(True)
+                self.map_default.setText(
+                    repr(d) if isinstance(d, str) else str(d)
+                )
+                self.map_default.blockSignals(False)
+            # Run the normal selection flow (create/lookup column, load the
+            # default field, fill the per-channel value table).
+            self._on_map_option(val[1])
+        elif cmd == "index":
+            self._select_command("index")
+            self._preselect_key(self.index_combo, val[1])
+            parts = rest.split(" ")
+            if len(parts) > 1:
+                try:
+                    self.index_spin.setValue(int(parts[1]))
+                except ValueError:
+                    pass
+        elif cmd == "get_previous_module_result":
+            self._select_command("Previous Module Result")
+        elif cmd == "get_prior_result":
+            self._select_command("Prior Result")
+        self._refresh_command()
+
+    def _select_command(self, text):
+        idx = self.command_combo.findText(text)
+        if idx >= 0:
+            self.command_combo.setCurrentIndex(idx)
+
+    def _preselect_key(self, combo, key):
+        combo.blockSignals(True)
+        if combo.findText(key) < 0:
+            combo.addItem(key)
+        combo.setCurrentText(key)
+        combo.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    # Per-channel column creation and inline value editing (map mode)
+    # ------------------------------------------------------------------
+    def _user_columns(self):
+        """Names of user-declared per-channel columns (not the built-ins)."""
+        if not self._has_tree:
+            return []
+        return list(self.parent.tree_data.get("tile_params", {}))
+
+    def _rebuild_key_combos(self, select=None):
+        """Repopulate both key dropdowns from the current column set.
+
+        The map dropdown additionally offers the current parameter name as a
+        ready-made per-channel column (created on selection). The index
+        dropdown lists only built-ins and already-declared columns.
+
+        Parameters
+        ----------
+        select : str, optional
+            Key to select in both dropdowns after rebuilding.
+        """
+        base = list(self._builtin_keys) + self._user_columns()
+        map_keys = list(base)
+        if (
+            self._has_tree
+            and self.param_name
+            and self.param_name not in map_keys
+        ):
+            map_keys.append(self.param_name)
+        for combo, keys in (
+            (self.map_combo, map_keys),
+            (self.index_combo, base),
+        ):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(keys)
+            if select is not None:
+                idx = combo.findText(select)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+    def _ensure_param_column(self, name):
+        """Create the parameter-named per-channel column if newly selected.
+
+        Selecting the map option named after this parameter (offered even
+        before the column exists) lazily registers a per-channel column so
+        its values can be entered inline. Tracked for cleanup on cancel.
+        """
+        if (
+            not self._has_tree
+            or not self.param_name
+            or name != self.param_name
+            or name in self._user_columns()
+        ):
+            return
+        try:
+            self.parent.register_tile_param(
+                name, "channel", self._coerce_default()
+            )
+        except ValueError as e:
+            QtWidgets.QMessageBox.warning(self, "Invalid column", str(e))
+            return
+        self._autocreated.add(name)
+        self._rebuild_key_combos(select=name)
+
+    def reject(self):
+        """Cancel, pruning per-channel columns auto-created but left empty."""
+        if self._has_tree:
+            tile_params = self.parent.tree_data.get("tile_params", {})
+            for name in list(self._autocreated):
+                entry = tile_params.get(name)
+                if entry is not None and not entry["values"]:
+                    self.parent.unregister_tile_param(name)
+        super().reject()
+
+    def _coerce_default(self):
+        """The Default field as a Python value (or None if blank)."""
+        import ast
+
+        text = self.map_default.text().strip()
+        if not text:
+            return None
+        try:
+            return ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return text
+
+    def _sync_column_default(self):
+        """Store the Default field as the selected column's default.
+
+        Keeps a single notion of "default": the value emitted in the command
+        and used for blank cells in the value table below.
+        """
+        name = self.map_combo.currentText()
+        if self._has_tree and name in self._user_columns():
+            self.parent.tree_data["tile_params"][name][
+                "default"
+            ] = self._coerce_default()
+
+    def _rebuild_value_table(self):
+        """Fill the per-channel value table for the selected map column."""
+        table = self.map_values_table
+        table.blockSignals(True)
+        try:
+            table.setRowCount(0)
+            name = self.map_combo.currentText()
+            user_cols = self._user_columns()
+            is_user = name in user_cols
+            self.map_values_label.setVisible(is_user)
+            self.map_values_hint.setVisible(is_user)
+            table.setVisible(is_user)
+            if not is_user:
+                return
+            channels = self.parent.tree_data.get("channels", [])
+            table.setHorizontalHeaderLabels(["channel", name])
+            table.setRowCount(len(channels))
+            for r, ch in enumerate(channels):
+                key = QtWidgets.QTableWidgetItem(ch)
+                key.setFlags(key.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                table.setItem(r, 0, key)
+                val = self.parent.resolve_tile_param(name, None, ch)
+                item = QtWidgets.QTableWidgetItem(
+                    "" if val is None else str(val)
+                )
+                item.setData(Qt.ItemDataRole.UserRole, ch)
+                table.setItem(r, 1, item)
+            table.resizeColumnsToContents()
+        finally:
+            table.blockSignals(False)
+
+    def _on_map_value_changed(self, item):
+        ch = item.data(Qt.ItemDataRole.UserRole)
+        if ch is None:
+            return
+        name = self.map_combo.currentText()
+        if name not in self._user_columns():
+            return
+        if item.text().strip() == "":
+            self.parent.unset_tile_param_value(name, ch)
+        else:
+            self.parent.set_tile_param_value(
+                name, self._coerce_default_text(item.text()), ch
+            )
+
+    @staticmethod
+    def _coerce_default_text(text):
+        """Parse a table entry as a Python literal, else keep it as text."""
+        import ast
+
+        text = text.strip()
+        try:
+            return ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return text
 
     def _on_command_changed(self, index):
         """Handle command type change and update dynamic layout.
@@ -8176,6 +8542,10 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             self.dynamic_layout.addWidget(self.map_combo)
             self.dynamic_layout.addWidget(self.map_default_label)
             self.dynamic_layout.addWidget(self.map_default)
+            self.dynamic_layout.addWidget(self.map_values_label)
+            self.dynamic_layout.addWidget(self.map_values_table)
+            self.dynamic_layout.addWidget(self.map_values_hint)
+            self._rebuild_value_table()
         elif command_type == "index":
             self.dynamic_layout.addWidget(self.index_label)
             self.dynamic_layout.addWidget(self.index_combo)
@@ -8215,8 +8585,7 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             # Populate results for initially selected module
             self._on_module_selected(self.module_combo.currentIndex())
 
-        command = self.get_command()
-        self.command_result.setText(command)
+        self._refresh_command()
 
     def _on_prior_mode_selected(self, button, checked):
         self.module_combo.blockSignals(True)
@@ -8235,8 +8604,7 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             self.module_combo.setCurrentIndex(0)
             self._on_module_selected(0)
 
-        command = self.get_command()
-        self.command_result.setText(command)
+        self._refresh_command()
 
     def _on_module_selected(self, index):
         """Populate result combo box when module is selected.
@@ -8282,20 +8650,105 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         except Exception as e:
             self.result_combo.addItem(f"(error: {str(e)})")
 
-        command = self.get_command()
-        self.command_result.setText(command)
+        self._refresh_command()
 
     def _on_result_selected(self, index):
-        command = self.get_command()
-        self.command_result.setText(command)
+        self._refresh_command()
 
     def _on_modify_value_changed(self, value):
-        command = self.get_command()
-        self.command_result.setText(command)
+        self._refresh_command()
 
     def _on_modify_operator_selected(self, index):
-        command = self.get_command()
-        self.command_result.setText(command)
+        self._refresh_command()
+
+    def _refresh_command(self):
+        """Update the assembled command and the contextual help text."""
+        self.command_result.setText(self.get_command())
+        self._update_help()
+
+    def _update_help(self):
+        """Explain the current command-type / timing choice in context.
+
+        Adapts to the selected command type and the ``$`` / ``$$`` timing,
+        shows a concrete example, and flags a timing that is unusual for the
+        chosen command.
+        """
+        command_type = self.command_combo.currentText()
+        start = self.timing_start_radio.isChecked()
+
+        target = (
+            f"parameter <code>{self.param_name}</code>"
+            if self.param_name
+            else "this parameter"
+        )
+        if command_type == "map":
+            body = (
+                f"<b>Map</b> gives each channel its own value for {target}, "
+                "read from a dataset-table column. Pick a built-in column "
+                "(<code>filepath</code>, <code>#tags</code>) or the option "
+                "named after this parameter to create a per-channel column "
+                "and type its values in the table below. The optional default "
+                "is used when a channel is left blank or the column is "
+                "absent, so the spec stays reusable."
+            )
+            example = "('$$map', 'min_locs', 10)"
+            want_start = True
+        elif command_type == "index":
+            body = (
+                "<b>Index</b> inserts one element, by position, of a "
+                "per-channel list column. Use it when a column holds a list "
+                "per channel and you need a fixed element."
+            )
+            example = "('$$index 0', 'filepath')"
+            want_start = True
+        elif command_type == "Previous Module Result":
+            body = (
+                "<b>Previous Module Result</b> reuses a value produced by "
+                "the module <i>immediately before</i> this one in the same "
+                "workflow. Pick the result name; optionally apply an "
+                "arithmetic modifier."
+            )
+            example = "('$get_previous_module_result *2', 'nena')"
+            want_start = False
+        else:  # Prior Result
+            if self.prior_singlestage_list.isChecked():
+                body = (
+                    "<b>Prior Result (list across runs)</b> collects the "
+                    "chosen result from <i>every</i> single-dataset run into "
+                    "a list (uses <code>$all</code>). Reference it from an "
+                    "aggregation module to gather per-channel results."
+                )
+                example = (
+                    "('$$get_prior_result', 'all_results, single_dataset, "
+                    "$all, 03_localize, locs')"
+                )
+                want_start = True
+            else:
+                body = (
+                    "<b>Prior Result (current stage)</b> reuses a value from "
+                    "any earlier module in this workflow stage. Pick the "
+                    "module and its result; optionally apply an arithmetic "
+                    "modifier."
+                )
+                example = "('$get_prior_result', 'results, 03_localize, locs')"
+                want_start = False
+
+        timing_word = "start of stage ($$)" if want_start else "before ($)"
+        note = f"Recommended timing: <b>{timing_word}</b>."
+        if want_start and not start:
+            note += (
+                " &nbsp;&#9888; This command needs <b>start of stage "
+                "($$)</b> to resolve correctly."
+            )
+        elif not want_start and start:
+            note += (
+                " &nbsp;&#9888; This command usually uses <b>before ($)</b> "
+                "timing."
+            )
+
+        self.help_label.setText(
+            f"{body}<br><br>Example: <code>{example}</code><br>{note}"
+        )
 
     # def get_selection(self):
     #     """Get the selected module index, result name, command type, and timing.
@@ -9760,8 +10213,8 @@ class Window(QtWidgets.QMainWindow):
 
         self._rename_channel(old_name, new_name)
 
-    def remove_tree_items(self):
-        """Remove selected datasets or channels."""
+    def remove_dataset(self):
+        """Remove the selected dataset(s) and all of their channels."""
         current_tree = self._get_current_tree_widget()
         if not current_tree:
             return
@@ -9769,19 +10222,38 @@ class Window(QtWidgets.QMainWindow):
         selected = current_tree.selectedItems()
 
         if not selected:
+            QtWidgets.QMessageBox.information(
+                self, "No Selection", "Please select a dataset to remove."
+            )
             return
 
+        # Top-level items are datasets; children are channels. Dedupe by
+        # name: selecting several channels of one dataset also selects it
+        # in some styles.
         datasets_to_remove = []
-
         for item in selected:
-            if item.parent() is None:  # Top-level = dataset
+            if item.parent() is None:
                 dataset_name = item.text(0)
-                datasets_to_remove.append(dataset_name)
+                if dataset_name and dataset_name not in datasets_to_remove:
+                    datasets_to_remove.append(dataset_name)
 
         if not datasets_to_remove:
+            # A channel was selected. Removing its parent dataset would
+            # discard far more than the user pointed at, so say so
+            # instead - mirroring remove_channel's guard.
+            QtWidgets.QMessageBox.information(
+                self,
+                "Invalid Selection",
+                "Please select a dataset (not a channel) to remove.\n"
+                "Use 'Remove Channel' to remove a channel.",
+            )
             return
 
-        msg = f"Remove {len(datasets_to_remove)} dataset(s)?"
+        names = ", ".join(f"'{d}'" for d in datasets_to_remove)
+        msg = (
+            f"Remove {len(datasets_to_remove)} dataset(s) and all their "
+            f"channels?\n\n{names}"
+        )
         if (
             QtWidgets.QMessageBox.question(self, "Confirm", msg)
             != QtWidgets.QMessageBox.StandardButton.Yes
@@ -9789,11 +10261,13 @@ class Window(QtWidgets.QMainWindow):
             return
 
         for dataset_name in datasets_to_remove:
-            self.tree_data["datasets"].remove(dataset_name)
-            del self.tree_data["file_paths"][dataset_name]
-            if dataset_name in self.tree_data["conditions"]:
-                del self.tree_data["conditions"][dataset_name]
+            if dataset_name in self.tree_data["datasets"]:
+                self.tree_data["datasets"].remove(dataset_name)
+            self.tree_data["file_paths"].pop(dataset_name, None)
+            self.tree_data["conditions"].pop(dataset_name, None)
 
+        # Repopulating runs _sync_tile_params, which prunes per-cell
+        # values belonging to the removed datasets.
         self._populate_tree_from_data()
         self._log_workflow_config_event(
             "tree.remove_datasets", datasets=datasets_to_remove
@@ -9942,6 +10416,9 @@ class Window(QtWidgets.QMainWindow):
             current_tree.blockSignals(False)
 
         self._update_validation_display()
+        # Channels or per-channel values may have changed - keep the
+        # parameter rows' summaries in sync.
+        self._refresh_param_summaries()
 
     def _on_tree_item_changed(self, item, column):
         """Handle tree item changes to update data structure."""
@@ -10276,16 +10753,14 @@ class Window(QtWidgets.QMainWindow):
                 "Rename Channel"
             )
             self.rename_channel_button.clicked.connect(self.rename_channel)
+            self.remove_dataset_button = QtWidgets.QPushButton(
+                "Remove Dataset"
+            )
+            self.remove_dataset_button.clicked.connect(self.remove_dataset)
             self.remove_channel_button = QtWidgets.QPushButton(
                 "Remove Channel"
             )
             self.remove_channel_button.clicked.connect(self.remove_channel)
-            self.remove_dataset_button = QtWidgets.QPushButton(
-                "Remove Dataset"
-            )
-            self.remove_dataset_button.clicked.connect(self.remove_tree_items)
-            self.clear_tree_button = QtWidgets.QPushButton("Clear")
-            self.clear_tree_button.clicked.connect(self.clear_tree)
             self.tile_params_button = QtWidgets.QPushButton(
                 "Per-Channel Params…"
             )
@@ -10294,13 +10769,17 @@ class Window(QtWidgets.QMainWindow):
                 "per-channel cluster min_locs) and edit their values."
             )
             self.tile_params_button.clicked.connect(self.manage_tile_params)
+            self.clear_tree_button = QtWidgets.QPushButton("Clear")
+            self.clear_tree_button.clicked.connect(self.clear_tree)
 
+            # Grouped by verb, and within each verb dataset before
+            # channel - matching the tree's parent/child nesting.
             self.file_buttons_layout.addWidget(self.add_dataset_button)
             self.file_buttons_layout.addWidget(self.add_channel_button)
             self.file_buttons_layout.addWidget(self.rename_dataset_button)
             self.file_buttons_layout.addWidget(self.rename_channel_button)
-            self.file_buttons_layout.addWidget(self.remove_channel_button)
             self.file_buttons_layout.addWidget(self.remove_dataset_button)
+            self.file_buttons_layout.addWidget(self.remove_channel_button)
             self.file_buttons_layout.addWidget(self.tile_params_button)
             self.file_buttons_layout.addWidget(self.clear_tree_button)
 
@@ -11568,6 +12047,13 @@ class Window(QtWidgets.QMainWindow):
             # Restore the input-files mode (explicit / auto-detect / none)
             self._apply_files_mode_from_source(source_text)
 
+            # Restore the GUI dataset table (file layout + per-channel
+            # parameters) if the script carries one, so an aggregation /
+            # investigation run round-trips exactly.
+            gui_table = getattr(module, "_gui_dataset_table", None)
+            if isinstance(gui_table, dict):
+                self._restore_dataset_table(gui_table)
+
         except Exception as e:
             logger.error(f"Error loading start_workflow.py: {e}")
             QtWidgets.QMessageBox.warning(
@@ -11575,6 +12061,57 @@ class Window(QtWidgets.QMainWindow):
                 "Workflow Load Error",
                 f"Failed to load workflow from start_workflow.py:\n{str(e)}",
             )
+
+    def _restore_dataset_table(self, gui_table):
+        """Restore the dataset tree and per-channel parameters from a script.
+
+        Counterpart to the ``_gui_dataset_table`` block written at script
+        generation. Rebuilds ``self.tree_data`` (datasets, channels, file
+        paths, conditions and per-channel tile parameters) and repopulates
+        the aggregation/investigation tree, so a saved workflow round-trips
+        exactly. Per-channel values are keyed by channel name, so a channel
+        renamed later in the GUI still inherits its values (via the rename
+        remapping); a channel whose name no longer matches falls back to the
+        parameter default.
+
+        Parameters
+        ----------
+        gui_table : dict
+            The restored ``_gui_dataset_table`` mapping, with keys
+            ``workflow_type`` and ``tree_data``.
+        """
+        import copy
+
+        td = gui_table.get("tree_data")
+        if not isinstance(td, dict):
+            return
+
+        # Switch to the workflow type the table was built for *first*: the
+        # type-change handler resets tree_data to defaults, so it must run
+        # before we install the restored data.
+        workflow_type = gui_table.get("workflow_type")
+        if workflow_type in (1, 2):
+            self.workflow_type.setCurrentIndex(workflow_type)
+
+        self.tree_data = {
+            "datasets": list(td.get("datasets", [])),
+            "channels": list(td.get("channels", [])),
+            "file_paths": {
+                ds: dict(chans)
+                for ds, chans in td.get("file_paths", {}).items()
+            },
+            "conditions": dict(td.get("conditions", {})),
+            "tile_params": copy.deepcopy(td.get("tile_params", {})),
+        }
+
+        self._sync_tile_params()
+        self._populate_tree_from_data()
+        self._log_workflow_config_event(
+            "tree.restored",
+            datasets=len(self.tree_data["datasets"]),
+            channels=len(self.tree_data["channels"]),
+            tile_params=list(self.tree_data["tile_params"]),
+        )
 
     def _populate_workflow_from_definition(
         self, workflow_def, workflow_list, list_widget, workflow_name
@@ -12009,14 +12546,12 @@ class Window(QtWidgets.QMainWindow):
                 value_data = param_values[param_name]
 
                 # Check if value is a command tuple (starts with $ or $$)
-                if isinstance(value_data, tuple) and len(value_data) >= 1:
-                    first_elem = str(value_data[0])
-                    if first_elem.startswith("$"):
-                        # This is a command - convert widget to textbox
-                        self._convert_widget_to_textbox(
-                            param_name, str(value_data)
-                        )
-                        continue
+                if self._is_command_value(value_data):
+                    # This is a command - convert widget to textbox
+                    self._convert_widget_to_textbox(
+                        param_name, str(tuple(value_data))
+                    )
+                    continue
 
                 # Set value in widget
                 self._set_widget_value(
@@ -12625,6 +13160,30 @@ class Window(QtWidgets.QMainWindow):
                         script_lines.append(f"        {formatted},")
                     script_lines.append("    ],")
             script_lines.append("}")
+
+            # Persist the GUI dataset table (file layout, conditions, and
+            # per-channel parameter columns/values) so an aggregation /
+            # investigation workflow round-trips exactly when reloaded into
+            # the GUI. Runtime uses the `datasets` dict above; this block is
+            # read only by the GUI on load.
+            if workflow_type_index in (1, 2):
+                import pprint
+
+                gui_table = {
+                    "workflow_type": workflow_type_index,
+                    "tree_data": self.tree_data,
+                }
+                script_lines.extend(
+                    [
+                        "",
+                        "# GUI dataset table - restored on reload into the "
+                        "picasso-workflow GUI.",
+                        "_gui_dataset_table = "
+                        + pprint.pformat(
+                            gui_table, width=79, sort_dicts=False
+                        ),
+                    ]
+                )
 
         script_lines.extend(
             [
@@ -13397,6 +13956,18 @@ class Window(QtWidgets.QMainWindow):
                     if sub_param_name in value_data:
                         sub_value_data = value_data[sub_param_name]
 
+                        # A nested value may itself be a command; it needs
+                        # the same textbox conversion the top level gets
+                        # in _populate_stored_parameters, or e.g. a
+                        # spinbox would silently swallow it.
+                        if self._is_command_value(sub_value_data):
+                            self._convert_widget_to_textbox(
+                                sub_param_name,
+                                str(tuple(sub_value_data)),
+                                sub_widget_info,
+                            )
+                            continue
+
                         # Recursively set nested parameter value
                         self._set_widget_value(
                             sub_widget_info.widget,
@@ -13436,12 +14007,151 @@ class Window(QtWidgets.QMainWindow):
                 )
                 widget.setChecked(is_checked)
 
-    def _on_cmd_button_clicked(self, param_name):
+    @staticmethod
+    def _is_command_value(value):
+        """Return whether a stored parameter value is a `$` command tuple."""
+        return (
+            isinstance(value, (tuple, list))
+            and len(value) >= 1
+            and str(value[0]).startswith("$")
+        )
+
+    def _tile_param_binding(self, widget_info):
+        """Return the tile parameter column a parameter is bound to.
+
+        Parameters
+        ----------
+        widget_info: ParameterWidgetInfo of the row to inspect
+
+        Returns
+        -------
+        str or None: Name of the registered tile parameter column the
+            parameter maps to, or None if the parameter does not hold a
+            per-channel mapping command.
+        """
+        if widget_info.original_type == "dict":
+            return None
+
+        try:
+            value = self._get_widget_value(
+                widget_info.widget,
+                widget_info.original_type,
+                widget_info,
+            )
+        except Exception:
+            return None
+
+        if not isinstance(value, (tuple, list)) or len(value) < 2:
+            return None
+        cmd = str(value[0])
+        if not cmd.startswith("$"):
+            return None
+        # Only mapping commands bind to a per-tile column; $get_prior_result
+        # and friends reference module results instead.
+        if cmd.lstrip("$") not in ("map", "index"):
+            return None
+
+        name = value[1]
+        # The builtin filepath/#tags columns are per-channel by definition
+        # and shown in the dataset tree already - annotating them would be
+        # noise on every loader module.
+        if name not in self._tile_params():
+            return None
+        return name
+
+    def _update_param_summary(self, widget_info):
+        """Show the per-channel values a mapped parameter resolves to.
+
+        Updates the summary label below a parameter row so that a mapping
+        such as ``("$$map", "min_locs", 10)`` is not just an opaque tuple:
+        the label spells out what each channel receives. Hides the label
+        for parameters that are not bound to a tile parameter column.
+
+        Parameters
+        ----------
+        widget_info: ParameterWidgetInfo of the row to update
+        """
+        label = widget_info.summary_label
+        if label is None:
+            return
+
+        name = self._tile_param_binding(widget_info)
+        channels = self.tree_data.get("channels", [])
+        if name is None or not channels:
+            label.setVisible(False)
+            label.clear()
+            label.setToolTip("")
+            return
+
+        entry = self._tile_params()[name]
+        scope = entry.get("scope", "channel")
+        default = entry.get("default")
+        datasets = self.tree_data.get("datasets", [])
+
+        if scope == "cell":
+            values = entry.get("values", {})
+            n_set = sum(
+                1
+                for ds in datasets
+                for ch in channels
+                if ch in values.get(ds, {})
+            )
+            n_total = len(datasets) * len(channels)
+            text = (
+                f"⇄ per-cell ({name}): {n_set} of {n_total} cells "
+                f"set  (default {default!r})"
+            )
+            detail = [
+                f"{ds}/{ch} = {self.resolve_tile_param(name, ds, ch)!r}"
+                for ds in datasets
+                for ch in channels
+            ]
+        else:
+            pairs = [
+                f"{ch} = {self.resolve_tile_param(name, None, ch)!r}"
+                for ch in channels
+            ]
+            shown = pairs[:_SUMMARY_MAX_CHANNELS]
+            if len(pairs) > _SUMMARY_MAX_CHANNELS:
+                n_more = len(pairs) - _SUMMARY_MAX_CHANNELS
+                shown.append(f"… (+{n_more} more)")
+            text = (
+                "⇄ per-channel: "
+                + ", ".join(shown)
+                + f"  (default {default!r})"
+            )
+            detail = pairs
+
+        label.setText(text)
+        # The visible text may be elided; the tooltip always lists every
+        # channel.
+        label.setToolTip(
+            f"Tile parameter column '{name}' (scope: {scope})\n"
+            + "\n".join(detail)
+            + f"\ndefault: {default!r}"
+        )
+        label.setVisible(True)
+
+    def _refresh_param_summaries(self):
+        """Update the per-channel summary of every visible parameter row."""
+        widgets = getattr(self, "parameter_widgets", None)
+        if not widgets:
+            return
+        for widget_info in widgets.values():
+            self._update_param_summary(widget_info)
+            for sub_info in widget_info.sub_parameters.values():
+                self._update_param_summary(sub_info)
+
+    def _on_cmd_button_clicked(self, param_name, widget_info=None):
         """Handle cmd button click - opens prior result dialog.
 
         Parameters
         ----------
         param_name: Name of the parameter to populate
+        widget_info: ParameterWidgetInfo of the row whose button was
+            clicked. Required for nested sub-parameters, which are not
+            registered in self.parameter_widgets; defaults to the
+            top-level row of that name.
         """
         # Determine which workflow list to use
         current_tab_index = self.workflow_tabs.currentIndex()
@@ -13454,14 +14164,40 @@ class Window(QtWidgets.QMainWindow):
         else:
             return
 
+        # Read the parameter's current value so the dialog can open on an
+        # existing command (e.g. to review/edit a per-channel mapping).
+        current_value = None
+        if widget_info is None:
+            widget_info = self.parameter_widgets.get(param_name)
+        if widget_info is not None:
+            try:
+                current_value = self._get_widget_value(
+                    widget_info.widget,
+                    widget_info.original_type,
+                    widget_info,
+                )
+            except Exception:
+                current_value = None
+
         # Create dialog
         dialog = ParameterCmdDialog(
-            workflow_modules, self.module_descriptor, curr_module_index, self
+            workflow_modules,
+            self.module_descriptor,
+            curr_module_index,
+            self,
+            param_name=param_name,
+            current_value=current_value,
         )
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             command_str = dialog.command_result.text()
             # Convert widget to QLineEdit and populate
-            self._convert_widget_to_textbox(param_name, command_str)
+            self._convert_widget_to_textbox(
+                param_name, command_str, widget_info
+            )
+        # Per-channel values are edited inline in the dialog and written
+        # through immediately, so refresh even when the dialog was
+        # cancelled.
+        self._refresh_param_summaries()
 
     # def _handle_prior_result_command(self, param_name):
     #     """Open dialog for selecting prior result reference.
@@ -13481,17 +14217,26 @@ class Window(QtWidgets.QMainWindow):
     #         widget_info.command_combo.setCurrentIndex(0)
     #         return
 
-    def _convert_widget_to_textbox(self, param_name, initial_value=""):
+    def _convert_widget_to_textbox(
+        self, param_name, initial_value="", widget_info=None
+    ):
         """Convert parameter widget to QLineEdit for command values.
 
         Parameters
         ----------
         param_name: Name of the parameter
         initial_value: Initial text to populate
+        widget_info: ParameterWidgetInfo of the row to convert. Required
+            for nested sub-parameters, which are not registered in
+            self.parameter_widgets; defaults to the top-level row of that
+            name.
         """
-        widget_info = self.parameter_widgets[param_name]
+        if widget_info is None:
+            widget_info = self.parameter_widgets[param_name]
         row_widget = widget_info.row_widget
-        row_layout = row_widget.layout()
+        # The row's own layout is the outer vertical box; the label/widget/
+        # cmd row we need to splice into is field_layout.
+        row_layout = getattr(row_widget, "field_layout", row_widget.layout())
 
         # Remove old widget (at index 1, between label and command combo)
         old_widget = widget_info.widget
@@ -13509,6 +14254,10 @@ class Window(QtWidgets.QMainWindow):
 
         # Update stored reference
         widget_info.widget = new_widget
+
+        # The new value may be a per-channel mapping - reflect it below
+        # the row.
+        self._update_param_summary(widget_info)
 
         # Trigger validation update
         self._on_parameter_changed()
@@ -13528,10 +14277,31 @@ class Window(QtWidgets.QMainWindow):
         -------
         ParameterWidgetInfo: Widget info for this parameter
         """
-        # Create row container
+        # Create row container. The field row (label/widget/cmd) sits in a
+        # horizontal layout; below it hangs a summary label that describes
+        # per-channel values when the parameter is mapped to a tile
+        # parameter column. Keeping both inside row_widget means nested
+        # rows and the optional-dict visibility toggle keep working
+        # unchanged.
         row_widget = QtWidgets.QWidget()
-        row_layout = QtWidgets.QHBoxLayout(row_widget)
+        outer_layout = QtWidgets.QVBoxLayout(row_widget)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        row_layout = QtWidgets.QHBoxLayout()
         row_layout.setContentsMargins(indent_level * 20, 2, 0, 2)
+        outer_layout.addLayout(row_layout)
+
+        summary_label = QtWidgets.QLabel()
+        summary_label.setWordWrap(True)
+        summary_label.setStyleSheet("color: gray; font-style: italic;")
+        summary_label.setContentsMargins(indent_level * 20 + 12, 0, 0, 2)
+        summary_label.setVisible(False)
+        outer_layout.addWidget(summary_label)
+
+        # _convert_widget_to_textbox swaps the input widget in place and
+        # needs the field row, not the outer layout.
+        row_widget.field_layout = row_layout
 
         # Create label
         label = QtWidgets.QLabel(param_name)
@@ -13625,6 +14395,7 @@ class Window(QtWidgets.QMainWindow):
                 toggle_function=(
                     toggle_nested_params if not is_required else None
                 ),
+                summary_label=summary_label,
             )
             return widget_info
 
@@ -13658,9 +14429,6 @@ class Window(QtWidgets.QMainWindow):
             # Create cmd button
             cmd_button = QtWidgets.QPushButton("cmd")
             cmd_button.setFixedWidth(50)
-            cmd_button.clicked.connect(
-                lambda checked, pn=param_name: self._on_cmd_button_clicked(pn)
-            )
             row_layout.addWidget(cmd_button, stretch=0)
 
             widget_info = ParameterWidgetInfo(
@@ -13669,6 +14437,16 @@ class Window(QtWidgets.QMainWindow):
                 row_widget=row_widget,
                 metadata=param_metadata,
                 original_type=original_type,
+                summary_label=summary_label,
+            )
+
+            # Capture the widget info itself, not just the name: nested
+            # sub-parameters are not registered in self.parameter_widgets
+            # (only top-level names are), so a name lookup would miss them.
+            cmd_button.clicked.connect(
+                lambda checked, pn=param_name, wi=widget_info: (
+                    self._on_cmd_button_clicked(pn, wi)
+                )
             )
             return widget_info
 
@@ -13706,6 +14484,8 @@ class Window(QtWidgets.QMainWindow):
 
         # Add stretch at the end to push widgets to the top
         self.module_parameters_layout.addStretch()
+
+        self._refresh_param_summaries()
 
     def _validate_parameters(self):
         """Validate that all required parameters are filled.
