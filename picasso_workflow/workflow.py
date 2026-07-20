@@ -29,6 +29,7 @@ from picasso_workflow.confluence import (
     ConfluenceReporter,
     ConfluenceInterface,
     ConfluenceInterfaceError,
+    aggregation_abort_body,
     _PARAM_BLACKLIST,
 )
 from picasso_workflow.html_reporter import (
@@ -536,16 +537,28 @@ class AggregationWorkflowRunner:
         self.sgl_workflow_locations = sgl_folders
         self.save(self.result_folder)
 
+        failures = self._failed_single_datasets(
+            sgl_dataset_success, sgl_folders, tags
+        )
+
         # Write the HTML overview already now (even when not all singles
         # succeed) so a partial run still has a navigable local index.
-        self._write_html_overview(sgl_folders)
+        self._write_html_overview(sgl_folders, failures=failures)
 
-        if not all(sgl_dataset_success):
+        if failures:
+            # Name the offenders: hunting for which of N datasets failed,
+            # and why, used to mean opening every result folder by hand.
+            detail = "\n".join(
+                f"  [{i:02d}] {tag or '(no tag)'}: {description}\n"
+                f"         {folder}"
+                for i, tag, folder, description in failures
+            )
             msg = (
-                "Not all single datasets were analysed successfully. "
-                + "Therefore, no aggregation analysis is started."
+                f"{len(failures)} of {n_sgl} single datasets failed, so no "
+                f"aggregation analysis is started:\n{detail}"
             )
             logger.error(msg)
+            self._report_aggregation_abort(failures, n_sgl)
             raise WorkflowError(msg)
 
         # Then, run the aggregation workflow
@@ -609,7 +622,10 @@ class AggregationWorkflowRunner:
         self._write_html_overview(sgl_folders, self._agg_report_folder)
 
     def _write_html_overview(
-        self, sgl_folders: list, agg_folder: str | None = None
+        self,
+        sgl_folders: list,
+        agg_folder: str | None = None,
+        failures: list | None = None,
     ) -> None:
         """Write the top-level ``index.html`` linking the child reports.
 
@@ -623,6 +639,10 @@ class AggregationWorkflowRunner:
             The single-dataset result folders (each holds a ``report.html``).
         agg_folder : str, optional
             The aggregation result folder, if the aggregation step has run.
+        failures : list of tuple, optional
+            ``(index, tag, folder, description)`` per failed single
+            dataset, listed in the overview table so a partial run shows
+            what went wrong.
         """
         if not self._html_reporting:
             return
@@ -646,6 +666,14 @@ class AggregationWorkflowRunner:
             ("Single datasets", len(sgl_folders)),
             ("Reports found", sum(1 for _, _, ok in child_reports if ok)),
         ]
+        if failures:
+            rows.append(
+                ("Failed datasets", f"{len(failures)} of {len(sgl_folders)}")
+            )
+            for idx, tag, _folder, description in failures:
+                rows.append(
+                    (f"Failed [{idx:02d}] {tag or '(no tag)'}", description)
+                )
         try:
             write_aggregation_index(
                 self.result_folder,
@@ -656,6 +684,111 @@ class AggregationWorkflowRunner:
             )
         except Exception as e:  # reporting must never abort the analysis
             logger.error(f"Could not write HTML aggregation index: {e}")
+
+    def _report_aggregation_abort(self, failures: list, n_total: int) -> None:
+        """Post the skipped-aggregation summary to the run's parent page.
+
+        Best effort: a reporting problem must not replace the analysis
+        failure that is about to be raised.
+
+        Parameters
+        ----------
+        failures : list of tuple
+            ``(index, tag, folder, description)`` per failed dataset.
+        n_total : int
+            Total number of single datasets.
+        """
+        ci = getattr(self, "ci", None)
+        if ci is None:
+            return
+        try:
+            confluence_config = self.reporter_config.get(
+                "ConfluenceReporter", {}
+            )
+            page_id = confluence_config.get("parent_page_id")
+            page_name = self.reporter_config.get("report_name", "")
+            if not page_id:
+                logger.debug(
+                    "No parent page id; skipping the Confluence summary of "
+                    "the skipped aggregation."
+                )
+                return
+            ci.update_page_content(
+                page_name,
+                page_id,
+                aggregation_abort_body(failures, n_total),
+            )
+        except Exception as e:
+            logger.error(
+                f"Could not report the skipped aggregation to Confluence: {e}"
+            )
+
+    def _describe_single_failure(self, i: int) -> str:
+        """Explain why single dataset ``i`` failed, from its results.
+
+        Parameters
+        ----------
+        i : int
+            Index of the single dataset.
+
+        Returns
+        -------
+        str
+            The failing module and exception, e.g.
+            ``"fit_csr: ValueError: min_dist=50.0, max_dist=300.0 leaves
+            0 of 99 ..."``. Falls back to the last module reached when no
+            error was recorded (results written before failures were
+            recorded), or a plain note when there are no results at all.
+        """
+        try:
+            results = self.all_results["single_dataset"][i]
+        except (KeyError, IndexError, TypeError):
+            results = None
+        if not results:
+            return "no results recorded"
+
+        for key, res in reversed(list(results.items())):
+            if not isinstance(res, dict):
+                continue
+            error = res.get("error")
+            if error:
+                return (
+                    f"{key}: {error.get('type', 'Error')}: "
+                    f"{error.get('message', '')}"
+                )
+            if res.get("success") is False:
+                return f"{key}: failed (no exception recorded)"
+
+        last = list(results)[-1] if results else None
+        return f"no error recorded; last module reached was {last}"
+
+    def _failed_single_datasets(
+        self, sgl_dataset_success: list, sgl_folders: list, tags: list
+    ) -> list:
+        """Collect a description of every failed single dataset.
+
+        Parameters
+        ----------
+        sgl_dataset_success : list of bool
+            Per-dataset success flags.
+        sgl_folders : list of str
+            Per-dataset result folders.
+        tags : list of str
+            Per-dataset tags.
+
+        Returns
+        -------
+        list of tuple
+            ``(index, tag, folder, description)`` for each failure.
+        """
+        failures = []
+        for i, ok in enumerate(sgl_dataset_success):
+            if ok:
+                continue
+            tag = tags[i] if i < len(tags) else ""
+            folder = sgl_folders[i] if i < len(sgl_folders) else ""
+            failures.append((i, tag, folder, self._describe_single_failure(i)))
+        return failures
 
     @staticmethod
     def _single_marker_path(folder: str) -> str:

@@ -371,3 +371,103 @@ class Test_D_WorkflowRunnerErrorRecording(unittest.TestCase):
         assert "in deep_failure" in text
 
         shutil.rmtree(wr.result_folder)
+
+
+class Test_E_AggregationFailureTraceability(unittest.TestCase):
+    """A skipped aggregation must name which datasets failed, and why."""
+
+    def _awr(self, single_results):
+        awr = AggregationWorkflowRunner.__new__(AggregationWorkflowRunner)
+        awr.all_results = {"single_dataset": single_results}
+        return awr
+
+    def test_describes_recorded_error(self):
+        awr = self._awr(
+            [
+                {
+                    "12_nneighbor": {"success": True},
+                    "13_fit_csr": {
+                        "success": False,
+                        "error": {
+                            "type": "ValueError",
+                            "message": "max_dist=300.0 leaves 0 of 99",
+                        },
+                    },
+                }
+            ]
+        )
+        desc = awr._describe_single_failure(0)
+        assert "13_fit_csr" in desc
+        assert "ValueError" in desc
+        assert "leaves 0 of 99" in desc
+
+    def test_falls_back_to_last_module_when_no_error_recorded(self):
+        """Results written before failures were recorded stop silently."""
+        awr = self._awr([{"12_nneighbor": {"success": True}}])
+        desc = awr._describe_single_failure(0)
+        assert "12_nneighbor" in desc
+        assert "no error recorded" in desc
+
+    def test_handles_missing_results(self):
+        awr = self._awr([None])
+        assert "no results recorded" in awr._describe_single_failure(0)
+        awr2 = self._awr([])
+        assert "no results recorded" in awr2._describe_single_failure(3)
+
+    def test_collects_only_failed_datasets(self):
+        awr = self._awr(
+            [
+                {"00_a": {"success": True}},
+                {
+                    "00_a": {
+                        "success": False,
+                        "error": {"type": "ValueError", "message": "boom"},
+                    }
+                },
+                {"00_a": {"success": True}},
+            ]
+        )
+        failures = awr._failed_single_datasets(
+            [True, False, True],
+            ["/f0", "/f1", "/f2"],
+            ["tagA", "tagB", "tagC"],
+        )
+        assert len(failures) == 1
+        idx, tag, folder, desc = failures[0]
+        assert (idx, tag, folder) == (1, "tagB", "/f1")
+        assert "ValueError: boom" in desc
+
+    def test_abort_body_names_every_failure(self):
+        from picasso_workflow.confluence import aggregation_abort_body
+
+        body = aggregation_abort_body(
+            [
+                (11, "PDL1-H9_PDL1-Mb", "/res/11", "fit_csr: ValueError"),
+                (15, "PDL1-H12_PDL1-Mb", "/res/15", "fit_csr: ValueError"),
+            ],
+            16,
+        )
+        assert "2 of 16" in body
+        assert "PDL1-H9_PDL1-Mb" in body
+        assert "PDL1-H12_PDL1-Mb" in body
+        assert "/res/11" in body and "/res/15" in body
+        assert "<h2>" in body
+
+    def test_report_abort_is_best_effort(self):
+        """A reporting failure must not mask the analysis failure."""
+        awr = self._awr([])
+        awr.ci = MagicMock()
+        awr.ci.update_page_content.side_effect = RuntimeError("down")
+        awr.reporter_config = {
+            "report_name": "r",
+            "ConfluenceReporter": {"parent_page_id": "42"},
+        }
+        # must not raise
+        awr._report_aggregation_abort([(0, "t", "/f", "d")], 1)
+
+    def test_report_abort_noop_without_page_id(self):
+        awr = self._awr([])
+        awr.ci = MagicMock()
+        awr.reporter_config = {"report_name": "r", "ConfluenceReporter": {}}
+        awr._report_aggregation_abort([(0, "t", "/f", "d")], 1)
+        awr.ci.update_page_content.assert_not_called()

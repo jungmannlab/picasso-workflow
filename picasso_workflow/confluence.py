@@ -253,6 +253,47 @@ def overview_body(title, rows, intro_html="", config=None):
     )
 
 
+def aggregation_abort_body(failures, n_total):
+    """Build the storage-format summary of a skipped aggregation.
+
+    The aggregation stage is all-or-nothing: one failed single dataset
+    stops it. This names which datasets failed and why, so the cause does
+    not have to be hunted for across per-dataset result folders.
+
+    Parameters
+    ----------
+    failures : list of tuple
+        ``(index, tag, folder, description)`` per failed single dataset.
+    n_total : int
+        Total number of single datasets in the run.
+
+    Returns
+    -------
+    str
+        Confluence storage-format HTML body.
+    """
+    rows = "".join(
+        f"<tr><td>{idx:02d}</td>"
+        f"<td>{html.escape(str(tag) or '(no tag)')}</td>"
+        f"<td>{html.escape(str(description))}</td>"
+        f"<td>{html.escape(str(folder))}</td></tr>"
+        for idx, tag, folder, description in failures
+    )
+    return (
+        '<ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>'
+        f"<h2>Aggregation skipped &mdash; {len(failures)} of {n_total} "
+        "single datasets failed</h2>"
+        "<p>The aggregation stage runs only when every single dataset "
+        "succeeded. Fix the failures below and re-run; datasets that "
+        "already succeeded are skipped on a continued run.</p>"
+        "<table><tbody>"
+        "<tr><th>#</th><th>Tag</th><th>Failure</th><th>Folder</th></tr>"
+        f"{rows}"
+        "</tbody></table>"
+        "</ac:layout-cell></ac:layout-section></ac:layout>"
+    )
+
+
 def module_decorator(method):
     """Wrap a reporter module to render its parameters and results.
 
