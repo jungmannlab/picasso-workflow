@@ -29,6 +29,7 @@ from picasso_workflow.confluence import (
     ConfluenceReporter,
     ConfluenceInterface,
     ConfluenceInterfaceError,
+    _PARAM_BLACKLIST,
 )
 from picasso_workflow.html_reporter import (
     HTMLReporter,
@@ -1067,6 +1068,10 @@ class WorkflowRunner:
 
         # now, run the modules
         all_previously_succeeded = True
+        # Bind up front: a module raising on the very first iteration used
+        # to leave this unbound and fail with UnboundLocalError below,
+        # masking the real error.
+        success = False
         for i, (module_name, module_parameters) in enumerate(
             self.workflow_modules
         ):
@@ -1098,7 +1103,14 @@ class WorkflowRunner:
             try:
                 success = self.call_module(module_name, i, module_parameters)
             except AutoPicassoError:
-                pass
+                success = False
+            except Exception:
+                # Any other exception used to escape before save(), so the
+                # failing module never reached WorkflowRunner.yaml. Record
+                # it, then let it propagate as before.
+                success = False
+                self.save(self.result_folder)
+                raise
 
             self.save(self.result_folder)
             if not success:
@@ -1227,6 +1239,75 @@ class WorkflowRunner:
         )
         return self.results.get(module_id, {}).get("success", False)
 
+    def _report_module_error(self, e, fun_name, i, parameters, key):
+        """Log, report and record a module failure.
+
+        Posts a detailed error section to every reporter and records the
+        failure in ``self.results`` so the next ``save()`` writes it to
+        ``WorkflowRunner.yaml`` -- otherwise the failing module leaves no
+        trace on disk at all.
+
+        Parameters
+        ----------
+        e : Exception
+            The exception raised by the module.
+        fun_name : str
+            Name of the failed module.
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            The module's resolved parameters.
+        key : str
+            Results key of the module, ``f"{i:02d}_{fun_name}"``.
+        """
+        logger.error(e)
+        logger.error(traceback.format_exc())
+
+        partial = getattr(e, "_pwf_partial_results", None) or {}
+        # The preceding module's results are the inputs this one worked
+        # from; self.results is insertion-ordered.
+        previous_results = next(reversed(list(self.results.values())), None)
+
+        if e.__traceback__ is not None:
+            tb_text = "".join(
+                traceback.format_exception(type(e), e, e.__traceback__)
+            )
+        else:
+            tb_text = traceback.format_exc()
+
+        for reporter in self.reporters:
+            try:
+                reporter.report_error(
+                    e,
+                    fun_name,
+                    i=i,
+                    parameters=parameters,
+                    result_folder=partial.get("folder"),
+                    previous_results=previous_results,
+                )
+            except Exception as report_exc:
+                logger.error(f"Could not report the error: {report_exc}")
+                logger.error(traceback.format_exc())
+
+        self.results[key] = {
+            **partial,
+            "success": False,
+            "error": {
+                "type": type(e).__name__,
+                "message": str(e),
+                "traceback": tb_text,
+                "module": fun_name,
+                "index": i,
+            },
+            # Filtered: an injected live object would be yaml.dump'd as an
+            # !!python/object tag and break the reload path.
+            "parameters": {
+                k: v
+                for k, v in parameters.items()
+                if k not in _PARAM_BLACKLIST
+            },
+        }
+
     def call_module(self, fun_name: str, i: int, parameters: dict) -> bool:
         """Run one workflow module: analyse, then report.
 
@@ -1271,19 +1352,14 @@ class WorkflowRunner:
         try:
             parameters, self.results[key] = fun_ap(i, parameters)
         except AutoPicassoError as e:
-            logger.error(e)
-            logger.error(traceback.format_exc())
-            analyse_error = copy.copy(e)
-            for reporter in self.reporters:
-                reporter.report_error(e, fun_name)
-            # raise e
+            # Bind the exception itself, not a copy: copy.copy() goes
+            # through __reduce__ and drops __traceback__, so the re-raise
+            # below used to surface with a stack that stopped here.
+            analyse_error = e
+            self._report_module_error(e, fun_name, i, parameters, key)
         except Exception as e:
-            logger.error(e)
-            logger.error(traceback.format_exc())
-            analyse_error = copy.copy(e)
-            for reporter in self.reporters:
-                reporter.report_error(e, fun_name)
-            # raise e
+            analyse_error = e
+            self._report_module_error(e, fun_name, i, parameters, key)
 
         # If the analysis step crashed, self.results[key] was never
         # written; skip the per-module success-path Confluence reporter

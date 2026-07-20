@@ -55,6 +55,125 @@ def _yaml_safe(value):
     return value
 
 
+# Parameter keys that must never be rendered or serialized: the workflow
+# runner injects a live ParameterCommandExecutor under this name.
+_PARAM_BLACKLIST = ("parameter_command_executor",)
+
+
+def _format_val(v):
+    """Render a parameter/result value, unwrapping numpy scalars."""
+    if type(v).__module__ == "numpy" and hasattr(v, "item"):
+        try:
+            return str(v.item())
+        except Exception:
+            pass
+    return str(v)
+
+
+def _expand_macro(title, mapping, skip_keys=()):
+    """Build a collapsible Confluence 'expand' macro from a mapping.
+
+    Parameters
+    ----------
+    title : str
+        The macro title, e.g. ``"Parameters"``.
+    mapping : dict
+        Key/value pairs rendered as a bullet list.
+    skip_keys : iterable of str, optional
+        Keys to omit, e.g. non-serializable injected objects.
+
+    Returns
+    -------
+    str
+        The storage-format macro.
+    """
+    text = (
+        '<ac:structured-macro ac:name="expand" ac:schema-version="1">'
+        f'<ac:parameter ac:name="title">{html.escape(str(title))}'
+        "</ac:parameter>"
+        "<ac:rich-text-body>"
+        "<ul>"
+    )
+    for k, v in mapping.items():
+        if k in skip_keys:
+            continue
+        text += (
+            f"<li>{html.escape(str(k))}: "
+            f"{html.escape(_format_val(v))}</li>"
+        )
+    text += "</ul></ac:rich-text-body></ac:structured-macro>"
+    return text
+
+
+def _code_macro(text, language=None):
+    """Wrap text in a Confluence code macro, preserving its formatting.
+
+    Parameters
+    ----------
+    text : str
+        The literal text, e.g. a traceback. Newlines are preserved.
+    language : str, optional
+        Syntax-highlighting language, e.g. ``"python"``.
+
+    Returns
+    -------
+    str
+        The storage-format macro.
+    """
+    # CDATA cannot contain the literal "]]>"; split it if present.
+    text = str(text).replace("]]>", "]]]]><![CDATA[>")
+    lang = (
+        f'<ac:parameter ac:name="language">{html.escape(language)}'
+        "</ac:parameter>"
+        if language
+        else ""
+    )
+    return (
+        '<ac:structured-macro ac:name="code" ac:schema-version="1">'
+        f"{lang}"
+        "<ac:plain-text-body>"
+        f"<![CDATA[{text}]]>"
+        "</ac:plain-text-body>"
+        "</ac:structured-macro>"
+    )
+
+
+def _innermost_project_frame(exc):
+    """Describe the deepest traceback frame inside picasso_workflow.
+
+    A traceback often ends deep in scipy/numpy, where the failing line says
+    nothing about the workflow. This picks out the last frame that belongs
+    to this package, which is the one worth showing first.
+
+    Parameters
+    ----------
+    exc : BaseException
+        The exception to inspect.
+
+    Returns
+    -------
+    str or None
+        e.g. ``"picasso_outpost.py:2625 in nndistribution_from_csr"``, with
+        the source line appended when available. None if no project frame
+        is present or the traceback cannot be walked.
+    """
+    try:
+        pkg_dir = os.path.dirname(os.path.abspath(__file__))
+        frames = traceback.extract_tb(exc.__traceback__)
+        for frame in reversed(frames):
+            if os.path.abspath(frame.filename).startswith(pkg_dir):
+                where = (
+                    f"{os.path.basename(frame.filename)}:{frame.lineno} "
+                    f"in {frame.name}"
+                )
+                if frame.line:
+                    where += f" -- {frame.line.strip()}"
+                return where
+    except Exception:  # never let reporting mask the real error
+        pass
+    return None
+
+
 def config_snapshot_macro(
     config, title="Workflow configuration (YAML snapshot)"
 ):
@@ -87,18 +206,11 @@ def config_snapshot_macro(
     except Exception as e:  # never block page creation on a dump issue
         logger.debug(f"Could not serialize config snapshot: {e}")
         return ""
-    # CDATA cannot contain the literal "]]>"; split it if present.
-    yaml_text = yaml_text.replace("]]>", "]]]]><![CDATA[>")
     return (
         '<ac:structured-macro ac:name="expand" ac:schema-version="1">'
         f'<ac:parameter ac:name="title">{html.escape(title)}</ac:parameter>'
         "<ac:rich-text-body>"
-        '<ac:structured-macro ac:name="code" ac:schema-version="1">'
-        '<ac:parameter ac:name="language">yaml</ac:parameter>'
-        "<ac:plain-text-body>"
-        f"<![CDATA[{yaml_text}]]>"
-        "</ac:plain-text-body>"
-        "</ac:structured-macro>"
+        f"{_code_macro(yaml_text, language='yaml')}"
         "</ac:rich-text-body>"
         "</ac:structured-macro>"
     )
@@ -161,44 +273,10 @@ def module_decorator(method):
 
     def module_wrapper(self, i, parameters, results, postpone_report=False):
         # create parameter and results documentation
-        parameter_text = """
-            <ac:structured-macro ac:name="expand" ac:schema-version="1">
-            <ac:parameter ac:name="title">Parameters</ac:parameter>
-            <ac:rich-text-body>
-            <ul>
-            """
-
-        def _format_val(v):
-            if type(v).__module__ == "numpy" and hasattr(v, "item"):
-                try:
-                    return str(v.item())
-                except Exception:
-                    pass
-            return str(v)
-
-        for k, v in parameters.items():
-            parameter_text += f"<li>{html.escape(str(k))}: {html.escape(_format_val(v))}</li>"
-
-        parameter_text += """
-        </ul>
-        </ac:rich-text-body>
-        </ac:structured-macro>
-        """
-
-        result_text = """
-            <ac:structured-macro ac:name="expand" ac:schema-version="1">
-            <ac:parameter ac:name="title">Results</ac:parameter>
-            <ac:rich-text-body>
-            <ul>
-            """
-        for k, v in results.items():
-            result_text += f"<li>{html.escape(str(k))}: {html.escape(_format_val(v))}</li>"
-
-        result_text += """
-        </ul>
-        </ac:rich-text-body>
-        </ac:structured-macro>
-        """
+        parameter_text = _expand_macro(
+            "Parameters", parameters, skip_keys=_PARAM_BLACKLIST
+        )
+        result_text = _expand_macro("Results", results)
 
         # call the module
         retval = method(
@@ -378,11 +456,20 @@ class ConfluenceReporter(AbstractModuleCollection):
             logger.debug(f"""Failed to create page {self.report_page_name}.
                 Continuing on the pre-existing page""")
 
-    def report_error(self, e, module):
+    def report_error(
+        self,
+        e,
+        module,
+        i=None,
+        parameters=None,
+        result_folder=None,
+        previous_results=None,
+    ):
         """Report an analysis error to Confluence.
 
         Appends a page section documenting an error that occurred during
-        workflow execution, including the exception and traceback.
+        workflow execution: which module failed, what it was called with,
+        and the full traceback in a code block so its formatting survives.
 
         Parameters
         ----------
@@ -390,20 +477,104 @@ class ConfluenceReporter(AbstractModuleCollection):
             The exception that occurred during analysis.
         module : str
             Name of the module where the error occurred.
+        i : int, optional
+            Index of the module in the workflow, used in the heading.
+        parameters : dict, optional
+            The module's (fully resolved) parameters. Rendered as a
+            collapsible list; this is usually where the cause is visible.
+        result_folder : str, optional
+            The module's result folder, created before the failure.
+        previous_results : dict, optional
+            Results of the preceding module, giving the inputs this module
+            was working from.
         """
-        text = f"""
-        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>ERROR OCCURRED</strong></p>
-        During analysis of {module}, an error occurred.
-        """
-        text += html.escape(str(e))
-        text += html.escape(traceback.format_exc())
-        text += """
-        </ac:layout-cell></ac:layout-section></ac:layout>
-        """
+        try:
+            text = self._error_report_text(
+                e, module, i, parameters, result_folder, previous_results
+            )
+        except Exception as report_error_exc:
+            # A bug in reporting must never replace the real diagnosis.
+            logger.error(
+                f"Could not build the error report: {report_error_exc}"
+            )
+            text = (
+                "<ac:layout><ac:layout-section ac:type='single'>"
+                "<ac:layout-cell>"
+                "<p><strong>ERROR OCCURRED</strong></p>"
+                f"During analysis of {html.escape(str(module))}, an error "
+                "occurred."
+                f"{html.escape(str(e))}"
+                f"{html.escape(traceback.format_exc())}"
+                "</ac:layout-cell></ac:layout-section></ac:layout>"
+            )
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
+
+    def _error_report_text(
+        self,
+        e,
+        module,
+        i=None,
+        parameters=None,
+        result_folder=None,
+        previous_results=None,
+    ):
+        """Build the storage-format body of an error report.
+
+        See :meth:`report_error` for the parameters.
+
+        Returns
+        -------
+        str
+            The storage-format section.
+        """
+        if i is None:
+            heading = f"Error in {html.escape(str(module))}"
+        else:
+            heading = (
+                f"Module {i:02d}: {html.escape(str(module))} &mdash; FAILED"
+            )
+
+        facts = [
+            f"<li>Exception type: {html.escape(type(e).__name__)}</li>",
+            f"<li>Message: {html.escape(str(e))}</li>",
+        ]
+        frame = _innermost_project_frame(e)
+        if frame:
+            facts.append(
+                f"<li>Failing picasso-workflow frame: "
+                f"{html.escape(frame)}</li>"
+            )
+        if result_folder:
+            facts.append(
+                f"<li>Result folder: {html.escape(str(result_folder))}</li>"
+            )
+
+        # format_exception, not format_exc: the latter reads the ambient
+        # sys.exc_info() and yields "NoneType: None" outside an except block.
+        if e.__traceback__ is not None:
+            tb_text = "".join(
+                traceback.format_exception(type(e), e, e.__traceback__)
+            )
+        else:
+            tb_text = traceback.format_exc()
+
+        text = (
+            '<ac:layout><ac:layout-section ac:type="single">'
+            "<ac:layout-cell>"
+            f"<h2>{heading}</h2>"
+            f"<ul>{''.join(facts)}</ul>"
+            f"{_code_macro(tb_text, language='python')}"
+        )
+        if parameters is not None:
+            text += _expand_macro(
+                "Parameters", parameters, skip_keys=_PARAM_BLACKLIST
+            )
+        if previous_results is not None:
+            text += _expand_macro("Preceding module results", previous_results)
+        text += "</ac:layout-cell></ac:layout-section></ac:layout>"
+        return text
 
     def dummy_module(self, i, parameters, results, postpone_report=False):
         """Report the placeholder ``dummy_module``.

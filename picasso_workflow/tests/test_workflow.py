@@ -15,6 +15,9 @@ import logging
 import unittest
 from unittest.mock import patch, MagicMock
 
+import yaml
+
+from picasso_workflow.analyse import AutoPicassoError
 from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
 
 logger = logging.getLogger(__name__)
@@ -249,3 +252,122 @@ class TestWorkflow(unittest.TestCase):
         os.remove(
             os.path.join(self.results_folder, "AggregationWorkflowRunner.yaml")
         )
+
+
+class Test_D_WorkflowRunnerErrorRecording(unittest.TestCase):
+    """A failed module must leave a trace on disk and a rich report."""
+
+    def setUp(self):
+        self.results_folder = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "TestData", "results"
+        )
+        os.makedirs(self.results_folder, exist_ok=True)
+
+    def _runner(self):
+        return WorkflowRunner.config_from_dicts(
+            {"report_name": "myreport", "ConfluenceReporter": {"a": 0}},
+            {"result_location": self.results_folder},
+            [("dummy_module", {"parameter0": 1})],
+        )
+
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_report_error_receives_index_and_parameters(self):
+        wr = self._runner()
+
+        def failing_module(i, parameters):
+            raise RuntimeError("kaboom")
+
+        wr.autopicasso.dummy_module = failing_module
+        wr.confluencereporter.dummy_module = MagicMock()
+
+        with self.assertRaises(RuntimeError):
+            wr.call_module("dummy_module", 0, {"parameter0": 1})
+
+        kwargs = wr.confluencereporter.report_error.call_args[1]
+        assert kwargs["i"] == 0
+        assert kwargs["parameters"] == {"parameter0": 1}
+
+        shutil.rmtree(wr.result_folder)
+
+    # ParameterCommandExecutor is left real here so the recorded
+    # parameters are the genuine resolved dict.
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    def test_failed_module_is_recorded_in_yaml(self):
+        """A plain exception used to escape run() before save(), so the
+        failing module was absent from WorkflowRunner.yaml entirely."""
+        wr = self._runner()
+
+        def failing_module(i, parameters):
+            raise RuntimeError("kaboom")
+
+        wr.autopicasso.dummy_module = failing_module
+        wr.confluencereporter.dummy_module = MagicMock()
+
+        with self.assertRaises(RuntimeError):
+            wr.run()
+
+        fp = os.path.join(wr.result_folder, "WorkflowRunner.yaml")
+        assert os.path.exists(fp)
+        with open(fp, "r") as f:
+            data = yaml.unsafe_load(f)
+        entry = data["results"]["00_dummy_module"]
+        assert entry["success"] is False
+        assert entry["error"]["type"] == "RuntimeError"
+        assert "kaboom" in entry["error"]["message"]
+        assert entry["error"]["index"] == 0
+        assert entry["parameters"] == {"parameter0": 1}
+
+        shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_autopicasso_error_on_first_module_returns_false(self):
+        """Used to raise UnboundLocalError on 'success' instead."""
+        wr = self._runner()
+
+        def failing_module(i, parameters):
+            raise AutoPicassoError("nope")
+
+        wr.autopicasso.dummy_module = failing_module
+        wr.confluencereporter.dummy_module = MagicMock()
+
+        assert wr.run() is False
+
+        shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_reraised_error_keeps_original_traceback(self):
+        """copy.copy() dropped __traceback__, so the exception escaping
+        call_module() used to stop at the re-raise instead of pointing at
+        the code that actually failed."""
+        import traceback as _tb
+
+        wr = self._runner()
+
+        def deep_failure():
+            raise RuntimeError("kaboom")
+
+        wr.autopicasso.dummy_module = lambda i, p: deep_failure()
+        wr.confluencereporter.dummy_module = MagicMock()
+
+        # Not assertRaises: it stores the exception via
+        # with_traceback(None), which would strip exactly what is under
+        # test here.
+        text = None
+        try:
+            wr.call_module("dummy_module", 0, {"parameter0": 1})
+        except RuntimeError as exc:
+            assert exc.__traceback__ is not None
+            text = "".join(
+                _tb.format_exception(type(exc), exc, exc.__traceback__)
+            )
+        assert text is not None, "call_module did not raise"
+        assert "in deep_failure" in text
+
+        shutil.rmtree(wr.result_folder)

@@ -340,8 +340,16 @@ def module_decorator(method):
             "start time": datetime.now().strftime("%y-%m-%d %H:%M:%S"),
         }
 
-        # call the module
-        parameters, results = method(self, i, parameters, results)
+        # call the module. On failure, hand the partial results (folder and
+        # start time) to the error reporter: they are built here and would
+        # otherwise die with the stack frame, and the folder cannot be
+        # reconstructed by the caller, which does not see suffix /
+        # calling_module_dir.
+        try:
+            parameters, results = method(self, i, parameters, results)
+        except BaseException as exc:
+            exc._pwf_partial_results = results
+            raise
 
         # post-actions
         # modules only need to specifically set an error.
@@ -7747,11 +7755,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             "kmin": kmin,
             "rho_bound_factor": 10,
         }
-        if min_dist := parameters.get("min_dist"):
+        # "is not None", not truthiness: a value of 0 is meaningful here
+        # and used to be silently replaced by the function default.
+        if (min_dist := parameters.get("min_dist")) is not None:
             kwargs["min_dist"] = float(min_dist)
-        if max_dist := parameters.get("max_dist"):
+        if (max_dist := parameters.get("max_dist")) is not None:
             kwargs["max_dist"] = float(max_dist)
-        if bkg_fraction := parameters.get("bkg_fraction"):
+        if (bkg_fraction := parameters.get("bkg_fraction")) is not None:
             kwargs["bkg_fraction"] = float(bkg_fraction)
         kwargs["fit_bkg"] = bool(parameters.get("fit_bkg", False))
         kwargs["d"] = d

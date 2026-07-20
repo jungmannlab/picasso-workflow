@@ -343,3 +343,43 @@ def test_regenerate_raises_without_state(tmp_path):
     except FileNotFoundError:
         return
     raise AssertionError("expected FileNotFoundError")
+
+
+def test_error_report_renders_traceback_with_newlines():
+    """The traceback must survive as preformatted text, not one paragraph.
+
+    It used to be html.escape'd with no wrapper, so Confluence reflowed
+    every newline away and the traceback became unreadable.
+    """
+    from unittest.mock import MagicMock as _MM
+
+    from picasso_workflow import confluence
+
+    cr = confluence.ConfluenceReporter.__new__(confluence.ConfluenceReporter)
+    cr.ci = _MM()
+    cr.report_page_name = "page"
+    cr.report_page_id = "1"
+
+    try:
+        raise ValueError("zero-size array to reduction operation maximum")
+    except ValueError as e:
+        cr.report_error(
+            e,
+            "fit_csr",
+            i=13,
+            parameters={"max_dist": 300.0},
+            result_folder="/res/13_fit_csr",
+        )
+
+    body = cr.ci.update_page_content.call_args[0][2]
+    html_out = storage_to_html(body)
+
+    assert "<h2>Module 13: fit_csr" in html_out
+    assert '<pre class="cl-code">' in html_out
+    # The traceback keeps its line structure inside the <pre>.
+    pre = html_out.split('<pre class="cl-code">')[1].split("</pre>")[0]
+    assert pre.count("\n") >= 2
+    assert "Traceback (most recent call last):" in pre
+    assert "ValueError" in pre
+    # Parameters made it through as a collapsible block.
+    assert "max_dist" in html_out

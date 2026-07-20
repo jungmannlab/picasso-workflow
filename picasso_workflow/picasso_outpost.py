@@ -2389,6 +2389,53 @@ def generate_N_structures(structures, N_total, res_factor, save=""):
 ########################################################################
 
 
+def _check_distance_window(nn_dists, kmin, min_dist, max_dist):
+    """Check that the [min_dist, max_dist] window retains distances.
+
+    Filtering to a window that excludes every distance for some neighbour
+    order leaves an empty array, which used to surface far downstream as
+    ``ValueError: zero-size array to reduction operation maximum``, with a
+    traceback deep inside scipy that never mentions the offending
+    parameter. Fail here instead, naming it.
+
+    Parameters
+    ----------
+    nn_dists : array
+        Nearest-neighbour distances, shape ``(k,)`` or ``(k, N)``. Row
+        ``r`` holds the distances for neighbour order ``k = r + kmin``.
+    kmin : int
+        The smallest neighbour order present in ``nn_dists``.
+    min_dist, max_dist : float
+        The filter window.
+
+    Raises
+    ------
+    ValueError
+        If any neighbour order has no distance inside the window.
+    """
+    rows = np.atleast_2d(np.asarray(nn_dists, dtype=float))
+    for row, dist in enumerate(rows):
+        k = row + kmin
+        if dist.size == 0:
+            continue
+        n_keep = int(np.count_nonzero((dist >= min_dist) & (dist <= max_dist)))
+        if n_keep == 0:
+            raise ValueError(
+                f"min_dist={min_dist}, max_dist={max_dist} leaves "
+                f"{n_keep} of {dist.size} k={k} nearest-neighbour "
+                f"distances (observed range {np.min(dist):.4g}-"
+                f"{np.max(dist):.4g}). Widen the [min_dist, max_dist] "
+                f"window or lower the number of neighbours fitted."
+            )
+        if n_keep < 2:
+            logger.warning(
+                f"min_dist={min_dist}, max_dist={max_dist} leaves only "
+                f"{n_keep} of {dist.size} k={k} nearest-neighbour "
+                f"distances; the fit for this neighbour order is "
+                f"unlikely to be meaningful."
+            )
+
+
 def estimate_density_from_neighbordists(
     nn_dists,
     rho_init,
@@ -2434,6 +2481,8 @@ def estimate_density_from_neighbordists(
     result : scipy.optimize.OptimizeResult
         The full minimizer result.
     """
+    _check_distance_window(nn_dists, kmin, min_dist, max_dist)
+
     bounds = [
         (rho_init / rho_bound_factor, rho_init * rho_bound_factor)
     ]  # rho must be positive
@@ -2613,6 +2662,12 @@ def nndistribution_from_csr(
     # pdf = gaussian_pdf(r, 4, k*rho*4)
     # # pdf = gaussian_pdf(r, 4+k*rho, .8)
     # return pdf #/ np.sum(pdf)
+    # An empty r reaches np.max() below and raises an opaque
+    # "zero-size array to reduction operation" - callers filtering by
+    # [min_dist, max_dist] can easily produce one.
+    if np.size(r) == 0:
+        return np.asarray(r, dtype=float)
+
     lam = rho * np.pi ** (d / 2) / _gamma(d / 2 + 1)
     factor = d / _factorial(k - 1) * lam**k * r ** (d * k - 1)
     dist = factor * np.exp(-lam * r**d)
