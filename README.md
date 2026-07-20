@@ -17,6 +17,7 @@ A package for automated DNA-PAINT analysis workflows
 ## Table of Contents
 
 - [Features](#features)
+- [Per-channel parameters](#per-channel-parameters)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Testing](#testing)
@@ -34,6 +35,69 @@ via picassosr.
 	and clustered.
 	- Aggregation workflow: multiple datasets undergo a single-dataset
 	workflow and are then aggregated.
+
+## Per-channel parameters
+
+In an aggregation (or investigation) workflow, every channel is analyzed by
+the *same* `single_dataset_modules`. Sometimes a single module parameter must
+differ between channels — e.g. a cluster module's `min_locs` depends on the
+target density of each channel.
+
+The modules themselves stay channel-agnostic and reusable: they never name a
+channel. Instead, list the per-channel values as an extra column in
+`single_dataset_tileparameters` (one entry per channel, aligned to `#tags`)
+and reference the column from the module spec with a `$$map` command:
+
+```python
+workflow_modules_multi = {
+	"single_dataset_tileparameters": {
+		"#tags":    ["CD80", "CD86", "PDL1"],
+		"filepath": [fp0, fp1, fp2],
+		"min_locs": [10,    20,     15],      # per-channel column
+	},
+	"single_dataset_modules": [
+		# ... load / identify / localize ...
+		("smlm_clusterer", {"min_locs": ("$$map", "min_locs", 10), "radius": 4}),
+	],
+	"aggregation_modules": [ ... ],
+}
+```
+
+The channel-to-value binding lives entirely in the tileparameters table, so
+`("$$map", "min_locs", 10)` reads the value for the channel being processed.
+The optional third element (`10`) is a **default**: if a deployment does not
+define the `min_locs` column at all, the module still runs with the default,
+so one module spec is reusable across projects that do or don't vary that
+parameter. Resolution precedence at run time is *per-cell value → per-channel
+value → default*.
+
+**In the GUI**, the quickest route is straight from the parameter you want to
+vary: click that parameter's **cmd** button and choose the *map* command. The
+parameter's own name is offered as a ready-made per-channel column — select it
+and type one value per channel in the table that appears, optionally with a
+default. Reopening the **cmd** button later reopens on that mapping with the
+stored values shown. The dialog's help panel explains each option and flags a
+mismatched `$` / `$$` timing.
+
+Once a parameter is bound to a per-channel column, the parameters view shows
+what each channel receives on a summary line directly under that row — e.g.
+`⇄ per-channel: CD80 = 10, CD86 = 20, PDL1 = 15  (default 10)` — so a mapped
+parameter is recognizable at a glance instead of reading as an opaque tuple.
+With many channels the line is elided; the row's tooltip always lists every
+channel. Per-cell columns report how many cells have an explicit value, with
+the full dataset × channel breakdown in the tooltip.
+
+Alternatively, click **Per-Channel Params…** in the aggregation/investigation
+file panel to manage all columns at once (choose *per channel* to broadcast one
+value across all datasets, or *per cell* for a distinct value per dataset ×
+channel), then bind each module parameter to its column with the **cmd** button
+→ *map* command. Both routes edit the same underlying columns.
+
+The dataset table — file layout, conditions, and per-channel columns/values —
+is saved into the generated `start_workflow.py` and restored when that script
+is reloaded into the GUI, so a workflow round-trips exactly. Per-channel values
+are keyed by channel name: renaming a channel in the GUI carries its values
+across, while a channel whose name no longer matches falls back to the default.
 
 ## Installation
 

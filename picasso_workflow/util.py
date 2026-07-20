@@ -2109,6 +2109,10 @@ class ParameterCommandExecutor(DictSimpleTyper):
             $map
                 use self.map dictionary to map values, e.g.
                 ("$$map", "filepath")
+                An optional third element is a default value used when the
+                key is absent from self.map, so a single (reusable) spec can
+                run whether or not a deployment defines that per-tile column:
+                ("$$map", "min_locs", 10)
             $sum
                 sum up values, e.g.
                 ("$sum", ($get_prior_result, ...), ($get_prior_result, ...))
@@ -2145,11 +2149,26 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 res = self.get_previous_module_result(t[1])
                 logger.debug(f"Previous module result is {res}.")
             elif cmd == f"{self.command_sign}map":
-                res = self.map[t[1]]
+                # An optional third tuple element is a default, applied when
+                # the key is missing so a reusable spec need not define the
+                # per-tile column on every deployment.
+                if len(t) > 2:
+                    res = self.map.get(t[1], t[2])
+                else:
+                    res = self.map[t[1]]
                 logger.debug(f"Mapping {t[1]}: {res}")
             elif cmd == f"{self.command_sign}index":
                 idx = int(aritexp)
-                res = self.map[t[1]][idx]
+                # As for $map, an optional third element is a default used
+                # when the key is missing or the sequence is too short.
+                if len(t) > 2:
+                    seq = self.map.get(t[1])
+                    if seq is None or idx >= len(seq):
+                        res = t[2]
+                    else:
+                        res = seq[idx]
+                else:
+                    res = self.map[t[1]][idx]
                 logger.debug(f"Indexing map {t[1]}[{idx}]: {res}")
                 aritexp = None  # avoid arithmetic expression below
             elif cmd == f"{self.command_sign}sum":

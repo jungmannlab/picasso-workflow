@@ -172,6 +172,56 @@ class TestUtil(unittest.TestCase):
         # logger.debug(f'dictionary received: {di_out}')
         assert di_out == di_exp
 
+    def test_04_ParameterCommandExecutor_map_default(self):
+        """A third tuple element is a default used when the key is absent,
+        so a reusable spec can omit the per-tile column on some deployments.
+        """
+        mymap = {"key1": "value1"}
+        pce = util.ParameterCommandExecutor(self, mymap)
+        di = [
+            (
+                "a",
+                {
+                    "present": ("$map", "key1", "fallback"),
+                    "absent": ("$map", "missing", "fallback"),
+                },
+            ),
+        ]
+        di_exp = [
+            (
+                "a",
+                {
+                    "present": "value1",
+                    "present_originalnocmd": ("map", "key1"),
+                    "absent": "fallback",
+                    "absent_originalnocmd": ("map", "missing"),
+                },
+            ),
+        ]
+        di_out = pce.run(di)
+        assert di_out == di_exp
+
+    def test_04_ParameterCommandExecutor_index_default(self):
+        """$index likewise takes an optional default, used when the key is
+        missing or the sequence is too short."""
+        mymap = {"key1": ["a", "b", "c"]}
+        pce = util.ParameterCommandExecutor(self, mymap)
+        di = [
+            (
+                "m",
+                {
+                    "inrange": ("$index 1", "key1", "def"),
+                    "outrange": ("$index 9", "key1", "def"),
+                    "missing": ("$index 0", "nokey", "def"),
+                },
+            ),
+        ]
+        di_out = pce.run(di)
+        params = di_out[0][1]
+        assert params["inrange"] == "b"
+        assert params["outrange"] == "def"
+        assert params["missing"] == "def"
+
     def test_05_ParameterTiler(self):
         mymap = {"key1": "value1", "key2": "value2"}
         tile_entries = {
@@ -211,6 +261,36 @@ class TestUtil(unittest.TestCase):
         assert res_out == res_exp
         logger.debug(f"tags out: {tags}")
         assert tags == ["RESI-1", "RESI-2"]
+
+    def test_05_ParameterTiler_perchannel(self):
+        """Per-channel parameters: an extra tile-parameter column (min_locs)
+        is resolved per tile via ``$$map``, while an absent column falls back
+        to the spec default - keeping the single-dataset modules reusable."""
+        tile_entries = {
+            "#tags": ["c0", "c1"],
+            "filepath": ["a.tiff", "b.tiff"],
+            "min_locs": [10, 20],
+        }
+        tiler = util.ParameterTiler(self, tile_entries)
+        di = [
+            ("load", {"filename": ("$$map", "filepath")}),
+            (
+                "cluster",
+                {
+                    "min_locs": ("$$map", "min_locs"),
+                    "radius": ("$$map", "radius", 4),  # absent -> default
+                },
+            ),
+        ]
+        res_out, tags = tiler.run(di)
+        assert tags == ["c0", "c1"]
+        # tile 0 / tile 1 cluster module parameter dicts
+        cluster0 = res_out[0][1][1]
+        cluster1 = res_out[1][1][1]
+        assert cluster0["min_locs"] == 10
+        assert cluster1["min_locs"] == 20
+        assert cluster0["radius"] == 4
+        assert cluster1["radius"] == 4
 
     def test_05_ParameterTiler_tags_only(self):
         """With only a '#tags' entry (no mapped files), the tiler must

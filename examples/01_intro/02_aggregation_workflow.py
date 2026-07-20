@@ -208,6 +208,27 @@ filepath = [
 
 
 # e.g. for multi dataset evaluation and aggregation
+#
+# Per-channel parameters: every channel is analyzed by the same
+# ``single_dataset_modules``, but individual parameters can differ between
+# channels. List the varying values as an extra column in
+# ``single_dataset_tileparameters`` (one entry per channel, aligned to
+# ``#tags``) and reference it from a module spec with
+# ``("$$map", "<column>", <default>)``. The modules never name a channel, so
+# they stay reusable; the channel-to-value binding lives entirely in the
+# tileparameters table. The optional third element is a default used when the
+# column is absent, so the same modules run whether or not min_locs varies.
+#
+#   workflow_modules_multi = {
+#       "single_dataset_tileparameters": {
+#           "#tags": ["miniROI1", "miniROI2"],
+#           "filepath": filepath,
+#           "min_locs": [10, 20],   # per-channel cluster min_locs
+#       },
+#       ...
+#   }
+# and, in workflow_modules_sgl, a clustering module such as:
+#   ("smlm_clusterer", {"min_locs": ("$$map", "min_locs", 10), "radius": 4}),
 workflow_modules_multi = {
     "single_dataset_tileparameters": {
         "#tags": ["miniROI1", "miniROI2"],
