@@ -56,6 +56,10 @@ Changed
 - Tracebacks are posted inside a Confluence code macro, so their line
   structure is preserved. They were previously HTML-escaped without a
   wrapper and reflowed into a single unreadable paragraph.
+- CI now runs a ``black --check`` + ``flake8`` lint job on a GitHub-hosted
+  runner (``.github/workflows/lint.yml``), so style regressions are caught
+  in CI and not only by the local pre-commit hook. Linter versions are
+  pinned to match ``.pre-commit-config.yaml``.
 
 Fixed
 ~~~~~
