@@ -69,6 +69,7 @@ fallback_version = "0.3.3.dev0"
 picasso_workflow = ["picasso-workflow.ico"]
 
 [tool.black]
+target-version = ["py310"]
 line-length = 79
 include = "\\.pyi?$"
 exclude = '''
