@@ -24,7 +24,15 @@ from matplotlib.colors import LogNorm
 import yaml
 import os
 from datetime import datetime
-from aicsimageio import AICSImage
+
+try:
+    # The Zeiss .czi reader is an optional dependency (the ``[formats]``
+    # extra); it is only needed by ``convert_zeiss_file``. Keep it a module
+    # attribute (None when absent) so the base install imports cleanly and
+    # tests can still patch ``picasso_outpost.AICSImage``.
+    from aicsimageio import AICSImage
+except ImportError:  # pragma: no cover - exercised only without the extra
+    AICSImage = None
 
 from picasso import (
     io,
@@ -1905,6 +1913,12 @@ def convert_zeiss_file(filepath_czi, filepath_raw, info=None):
         are entered. Necessary keys: ``'Byte Order'``, ``'Camera'``,
         ``'Micro-Manager Metadata'``.
     """
+    if AICSImage is None:
+        raise ImportError(
+            "Reading Zeiss .czi files requires the optional 'formats' "
+            "dependencies. Install them with: pip install "
+            '"picasso_workflow[formats]"'
+        )
     img = AICSImage(filepath_czi)
 
     with open(filepath_raw, "wb") as f:
