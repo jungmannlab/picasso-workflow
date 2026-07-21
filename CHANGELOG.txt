@@ -33,6 +33,15 @@ Added
 Changed
 ~~~~~~~
 
+- The Zeiss ``.czi`` reader (``aicsimageio`` + ``aicspylibczi`` + ``fsspec``)
+  moved from the base dependencies to an optional ``formats`` extra
+  (``pip install "picasso_workflow[formats]"``). aicspylibczi has no
+  aarch64 wheels and source-builds via a C++/cmake toolchain, and
+  aicsimageio dragged an old imagecodecs that failed to build on the
+  py3.10 arm64 container, so a bare ``pip install -e .`` now resolves
+  entirely from wheels. The ``convert_zeiss_movie`` module raises a clear
+  ImportError pointing at the extra when the reader is absent; no other
+  workflow is affected.
 - ``estimate_density_from_neighbordists`` now validates the
   ``[min_dist, max_dist]`` window per neighbour order and fails with a
   message naming the parameter and the surviving counts, e.g.
