@@ -559,6 +559,9 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "min_locs": 3,
             "basic_fa": False,
             "radius_z": 2,
+            "n_locs_in": 1000,
+            "n_locs_clustered": 600,
+            "n_centers": 50,
         }
         self.cr.smlm_clusterer(0, parameters, results)
 

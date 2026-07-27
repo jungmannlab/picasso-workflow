@@ -542,14 +542,22 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
-        mock_clusterer.return_value = (self.ap.locs, {})
-        mock_fcc.return_value = self.ap.locs
+        # clusterer.cluster adds a "group" column and drops unclustered locs;
+        # emulate a few clusters so the locs-per-cluster stats/histogram work.
+        clustered = self.ap.locs.copy()
+        clustered["group"] = np.arange(len(clustered)) % 5
+        mock_clusterer.return_value = (clustered, {})
+        mock_fcc.return_value = clustered.iloc[:5].copy()
 
         parameters = {"radius": 5, "min_locs": 10}
         parameters, results = self.ap.smlm_clusterer(0, parameters)
         # logger.debug(f'parameters: {parameters}')
         logger.debug(f"results: {results}")
         assert results["duration"] > -1
+        # dropped-locs accounting and cluster-size histogram are populated
+        assert results["n_locs_in"] == len(self.ap.movie)
+        assert results["n_centers"] == 5
+        assert os.path.exists(results["fp_fig_clustersizes"])
 
         shutil.rmtree(os.path.join(self.results_folder, "00_smlm_clusterer"))
 

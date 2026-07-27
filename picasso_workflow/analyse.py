@@ -7091,6 +7091,49 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    def _plot_cluster_sizes(self, size_map, filepath):
+        """Plot a histogram of localizations per cluster.
+
+        Parameters
+        ----------
+        size_map : dict of {str: np.ndarray}
+            Cluster sizes (locs per cluster) keyed by label. A single ""
+            key yields a plain histogram; multiple keys are overlaid with a
+            legend (e.g. one entry per channel).
+        filepath : str
+            Destination path for the figure.
+
+        Returns
+        -------
+        str
+            ``filepath`` (for convenience when assigning to ``results``).
+        """
+        fig, ax = plt.subplots()
+        nonempty = [s for s in size_map.values() if len(s)]
+        if nonempty:
+            all_sizes = np.concatenate(nonempty)
+            # match dbscan/g5m: cap the axis at the 95th percentile so a few
+            # huge clusters do not flatten the informative part.
+            maxbin = max(int(np.quantile(all_sizes, 0.95)), 2)
+            bins = np.arange(1, maxbin + 1)
+            overlay = len(size_map) > 1
+            for size_label, sizes in size_map.items():
+                if not len(sizes):
+                    continue
+                ax.hist(
+                    sizes,
+                    bins=bins,
+                    alpha=0.6 if overlay else 1.0,
+                    label=size_label or None,
+                )
+            if overlay:
+                ax.legend()
+        ax.set_xlabel("cluster size [locs]")
+        ax.set_ylabel("Frequency")
+        fig.savefig(filepath)
+        plt.close(fig)
+        return filepath
+
     #    @profile_resource_usage
     @module_decorator
     def smlm_clusterer(self, i, parameters, results):
@@ -7121,6 +7164,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Updated with ``n_locs_in`` (locs entering the clusterer),
+            ``n_locs_clustered`` (locs kept in clusters), ``n_centers``
+            (number of cluster centers) and ``fp_fig_clustersizes`` (the
+            locs-per-cluster histogram). In the multi-channel case a
+            ``per_channel`` list carries the same counts per channel.
         """
         pixelsize = self.pixelsize
         radius = parameters["radius"] / pixelsize
@@ -7147,6 +7201,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             if radius_z is not None:  # 3D
                 kwargs["radius_z"] = radius_z
 
+            # locs going into the clusterer; those not assigned to a cluster
+            # (or in clusters below min_locs) are dropped by the clusterer.
+            n_locs_in = len(self.locs)
+
             # label locs according to clusters
             # logger.debug(
             #     f"starting clusterer on self.locs with kwargs {kwargs}"
@@ -7164,6 +7222,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             self._save_locs(filepath)
             results["fp_clustered_locs"] = filepath
 
+            n_locs_clustered = len(self.locs)
+            cluster_sizes = np.unique(self.locs["group"], return_counts=True)[
+                1
+            ]
+
             self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
             logger.warning(
                 "saving cluster centeras as locs. Is that intended?"
@@ -7174,10 +7237,21 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             self._save_locs(filepath)
             results["fp_cluster_centers"] = filepath
+
+            # report dropped locs and the locs-per-cluster distribution
+            results["n_locs_in"] = n_locs_in
+            results["n_locs_clustered"] = n_locs_clustered
+            results["n_centers"] = len(self.locs)
+            results["fp_fig_clustersizes"] = self._plot_cluster_sizes(
+                {"": cluster_sizes},
+                os.path.join(results["folder"], "fig_smlm_clustersize.png"),
+            )
         else:
             logger.debug("smlm clustering channel_locs")
             new_channel_locs = []
             new_channel_infos = []
+            size_map = {}
+            per_channel = []
             for tag, info, locs in zip(
                 self.channel_tags, self.channel_info, self.channel_locs
             ):
@@ -7190,6 +7264,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 }
                 if radius_z is not None:  # 3D
                     kwargs["radius_z"] = radius_z
+
+                n_locs_in = len(locs)
 
                 # label locs according to clusters
                 clustered_locs, smlm_cluster_info = clusterer.cluster(
@@ -7204,6 +7280,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 io.save_locs(filepath, clustered_locs, info)
 
+                size_map[tag] = np.unique(
+                    clustered_locs["group"], return_counts=True
+                )[1]
+
                 cc_locs = clusterer.find_cluster_centers(
                     clustered_locs, pixelsize
                 )
@@ -7213,10 +7293,32 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 io.save_locs(filepath, cc_locs, info)
 
+                per_channel.append(
+                    {
+                        "tag": tag,
+                        "n_locs_in": n_locs_in,
+                        "n_locs_clustered": len(clustered_locs),
+                        "n_centers": len(cc_locs),
+                    }
+                )
+
                 new_channel_locs.append(cc_locs)
                 new_channel_infos.append(info)
             self.channel_locs = new_channel_locs
             self.channel_info = new_channel_infos
+
+            # report dropped locs (totals + per channel) and the
+            # locs-per-cluster distribution across channels
+            results["per_channel"] = per_channel
+            results["n_locs_in"] = sum(c["n_locs_in"] for c in per_channel)
+            results["n_locs_clustered"] = sum(
+                c["n_locs_clustered"] for c in per_channel
+            )
+            results["n_centers"] = sum(c["n_centers"] for c in per_channel)
+            results["fp_fig_clustersizes"] = self._plot_cluster_sizes(
+                size_map,
+                os.path.join(results["folder"], "fig_smlm_clustersize.png"),
+            )
 
         return parameters, results
 

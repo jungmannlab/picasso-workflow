@@ -2209,6 +2209,35 @@ class ConfluenceReporter(AbstractModuleCollection):
         result_text,
         postpone_report=False,
     ):
+        logger.debug("Reporting smlm_clusterer.")
+
+        # dropped locs and cluster-size summary (mirrors g5m)
+        summary = ""
+        n_in = results.get("n_locs_in")
+        n_clustered = results.get("n_locs_clustered")
+        n_centers = results.get("n_centers")
+        if n_in:
+            dropped = n_in - n_clustered
+            summary += (
+                f"<li>Locs dropped: {dropped} of {n_in} "
+                f"({dropped / n_in * 100:.1f} %)</li>"
+            )
+        if n_centers:
+            summary += f"<li>Clusters (centers): {n_centers}</li>"
+            if n_clustered:
+                summary += (
+                    "<li>Mean locs per cluster: "
+                    f"{n_clustered / n_centers:.1f}</li>"
+                )
+        for ch in results.get("per_channel", []):
+            ch_in = ch["n_locs_in"]
+            ch_dropped = ch_in - ch["n_locs_clustered"]
+            pct = ch_dropped / ch_in * 100 if ch_in else 0.0
+            summary += (
+                f"<li>{ch['tag']}: {ch_dropped} of {ch_in} dropped "
+                f"({pct:.1f} %), {ch['n_centers']} centers</li>"
+            )
+
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: smlm_clusterer clustering</strong></p>
@@ -2219,18 +2248,33 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>min_locs: {parameters.get('min_locs')}</li>
         <li>basic_fa: {parameters.get('basic_fa')}</li>
         <li>radius_z: {parameters.get('radius_z')}</li>
+        {summary}
         </ul>
         {parameter_text}
         {result_text}
         """
 
+        if fp_fig := results.get("fp_fig_clustersizes"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            _, fp_fig = os.path.split(fp_fig)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fp_fig}" />'
+                + "</ac:image></ul>"
+            )
+
         text += """
-        <b>TODO: generate plot for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
+            )
 
     @module_decorator
     def gaussian_mixture_cluster(
