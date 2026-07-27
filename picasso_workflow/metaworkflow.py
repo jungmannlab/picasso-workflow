@@ -1187,52 +1187,57 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 runner_rank, runner_size = self.rank, self.size
 
             parent_page_id = None
+            # Every cooperating rank must agree on the parent page name. Use
+            # the group's explicit report_name when given, otherwise the
+            # investigation's analysis_name, and always suffix the *shared*
+            # run timestamp. Relying on a per-rank datetime.now() (the
+            # WorkflowRunner postfix fallback) makes worker ranks drift by a
+            # minute across a clock boundary and hunt for a page that never
+            # existed -- so the timestamp is fixed here and threaded through
+            # as the runner postfix below.
             if rname := datasets.get("report_name"):
                 report_name = rname + "_" + runstamp
                 dedicated_page = True
-                # Create the aggregation's dedicated Confluence page (page
-                # owner only). Every child single-dataset workflow -- on this
-                # rank and, in cooperative mode, on the other ranks -- uses
-                # this page as its parent, so if it is missing they all fail
-                # later with a confusing "page not found". Create-or-reuse,
-                # then confirm it is actually queryable (get_page_properties
-                # retries for eventual consistency) so a silently dropped
-                # creation surfaces here, loudly, on the owning rank instead
-                # of cascading across every child.
-                if owns_page:
-                    try:
-                        # create_page returns the new page's id directly,
-                        # which is immediately valid. A title lookup, by
-                        # contrast, hits Confluence Cloud's search index,
-                        # which lags page creation by seconds to minutes --
-                        # the root cause of the cross-rank "page not found"
-                        # races. So resolve the id from the creation itself
-                        # and only fall back to a title lookup when the page
-                        # already exists (e.g. a re-run), where the older
-                        # page is already indexed.
-                        parent_page_id = self.ci.create_page(report_name, "")
-                    except confluence.ConfluenceInterfaceError as e:
-                        logger.warning(
-                            f"create_page for '{report_name}' failed "
-                            f"({e}); the page may already exist -- "
-                            "resolving by title."
-                        )
-                        parent_page_id, _ = self.ci.get_page_properties(
-                            page_title=report_name
-                        )
-                    # In cooperative mode the other ranks attach their child
-                    # workflows to this same page. Publish its id so they use
-                    # it directly instead of an eventually-consistent title
-                    # lookup that can race this creation.
-                    if not distribute_groups:
-                        self._publish_page_id(report_name, parent_page_id)
-                else:
-                    # Cooperative worker rank: block until the page owner has
-                    # created the parent page and published its id.
-                    parent_page_id = self._await_page_id(report_name)
             else:
-                report_name = self.analysis_name
+                report_name = self.analysis_name + "_" + runstamp
                 dedicated_page = False
+            # Create the aggregation's parent Confluence page (page owner
+            # only). Every child single-dataset workflow -- on this rank and,
+            # in cooperative mode, on the other ranks -- uses this page as its
+            # parent, so if it is missing they all fail later with a confusing
+            # "page not found". Create-or-reuse, then publish the id so
+            # cooperating ranks attach by id rather than racing an
+            # eventually-consistent title lookup.
+            if owns_page:
+                try:
+                    # create_page returns the new page's id directly, which
+                    # is immediately valid. A title lookup, by contrast, hits
+                    # Confluence Cloud's search index, which lags page
+                    # creation by seconds to minutes -- the root cause of the
+                    # cross-rank "page not found" races. So resolve the id
+                    # from the creation itself and only fall back to a title
+                    # lookup when the page already exists (e.g. a re-run),
+                    # where the older page is already indexed.
+                    parent_page_id = self.ci.create_page(report_name, "")
+                except confluence.ConfluenceInterfaceError as e:
+                    logger.warning(
+                        f"create_page for '{report_name}' failed "
+                        f"({e}); the page may already exist -- "
+                        "resolving by title."
+                    )
+                    parent_page_id, _ = self.ci.get_page_properties(
+                        page_title=report_name
+                    )
+                # In cooperative mode the other ranks attach their child
+                # workflows to this same page. Publish its id so they use
+                # it directly instead of an eventually-consistent title
+                # lookup that can race this creation.
+                if not distribute_groups:
+                    self._publish_page_id(report_name, parent_page_id)
+            else:
+                # Cooperative worker rank: block until the page owner has
+                # created the parent page and published its id.
+                parent_page_id = self._await_page_id(report_name)
 
             reporter_config, analysis_config = self.get_configs(
                 report_name, self.root_folder, parent_page_id=parent_page_id
@@ -1250,7 +1255,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 workflow_modules_multi,
                 continue_previous_runner=continue_previous_runners,
                 single_workflow_parallel=False,
-                postfix="",
+                postfix=runstamp,
                 rank=runner_rank,
                 size=runner_size,
             )
