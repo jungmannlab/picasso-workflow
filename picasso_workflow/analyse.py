@@ -7827,11 +7827,16 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``min_dist`` : float
                 Minimum observable distance in nm due to technical limits.
             ``max_dist`` : float
-                Maximum distance for filtering analysis.
+                Maximum distance for filtering analysis. Bounds the fit
+                only, not the plotting range (see ``plot_max_dist``).
             ``bkg_fraction`` : float
                 Background fraction for fitting.
             ``fit_bkg`` : bool
                 Whether to fit the background (default False).
+            ``plot_max_dist`` : float
+                Maximum distance shown on the plot's distance axis, in nm.
+                Only affects display, not the fit. Defaults to the 95th
+                percentile of the largest-k neighbour distances.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
@@ -8002,7 +8007,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             # plot results
             fig, ax = plt.subplots()
             colors = colormaps["viridis"].resampled(k_max).colors
-            bin_max = np.quantile(nneighbors[:, -1], 0.95)
+            # Plotting range on the distance axis. Independent of ``max_dist``
+            # (which only bounds the fit): ``plot_max_dist`` sets how far the
+            # histograms/curves are displayed. Defaults to the 95th percentile
+            # of the largest-k neighbour distances.
+            if (plot_max_dist := parameters.get("plot_max_dist")) is not None:
+                bin_max = float(plot_max_dist)
+            else:
+                bin_max = np.quantile(nneighbors[:, -1], 0.95)
             median_1stNN = np.median(nneighbors[:, 0])
             # sample bins such that there are 5 bins from 0 to middle of 1stNN
             nbins = int(5 * bin_max / median_1stNN)

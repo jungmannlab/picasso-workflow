@@ -766,6 +766,48 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
 
+    @patch("picasso_workflow.analyse.picasso_outpost.nndistribution_from_csr")
+    def test_fit_csr_plot_max_dist_controls_display_range(self, mock_nnd):
+        """plot_max_dist sets the plotting range, independent of the fit.
+
+        The plotting loop evaluates the CSR curve on ``rvals`` spanning
+        0..bin_max; capturing that range shows whether the display extent
+        follows the data (default) or the explicit plot_max_dist.
+        """
+        captured = []
+
+        def _fake(r, *a, **k):
+            r = np.asarray(r, dtype=float)
+            captured.append(float(np.max(r)) if r.size else 0.0)
+            return np.zeros_like(r)
+
+        mock_nnd.side_effect = _fake
+        self.ap.info = []
+        neighbors = np.array([[2, 5, 7], [3, 5, 8], [2, 4, 6], [2, 4, 7]])
+        folder = os.path.join(self.results_folder, "00_fit_csr")
+
+        # default: display range driven by the (small) data distances
+        captured.clear()
+        self.ap.fit_csr(0, {"nneighbors": neighbors, "dimensionality": 2})
+        default_max = max(captured)
+        shutil.rmtree(folder)
+
+        # explicit plot_max_dist extends the display far beyond the data
+        captured.clear()
+        self.ap.fit_csr(
+            0,
+            {
+                "nneighbors": neighbors,
+                "dimensionality": 2,
+                "plot_max_dist": 500,
+            },
+        )
+        plot_max = max(captured)
+        shutil.rmtree(folder)
+
+        self.assertLess(default_max, 100)
+        self.assertAlmostEqual(plot_max, 500.0, places=6)
+
     @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
     def spinna(self, mock_sptmp):
         mock_sptmp.return_value = (0, 1)
