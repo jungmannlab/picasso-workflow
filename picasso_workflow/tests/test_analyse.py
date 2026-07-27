@@ -592,6 +592,40 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_gaussian_mixture_cluster")
         )
 
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_gaussian_mixture_cluster_no_clusters_raises(self, mock_gmm):
+        """No clusters found must raise a clear AutoPicassoError.
+
+        picasso.g5m returns ``(None, None, info)`` when no molecules are
+        found, and an empty centers table when postprocess filtering removes
+        them all. Both previously crashed with a cryptic
+        ``'NoneType' object is not subscriptable`` (or empty-quantile /
+        divide-by-zero) at the histogram/statistics step.
+        """
+        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.locs = pd.DataFrame({"x": [1.0], "y": [2.0], "group": [0]})
+        parameters = {"min_locs": 10}
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+
+        no_result_returns = {
+            "none": (None, None, self.ap.info),
+            "empty": (
+                pd.DataFrame({"n_events": []}),
+                pd.DataFrame({"group": []}),
+                self.ap.info,
+            ),
+        }
+        for label, ret in no_result_returns.items():
+            with self.subTest(case=label):
+                mock_gmm.return_value = ret
+                try:
+                    with self.assertRaises(analyse.AutoPicassoError):
+                        self.ap.gaussian_mixture_cluster(0, parameters)
+                finally:
+                    shutil.rmtree(folder, ignore_errors=True)
+
     @patch("picasso_workflow.analyse.distance.cdist")
     def nneighbor(self, mock_cdist):
         mock_cdist.return_value = np.random.rand(len(self.ap.movie), 4)

@@ -7314,6 +7314,20 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.locs, self.info, **kwargs
         )
 
+        # picasso.g5m returns (None, None, info) when no molecules are found,
+        # and an empty centers table when its postprocess filters remove them
+        # all. Either way there is nothing to keep as new localizations, so
+        # the downstream plotting/statistics (center_locs["n_events"],
+        # dividing by n_centers) would otherwise crash with a cryptic
+        # TypeError / ZeroDivisionError. Fail here with an actionable message.
+        if center_locs is None or len(center_locs) == 0:
+            raise AutoPicassoError(
+                "Gaussian mixture clustering found no clusters passing its "
+                "filters, so there are no centers to keep as localizations. "
+                "Check the input localizations and any upstream clustering, "
+                "and consider relaxing 'min_locs' or the sigma bounds."
+            )
+
         if parameters.get("save_locs"):
             fp_centers = os.path.join(results["folder"], "gmm_centers.hdf5")
             io.save_locs(fp_centers, center_locs, gmm_info)
