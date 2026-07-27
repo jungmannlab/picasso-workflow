@@ -626,6 +626,86 @@ class TestAnalyseModules(unittest.TestCase):
                 finally:
                     shutil.rmtree(folder, ignore_errors=True)
 
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_module_error_saves_current_locs(self, mock_gmm):
+        """A module error dumps the current locs for post-mortem debugging.
+
+        Exercises the full path: the module raises (g5m finds nothing), so
+        module_decorator saves whatever self.locs held into an
+        ``error_state`` subfolder of the module's result folder.
+        """
+        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.locs = pd.DataFrame(
+            {
+                "frame": np.arange(20, dtype="u4"),
+                "x": np.random.rand(20).astype("f4"),
+                "y": np.random.rand(20).astype("f4"),
+                "lpx": np.full(20, 0.1, dtype="f4"),
+                "lpy": np.full(20, 0.1, dtype="f4"),
+            }
+        )
+        self.ap.channel_locs = None
+        mock_gmm.return_value = (None, None, self.ap.info)
+
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+        try:
+            with self.assertRaises(analyse.AutoPicassoError):
+                self.ap.gaussian_mixture_cluster(0, {"min_locs": 10})
+            dumped = os.path.join(folder, "error_state", "locs.hdf5")
+            self.assertTrue(
+                os.path.exists(dumped),
+                "current locs should be saved on a module error",
+            )
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_save_state_on_error_dumps_channel_locs(self):
+        """_save_state_on_error dumps aggregation channel_locs too."""
+        ch_locs = pd.DataFrame(
+            {
+                "x": np.random.rand(5).astype("f4"),
+                "y": np.random.rand(5).astype("f4"),
+            }
+        )
+        self.ap.locs = None
+        self.ap.channel_locs = [ch_locs, ch_locs.copy()]
+        self.ap.channel_info = [
+            [{"Width": 10, "Height": 10, "Frames": 100}],
+            [{"Width": 10, "Height": 10, "Frames": 100}],
+        ]
+        self.ap.channel_tags = ["chan_a", "chan_b"]
+
+        folder = os.path.join(self.results_folder, "err_dump")
+        os.makedirs(folder, exist_ok=True)
+        try:
+            self.ap._save_state_on_error(folder)
+            error_dir = os.path.join(folder, "error_state")
+            self.assertTrue(
+                os.path.exists(os.path.join(error_dir, "chan_a.hdf5"))
+            )
+            self.assertTrue(
+                os.path.exists(os.path.join(error_dir, "chan_b.hdf5"))
+            )
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    @patch("picasso_workflow.analyse.AutoPicasso._save_locs")
+    def test_save_state_on_error_never_raises(self, mock_save):
+        """A failure while dumping must not mask the original error."""
+        # force the save to blow up; the helper must swallow it (log a
+        # warning) and return normally so the caller's real error survives.
+        mock_save.side_effect = RuntimeError("disk full")
+        self.ap.locs = pd.DataFrame({"x": [1.0], "y": [2.0]})
+        self.ap.channel_locs = None
+        folder = os.path.join(self.results_folder, "err_noraise")
+        os.makedirs(folder, exist_ok=True)
+        try:
+            self.assertIsNone(self.ap._save_state_on_error(folder))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
     @patch("picasso_workflow.analyse.distance.cdist")
     def nneighbor(self, mock_cdist):
         mock_cdist.return_value = np.random.rand(len(self.ap.movie), 4)

@@ -349,6 +349,10 @@ def module_decorator(method):
             parameters, results = method(self, i, parameters, results)
         except BaseException as exc:
             exc._pwf_partial_results = results
+            # Persist whatever locs the module held when it failed, so the
+            # last data state can be inspected while debugging without
+            # re-running the workflow. Best-effort: never mask the real error.
+            self._save_state_on_error(results["folder"])
             raise
 
         # post-actions
@@ -8114,6 +8118,42 @@ class AutoPicasso(util.AbstractModuleCollection):
         dt = np.round(time.time() - t00, 2)
         results_save = {"duration": dt}
         return results_save
+
+    def _save_state_on_error(self, folder):
+        """Best-effort dump of the current locs when a module fails.
+
+        On a module error, whatever ``self.locs`` / ``self.channel_locs``
+        held at that moment is often the fastest way to diagnose the cause,
+        so it is written into an ``error_state`` subfolder of the failed
+        module's result folder. This must never raise: a failure here would
+        mask the original module error that the caller is about to re-raise.
+
+        Parameters
+        ----------
+        folder : str
+            The failed module's result folder.
+        """
+        error_dir = os.path.join(folder, "error_state")
+        try:
+            saved = []
+            if getattr(self, "locs", None) is not None:
+                os.makedirs(error_dir, exist_ok=True)
+                self._save_locs(os.path.join(error_dir, "locs.hdf5"))
+                saved.append("locs")
+            if getattr(self, "channel_locs", None) is not None:
+                os.makedirs(error_dir, exist_ok=True)
+                self._save_datasets_agg(error_dir)
+                saved.append(f"{len(self.channel_locs)} channel_locs")
+            if saved:
+                logger.info(
+                    "Saved current localizations at time of error "
+                    f"({', '.join(saved)}) to {error_dir} for debugging."
+                )
+        except Exception as save_exc:
+            logger.warning(
+                "Could not save the current localizations to "
+                f"{error_dir} after a module error: {save_exc}"
+            )
 
     ##########################################################################
     # Aggregation workflow modules
