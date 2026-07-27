@@ -12722,7 +12722,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``labeling_uncertainty`` : dict
                 Channel tag -> labeling uncertainty in nm (e.g. 5).
             ``n_simulate`` : int
-                Number of target molecules to simulate (e.g. 50000).
+                Deprecated / ignored. The number of simulated molecules is
+                fixed by the picasso fit to the experimental molecule counts
+                (``len(exp_data[t])``), so this value no longer sizes the
+                simulation ROI. Kept for backward compatibility with existing
+                parameter files.
             ``density`` : dict
                 Channel tag -> density to simulate (area in 2D, volume in 3D).
             ``granularity`` : int
@@ -12822,19 +12826,25 @@ class AutoPicasso(util.AbstractModuleCollection):
         compound_density = (
             density_gt[target] / 1 + density_gt[reference] / 1
         )  # in nm^-2
-        # area = parameters["n_simulate"] / (compound_density / 1e6)
-        # area = parameters["n_simulate"] / (compound_density)
-        area = parameters["n_simulate"] / (compound_density * 1e6)  # in µm^2
-        n_sim_targets = {
-            tag: int(
-                parameters["n_simulate"] * density_gt[tag] / compound_density
-            )
-            for tag in [target, reference]
-        }
 
-        # simulation ROI (area-based, as in the prior single_spinna_run
-        # call): a square box matching the requested number of simulated
-        # molecules at the given density.
+        # The picasso fit (spinna.compare_models_given_label_unc) always
+        # simulates exactly ``len(exp_data[t])`` molecules per target
+        # (N_total, with LE forced to 1), and the plot / bootstrap must use
+        # the same counts so that all three run at the experimental density.
+        # Therefore the simulation ROI is sized from the *experimental*
+        # molecule counts, not from the ``n_simulate`` parameter: a box whose
+        # area reproduces the experimental (compound) density for those
+        # counts. Sizing the box from ``n_simulate`` (>> len(exp)) instead
+        # left the fit ~n_simulate/len(exp) times too dilute while the
+        # plotted NND curve used ~n_simulate molecules, so the fitted model,
+        # the plotted curve and the experimental histogram all disagreed
+        # (visible as heterodimer peaks fit far too high). This mirrors
+        # picasso's own LE convention (ROI from the data area,
+        # n_simulated[target] = len(locs)).
+        n_exp = {tag: len(exp_data[tag]) for tag in [target, reference]}
+        area = sum(n_exp.values()) / (compound_density * 1e6)  # in µm^2
+
+        # simulation ROI: square box reproducing the experimental density.
         sim_width = np.sqrt(area * 1e6)  # in nm
 
         distances = (
@@ -12878,7 +12888,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             random_rot_mode="2D",
             asynch=True,
             savedir=results["folder"],
-            fitting_mode="coarse-to-fine",
+            fitting_mode="bayesian",
         )
         results["best_pair_distance"] = best_distance
 
@@ -12900,7 +12910,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             targets=[target, reference],
             exp_data=exp_data,
             opt_props=best_props,
-            n_simulated=n_sim_targets,
+            n_simulated=n_exp,
             sim_repeats=parameters["sim_repeats"],
             NND_bin=fit_NND_bin,
             NND_maxdist=fit_NND_maxdist,
@@ -12947,7 +12957,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # best_mixer.structures order is [monomer_A, monomer_B, het].
             N_structures = picasso_outpost.generate_N_structures(
                 best_mixer.structures,
-                n_sim_targets,
+                n_exp,
                 parameters["granularity"],
             )
             _, props_std = spinna.SPINNA(
