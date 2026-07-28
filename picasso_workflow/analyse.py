@@ -7837,6 +7837,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Maximum distance shown on the plot's distance axis, in nm.
                 Only affects display, not the fit. Defaults to the 95th
                 percentile of the largest-k neighbour distances.
+            ``gof_window_coverage_warn`` : float
+                Warn if more than this fraction of the ``kmin``-th
+                nearest-neighbour distances fall outside the fit window
+                ``[min_dist, max_dist]`` (the window is then too narrow and
+                the density is biased). Default 0.5.
+            ``gof_wasserstein_warn`` : float
+                Warn if the mean Wasserstein distance between observed and
+                CSR-model neighbour distributions exceeds this fraction of
+                the median 1st-NN spacing (poor goodness of fit).
+                Default 0.3.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
@@ -7876,9 +7886,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # nspots = nneighbors.shape[0]
         d = int(parameters.get("dimensionality", 2))
         kwargs = {
-            # "nn_dists": nneighbors.T[kmin - 1 :, :],
             "kmin": kmin,
-            "rho_bound_factor": 10,
         }
         # "is not None", not truthiness: a value of 0 is meaningful here
         # and used to be silently replaced by the function default.
@@ -7890,8 +7898,6 @@ class AutoPicasso(util.AbstractModuleCollection):
             kwargs["bkg_fraction"] = float(bkg_fraction)
         kwargs["fit_bkg"] = bool(parameters.get("fit_bkg", False))
         kwargs["d"] = d
-        rho_init = 2 / (2 * d * np.pi * np.median(nneighbors[:, 0]) ** d)
-        kwargs["rho_init"] = rho_init
 
         densities = []
         bkgs = []
@@ -7901,10 +7907,54 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_fig"] = []
         for tag, nneighbors in zip(tags, nneighbor_list):
             kwargs["nn_dists"] = nneighbors.T[kmin - 1 :, :]
-            (
-                rho_mle,
-                fitresult,
-            ) = picasso_outpost.estimate_density_from_neighbordists(**kwargs)
+            # rho_init must come from THIS dataset's 1st-NN distances: it
+            # seeds the fit and sets the hard density bounds
+            # [rho_init / f, rho_init * f] inside
+            # estimate_density_from_neighbordists. Computing it once from
+            # the first dataset (as before) made every channel of an
+            # aggregation inherit the first channel's density scale,
+            # silently clamping sparser/denser channels to a wrong bound.
+            rho_init = 2 / (2 * d * np.pi * np.median(nneighbors[:, 0]) ** d)
+            kwargs["rho_init"] = rho_init
+
+            # Fit; if the MLE rails against a density bound, the true
+            # density lies outside the search window and the result is a
+            # clamped, confidently-wrong value (e.g. a too-small max_dist
+            # only sees close neighbours and overestimates the density).
+            # Widen rho_bound_factor and refit instead, and warn if the
+            # fit still cannot escape the bound.
+            bound_factor = 10.0
+            max_bound_factor = 1e4
+            while True:
+                kwargs["rho_bound_factor"] = bound_factor
+                (
+                    rho_mle,
+                    fitresult,
+                ) = picasso_outpost.estimate_density_from_neighbordists(
+                    **kwargs
+                )
+                lo = rho_init / bound_factor
+                hi = rho_init * bound_factor
+                at_bound = rho_mle <= lo * (1 + 1e-3) or rho_mle >= hi * (
+                    1 - 1e-3
+                )
+                if not at_bound or bound_factor >= max_bound_factor:
+                    break
+                logger.warning(
+                    f"fit_csr[{tag}]: density {1e6 * rho_mle:.3g} "
+                    f"um^-2 hit the [{1e6 * lo:.3g}, {1e6 * hi:.3g}] "
+                    f"um^-2 bound (rho_bound_factor={bound_factor:g}); "
+                    f"widening and refitting."
+                )
+                bound_factor *= 10
+            if at_bound:
+                logger.warning(
+                    f"fit_csr[{tag}]: density {1e6 * rho_mle:.3g} um^-2 "
+                    f"stays at a bound even with "
+                    f"rho_bound_factor={bound_factor:g}; the CSR fit is "
+                    f"unreliable -- check min_dist/max_dist/kmin and that "
+                    f"the neighbour distances span the true density scale."
+                )
             # print(fitresult)
             logger.debug(str(fitresult))
             densities.append(rho_mle)
@@ -8003,6 +8053,60 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
             else:
                 mean_wasserstein_distances.append(np.nan)
+
+            # Fit-quality warnings: both failure modes below yield a
+            # plausible density with no error, so flag them loudly.
+            #  (1) window too narrow -- if most neighbour distances lie
+            #      outside [min_dist, max_dist], the density is estimated
+            #      from a biased near-tail and comes out far too high (the
+            #      fitted curves land left of the histogram). This is the
+            #      classic "completely off" sparse-channel symptom, and it
+            #      is invisible to the in-window GoF metrics below because
+            #      those only see the retained near-tail.
+            #  (2) poor goodness of fit -- the CSR model does not match the
+            #      observed neighbour distributions even within the window
+            #      (Wasserstein distance large relative to the neighbour
+            #      spacing): an unreliable fit or genuine non-CSR structure
+            #      (clustering). KS p-values are deliberately not used here
+            #      -- with thousands of points KS rejects on any trivial
+            #      deviation, so it would warn on essentially every run.
+            min_d = float(kwargs.get("min_dist", 0))
+            max_d = float(kwargs.get("max_dist", np.inf))
+            kmin_dists = nneighbors[:, kmin - 1]
+            frac_outside = (
+                float(np.mean((kmin_dists < min_d) | (kmin_dists > max_d)))
+                if len(kmin_dists)
+                else 0.0
+            )
+            coverage_warn = float(
+                parameters.get("gof_window_coverage_warn", 0.5)
+            )
+            if frac_outside > coverage_warn:
+                logger.warning(
+                    f"fit_csr[{tag}]: {100 * frac_outside:.0f}% of the "
+                    f"k={kmin} nearest-neighbour distances fall outside "
+                    f"the fit window [{min_d:g}, {max_d:g}] nm; the fitted "
+                    f"density ({1e6 * rho_mle:.3g} um^-2) is biased "
+                    f"(likely too high). Widen max_dist / lower min_dist "
+                    f"for this dataset."
+                )
+            median_1stnn = float(np.median(nneighbors[:, 0]))
+            rel_wasserstein = (
+                mean_wasserstein_distances[-1] / median_1stnn
+                if median_1stnn > 0
+                else np.nan
+            )
+            gof_warn = float(parameters.get("gof_wasserstein_warn", 0.3))
+            if np.isfinite(rel_wasserstein) and rel_wasserstein > gof_warn:
+                logger.warning(
+                    f"fit_csr[{tag}]: poor CSR goodness of fit (mean "
+                    f"Wasserstein distance "
+                    f"{mean_wasserstein_distances[-1]:.3g} nm = "
+                    f"{rel_wasserstein:.2f}x the median 1st-NN spacing). "
+                    f"The density ({1e6 * rho_mle:.3g} um^-2) may be "
+                    f"unreliable, or the data may deviate from CSR "
+                    f"(clustering)."
+                )
 
             # plot results
             fig, ax = plt.subplots()
