@@ -1004,6 +1004,8 @@ class TestAnalyseModules(unittest.TestCase):
 
         self.assertEqual(best, {"A": 4.0, "B": 5.0})
         self.assertEqual(mock_compare.call_count, 3)
+        # empty savedir avoids picasso's single-candidate save crash
+        self.assertEqual(mock_compare.call_args.kwargs["savedir"], "")
         self.assertEqual(scan["A"]["candidates"], [2.0, 4.0, 6.0])
         self.assertEqual(scan["A"]["scores"], [0.5, 0.1, 0.3])
         self.assertNotIn("B", scan)
@@ -1169,6 +1171,8 @@ class TestAnalyseModules(unittest.TestCase):
         self.assertEqual(kw["label_unc"], {"A": [2.0, 4.0], "B": [5.0]})
         self.assertEqual(kw["target_a"], "A")
         self.assertEqual(kw["target_b"], "B")
+        # empty savedir avoids picasso's single-candidate save crash
+        self.assertEqual(kw["savedir"], "")
 
         self.assertEqual(best_distance, 12.0)
         self.assertEqual(best_score, 0.08)
@@ -1252,6 +1256,8 @@ class TestAnalyseModules(unittest.TestCase):
         )
         self.assertEqual(kw["target_a"], "CD80")
         self.assertEqual(kw["target_b"], "CD86")
+        # empty savedir avoids picasso's single-candidate save crash
+        self.assertEqual(kw["savedir"], "")
 
         self.assertEqual(results["best_pair_distance"], 12.0)
         self.assertEqual(

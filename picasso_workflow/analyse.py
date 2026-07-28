@@ -13197,7 +13197,15 @@ class AutoPicasso(util.AbstractModuleCollection):
             depth=None,
             random_rot_mode="2D",
             asynch=True,
-            savedir=results["folder"],
+            # savedir left empty on purpose. When labeling uncertainty is
+            # screened, picasso's fit_le scores each candidate on a
+            # single-structure target sub-model whose search space has one
+            # row; picasso's fit_stoichiometry then crashes in its
+            # CSV-save branch (np.hstack of a 2-D N_structures with the
+            # 1-D props that convert_counts_to_props returns for a single
+            # row). An empty savedir skips that broken save path; the
+            # workflow does not consume picasso's internal fit-score CSVs.
+            savedir="",
             fitting_mode="bayesian",
         )
         results["best_pair_distance"] = best_distance
