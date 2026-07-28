@@ -8677,6 +8677,13 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             Optional keys:
 
+            ``labeling_uncertainty_screen`` : dict
+                If given, screen a range of labeling uncertainties instead
+                of using ``labeling_uncertainty``. Keys ``"min"``,
+                ``"max"`` and ``"step"`` (all in nm) define the candidate
+                grid, which is applied to every target; picasso fits the
+                best value per target. Adds ``best_labeling_uncertainty``
+                and ``labeling_uncertainty_scan`` to ``results``.
             ``density_app`` : list of float
                 Apparent density in 1/nm^2 (the product of the real density
                 and the labeling efficiency).
@@ -8689,7 +8696,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             structures = parameters["structures"]
 
-        if isinstance(parameters["labeling_uncertainty"], (int, float)):
+        screen = parameters.get("labeling_uncertainty_screen")
+        if screen:
+            # screen the same candidate grid for every target; picasso
+            # fits the best value per target further below
+            grid = np.arange(
+                screen["min"],
+                screen["max"] + screen["step"] / 2,
+                screen["step"],
+            ).tolist()
+            labeling_uncertainty = {tgt: grid for tgt in self.channel_tags}
+        elif isinstance(parameters["labeling_uncertainty"], (int, float)):
             labeling_uncertainty = {
                 tgt: parameters["labeling_uncertainty"]
                 for tgt in self.channel_tags
@@ -8770,6 +8787,35 @@ class AutoPicasso(util.AbstractModuleCollection):
             structures, n_sim_targets, parameters["granularity"]
         )
 
+        # if requested, screen a range of labeling uncertainties and
+        # reduce labeling_uncertainty to the best-fit scalar per target
+        # before the final SPINNA run
+        if screen:
+            (
+                labeling_uncertainty,
+                labeling_uncertainty_scan,
+                labelunc_scan_figs,
+            ) = picasso_outpost.screen_label_uncertainty(
+                structures=structures,
+                label_unc=labeling_uncertainty,
+                le=parameters["labeling_efficiency"],
+                granularity=parameters["granularity"],
+                exp_data=exp_data,
+                mask_dict=mask_dict,
+                width=width,
+                height=height,
+                depth=depth,
+                random_rot_mode=parameters["random_rot_mode"],
+                sim_repeats=parameters["sim_repeats"],
+                asynch=True,
+                result_dir=results["folder"],
+                save_filename=os.path.join(results["folder"], "spinna-run"),
+            )
+            results["best_labeling_uncertainty"] = labeling_uncertainty
+            results["labeling_uncertainty_scan"] = labeling_uncertainty_scan
+        else:
+            labelunc_scan_figs = []
+
         spinna_pars = {
             "structures": structures,
             "label_unc": labeling_uncertainty,
@@ -8797,7 +8843,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             **spinna_pars
         )
         plt.close("all")
-        results["fp_figs"] = fp_figs
+        results["fp_figs"] = labelunc_scan_figs + fp_figs
         results["spinna_results"] = spinna_results
 
         return parameters, results

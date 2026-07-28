@@ -3309,21 +3309,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     this is the product of 'real' density & lbl efficiency
         """
         parameters_spec = {
-            "max_radius": {
-                "type": "float",
-                "description": "Maximum analysis radius in nm",
-                "min": 10.0,
-                "max": 1000.0,
-                "default": 200.0,
-                "required": True,
-            },
-            "optimization_method": {
-                "type": "str",
-                "description": "Method for parameter optimization",
-                "options": ["mle", "leastsq", "bayesian"],
-                "default": "mle",
-                "required": False,
-            },
             "labeling_efficiency": {
                 "type": "dict",
                 "element_type": "float",
@@ -3334,10 +3319,45 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "labeling_uncertainty": {
                 "type": "float",
-                "description": "labeling uncertainty [nm]; good value is e.g. \
-                    5 assumed the same value for all targets (can be dict for \
-                    targets)",
+                "description": (
+                    "Fixed labeling uncertainty [nm], same value for all "
+                    "targets (good value is e.g. 5). Used when "
+                    "'labeling_uncertainty_screen' below is unchecked."
+                ),
+                "default": 5.0,
                 "required": True,
+            },
+            "labeling_uncertainty_screen": {
+                "type": "dict",
+                "required": False,
+                "description": (
+                    "Screen a range of labeling uncertainties instead of "
+                    "using the fixed value above; picasso fits the best "
+                    "value per target (independent 1-D scans, so the cost "
+                    "grows with the number of candidates)."
+                ),
+                "properties": {
+                    "min": {
+                        "type": "float",
+                        "description": "Range start [nm]",
+                        "min": 0.0,
+                        "default": 2.0,
+                    },
+                    "max": {
+                        "type": "float",
+                        "description": "Range end [nm] (inclusive)",
+                        "min": 0.0,
+                        "default": 12.0,
+                    },
+                    "step": {
+                        "type": "float",
+                        "description": (
+                            "Step [nm]; defines the number of candidates"
+                        ),
+                        "min": 0.1,
+                        "default": 2.0,
+                    },
+                },
             },
             "n_simulate": {
                 "type": "int",
@@ -3391,6 +3411,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "The spinna granularity",
                 "required": True,
             },
+            "random_rot_mode": {
+                "type": "str",
+                "description": "Mode of molecule rotation in the simulation.",
+                "options": ["2D", "3D"],
+                "default": "2D",
+                "required": True,
+            },
             "density_app": {
                 "type": "float",
                 "description": "Tpparent density in 1/nm^2; this is the \
@@ -3417,9 +3444,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Output folder for module results",
             },
-            "optimal_parameters": {
+            "spinna_results": {
                 "type": "dict",
-                "description": "Optimized SPINNA parameters",
+                "description": (
+                    "SPINNA fit results, including fitted structure "
+                    "proportions and, when screening, the best-fit "
+                    "labeling uncertainty per target."
+                ),
+            },
+            "best_labeling_uncertainty": {
+                "type": "dict",
+                "description": (
+                    "Best-fit labeling uncertainty [nm] per target; only "
+                    "present when labeling_uncertainty_screen is used."
+                ),
             },
         }
 

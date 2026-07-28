@@ -2056,6 +2056,203 @@ def spinna_batch(parameters_filename):
     return result_dir, fp_summary, fp_fig
 
 
+def _plot_label_unc_scan(
+    target,
+    candidates,
+    scores,
+    best_idx,
+    save_filename,
+    result_dir,
+):
+    """Plot the labeling-uncertainty screening curve for one target.
+
+    Parameters
+    ----------
+    target : str
+        Molecular target name.
+    candidates : list of float
+        Screened labeling uncertainties in nm.
+    scores : list of float
+        Kolmogorov-Smirnov fit score for each candidate.
+    best_idx : int
+        Index of the best-fit candidate.
+    save_filename : str
+        Base filename (without extension) for the saved figure.
+    result_dir : str
+        Directory the returned figure path is anchored to.
+
+    Returns
+    -------
+    fp_fig : str
+        Filepath of the saved ``.png`` figure.
+    """
+    fig, ax = plt.subplots(1, figsize=(5.5, 4), constrained_layout=True)
+    ax.plot(candidates, scores, "o-", color=spinna.NN_COLORS[0])
+    ax.plot(
+        candidates[best_idx],
+        scores[best_idx],
+        "o",
+        color=spinna.NN_COLORS[2],
+        markersize=10,
+        label=f"best: {candidates[best_idx]:.2f} nm",
+    )
+    ax.set_xlabel("Labeling uncertainty (nm)")
+    ax.set_ylabel("Kolmogorov-Smirnov score")
+    ax.set_title(f"Labeling uncertainty screening: {target}")
+    ax.legend()
+    fname = f"{save_filename}_labelunc_scan_{target}"
+    for ext in ["png", "svg"]:
+        fig.savefig(f"{fname}.{ext}")
+    plt.close(fig)
+    return os.path.join(
+        result_dir, f"{save_filename}_labelunc_scan_{target}.png"
+    )
+
+
+def screen_label_uncertainty(
+    structures,
+    label_unc,
+    le,
+    granularity,
+    exp_data,
+    mask_dict,
+    width,
+    height,
+    depth,
+    random_rot_mode,
+    sim_repeats,
+    asynch,
+    result_dir,
+    save_filename,
+    fitting_mode="coarse-to-fine",
+):
+    """Screen a range of labeling uncertainties, one target at a time.
+
+    For every molecular target whose ``label_unc`` entry lists more than
+    one candidate, each candidate is scored by fitting a target-only
+    sub-model to the experimental nearest-neighbour distances. This
+    mirrors picasso's private ``spinna._fit_label_unc_for_target`` but
+    retains the per-candidate scores so a screening curve can be plotted.
+    The candidate with the lowest Kolmogorov-Smirnov score is selected.
+
+    Parameters
+    ----------
+    structures : list of spinna.Structure
+        The SPINNA model.
+    label_unc : dict
+        Maps each target name to a list of candidate labeling
+        uncertainties in nm. A single-element list fixes that target's
+        value (no screening).
+    le : dict
+        Labeling efficiency per target (0-1).
+    granularity : int
+        SPINNA granularity, see ``spinna.generate_N_structures``.
+    exp_data : dict
+        Experimental coordinates (nm) per target.
+    mask_dict : dict or None
+        Mask dictionary, see ``spinna.StructureMixer``.
+    width, height, depth : float or None
+        ROI dimensions in nm (``depth`` is None for 2D).
+    random_rot_mode : {"2D", "3D"} or None
+        Molecule rotation mode.
+    sim_repeats : int
+        Number of simulation repeats per candidate (``N_sim``).
+    asynch : bool
+        Whether picasso uses multiprocessing during fitting.
+    result_dir : str
+        Directory the returned figure paths are anchored to.
+    save_filename : str
+        Base filename (without extension) for saved figures/CSVs.
+    fitting_mode : {"coarse-to-fine", "bayesian", "brute-force"}, optional
+        Stoichiometry fitting mode forwarded to picasso. Default is
+        "coarse-to-fine".
+
+    Returns
+    -------
+    best_label_unc : dict
+        Best-fit labeling uncertainty (float, nm) per target.
+    scan : dict
+        Maps each screened target to a dict with ``"candidates"`` and
+        ``"scores"`` lists.
+    fp_figs : list of str
+        Filepaths of the saved screening figures (one per screened
+        target).
+    """
+    targets = spinna._targets_from_structures(structures)
+    # nn_counts keys for all target pairs (reset per candidate fit)
+    nn_keys = [
+        f"{t1}-{t2}" for i, t1 in enumerate(targets) for t2 in targets[i:]
+    ]
+    # starting scalar for every target (first candidate), used for the
+    # targets that are not currently being screened
+    label_unc_start = {t: float(label_unc[t][0]) for t in targets}
+
+    best_label_unc = {}
+    scan = {}
+    fp_figs = []
+    for target in targets:
+        candidates = [float(c) for c in label_unc[target]]
+        if len(candidates) == 1:
+            best_label_unc[target] = candidates[0]
+            continue
+
+        # only this target's monomers matter for its self-NND scan
+        target_model = [s for s in structures if s.targets == [target]]
+        if not target_model:
+            logger.warning(
+                f"No monomer structure found for target {target}; cannot "
+                "screen its labeling uncertainty. Using the first candidate."
+            )
+            best_label_unc[target] = candidates[0]
+            continue
+
+        nn_counts = {key: 0 for key in nn_keys}
+        nn_counts[f"{target}-{target}"] = 1
+
+        scores = []
+        for k, candidate in enumerate(candidates):
+            label_unc_input = dict(label_unc_start)
+            label_unc_input[target] = candidate
+            score = spinna.compare_models_given_label_unc(
+                models=[target_model],
+                exp_data=exp_data,
+                granularity=granularity,
+                label_unc=label_unc_input,
+                le=le,
+                mask_dict=mask_dict,
+                width=width,
+                height=height,
+                depth=depth,
+                random_rot_mode=random_rot_mode,
+                nn_counts=nn_counts,
+                N_sim=sim_repeats,
+                asynch=asynch,
+                savedir=result_dir,
+                progress_title=(
+                    f"Screening label_unc for {target}: "
+                    f"{candidate:.2f} nm ({k + 1}/{len(candidates)})"
+                ),
+                fitting_mode=fitting_mode,
+            )[0]
+            scores.append(float(score))
+
+        best_idx = int(np.argmin(scores))
+        best_label_unc[target] = candidates[best_idx]
+        scan[target] = {"candidates": candidates, "scores": scores}
+        fp_figs.append(
+            _plot_label_unc_scan(
+                target=target,
+                candidates=candidates,
+                scores=scores,
+                best_idx=best_idx,
+                save_filename=save_filename,
+                result_dir=result_dir,
+            )
+        )
+
+    return best_label_unc, scan, fp_figs
+
+
 def single_spinna_run(
     structures,
     label_unc,

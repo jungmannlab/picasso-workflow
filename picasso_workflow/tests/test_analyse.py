@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from unittest.mock import patch, MagicMock
 
-from picasso_workflow import analyse, util
+from picasso_workflow import analyse, util, picasso_outpost
 
 logger = logging.getLogger(__name__)
 
@@ -810,7 +810,7 @@ class TestAnalyseModules(unittest.TestCase):
 
     @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
     def spinna(self, mock_sptmp):
-        mock_sptmp.return_value = (0, 1)
+        mock_sptmp.return_value = (0, [])
         info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
         locs_dtype = [
             ("frame", "u4"),
@@ -865,6 +865,148 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.spinna(0, parameters)
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
+
+    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
+    @patch("picasso_workflow.analyse.picasso_outpost.screen_label_uncertainty")
+    def test_spinna_label_uncertainty_screen(self, mock_screen, mock_sptmp):
+        """Screening routes to screen_label_uncertainty, feeds the
+        best-fit value into single_spinna_run and prepends the scan
+        figures to the reported figures."""
+        best_unc = {"CD86": 6.0}
+        scan = {
+            "CD86": {
+                "candidates": [2.0, 4.0, 6.0, 8.0],
+                "scores": [0.4, 0.3, 0.1, 0.2],
+            }
+        }
+        scan_figs = ["scanA.png"]
+        mock_screen.return_value = (best_unc, scan, scan_figs)
+        mock_sptmp.return_value = ("spinna-results", ["nnd.png"])
+
+        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                    for i in range(len(self.ap.movie))
+                ],
+                dtype=locs_dtype,
+            )
+        )
+        self.ap.channel_locs = [locs]
+        self.ap.channel_info = [info]
+        self.ap.channel_tags = ["CD86"]
+
+        parameters = {
+            "labeling_efficiency": {"CD86": 0.54},
+            "labeling_uncertainty": 5,
+            "labeling_uncertainty_screen": {
+                "min": 2.0,
+                "max": 8.0,
+                "step": 2.0,
+            },
+            "n_simulate": 50000,
+            "fp_mask_dict": None,
+            "density": [0.00009],
+            "random_rot_mode": "2D",
+            "n_nearest_neighbors": 4,
+            "sim_repeats": 5,
+            "fit_NND_bin": 5,
+            "fit_NND_maxdist": 300,
+            "granularity": 30,
+            "structures": [
+                {
+                    "Molecular targets": ["CD86"],
+                    "Structure title": "monomer",
+                    "CD86_x": [0],
+                    "CD86_y": [0],
+                    "CD86_z": [0],
+                },
+                {
+                    "Molecular targets": ["CD86"],
+                    "Structure title": "dimer",
+                    "CD86_x": [-10, 10],
+                    "CD86_y": [0, 0],
+                    "CD86_z": [0, 0],
+                },
+            ],
+        }
+        parameters, results = self.ap.spinna(0, parameters)
+
+        # the same candidate grid is screened for every target
+        mock_screen.assert_called_once()
+        self.assertEqual(
+            mock_screen.call_args.kwargs["label_unc"],
+            {"CD86": [2.0, 4.0, 6.0, 8.0]},
+        )
+        # the best-fit scalar is what actually gets simulated
+        self.assertEqual(mock_sptmp.call_args.kwargs["label_unc"], best_unc)
+        # results carry the best value, the scan and the scan figures
+        self.assertEqual(results["best_labeling_uncertainty"], best_unc)
+        self.assertEqual(results["labeling_uncertainty_scan"], scan)
+        self.assertEqual(results["fp_figs"], scan_figs + ["nnd.png"])
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
+
+    @patch("picasso_workflow.picasso_outpost._plot_label_unc_scan")
+    @patch(
+        "picasso_workflow.picasso_outpost.spinna."
+        "compare_models_given_label_unc"
+    )
+    def test_screen_label_uncertainty_selects_best(
+        self, mock_compare, mock_plot
+    ):
+        """screen_label_uncertainty scans multi-candidate targets, keeps
+        the lowest-scoring value and leaves single-candidate targets
+        untouched."""
+        Structure = picasso_outpost.spinna.Structure
+        mono_a = Structure("mono_A")
+        mono_a.define_coordinates("A", [0.0], [0.0], [0.0])
+        mono_b = Structure("mono_B")
+        mono_b.define_coordinates("B", [0.0], [0.0], [0.0])
+        structures = [mono_a, mono_b]
+
+        # A screened over 3 values (best is 4.0 -> lowest score), B fixed
+        label_unc = {"A": [2.0, 4.0, 6.0], "B": [5.0]}
+        mock_compare.side_effect = [(0.5,), (0.1,), (0.3,)]
+        mock_plot.return_value = "scan_A.png"
+
+        exp_data = {
+            "A": np.random.rand(20, 2) * 100,
+            "B": np.random.rand(20, 2) * 100,
+        }
+
+        best, scan, figs = picasso_outpost.screen_label_uncertainty(
+            structures=structures,
+            label_unc=label_unc,
+            le={"A": 0.5, "B": 0.5},
+            granularity=10,
+            exp_data=exp_data,
+            mask_dict=None,
+            width=1000.0,
+            height=1000.0,
+            depth=None,
+            random_rot_mode="2D",
+            sim_repeats=1,
+            asynch=False,
+            result_dir="/tmp",
+            save_filename="/tmp/spinna-run",
+        )
+
+        self.assertEqual(best, {"A": 4.0, "B": 5.0})
+        self.assertEqual(mock_compare.call_count, 3)
+        self.assertEqual(scan["A"]["candidates"], [2.0, 4.0, 6.0])
+        self.assertEqual(scan["A"]["scores"], [0.5, 0.1, 0.3])
+        self.assertNotIn("B", scan)
+        self.assertEqual(figs, ["scan_A.png"])
 
     @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
     @patch("picasso_workflow.analyse.io.save_locs")
