@@ -7442,12 +7442,54 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             io.save_locs(fp_centers, clustered_locs, gmm_info)
 
-        # plot: histogram of cluster sizes
+        # plot: cluster-size distribution. Two quantities are overlaid because
+        # they answer different questions and differ by construction: n_locs
+        # is the localization population per component (what 'min_locs' filters
+        # on, so every kept cluster has n_locs >= min_locs), while n_events is
+        # the number of binding events (consecutive-frame locs linked into
+        # events) assigned to the component -- always <= n_locs, and often far
+        # smaller for sticky binders. Plotting only n_events under a "[locs]"
+        # label previously made kept clusters look like they fell below
+        # min_locs.
+        n_events = center_locs["n_events"]
+        # center_locs is a structured array (recarray); fall back to DataFrame
+        # columns in case a future g5m returns one.
+        field_names = getattr(
+            getattr(center_locs, "dtype", None), "names", None
+        ) or list(getattr(center_locs, "columns", []))
+        has_n_locs = "n_locs" in (field_names or [])
+        # Shared bins spanning both distributions; clip the top at the 95th
+        # percentile of the larger quantity so a few huge clusters don't
+        # flatten the histogram.
+        ref = center_locs["n_locs"] if has_n_locs else n_events
+        maxbin = max(int(np.quantile(ref, 0.95)), 2)
+        bins = np.arange(maxbin + 1)
         fig, ax = plt.subplots()
-        maxbin = int(np.quantile(center_locs["n_events"], 0.95))
-        ax.hist(center_locs["n_events"], bins=np.arange(maxbin))
-        ax.set_xlabel("cluster size [locs]")
+        if has_n_locs:
+            ax.hist(
+                center_locs["n_locs"],
+                bins=bins,
+                alpha=0.5,
+                color="C0",
+                label="localizations (n_locs)",
+            )
+        ax.hist(
+            n_events,
+            bins=bins,
+            alpha=0.5,
+            color="C1",
+            label="binding events (n_events)",
+        )
+        ax.axvline(
+            parameters["min_locs"],
+            color="k",
+            linestyle="--",
+            linewidth=1,
+            label=f"min_locs = {parameters['min_locs']}",
+        )
+        ax.set_xlabel("cluster size [count per cluster]")
         ax.set_ylabel("Frequency")
+        ax.legend()
         results["fp_fig_clustersizes"] = os.path.join(
             results["folder"], "fig_gmm_clustersize.png"
         )
