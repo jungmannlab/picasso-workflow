@@ -10,11 +10,14 @@
   // Reuse your host Claude auth + settings inside the container.
   // (settings.json with the shared allowlist/sandbox lives in ~/.claude)
   "mounts": [
-    "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind"
+    "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind",
+    "source=/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/tests,target=/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/tests,type=bind"
   ],
 
   // Bring up the default-deny egress firewall every time the container starts.
   "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
+
+  "postCreateCommand": "pip install --user -e '.'",
 
   "customizations": {
     "vscode": {
