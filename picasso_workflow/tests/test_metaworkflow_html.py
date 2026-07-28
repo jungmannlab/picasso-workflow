@@ -194,10 +194,16 @@ def test_prepare_analysis_shares_run_stamped_name_across_ranks(
     postfix0 = calls[0].kwargs["postfix"]
     postfix1 = calls[1].kwargs["postfix"]
 
-    stamp = (Path(coord0.root_folder) / ".pwf_runstamp").read_text().strip()
+    token = coord0._run_token()
+    stamp = (
+        (Path(coord0.root_folder) / f".pwf_runstamp_{token}")
+        .read_text()
+        .strip()
+    )
 
-    # identical name across ranks, carrying the shared run stamp ...
-    assert name0 == name1 == f"260727-le_{stamp}"
+    # identical name across ranks, carrying the shared run stamp and the
+    # per-run token (which disambiguates concurrent runs of the same name) ...
+    assert name0 == name1 == f"260727-le_{token}_{stamp}"
     # ... and the same stamp handed to the runner as its postfix, so it can
     # never fall back to a per-rank datetime.now().
     assert postfix0 == postfix1 == stamp
