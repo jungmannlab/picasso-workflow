@@ -2,8 +2,22 @@
   "name": "picasso-workflow",
   "build": { "dockerfile": "Dockerfile" },
 
-  // The firewall needs these to manage iptables/ipset inside the container.
-  "runArgs": ["--cap-add=NET_ADMIN", "--cap-add=NET_RAW"],
+  // runArgs:
+  //  - NET_ADMIN / NET_RAW: the firewall needs these to manage iptables/ipset.
+  //  - seccomp=unconfined: Claude Code wraps every command it runs in a
+  //    bubblewrap (bwrap) sandbox, which creates an unprivileged user
+  //    namespace. Docker's DEFAULT seccomp profile blocks clone(CLONE_NEWUSER),
+  //    so bwrap fails closed and no command can run. Relaxing seccomp re-enables
+  //    it. This does NOT touch the container's real safety boundaries: the
+  //    default-deny egress firewall (init-firewall.sh), the non-root `vscode`
+  //    user, the absence of --privileged, and OrbStack's VM boundary all stay
+  //    in place. Net effect: we trade a slice of kernel-syscall hardening to
+  //    gain bwrap, which *adds* an isolation layer around each command.
+  "runArgs": [
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW",
+    "--security-opt", "seccomp=unconfined"
+  ],
 
   "remoteUser": "vscode",
 
