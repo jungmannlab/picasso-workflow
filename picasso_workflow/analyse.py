@@ -7366,21 +7366,25 @@ class AutoPicasso(util.AbstractModuleCollection):
                 is shown on the console; if ``'silent'``, nothing is shown
                 (default ``'silent'``).
             ``sigma_bounds`` : tuple of float
-                Minimum Gaussian-component standard deviation in nm (not
-                recommended now that individual loc precision is used).
-            ``loc_prec_handle`` : {"local", "global", "abs"}
+                Lower and upper bounds on the Gaussian-component standard
+                deviation, as (min, max). With ``loc_prec_handle="local"``
+                (the default) these are dimensionless factors multiplying
+                each component's localization precision, i.e.
+                ``[min * loc_prec, max * loc_prec]``; with
+                ``loc_prec_handle="abs"`` they are absolute sigmas in camera
+                pixels. They are not in nm and are not converted here
+                (default ``(g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)``).
+            ``loc_prec_handle`` : {"local", "abs"}
                 How to handle localization precision (default ``"local"``).
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        pixelsize = self.pixelsize
         required_args = ["min_locs"]
         optional_args = [
             ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
             ("bootstrap_check", False),
             ("calibration", None),
-            # ("pixelsize", pixelsize),
             ("asynch", True),
             ("callback_parent", None),  # "silent"),
             ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
@@ -7392,10 +7396,6 @@ class AutoPicasso(util.AbstractModuleCollection):
             logger.error(f"""All of the following arguments are required for
                 picasso.g5m.g5m: {required_args}""")
             raise e
-        # sigma values are given in nm in parameters but px in gmm
-        if "min_sigma" in kwargs.keys():
-            kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
-            kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
         for oa, default in optional_args:
             setval = parameters.get(oa, default)
             if oa == "calibration" and setval == "":
