@@ -8684,6 +8684,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                 grid, which is applied to every target; picasso fits the
                 best value per target. Adds ``best_labeling_uncertainty``
                 and ``labeling_uncertainty_scan`` to ``results``.
+            ``pair_distance_screen`` : dict
+                If given, screen a range of pair (heterodimer) distances
+                via picasso ``fit_le``. Requires exactly two channel
+                targets; keys ``"min"``, ``"max"`` and ``"step"`` (nm)
+                define the distance grid. This fits both the best-fit
+                separation and the labeling efficiency, so
+                ``labeling_efficiency`` and ``structures`` are not used in
+                this mode. Adds ``best_pair_distance`` and
+                ``fitted_labeling_efficiency`` to ``results``.
             ``density_app`` : list of float
                 Apparent density in 1/nm^2 (the product of the real density
                 and the labeling efficiency).
@@ -8697,6 +8706,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             structures = parameters["structures"]
 
         screen = parameters.get("labeling_uncertainty_screen")
+        dist_screen = parameters.get("pair_distance_screen")
         if screen:
             # screen the same candidate grid for every target; picasso
             # fits the best value per target further below
@@ -8782,6 +8792,65 @@ class AutoPicasso(util.AbstractModuleCollection):
             tgt: exp_frac_targets[i] * parameters["n_simulate"]
             for i, tgt in enumerate(self.channel_tags)
         }
+        # pair-distance screening: a distinct picasso path (fit_le) that
+        # builds its own monomer/heterodimer model, fits labeling
+        # efficiency and picks the best-fit separation. It ignores the
+        # given structures and labeling_efficiency, so it short-circuits
+        # the standard single_spinna_run flow below (which is why it runs
+        # before the N_structures search space is generated).
+        if dist_screen:
+            if len(self.channel_tags) != 2:
+                raise ValueError(
+                    "pair_distance_screen (fit_le) requires exactly two "
+                    f"channel targets; got {self.channel_tags}."
+                )
+            distances = np.arange(
+                dist_screen["min"],
+                dist_screen["max"] + dist_screen["step"] / 2,
+                dist_screen["step"],
+            ).tolist()
+            # fit_le expects a list of candidate uncertainties per target
+            label_unc_lists = {
+                tgt: (val if isinstance(val, list) else [val])
+                for tgt, val in labeling_uncertainty.items()
+            }
+            target_a, target_b = self.channel_tags
+            (
+                spinna_results,
+                fp_figs,
+                le_values,
+                fitted_label_unc,
+                best_distance,
+                best_score,
+            ) = picasso_outpost.single_spinna_fit_le_run(
+                target_a=target_a,
+                target_b=target_b,
+                exp_data=exp_data,
+                granularity=parameters["granularity"],
+                label_unc=label_unc_lists,
+                distances=distances,
+                mask_dict=mask_dict,
+                width=width,
+                height=height,
+                depth=depth,
+                random_rot_mode=parameters["random_rot_mode"],
+                sim_repeats=parameters["sim_repeats"],
+                asynch=True,
+                NND_bin=parameters["fit_NND_bin"],
+                NND_maxdist=parameters["fit_NND_maxdist"],
+                nn_plotted=parameters["n_nearest_neighbors"],
+                n_simulated=n_sim_targets,
+                result_dir=results["folder"],
+                save_filename=os.path.join(results["folder"], "spinna-fit-le"),
+            )
+            plt.close("all")
+            results["fp_figs"] = fp_figs
+            results["spinna_results"] = spinna_results
+            results["best_pair_distance"] = best_distance
+            results["fitted_labeling_efficiency"] = le_values
+            results["best_labeling_uncertainty"] = fitted_label_unc
+            return parameters, results
+
         # N_structures = spinna.generate_N_structures(
         N_structures = picasso_outpost.generate_N_structures(
             structures, n_sim_targets, parameters["granularity"]
@@ -12984,6 +13053,33 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         if not parameters.get("nn_nth"):
             parameters["nn_nth"] = 2
+
+        # expand optional min/max/step screen ranges into the candidate
+        # lists that the fit (spinna.fit_le, below) already consumes: a
+        # list-valued pair_distance / per-tag labeling_uncertainty is
+        # screened, a scalar is used as-is.
+        pd_screen = parameters.get("pair_distance_screen")
+        if pd_screen:
+            parameters["pair_distance"] = np.arange(
+                pd_screen["min"],
+                pd_screen["max"] + pd_screen["step"] / 2,
+                pd_screen["step"],
+            ).tolist()
+        lu_screen = parameters.get("labeling_uncertainty_screen")
+        if lu_screen:
+            lu_grid = np.arange(
+                lu_screen["min"],
+                lu_screen["max"] + lu_screen["step"] / 2,
+                lu_screen["step"],
+            ).tolist()
+            lu = dict(parameters["labeling_uncertainty"])
+            for tag in (
+                parameters["target_name"],
+                parameters["reference_name"],
+            ):
+                lu[tag] = lu_grid
+            parameters["labeling_uncertainty"] = lu
+
         target = parameters["target_name"]
         reference = parameters["reference_name"]
         # spinna.fit_le forces LE=100% internally during the fit, so we no
@@ -13083,7 +13179,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # via compare_models, and converts the fitted proportions to LE.
         (
             le_values,
-            _fitted_label_unc,
+            fitted_label_unc,
             best_distance,
             _best_score,
             best_props,
@@ -13105,6 +13201,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             fitting_mode="bayesian",
         )
         results["best_pair_distance"] = best_distance
+        results["best_labeling_uncertainty"] = fitted_label_unc
 
         # bin size: more than Nyquist subsampling
         expected_1stNN_peak = (

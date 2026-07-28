@@ -2517,6 +2517,168 @@ def plot_spinna_nnd(
     return fp_fig
 
 
+def single_spinna_fit_le_run(
+    target_a,
+    target_b,
+    exp_data,
+    granularity,
+    label_unc,
+    distances,
+    mask_dict,
+    width,
+    height,
+    depth,
+    random_rot_mode,
+    sim_repeats,
+    asynch,
+    NND_bin,
+    NND_maxdist,
+    nn_plotted,
+    n_simulated,
+    result_dir,
+    save_filename,
+    fitting_mode="coarse-to-fine",
+):
+    """Fit labeling efficiency and screen the pair distance of two targets.
+
+    Thin wrapper around picasso's ``spinna.fit_le``. It builds the
+    monomer-A / monomer-B / heterodimer model family internally, screens
+    the heterodimer separation over ``distances`` (and, per target, the
+    labeling uncertainty over ``label_unc``), forces labeling efficiency
+    to 100% during the fit and recovers it from the fitted proportions.
+    The ``structures`` and ``labeling_efficiency`` inputs of the SPINNA
+    module are therefore not used in this mode.
+
+    Parameters
+    ----------
+    target_a, target_b : str
+        The two molecular target names; both must be keys in
+        ``exp_data``.
+    exp_data : dict
+        Experimental coordinates (nm) per target.
+    granularity : int
+        SPINNA granularity, see ``spinna.generate_N_structures``.
+    label_unc : dict
+        Maps each target to a list of candidate labeling uncertainties in
+        nm. A single-element list fixes that target's value.
+    distances : list of float
+        Candidate heterodimer separations in nm to screen.
+    mask_dict : dict or None
+        Mask dictionary, see ``spinna.StructureMixer``.
+    width, height, depth : float or None
+        ROI dimensions in nm (``depth`` is None for 2D).
+    random_rot_mode : {"2D", "3D"} or None
+        Molecule rotation mode.
+    sim_repeats : int
+        Number of simulation repeats (``N_sim``).
+    asynch : bool
+        Whether picasso uses multiprocessing during fitting.
+    NND_bin : float
+        Histogram bin size in nm.
+    NND_maxdist : float
+        Maximum distance shown in nm.
+    nn_plotted : int
+        Number of nearest neighbours to plot.
+    n_simulated : dict
+        Number of molecules per target used when plotting the fitted
+        NND histograms.
+    result_dir : str
+        Directory the returned figure paths are anchored to.
+    save_filename : str
+        Base filename (without extension) for saved figures/summary.
+    fitting_mode : {"coarse-to-fine", "bayesian", "brute-force"}, optional
+        Stoichiometry fitting mode forwarded to picasso. Default is
+        "coarse-to-fine".
+
+    Returns
+    -------
+    results : dict
+        Human-readable summary of the fit.
+    fp_fig : list of str
+        Filepaths of the saved NND figures.
+    le_values : dict
+        Fitted labeling efficiency [%] per target.
+    fitted_label_unc : dict
+        Fitted labeling uncertainty [nm] per target.
+    best_distance : float
+        Best-fit heterodimer separation in nm.
+    best_score : float
+        Kolmogorov-Smirnov score of the best fit.
+    """
+    (
+        le_values,
+        fitted_label_unc,
+        best_distance,
+        best_score,
+        best_props,
+        best_mixer,
+    ) = spinna.fit_le(
+        target_a=target_a,
+        target_b=target_b,
+        exp_data=exp_data,
+        granularity=granularity,
+        label_unc=label_unc,
+        distances=distances,
+        N_sim=sim_repeats,
+        mask_dict=mask_dict,
+        width=width,
+        height=height,
+        depth=depth,
+        random_rot_mode=random_rot_mode,
+        asynch=asynch,
+        savedir=result_dir,
+        fitting_mode=fitting_mode,
+    )
+
+    targets = [target_a, target_b]
+    results = {}
+    results["Date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    results["File location of structures"] = save_filename
+    results["Molecular targets"] = targets
+    results["Fitted labeling efficiency (%)"] = {
+        target: le_values[target] for target in targets
+    }
+    results["Fitted label uncertainty (nm)"] = {
+        target: fitted_label_unc[target] for target in targets
+    }
+    results["Best pair distance (nm)"] = best_distance
+    results["Rotation mode"] = random_rot_mode
+    results["Modified Kolmogorov-Smirnov score"] = best_score
+    results["Fitted structures names"] = best_mixer.get_structure_names()
+    results["Fitted proportions of structures"] = best_props
+    results["NND bin size (nm)"] = NND_bin
+    results["NND max distance (nm)"] = NND_maxdist
+
+    # save .txt with summary of the results
+    with open(f"{save_filename}_fit_le_summary.txt", "w") as f:
+        for key, value in results.items():
+            f.write(f"{key}: {value}\n")
+
+    # plot and save the NND plots for the best-fit mixer
+    fp_fig = plot_spinna_nnd(
+        mixer=best_mixer,
+        targets=targets,
+        exp_data=exp_data,
+        opt_props=best_props,
+        n_simulated=n_simulated,
+        sim_repeats=sim_repeats,
+        NND_bin=NND_bin,
+        NND_maxdist=NND_maxdist,
+        nn_plotted=nn_plotted,
+        save_filename=save_filename,
+        result_dir=result_dir,
+    )
+
+    return (
+        results,
+        fp_fig,
+        le_values,
+        fitted_label_unc,
+        best_distance,
+        best_score,
+    )
+
+
 def load_structures_from_dict(structure_dict):
     """Loads structures (SingleStructure's) from dict with format as
     those saved in .yaml files.

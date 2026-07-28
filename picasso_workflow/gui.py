@@ -3359,6 +3359,41 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     },
                 },
             },
+            "pair_distance_screen": {
+                "type": "dict",
+                "required": False,
+                "description": (
+                    "Screen a range of pair (heterodimer) distances via "
+                    "picasso fit_le. Requires exactly two channel targets; "
+                    "fits the best-fit separation between them AND the "
+                    "labeling efficiency (so the 'labeling_efficiency' and "
+                    "'structures' inputs are NOT used in this mode). "
+                    "Combine with 'labeling_uncertainty_screen' to also "
+                    "fit labeling uncertainty."
+                ),
+                "properties": {
+                    "min": {
+                        "type": "float",
+                        "description": "Smallest separation [nm]",
+                        "min": 0.0,
+                        "default": 5.0,
+                    },
+                    "max": {
+                        "type": "float",
+                        "description": "Largest separation [nm]",
+                        "min": 0.0,
+                        "default": 40.0,
+                    },
+                    "step": {
+                        "type": "float",
+                        "description": (
+                            "Step [nm]; defines the number of candidates"
+                        ),
+                        "min": 0.1,
+                        "default": 5.0,
+                    },
+                },
+            },
             "n_simulate": {
                 "type": "int",
                 "description": "Number of target molecules to simulated.",
@@ -3456,7 +3491,22 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "dict",
                 "description": (
                     "Best-fit labeling uncertainty [nm] per target; only "
-                    "present when labeling_uncertainty_screen is used."
+                    "present when labeling_uncertainty_screen (or "
+                    "pair_distance_screen) is used."
+                ),
+            },
+            "best_pair_distance": {
+                "type": "float",
+                "description": (
+                    "Best-fit heterodimer separation [nm]; only present "
+                    "when pair_distance_screen is used."
+                ),
+            },
+            "fitted_labeling_efficiency": {
+                "type": "dict",
+                "description": (
+                    "Labeling efficiency [%] fitted per target; only "
+                    "present when pair_distance_screen is used."
                 ),
             },
         }
@@ -6274,12 +6324,75 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 10,
                 "required": True,
             },
+            "pair_distance_screen": {
+                "type": "dict",
+                "required": False,
+                "description": (
+                    "Screen a range of pair distances instead of the "
+                    "fixed value above; picasso fit_le picks the best-fit "
+                    "separation. min/max/step in nm."
+                ),
+                "properties": {
+                    "min": {
+                        "type": "float",
+                        "description": "Smallest distance [nm]",
+                        "min": 0.0,
+                        "default": 5.0,
+                    },
+                    "max": {
+                        "type": "float",
+                        "description": "Largest distance [nm]",
+                        "min": 0.0,
+                        "default": 20.0,
+                    },
+                    "step": {
+                        "type": "float",
+                        "description": (
+                            "Step [nm]; defines the number of candidates"
+                        ),
+                        "min": 0.1,
+                        "default": 2.5,
+                    },
+                },
+            },
             "labeling_uncertainty": {
                 "type": "dict",
                 "description": "Dictionary mapping from target/reference (tag) "
                 "to labeling uncertainty [nm]",
                 # "default": 5,
                 "required": True,
+            },
+            "labeling_uncertainty_screen": {
+                "type": "dict",
+                "required": False,
+                "description": (
+                    "Screen a range of labeling uncertainties (applied to "
+                    "both target and reference) instead of the fixed dict "
+                    "above; picasso fit_le picks the best value per target. "
+                    "min/max/step in nm."
+                ),
+                "properties": {
+                    "min": {
+                        "type": "float",
+                        "description": "Range start [nm]",
+                        "min": 0.0,
+                        "default": 2.0,
+                    },
+                    "max": {
+                        "type": "float",
+                        "description": "Range end [nm] (inclusive)",
+                        "min": 0.0,
+                        "default": 12.0,
+                    },
+                    "step": {
+                        "type": "float",
+                        "description": (
+                            "Step [nm]; defines the number of candidates"
+                        ),
+                        "min": 0.1,
+                        "default": 2.0,
+                    },
+                },
             },
             "n_simulate": {
                 "type": "int",
@@ -6349,6 +6462,19 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Calculated labeling efficiency",
                 "min": 0.0,
                 "max": 1.0,
+            },
+            "best_pair_distance": {
+                "type": "float",
+                "description": (
+                    "Best-fit pair distance [nm] (equals the input when "
+                    "pair_distance_screen is not used)."
+                ),
+            },
+            "best_labeling_uncertainty": {
+                "type": "dict",
+                "description": (
+                    "Best-fit labeling uncertainty [nm] per fitted target."
+                ),
             },
         }
 
