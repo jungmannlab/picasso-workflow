@@ -9313,13 +9313,29 @@ class Window(QtWidgets.QMainWindow):
         config_layout = QtWidgets.QGridLayout(config_tab)
         self.tabs.addTab(config_tab, "Workflow Config")
 
-        # Files and modules boxes in config tab
+        # Files and modules boxes in config tab, separated by a draggable
+        # vertical divider so the user can trade width between the two panels.
         self._files_box = QtWidgets.QGroupBox("Files")
         self.files_box = QtWidgets.QGridLayout(self._files_box)
-        config_layout.addWidget(self._files_box, 0, 0, 1, 2)
         self._modules_box = QtWidgets.QGroupBox("Modules")
         self.modules_box = QtWidgets.QGridLayout(self._modules_box)
-        config_layout.addWidget(self._modules_box, 0, 2, 1, 2)
+        self.files_modules_splitter = QtWidgets.QSplitter(
+            Qt.Orientation.Horizontal
+        )
+        self.files_modules_splitter.addWidget(self._files_box)
+        self.files_modules_splitter.addWidget(self._modules_box)
+        self.files_modules_splitter.setChildrenCollapsible(False)
+        self.files_modules_splitter.setStretchFactor(0, 1)
+        self.files_modules_splitter.setStretchFactor(1, 1)
+        # Let the Files panel be dragged narrower than its content's natural
+        # width (long file paths elide / the table scrolls) instead of being
+        # pinned to the widest file path. SetNoConstraint stops the grid
+        # layout from re-imposing the content width as the box minimum.
+        self.files_box.setSizeConstraint(
+            QtWidgets.QLayout.SizeConstraint.SetNoConstraint
+        )
+        self._files_box.setMinimumWidth(150)
+        config_layout.addWidget(self.files_modules_splitter, 0, 0, 1, 4)
 
         # Documentation Config tab
         docconfig_tab = QtWidgets.QWidget()
@@ -9791,10 +9807,15 @@ class Window(QtWidgets.QMainWindow):
         self.files_tree_agg.itemChanged.connect(self._on_tree_item_changed)
         self.files_tree_inv.itemChanged.connect(self._on_tree_item_changed)
 
-        # adding modules
+        # adding modules. The Current Module editor and the workflow module
+        # list below it are placed in a vertical splitter so the divider
+        # between them can be dragged.
         self.current_module = QtWidgets.QGroupBox("Current Module")
         current_layout = QtWidgets.QVBoxLayout(self.current_module)
-        self.modules_box.addWidget(self.current_module, 0, 0)
+        self.modules_splitter = QtWidgets.QSplitter(Qt.Orientation.Vertical)
+        self.modules_splitter.setChildrenCollapsible(False)
+        self.modules_splitter.addWidget(self.current_module)
+        self.modules_box.addWidget(self.modules_splitter, 0, 0)
 
         self.module_combobox = QtWidgets.QComboBox()
         self.module_combobox.addItem("Select module")
@@ -9803,9 +9824,28 @@ class Window(QtWidgets.QMainWindow):
         )
         self.module_combobox.currentTextChanged.connect(self.on_module_changed)
         current_layout.addWidget(self.module_combobox)
-        # label describing the module selected
+        # label describing the module selected. Rendered as word-wrapped
+        # rich text inside its own scroll area so long descriptions stay
+        # readable and the divider below can resize the region.
         self.current_module_desc = QtWidgets.QLabel("No module selected")
-        current_layout.addWidget(self.current_module_desc)
+        self.current_module_desc.setTextFormat(Qt.TextFormat.RichText)
+        self.current_module_desc.setWordWrap(True)
+        self.current_module_desc.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        self.current_module_desc.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        self.current_module_desc.setOpenExternalLinks(True)
+        self.current_module_desc.setContentsMargins(4, 4, 4, 4)
+        desc_scroll = QtWidgets.QScrollArea()
+        desc_scroll.setWidget(self.current_module_desc)
+        desc_scroll.setWidgetResizable(True)
+        desc_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        desc_scroll.setMinimumHeight(60)
+
         # parameters section (scrollable)
         module_parameters = QtWidgets.QWidget()
         self.module_parameters_layout = QtWidgets.QVBoxLayout(
@@ -9821,8 +9861,16 @@ class Window(QtWidgets.QMainWindow):
             QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         parameters_scroll.setMinimumHeight(100)
-        parameters_scroll.setMaximumHeight(300)
-        current_layout.addWidget(parameters_scroll)
+
+        # Draggable horizontal divider between the module description and
+        # its parameters.
+        desc_params_splitter = QtWidgets.QSplitter(Qt.Orientation.Vertical)
+        desc_params_splitter.setChildrenCollapsible(False)
+        desc_params_splitter.addWidget(desc_scroll)
+        desc_params_splitter.addWidget(parameters_scroll)
+        desc_params_splitter.setStretchFactor(0, 0)
+        desc_params_splitter.setStretchFactor(1, 1)
+        current_layout.addWidget(desc_params_splitter)
         # button to add the selected module (or save edits to the selected
         # existing module -- label/behaviour switch via _on_module_button)
         self.add_module_button = QtWidgets.QPushButton("Add module")
@@ -9855,8 +9903,10 @@ class Window(QtWidgets.QMainWindow):
             self._on_workflow_selection_changed
         )
         aggregation_workflow_layout.addWidget(self.aggregation_workflow_list)
-        # Add workflow tabs to modules box
-        self.modules_box.addWidget(self.workflow_tabs, 1, 0)
+        # Add workflow tabs to the splitter below the current-module editor.
+        self.modules_splitter.addWidget(self.workflow_tabs)
+        self.modules_splitter.setStretchFactor(0, 0)
+        self.modules_splitter.setStretchFactor(1, 1)
         # Connect tab change signal
         self.workflow_tabs.currentChanged.connect(
             self._on_workflow_tab_changed
@@ -9876,7 +9926,7 @@ class Window(QtWidgets.QMainWindow):
         workflow_buttons = QtWidgets.QHBoxLayout()
         self.workflow_buttons_widget = QtWidgets.QWidget()
         self.workflow_buttons_widget.setLayout(workflow_buttons)
-        self.modules_box.addWidget(self.workflow_buttons_widget, 2, 0)
+        self.modules_box.addWidget(self.workflow_buttons_widget, 1, 0)
         remove_selected_button = QtWidgets.QPushButton("Remove selected")
         workflow_buttons.addWidget(remove_selected_button)
         remove_selected_button.clicked.connect(self.remove_selected)
@@ -9901,7 +9951,7 @@ class Window(QtWidgets.QMainWindow):
             self.addl_options_widget
         )
         self.addl_options_layout.setContentsMargins(0, 0, 0, 0)
-        self.modules_box.addWidget(self.addl_options_widget, 3, 0)
+        self.modules_box.addWidget(self.addl_options_widget, 2, 0)
 
         # Add options
         self.always_save = QtWidgets.QCheckBox(
@@ -9910,8 +9960,9 @@ class Window(QtWidgets.QMainWindow):
         self.addl_options_layout.addWidget(self.always_save)
 
         # resize the widgets
-        # Set fixed size for the group box
-        self.current_module.setMinimumSize(500, 300)
+        # Keep a sensible minimum width, but let the splitters drive height.
+        self.current_module.setMinimumWidth(500)
+        self.current_module.setMinimumHeight(180)
 
         # Initially disable file and module widgets until results folder is selected
         self._set_widgets_enabled(False)
@@ -14755,8 +14806,6 @@ class Window(QtWidgets.QMainWindow):
         self._update_editing_workflow_item()
 
     def on_module_changed(self, text):
-        import textwrap
-
         """Update the module description when a new module is selected."""
         # Clear editing state when user manually changes module
         # (This is only called via signal when not blocked, i.e., manual user action)
@@ -14828,26 +14877,22 @@ class Window(QtWidgets.QMainWindow):
                 if current_para:
                     processed_lines.append(" ".join(current_para))
 
-                desc = "\n".join(processed_lines)
+                # Render the summary as rich text: one paragraph per
+                # sentence-group so the label word-wraps to the available
+                # width on its own (no manual character-width guessing) and
+                # gives readable spacing between paragraphs.
+                import html as _html
 
-                # Calculate text width based on widget width
-                font_metrics = QtGui.QFontMetrics(
-                    self.current_module_desc.font()
-                )
-                widget_width = self.current_module_desc.width()
-                avg_char_width = font_metrics.averageCharWidth()
-                char_width = max(
-                    40, int(1.33 * widget_width / avg_char_width - 2)
-                )  # -2 for margin
-
-                # Apply text wrapping with calculated width, preserving paragraph breaks
-                wrapped_paragraphs = [
-                    textwrap.fill(para, width=char_width)
+                paragraphs = "".join(
+                    "<p style='margin:0 0 8px 0;'>{}</p>".format(
+                        _html.escape(para)
+                    )
                     for para in processed_lines
-                ]
-                desc = "\n".join(wrapped_paragraphs)
-
-                self.current_module_desc.setText(desc)
+                )
+                if not paragraphs:
+                    paragraphs = "<p style='margin:0;'>No description "
+                    paragraphs += "available.</p>"
+                self.current_module_desc.setText(paragraphs)
             except Exception as e:
                 raise e
                 self.current_module_desc.setText(
