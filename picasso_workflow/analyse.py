@@ -8126,17 +8126,44 @@ class AutoPicasso(util.AbstractModuleCollection):
             rvals = np.linspace(0, bin_max, num=3 * nbins)
             nnhist_obs = np.zeros((len(bins), k_max))
             nnhist_an = np.zeros_like(nnhist_obs)
+            # The CSR model is only defined on the fit window
+            # [min_dist, max_dist]; the histograms below are drawn with
+            # density=True, i.e. normalised over ALL of a neighbour's
+            # distances, including those outside the window.
+            fit_min_dist = float(kwargs.get("min_dist", 0))
+            fit_max_dist = float(kwargs.get("max_dist", np.inf))
             for i in range(nnhist_an.shape[1]):
                 k = i + 1
                 # nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
-                nnhist_an = picasso_outpost.nndistribution_from_csr(
-                    rvals,
-                    k,
-                    rho_mle,
-                    d=d,
-                    min_dist=kwargs.get("min_dist", 0),
-                    max_dist=kwargs.get("max_dist", np.inf),
-                    renormalize=False,
+                # Model curve to overlay the density=True histogram, in two
+                # steps:
+                #  - renormalize=True makes the CSR model a proper density
+                #    over [min_dist, max_dist] (it integrates to 1 there);
+                #  - scaling by the empirical fraction of this neighbour's
+                #    distances inside the window matches the histogram, which
+                #    (being density=True over all distances) integrates to
+                #    exactly that fraction over the window.
+                # Without the scaling the curve is the in-window *conditional*
+                # density, which sits too high whenever the data has mass
+                # outside the window (e.g. sub-min_dist localisations) -- the
+                # observed y-exaggeration at otherwise-correct x positions.
+                in_window = (nneighbors[:, i] >= fit_min_dist) & (
+                    nneighbors[:, i] <= fit_max_dist
+                )
+                frac_in_window = (
+                    float(np.mean(in_window)) if in_window.size else 0.0
+                )
+                nnhist_an = (
+                    frac_in_window
+                    * picasso_outpost.nndistribution_from_csr(
+                        rvals,
+                        k,
+                        rho_mle,
+                        d=d,
+                        min_dist=fit_min_dist,
+                        max_dist=fit_max_dist,
+                        renormalize=True,
+                    )
                 )
                 if i == 0:
                     lbl = f"rho_init {1E6*rho_init:.1f} um^-2"
@@ -8159,9 +8186,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 else:
                     linestyle = "--"
                     lblf = f"fit k={k}"
-                # do not plot the model cutoff
-                if kwargs.get("min_dist", 0) > 0:
-                    nnhist_an[rvals <= kwargs["min_dist"]] = np.nan
+                # do not draw the model outside the fit window (it is
+                # identically zero there); blank it so the curve is not drawn
+                # down to zero at the window edges.
+                if fit_min_dist > 0:
+                    nnhist_an[rvals <= fit_min_dist] = np.nan
+                if np.isfinite(fit_max_dist):
+                    nnhist_an[rvals >= fit_max_dist] = np.nan
                 ax.plot(
                     rvals,  # + (bins[1] - bins[0]) / 2,
                     nnhist_an,
@@ -8170,9 +8201,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     label=lblf,
                 )
                 # now, plot the histogram below cutoff in white for shading
-                if (kwargs.get("min_dist", 0) > 0) and (i == 0):
+                if (fit_min_dist > 0) and (i == 0):
                     xlim = ax.get_xlim()
-                    x_fill = [xlim[0], kwargs["min_dist"]]
+                    x_fill = [xlim[0], fit_min_dist]
                     y_fill1 = [ax.get_ylim()[0]] * 2
                     y_fill2 = [ax.get_ylim()[1]] * 2
                     ax.fill_between(
