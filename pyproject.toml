@@ -16,7 +16,7 @@ dependencies = [
     "tables",
     "numba",
     "openpyxl==3.1.2",
-    "picassosr>=0.11.0a1",
+    "picassosr>=0.11.0a2",
     # GUI uses PyQt6 directly; keep in sync with picasso's constraint
     "PyQt6>=6.10.2,<7",
     # Embedded HTML report viewer in the GUI Results tab (QWebEngineView);
