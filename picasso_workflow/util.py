@@ -994,11 +994,16 @@ class AbstractModuleCollection(abc.ABC):
             ``min_dist`` : float
                 Minimum observable distance in nm due to technical limits.
             ``max_dist`` : float
-                Maximum distance for filtering analysis.
+                Maximum distance for filtering analysis. Bounds the fit
+                only, not the plotting range (see ``plot_max_dist``).
             ``bkg_fraction`` : float
                 Background fraction for fitting.
             ``fit_bkg`` : bool
                 Whether to fit the background (default False).
+            ``plot_max_dist`` : float
+                Maximum distance shown on the plot's distance axis, in nm.
+                Only affects display, not the fit. Defaults to the 95th
+                percentile of the largest-k neighbour distances.
         results : dict
             Module results (see class docstring).
 

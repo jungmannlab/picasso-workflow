@@ -559,6 +559,9 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "min_locs": 3,
             "basic_fa": False,
             "radius_z": 2,
+            "n_locs_in": 1000,
+            "n_locs_clustered": 600,
+            "n_centers": 50,
         }
         self.cr.smlm_clusterer(0, parameters, results)
 
@@ -1689,3 +1692,143 @@ def test_get_page_properties_raises_clear_error_when_absent(monkeypatch):
         ci.confluence.get_page_by_title.call_count
         == confluence._PAGE_LOOKUP_RETRIES + 1
     )
+
+
+# ---------------------------------------------------------------------------
+# Error reporting
+# ---------------------------------------------------------------------------
+
+
+def _reporter():
+    """A ConfluenceReporter with a mocked interface, no network."""
+    cr = confluence.ConfluenceReporter.__new__(confluence.ConfluenceReporter)
+    cr.ci = MagicMock()
+    cr.report_page_name = "page"
+    cr.report_page_id = "1"
+    return cr
+
+
+def _raise_value_error():
+    """Raise from inside the package so a project frame exists."""
+    raise ValueError("zero-size array to reduction operation maximum")
+
+
+def _posted_body(cr):
+    return cr.ci.update_page_content.call_args[0][2]
+
+
+def test_report_error_names_module_index_type_and_parameters():
+    cr = _reporter()
+    try:
+        _raise_value_error()
+    except ValueError as e:
+        cr.report_error(
+            e,
+            "fit_csr",
+            i=13,
+            parameters={"min_dist": 50.0, "max_dist": 300.0},
+            result_folder="/res/13_fit_csr",
+            previous_results={"density_rdf": 3.2e-07},
+        )
+
+    body = _posted_body(cr)
+    assert "<h2>" in body
+    assert "Module 13: fit_csr" in body
+    # The type used to appear only at the tail of the traceback.
+    assert "Exception type: ValueError" in body
+    assert "max_dist" in body and "300.0" in body
+    assert "/res/13_fit_csr" in body
+    assert "density_rdf" in body
+    # Traceback kept, and inside a code macro so newlines survive.
+    assert 'ac:name="code"' in body
+    assert "Traceback (most recent call last)" in body
+
+
+def test_report_error_names_innermost_project_frame():
+    cr = _reporter()
+    try:
+        _raise_value_error()
+    except ValueError as e:
+        cr.report_error(e, "fit_csr", i=13)
+
+    body = _posted_body(cr)
+    assert "Failing picasso-workflow frame" in body
+    assert "test_confluence.py" in body
+    assert "_raise_value_error" in body
+
+
+def test_report_error_filters_non_serializable_parameters():
+    cr = _reporter()
+    try:
+        _raise_value_error()
+    except ValueError as e:
+        cr.report_error(
+            e,
+            "conditional_branch",
+            i=2,
+            parameters={"a": 1, "parameter_command_executor": object()},
+        )
+
+    body = _posted_body(cr)
+    assert "parameter_command_executor" not in body
+    assert "a: 1" in body
+
+
+def test_report_error_backwards_compatible_two_arg_call():
+    cr = _reporter()
+    try:
+        _raise_value_error()
+    except ValueError as e:
+        cr.report_error(e, "fit_csr")
+
+    body = _posted_body(cr)
+    assert "Error in fit_csr" in body
+    assert "Traceback (most recent call last)" in body
+
+
+def test_report_error_falls_back_when_rendering_fails(monkeypatch):
+    """A bug in reporting must not replace the real diagnosis."""
+    cr = _reporter()
+    monkeypatch.setattr(
+        confluence,
+        "_expand_macro",
+        MagicMock(side_effect=RuntimeError("render bug")),
+    )
+    try:
+        _raise_value_error()
+    except ValueError as e:
+        cr.report_error(e, "fit_csr", i=13, parameters={"a": 1})
+
+    body = _posted_body(cr)
+    assert "ERROR OCCURRED" in body
+    assert "zero-size array" in body
+
+
+def test_report_error_without_active_exception_still_has_traceback():
+    """format_exc() would yield 'NoneType: None' outside an except block."""
+    cr = _reporter()
+    try:
+        _raise_value_error()
+    except ValueError as exc:
+        captured = exc
+    cr.report_error(captured, "fit_csr", i=13)
+
+    body = _posted_body(cr)
+    assert "NoneType: None" not in body
+    assert "_raise_value_error" in body
+
+
+def test_expand_macro_formats_numpy_scalars_and_skips_keys():
+    import numpy as np
+
+    text = confluence._expand_macro(
+        "Parameters", {"a": np.float64(1.5), "b": 2}, skip_keys=("b",)
+    )
+    assert "a: 1.5" in text
+    assert "np.float64" not in text
+    assert "b: 2" not in text
+
+
+def test_code_macro_escapes_cdata_terminator():
+    text = confluence._code_macro("before " + "]]" + "> after")
+    assert "]]]]><" + "![CDATA[>" in text

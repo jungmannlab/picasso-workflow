@@ -340,8 +340,20 @@ def module_decorator(method):
             "start time": datetime.now().strftime("%y-%m-%d %H:%M:%S"),
         }
 
-        # call the module
-        parameters, results = method(self, i, parameters, results)
+        # call the module. On failure, hand the partial results (folder and
+        # start time) to the error reporter: they are built here and would
+        # otherwise die with the stack frame, and the folder cannot be
+        # reconstructed by the caller, which does not see suffix /
+        # calling_module_dir.
+        try:
+            parameters, results = method(self, i, parameters, results)
+        except BaseException as exc:
+            exc._pwf_partial_results = results
+            # Persist whatever locs the module held when it failed, so the
+            # last data state can be inspected while debugging without
+            # re-running the workflow. Best-effort: never mask the real error.
+            self._save_state_on_error(results["folder"])
+            raise
 
         # post-actions
         # modules only need to specifically set an error.
@@ -7079,6 +7091,49 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    def _plot_cluster_sizes(self, size_map, filepath):
+        """Plot a histogram of localizations per cluster.
+
+        Parameters
+        ----------
+        size_map : dict of {str: np.ndarray}
+            Cluster sizes (locs per cluster) keyed by label. A single ""
+            key yields a plain histogram; multiple keys are overlaid with a
+            legend (e.g. one entry per channel).
+        filepath : str
+            Destination path for the figure.
+
+        Returns
+        -------
+        str
+            ``filepath`` (for convenience when assigning to ``results``).
+        """
+        fig, ax = plt.subplots()
+        nonempty = [s for s in size_map.values() if len(s)]
+        if nonempty:
+            all_sizes = np.concatenate(nonempty)
+            # match dbscan/g5m: cap the axis at the 95th percentile so a few
+            # huge clusters do not flatten the informative part.
+            maxbin = max(int(np.quantile(all_sizes, 0.95)), 2)
+            bins = np.arange(1, maxbin + 1)
+            overlay = len(size_map) > 1
+            for size_label, sizes in size_map.items():
+                if not len(sizes):
+                    continue
+                ax.hist(
+                    sizes,
+                    bins=bins,
+                    alpha=0.6 if overlay else 1.0,
+                    label=size_label or None,
+                )
+            if overlay:
+                ax.legend()
+        ax.set_xlabel("cluster size [locs]")
+        ax.set_ylabel("Frequency")
+        fig.savefig(filepath)
+        plt.close(fig)
+        return filepath
+
     #    @profile_resource_usage
     @module_decorator
     def smlm_clusterer(self, i, parameters, results):
@@ -7109,6 +7164,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Updated with ``n_locs_in`` (locs entering the clusterer),
+            ``n_locs_clustered`` (locs kept in clusters), ``n_centers``
+            (number of cluster centers) and ``fp_fig_clustersizes`` (the
+            locs-per-cluster histogram). In the multi-channel case a
+            ``per_channel`` list carries the same counts per channel.
         """
         pixelsize = self.pixelsize
         radius = parameters["radius"] / pixelsize
@@ -7135,6 +7201,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             if radius_z is not None:  # 3D
                 kwargs["radius_z"] = radius_z
 
+            # locs going into the clusterer; those not assigned to a cluster
+            # (or in clusters below min_locs) are dropped by the clusterer.
+            n_locs_in = len(self.locs)
+
             # label locs according to clusters
             # logger.debug(
             #     f"starting clusterer on self.locs with kwargs {kwargs}"
@@ -7152,6 +7222,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             self._save_locs(filepath)
             results["fp_clustered_locs"] = filepath
 
+            n_locs_clustered = len(self.locs)
+            cluster_sizes = np.unique(self.locs["group"], return_counts=True)[
+                1
+            ]
+
             self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
             logger.warning(
                 "saving cluster centeras as locs. Is that intended?"
@@ -7162,10 +7237,21 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             self._save_locs(filepath)
             results["fp_cluster_centers"] = filepath
+
+            # report dropped locs and the locs-per-cluster distribution
+            results["n_locs_in"] = n_locs_in
+            results["n_locs_clustered"] = n_locs_clustered
+            results["n_centers"] = len(self.locs)
+            results["fp_fig_clustersizes"] = self._plot_cluster_sizes(
+                {"": cluster_sizes},
+                os.path.join(results["folder"], "fig_smlm_clustersize.png"),
+            )
         else:
             logger.debug("smlm clustering channel_locs")
             new_channel_locs = []
             new_channel_infos = []
+            size_map = {}
+            per_channel = []
             for tag, info, locs in zip(
                 self.channel_tags, self.channel_info, self.channel_locs
             ):
@@ -7178,6 +7264,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 }
                 if radius_z is not None:  # 3D
                     kwargs["radius_z"] = radius_z
+
+                n_locs_in = len(locs)
 
                 # label locs according to clusters
                 clustered_locs, smlm_cluster_info = clusterer.cluster(
@@ -7192,6 +7280,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 io.save_locs(filepath, clustered_locs, info)
 
+                size_map[tag] = np.unique(
+                    clustered_locs["group"], return_counts=True
+                )[1]
+
                 cc_locs = clusterer.find_cluster_centers(
                     clustered_locs, pixelsize
                 )
@@ -7201,10 +7293,32 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 io.save_locs(filepath, cc_locs, info)
 
+                per_channel.append(
+                    {
+                        "tag": tag,
+                        "n_locs_in": n_locs_in,
+                        "n_locs_clustered": len(clustered_locs),
+                        "n_centers": len(cc_locs),
+                    }
+                )
+
                 new_channel_locs.append(cc_locs)
                 new_channel_infos.append(info)
             self.channel_locs = new_channel_locs
             self.channel_info = new_channel_infos
+
+            # report dropped locs (totals + per channel) and the
+            # locs-per-cluster distribution across channels
+            results["per_channel"] = per_channel
+            results["n_locs_in"] = sum(c["n_locs_in"] for c in per_channel)
+            results["n_locs_clustered"] = sum(
+                c["n_locs_clustered"] for c in per_channel
+            )
+            results["n_centers"] = sum(c["n_centers"] for c in per_channel)
+            results["fp_fig_clustersizes"] = self._plot_cluster_sizes(
+                size_map,
+                os.path.join(results["folder"], "fig_smlm_clustersize.png"),
+            )
 
         return parameters, results
 
@@ -7252,21 +7366,25 @@ class AutoPicasso(util.AbstractModuleCollection):
                 is shown on the console; if ``'silent'``, nothing is shown
                 (default ``'silent'``).
             ``sigma_bounds`` : tuple of float
-                Minimum Gaussian-component standard deviation in nm (not
-                recommended now that individual loc precision is used).
-            ``loc_prec_handle`` : {"local", "global", "abs"}
+                Lower and upper bounds on the Gaussian-component standard
+                deviation, as (min, max). With ``loc_prec_handle="local"``
+                (the default) these are dimensionless factors multiplying
+                each component's localization precision, i.e.
+                ``[min * loc_prec, max * loc_prec]``; with
+                ``loc_prec_handle="abs"`` they are absolute sigmas in camera
+                pixels. They are not in nm and are not converted here
+                (default ``(g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)``).
+            ``loc_prec_handle`` : {"local", "abs"}
                 How to handle localization precision (default ``"local"``).
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        pixelsize = self.pixelsize
         required_args = ["min_locs"]
         optional_args = [
             ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
             ("bootstrap_check", False),
             ("calibration", None),
-            # ("pixelsize", pixelsize),
             ("asynch", True),
             ("callback_parent", None),  # "silent"),
             ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
@@ -7278,10 +7396,6 @@ class AutoPicasso(util.AbstractModuleCollection):
             logger.error(f"""All of the following arguments are required for
                 picasso.g5m.g5m: {required_args}""")
             raise e
-        # sigma values are given in nm in parameters but px in gmm
-        if "min_sigma" in kwargs.keys():
-            kwargs["min_sigma"] = kwargs["min_sigma"] / pixelsize
-            kwargs["max_sigma"] = kwargs["max_sigma"] / pixelsize
         for oa, default in optional_args:
             setval = parameters.get(oa, default)
             if oa == "calibration" and setval == "":
@@ -7306,6 +7420,20 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.locs, self.info, **kwargs
         )
 
+        # picasso.g5m returns (None, None, info) when no molecules are found,
+        # and an empty centers table when its postprocess filters remove them
+        # all. Either way there is nothing to keep as new localizations, so
+        # the downstream plotting/statistics (center_locs["n_events"],
+        # dividing by n_centers) would otherwise crash with a cryptic
+        # TypeError / ZeroDivisionError. Fail here with an actionable message.
+        if center_locs is None or len(center_locs) == 0:
+            raise AutoPicassoError(
+                "Gaussian mixture clustering found no clusters passing its "
+                "filters, so there are no centers to keep as localizations. "
+                "Check the input localizations and any upstream clustering, "
+                "and consider relaxing 'min_locs' or the sigma bounds."
+            )
+
         if parameters.get("save_locs"):
             fp_centers = os.path.join(results["folder"], "gmm_centers.hdf5")
             io.save_locs(fp_centers, center_locs, gmm_info)
@@ -7314,12 +7442,54 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             io.save_locs(fp_centers, clustered_locs, gmm_info)
 
-        # plot: histogram of cluster sizes
+        # plot: cluster-size distribution. Two quantities are overlaid because
+        # they answer different questions and differ by construction: n_locs
+        # is the localization population per component (what 'min_locs' filters
+        # on, so every kept cluster has n_locs >= min_locs), while n_events is
+        # the number of binding events (consecutive-frame locs linked into
+        # events) assigned to the component -- always <= n_locs, and often far
+        # smaller for sticky binders. Plotting only n_events under a "[locs]"
+        # label previously made kept clusters look like they fell below
+        # min_locs.
+        n_events = center_locs["n_events"]
+        # center_locs is a structured array (recarray); fall back to DataFrame
+        # columns in case a future g5m returns one.
+        field_names = getattr(
+            getattr(center_locs, "dtype", None), "names", None
+        ) or list(getattr(center_locs, "columns", []))
+        has_n_locs = "n_locs" in (field_names or [])
+        # Shared bins spanning both distributions; clip the top at the 95th
+        # percentile of the larger quantity so a few huge clusters don't
+        # flatten the histogram.
+        ref = center_locs["n_locs"] if has_n_locs else n_events
+        maxbin = max(int(np.quantile(ref, 0.95)), 2)
+        bins = np.arange(maxbin + 1)
         fig, ax = plt.subplots()
-        maxbin = int(np.quantile(center_locs["n_events"], 0.95))
-        ax.hist(center_locs["n_events"], bins=np.arange(maxbin))
-        ax.set_xlabel("cluster size [locs]")
+        if has_n_locs:
+            ax.hist(
+                center_locs["n_locs"],
+                bins=bins,
+                alpha=0.5,
+                color="C0",
+                label="localizations (n_locs)",
+            )
+        ax.hist(
+            n_events,
+            bins=bins,
+            alpha=0.5,
+            color="C1",
+            label="binding events (n_events)",
+        )
+        ax.axvline(
+            parameters["min_locs"],
+            color="k",
+            linestyle="--",
+            linewidth=1,
+            label=f"min_locs = {parameters['min_locs']}",
+        )
+        ax.set_xlabel("cluster size [count per cluster]")
         ax.set_ylabel("Frequency")
+        ax.legend()
         results["fp_fig_clustersizes"] = os.path.join(
             results["folder"], "fig_gmm_clustersize.png"
         )
@@ -7699,11 +7869,26 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``min_dist`` : float
                 Minimum observable distance in nm due to technical limits.
             ``max_dist`` : float
-                Maximum distance for filtering analysis.
+                Maximum distance for filtering analysis. Bounds the fit
+                only, not the plotting range (see ``plot_max_dist``).
             ``bkg_fraction`` : float
                 Background fraction for fitting.
             ``fit_bkg`` : bool
                 Whether to fit the background (default False).
+            ``plot_max_dist`` : float
+                Maximum distance shown on the plot's distance axis, in nm.
+                Only affects display, not the fit. Defaults to the 95th
+                percentile of the largest-k neighbour distances.
+            ``gof_window_coverage_warn`` : float
+                Warn if more than this fraction of the ``kmin``-th
+                nearest-neighbour distances fall outside the fit window
+                ``[min_dist, max_dist]`` (the window is then too narrow and
+                the density is biased). Default 0.5.
+            ``gof_wasserstein_warn`` : float
+                Warn if the mean Wasserstein distance between observed and
+                CSR-model neighbour distributions exceeds this fraction of
+                the median 1st-NN spacing (poor goodness of fit).
+                Default 0.3.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
@@ -7743,20 +7928,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         # nspots = nneighbors.shape[0]
         d = int(parameters.get("dimensionality", 2))
         kwargs = {
-            # "nn_dists": nneighbors.T[kmin - 1 :, :],
             "kmin": kmin,
-            "rho_bound_factor": 10,
         }
-        if min_dist := parameters.get("min_dist"):
+        # "is not None", not truthiness: a value of 0 is meaningful here
+        # and used to be silently replaced by the function default.
+        if (min_dist := parameters.get("min_dist")) is not None:
             kwargs["min_dist"] = float(min_dist)
-        if max_dist := parameters.get("max_dist"):
+        if (max_dist := parameters.get("max_dist")) is not None:
             kwargs["max_dist"] = float(max_dist)
-        if bkg_fraction := parameters.get("bkg_fraction"):
+        if (bkg_fraction := parameters.get("bkg_fraction")) is not None:
             kwargs["bkg_fraction"] = float(bkg_fraction)
         kwargs["fit_bkg"] = bool(parameters.get("fit_bkg", False))
         kwargs["d"] = d
-        rho_init = 2 / (2 * d * np.pi * np.median(nneighbors[:, 0]) ** d)
-        kwargs["rho_init"] = rho_init
 
         densities = []
         bkgs = []
@@ -7766,10 +7949,54 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_fig"] = []
         for tag, nneighbors in zip(tags, nneighbor_list):
             kwargs["nn_dists"] = nneighbors.T[kmin - 1 :, :]
-            (
-                rho_mle,
-                fitresult,
-            ) = picasso_outpost.estimate_density_from_neighbordists(**kwargs)
+            # rho_init must come from THIS dataset's 1st-NN distances: it
+            # seeds the fit and sets the hard density bounds
+            # [rho_init / f, rho_init * f] inside
+            # estimate_density_from_neighbordists. Computing it once from
+            # the first dataset (as before) made every channel of an
+            # aggregation inherit the first channel's density scale,
+            # silently clamping sparser/denser channels to a wrong bound.
+            rho_init = 2 / (2 * d * np.pi * np.median(nneighbors[:, 0]) ** d)
+            kwargs["rho_init"] = rho_init
+
+            # Fit; if the MLE rails against a density bound, the true
+            # density lies outside the search window and the result is a
+            # clamped, confidently-wrong value (e.g. a too-small max_dist
+            # only sees close neighbours and overestimates the density).
+            # Widen rho_bound_factor and refit instead, and warn if the
+            # fit still cannot escape the bound.
+            bound_factor = 10.0
+            max_bound_factor = 1e4
+            while True:
+                kwargs["rho_bound_factor"] = bound_factor
+                (
+                    rho_mle,
+                    fitresult,
+                ) = picasso_outpost.estimate_density_from_neighbordists(
+                    **kwargs
+                )
+                lo = rho_init / bound_factor
+                hi = rho_init * bound_factor
+                at_bound = rho_mle <= lo * (1 + 1e-3) or rho_mle >= hi * (
+                    1 - 1e-3
+                )
+                if not at_bound or bound_factor >= max_bound_factor:
+                    break
+                logger.warning(
+                    f"fit_csr[{tag}]: density {1e6 * rho_mle:.3g} "
+                    f"um^-2 hit the [{1e6 * lo:.3g}, {1e6 * hi:.3g}] "
+                    f"um^-2 bound (rho_bound_factor={bound_factor:g}); "
+                    f"widening and refitting."
+                )
+                bound_factor *= 10
+            if at_bound:
+                logger.warning(
+                    f"fit_csr[{tag}]: density {1e6 * rho_mle:.3g} um^-2 "
+                    f"stays at a bound even with "
+                    f"rho_bound_factor={bound_factor:g}; the CSR fit is "
+                    f"unreliable -- check min_dist/max_dist/kmin and that "
+                    f"the neighbour distances span the true density scale."
+                )
             # print(fitresult)
             logger.debug(str(fitresult))
             densities.append(rho_mle)
@@ -7869,10 +8096,71 @@ class AutoPicasso(util.AbstractModuleCollection):
             else:
                 mean_wasserstein_distances.append(np.nan)
 
+            # Fit-quality warnings: both failure modes below yield a
+            # plausible density with no error, so flag them loudly.
+            #  (1) window too narrow -- if most neighbour distances lie
+            #      outside [min_dist, max_dist], the density is estimated
+            #      from a biased near-tail and comes out far too high (the
+            #      fitted curves land left of the histogram). This is the
+            #      classic "completely off" sparse-channel symptom, and it
+            #      is invisible to the in-window GoF metrics below because
+            #      those only see the retained near-tail.
+            #  (2) poor goodness of fit -- the CSR model does not match the
+            #      observed neighbour distributions even within the window
+            #      (Wasserstein distance large relative to the neighbour
+            #      spacing): an unreliable fit or genuine non-CSR structure
+            #      (clustering). KS p-values are deliberately not used here
+            #      -- with thousands of points KS rejects on any trivial
+            #      deviation, so it would warn on essentially every run.
+            min_d = float(kwargs.get("min_dist", 0))
+            max_d = float(kwargs.get("max_dist", np.inf))
+            kmin_dists = nneighbors[:, kmin - 1]
+            frac_outside = (
+                float(np.mean((kmin_dists < min_d) | (kmin_dists > max_d)))
+                if len(kmin_dists)
+                else 0.0
+            )
+            coverage_warn = float(
+                parameters.get("gof_window_coverage_warn", 0.5)
+            )
+            if frac_outside > coverage_warn:
+                logger.warning(
+                    f"fit_csr[{tag}]: {100 * frac_outside:.0f}% of the "
+                    f"k={kmin} nearest-neighbour distances fall outside "
+                    f"the fit window [{min_d:g}, {max_d:g}] nm; the fitted "
+                    f"density ({1e6 * rho_mle:.3g} um^-2) is biased "
+                    f"(likely too high). Widen max_dist / lower min_dist "
+                    f"for this dataset."
+                )
+            median_1stnn = float(np.median(nneighbors[:, 0]))
+            rel_wasserstein = (
+                mean_wasserstein_distances[-1] / median_1stnn
+                if median_1stnn > 0
+                else np.nan
+            )
+            gof_warn = float(parameters.get("gof_wasserstein_warn", 0.3))
+            if np.isfinite(rel_wasserstein) and rel_wasserstein > gof_warn:
+                logger.warning(
+                    f"fit_csr[{tag}]: poor CSR goodness of fit (mean "
+                    f"Wasserstein distance "
+                    f"{mean_wasserstein_distances[-1]:.3g} nm = "
+                    f"{rel_wasserstein:.2f}x the median 1st-NN spacing). "
+                    f"The density ({1e6 * rho_mle:.3g} um^-2) may be "
+                    f"unreliable, or the data may deviate from CSR "
+                    f"(clustering)."
+                )
+
             # plot results
             fig, ax = plt.subplots()
             colors = colormaps["viridis"].resampled(k_max).colors
-            bin_max = np.quantile(nneighbors[:, -1], 0.95)
+            # Plotting range on the distance axis. Independent of ``max_dist``
+            # (which only bounds the fit): ``plot_max_dist`` sets how far the
+            # histograms/curves are displayed. Defaults to the 95th percentile
+            # of the largest-k neighbour distances.
+            if (plot_max_dist := parameters.get("plot_max_dist")) is not None:
+                bin_max = float(plot_max_dist)
+            else:
+                bin_max = np.quantile(nneighbors[:, -1], 0.95)
             median_1stNN = np.median(nneighbors[:, 0])
             # sample bins such that there are 5 bins from 0 to middle of 1stNN
             nbins = int(5 * bin_max / median_1stNN)
@@ -7880,17 +8168,44 @@ class AutoPicasso(util.AbstractModuleCollection):
             rvals = np.linspace(0, bin_max, num=3 * nbins)
             nnhist_obs = np.zeros((len(bins), k_max))
             nnhist_an = np.zeros_like(nnhist_obs)
+            # The CSR model is only defined on the fit window
+            # [min_dist, max_dist]; the histograms below are drawn with
+            # density=True, i.e. normalised over ALL of a neighbour's
+            # distances, including those outside the window.
+            fit_min_dist = float(kwargs.get("min_dist", 0))
+            fit_max_dist = float(kwargs.get("max_dist", np.inf))
             for i in range(nnhist_an.shape[1]):
                 k = i + 1
                 # nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
-                nnhist_an = picasso_outpost.nndistribution_from_csr(
-                    rvals,
-                    k,
-                    rho_mle,
-                    d=d,
-                    min_dist=kwargs.get("min_dist", 0),
-                    max_dist=kwargs.get("max_dist", np.inf),
-                    renormalize=False,
+                # Model curve to overlay the density=True histogram, in two
+                # steps:
+                #  - renormalize=True makes the CSR model a proper density
+                #    over [min_dist, max_dist] (it integrates to 1 there);
+                #  - scaling by the empirical fraction of this neighbour's
+                #    distances inside the window matches the histogram, which
+                #    (being density=True over all distances) integrates to
+                #    exactly that fraction over the window.
+                # Without the scaling the curve is the in-window *conditional*
+                # density, which sits too high whenever the data has mass
+                # outside the window (e.g. sub-min_dist localisations) -- the
+                # observed y-exaggeration at otherwise-correct x positions.
+                in_window = (nneighbors[:, i] >= fit_min_dist) & (
+                    nneighbors[:, i] <= fit_max_dist
+                )
+                frac_in_window = (
+                    float(np.mean(in_window)) if in_window.size else 0.0
+                )
+                nnhist_an = (
+                    frac_in_window
+                    * picasso_outpost.nndistribution_from_csr(
+                        rvals,
+                        k,
+                        rho_mle,
+                        d=d,
+                        min_dist=fit_min_dist,
+                        max_dist=fit_max_dist,
+                        renormalize=True,
+                    )
                 )
                 if i == 0:
                     lbl = f"rho_init {1E6*rho_init:.1f} um^-2"
@@ -7913,9 +8228,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 else:
                     linestyle = "--"
                     lblf = f"fit k={k}"
-                # do not plot the model cutoff
-                if kwargs.get("min_dist", 0) > 0:
-                    nnhist_an[rvals <= kwargs["min_dist"]] = np.nan
+                # do not draw the model outside the fit window (it is
+                # identically zero there); blank it so the curve is not drawn
+                # down to zero at the window edges.
+                if fit_min_dist > 0:
+                    nnhist_an[rvals <= fit_min_dist] = np.nan
+                if np.isfinite(fit_max_dist):
+                    nnhist_an[rvals >= fit_max_dist] = np.nan
                 ax.plot(
                     rvals,  # + (bins[1] - bins[0]) / 2,
                     nnhist_an,
@@ -7924,9 +8243,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                     label=lblf,
                 )
                 # now, plot the histogram below cutoff in white for shading
-                if (kwargs.get("min_dist", 0) > 0) and (i == 0):
+                if (fit_min_dist > 0) and (i == 0):
                     xlim = ax.get_xlim()
-                    x_fill = [xlim[0], kwargs["min_dist"]]
+                    x_fill = [xlim[0], fit_min_dist]
                     y_fill1 = [ax.get_ylim()[0]] * 2
                     y_fill2 = [ax.get_ylim()[1]] * 2
                     ax.fill_between(
@@ -8090,6 +8409,42 @@ class AutoPicasso(util.AbstractModuleCollection):
         dt = np.round(time.time() - t00, 2)
         results_save = {"duration": dt}
         return results_save
+
+    def _save_state_on_error(self, folder):
+        """Best-effort dump of the current locs when a module fails.
+
+        On a module error, whatever ``self.locs`` / ``self.channel_locs``
+        held at that moment is often the fastest way to diagnose the cause,
+        so it is written into an ``error_state`` subfolder of the failed
+        module's result folder. This must never raise: a failure here would
+        mask the original module error that the caller is about to re-raise.
+
+        Parameters
+        ----------
+        folder : str
+            The failed module's result folder.
+        """
+        error_dir = os.path.join(folder, "error_state")
+        try:
+            saved = []
+            if getattr(self, "locs", None) is not None:
+                os.makedirs(error_dir, exist_ok=True)
+                self._save_locs(os.path.join(error_dir, "locs.hdf5"))
+                saved.append("locs")
+            if getattr(self, "channel_locs", None) is not None:
+                os.makedirs(error_dir, exist_ok=True)
+                self._save_datasets_agg(error_dir)
+                saved.append(f"{len(self.channel_locs)} channel_locs")
+            if saved:
+                logger.info(
+                    "Saved current localizations at time of error "
+                    f"({', '.join(saved)}) to {error_dir} for debugging."
+                )
+        except Exception as save_exc:
+            logger.warning(
+                "Could not save the current localizations to "
+                f"{error_dir} after a module error: {save_exc}"
+            )
 
     ##########################################################################
     # Aggregation workflow modules
@@ -8499,6 +8854,22 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             Optional keys:
 
+            ``labeling_uncertainty_screen`` : dict
+                If given, screen a range of labeling uncertainties instead
+                of using ``labeling_uncertainty``. Keys ``"min"``,
+                ``"max"`` and ``"step"`` (all in nm) define the candidate
+                grid, which is applied to every target; picasso fits the
+                best value per target. Adds ``best_labeling_uncertainty``
+                and ``labeling_uncertainty_scan`` to ``results``.
+            ``pair_distance_screen`` : dict
+                If given, screen a range of pair (heterodimer) distances
+                via picasso ``fit_le``. Requires exactly two channel
+                targets; keys ``"min"``, ``"max"`` and ``"step"`` (nm)
+                define the distance grid. This fits both the best-fit
+                separation and the labeling efficiency, so
+                ``labeling_efficiency`` and ``structures`` are not used in
+                this mode. Adds ``best_pair_distance`` and
+                ``fitted_labeling_efficiency`` to ``results``.
             ``density_app`` : list of float
                 Apparent density in 1/nm^2 (the product of the real density
                 and the labeling efficiency).
@@ -8511,7 +8882,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             structures = parameters["structures"]
 
-        if isinstance(parameters["labeling_uncertainty"], (int, float)):
+        screen = parameters.get("labeling_uncertainty_screen")
+        dist_screen = parameters.get("pair_distance_screen")
+        if screen:
+            # screen the same candidate grid for every target; picasso
+            # fits the best value per target further below
+            grid = np.arange(
+                screen["min"],
+                screen["max"] + screen["step"] / 2,
+                screen["step"],
+            ).tolist()
+            labeling_uncertainty = {tgt: grid for tgt in self.channel_tags}
+        elif isinstance(parameters["labeling_uncertainty"], (int, float)):
             labeling_uncertainty = {
                 tgt: parameters["labeling_uncertainty"]
                 for tgt in self.channel_tags
@@ -8587,10 +8969,98 @@ class AutoPicasso(util.AbstractModuleCollection):
             tgt: exp_frac_targets[i] * parameters["n_simulate"]
             for i, tgt in enumerate(self.channel_tags)
         }
+        # pair-distance screening: a distinct picasso path (fit_le) that
+        # builds its own monomer/heterodimer model, fits labeling
+        # efficiency and picks the best-fit separation. It ignores the
+        # given structures and labeling_efficiency, so it short-circuits
+        # the standard single_spinna_run flow below (which is why it runs
+        # before the N_structures search space is generated).
+        if dist_screen:
+            if len(self.channel_tags) != 2:
+                raise ValueError(
+                    "pair_distance_screen (fit_le) requires exactly two "
+                    f"channel targets; got {self.channel_tags}."
+                )
+            distances = np.arange(
+                dist_screen["min"],
+                dist_screen["max"] + dist_screen["step"] / 2,
+                dist_screen["step"],
+            ).tolist()
+            # fit_le expects a list of candidate uncertainties per target
+            label_unc_lists = {
+                tgt: (val if isinstance(val, list) else [val])
+                for tgt, val in labeling_uncertainty.items()
+            }
+            target_a, target_b = self.channel_tags
+            (
+                spinna_results,
+                fp_figs,
+                le_values,
+                fitted_label_unc,
+                best_distance,
+                best_score,
+            ) = picasso_outpost.single_spinna_fit_le_run(
+                target_a=target_a,
+                target_b=target_b,
+                exp_data=exp_data,
+                granularity=parameters["granularity"],
+                label_unc=label_unc_lists,
+                distances=distances,
+                mask_dict=mask_dict,
+                width=width,
+                height=height,
+                depth=depth,
+                random_rot_mode=parameters["random_rot_mode"],
+                sim_repeats=parameters["sim_repeats"],
+                asynch=True,
+                NND_bin=parameters["fit_NND_bin"],
+                NND_maxdist=parameters["fit_NND_maxdist"],
+                nn_plotted=parameters["n_nearest_neighbors"],
+                n_simulated=n_sim_targets,
+                result_dir=results["folder"],
+                save_filename=os.path.join(results["folder"], "spinna-fit-le"),
+            )
+            plt.close("all")
+            results["fp_figs"] = fp_figs
+            results["spinna_results"] = spinna_results
+            results["best_pair_distance"] = best_distance
+            results["fitted_labeling_efficiency"] = le_values
+            results["best_labeling_uncertainty"] = fitted_label_unc
+            return parameters, results
+
         # N_structures = spinna.generate_N_structures(
         N_structures = picasso_outpost.generate_N_structures(
             structures, n_sim_targets, parameters["granularity"]
         )
+
+        # if requested, screen a range of labeling uncertainties and
+        # reduce labeling_uncertainty to the best-fit scalar per target
+        # before the final SPINNA run
+        if screen:
+            (
+                labeling_uncertainty,
+                labeling_uncertainty_scan,
+                labelunc_scan_figs,
+            ) = picasso_outpost.screen_label_uncertainty(
+                structures=structures,
+                label_unc=labeling_uncertainty,
+                le=parameters["labeling_efficiency"],
+                granularity=parameters["granularity"],
+                exp_data=exp_data,
+                mask_dict=mask_dict,
+                width=width,
+                height=height,
+                depth=depth,
+                random_rot_mode=parameters["random_rot_mode"],
+                sim_repeats=parameters["sim_repeats"],
+                asynch=True,
+                result_dir=results["folder"],
+                save_filename=os.path.join(results["folder"], "spinna-run"),
+            )
+            results["best_labeling_uncertainty"] = labeling_uncertainty
+            results["labeling_uncertainty_scan"] = labeling_uncertainty_scan
+        else:
+            labelunc_scan_figs = []
 
         spinna_pars = {
             "structures": structures,
@@ -8619,7 +9089,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             **spinna_pars
         )
         plt.close("all")
-        results["fp_figs"] = fp_figs
+        results["fp_figs"] = labelunc_scan_figs + fp_figs
         results["spinna_results"] = spinna_results
 
         return parameters, results
@@ -12712,7 +13182,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``labeling_uncertainty`` : dict
                 Channel tag -> labeling uncertainty in nm (e.g. 5).
             ``n_simulate`` : int
-                Number of target molecules to simulate (e.g. 50000).
+                Deprecated / ignored. The number of simulated molecules is
+                fixed by the picasso fit to the experimental molecule counts
+                (``len(exp_data[t])``), so this value no longer sizes the
+                simulation ROI. Kept for backward compatibility with existing
+                parameter files.
             ``density`` : dict
                 Channel tag -> density to simulate (area in 2D, volume in 3D).
             ``granularity`` : int
@@ -12756,6 +13230,33 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         if not parameters.get("nn_nth"):
             parameters["nn_nth"] = 2
+
+        # expand optional min/max/step screen ranges into the candidate
+        # lists that the fit (spinna.fit_le, below) already consumes: a
+        # list-valued pair_distance / per-tag labeling_uncertainty is
+        # screened, a scalar is used as-is.
+        pd_screen = parameters.get("pair_distance_screen")
+        if pd_screen:
+            parameters["pair_distance"] = np.arange(
+                pd_screen["min"],
+                pd_screen["max"] + pd_screen["step"] / 2,
+                pd_screen["step"],
+            ).tolist()
+        lu_screen = parameters.get("labeling_uncertainty_screen")
+        if lu_screen:
+            lu_grid = np.arange(
+                lu_screen["min"],
+                lu_screen["max"] + lu_screen["step"] / 2,
+                lu_screen["step"],
+            ).tolist()
+            lu = dict(parameters["labeling_uncertainty"])
+            for tag in (
+                parameters["target_name"],
+                parameters["reference_name"],
+            ):
+                lu[tag] = lu_grid
+            parameters["labeling_uncertainty"] = lu
+
         target = parameters["target_name"]
         reference = parameters["reference_name"]
         # spinna.fit_le forces LE=100% internally during the fit, so we no
@@ -12812,19 +13313,25 @@ class AutoPicasso(util.AbstractModuleCollection):
         compound_density = (
             density_gt[target] / 1 + density_gt[reference] / 1
         )  # in nm^-2
-        # area = parameters["n_simulate"] / (compound_density / 1e6)
-        # area = parameters["n_simulate"] / (compound_density)
-        area = parameters["n_simulate"] / (compound_density * 1e6)  # in µm^2
-        n_sim_targets = {
-            tag: int(
-                parameters["n_simulate"] * density_gt[tag] / compound_density
-            )
-            for tag in [target, reference]
-        }
 
-        # simulation ROI (area-based, as in the prior single_spinna_run
-        # call): a square box matching the requested number of simulated
-        # molecules at the given density.
+        # The picasso fit (spinna.compare_models_given_label_unc) always
+        # simulates exactly ``len(exp_data[t])`` molecules per target
+        # (N_total, with LE forced to 1), and the plot / bootstrap must use
+        # the same counts so that all three run at the experimental density.
+        # Therefore the simulation ROI is sized from the *experimental*
+        # molecule counts, not from the ``n_simulate`` parameter: a box whose
+        # area reproduces the experimental (compound) density for those
+        # counts. Sizing the box from ``n_simulate`` (>> len(exp)) instead
+        # left the fit ~n_simulate/len(exp) times too dilute while the
+        # plotted NND curve used ~n_simulate molecules, so the fitted model,
+        # the plotted curve and the experimental histogram all disagreed
+        # (visible as heterodimer peaks fit far too high). This mirrors
+        # picasso's own LE convention (ROI from the data area,
+        # n_simulated[target] = len(locs)).
+        n_exp = {tag: len(exp_data[tag]) for tag in [target, reference]}
+        area = sum(n_exp.values()) / (compound_density * 1e6)  # in µm^2
+
+        # simulation ROI: square box reproducing the experimental density.
         sim_width = np.sqrt(area * 1e6)  # in nm
 
         distances = (
@@ -12849,7 +13356,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # via compare_models, and converts the fitted proportions to LE.
         (
             le_values,
-            _fitted_label_unc,
+            fitted_label_unc,
             best_distance,
             _best_score,
             best_props,
@@ -12867,10 +13374,19 @@ class AutoPicasso(util.AbstractModuleCollection):
             depth=None,
             random_rot_mode="2D",
             asynch=True,
-            savedir=results["folder"],
-            fitting_mode="coarse-to-fine",
+            # savedir left empty on purpose. When labeling uncertainty is
+            # screened, picasso's fit_le scores each candidate on a
+            # single-structure target sub-model whose search space has one
+            # row; picasso's fit_stoichiometry then crashes in its
+            # CSV-save branch (np.hstack of a 2-D N_structures with the
+            # 1-D props that convert_counts_to_props returns for a single
+            # row). An empty savedir skips that broken save path; the
+            # workflow does not consume picasso's internal fit-score CSVs.
+            savedir="",
+            fitting_mode="bayesian",
         )
         results["best_pair_distance"] = best_distance
+        results["best_labeling_uncertainty"] = fitted_label_unc
 
         # bin size: more than Nyquist subsampling
         expected_1stNN_peak = (
@@ -12890,7 +13406,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             targets=[target, reference],
             exp_data=exp_data,
             opt_props=best_props,
-            n_simulated=n_sim_targets,
+            n_simulated=n_exp,
             sim_repeats=parameters["sim_repeats"],
             NND_bin=fit_NND_bin,
             NND_maxdist=fit_NND_maxdist,
@@ -12937,7 +13453,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # best_mixer.structures order is [monomer_A, monomer_B, het].
             N_structures = picasso_outpost.generate_N_structures(
                 best_mixer.structures,
-                n_sim_targets,
+                n_exp,
                 parameters["granularity"],
             )
             _, props_std = spinna.SPINNA(

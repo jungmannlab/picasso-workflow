@@ -10,12 +10,13 @@ import logging
 import unittest
 import os
 import shutil
+import tempfile
 import inspect
 import numpy as np
 import pandas as pd
 from unittest.mock import patch, MagicMock
 
-from picasso_workflow import analyse, util
+from picasso_workflow import analyse, util, picasso_outpost
 
 logger = logging.getLogger(__name__)
 
@@ -542,14 +543,22 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
-        mock_clusterer.return_value = (self.ap.locs, {})
-        mock_fcc.return_value = self.ap.locs
+        # clusterer.cluster adds a "group" column and drops unclustered locs;
+        # emulate a few clusters so the locs-per-cluster stats/histogram work.
+        clustered = self.ap.locs.copy()
+        clustered["group"] = np.arange(len(clustered)) % 5
+        mock_clusterer.return_value = (clustered, {})
+        mock_fcc.return_value = clustered.iloc[:5].copy()
 
         parameters = {"radius": 5, "min_locs": 10}
         parameters, results = self.ap.smlm_clusterer(0, parameters)
         # logger.debug(f'parameters: {parameters}')
         logger.debug(f"results: {results}")
         assert results["duration"] > -1
+        # dropped-locs accounting and cluster-size histogram are populated
+        assert results["n_locs_in"] == len(self.ap.movie)
+        assert results["n_centers"] == 5
+        assert os.path.exists(results["fp_fig_clustersizes"])
 
         shutil.rmtree(os.path.join(self.results_folder, "00_smlm_clusterer"))
 
@@ -591,6 +600,120 @@ class TestAnalyseModules(unittest.TestCase):
         shutil.rmtree(
             os.path.join(self.results_folder, "00_gaussian_mixture_cluster")
         )
+
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_gaussian_mixture_cluster_no_clusters_raises(self, mock_gmm):
+        """No clusters found must raise a clear AutoPicassoError.
+
+        picasso.g5m returns ``(None, None, info)`` when no molecules are
+        found, and an empty centers table when postprocess filtering removes
+        them all. Both previously crashed with a cryptic
+        ``'NoneType' object is not subscriptable`` (or empty-quantile /
+        divide-by-zero) at the histogram/statistics step.
+        """
+        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.locs = pd.DataFrame({"x": [1.0], "y": [2.0], "group": [0]})
+        parameters = {"min_locs": 10}
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+
+        no_result_returns = {
+            "none": (None, None, self.ap.info),
+            "empty": (
+                pd.DataFrame({"n_events": []}),
+                pd.DataFrame({"group": []}),
+                self.ap.info,
+            ),
+        }
+        for label, ret in no_result_returns.items():
+            with self.subTest(case=label):
+                mock_gmm.return_value = ret
+                try:
+                    with self.assertRaises(analyse.AutoPicassoError):
+                        self.ap.gaussian_mixture_cluster(0, parameters)
+                finally:
+                    shutil.rmtree(folder, ignore_errors=True)
+
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_module_error_saves_current_locs(self, mock_gmm):
+        """A module error dumps the current locs for post-mortem debugging.
+
+        Exercises the full path: the module raises (g5m finds nothing), so
+        module_decorator saves whatever self.locs held into an
+        ``error_state`` subfolder of the module's result folder.
+        """
+        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.locs = pd.DataFrame(
+            {
+                "frame": np.arange(20, dtype="u4"),
+                "x": np.random.rand(20).astype("f4"),
+                "y": np.random.rand(20).astype("f4"),
+                "lpx": np.full(20, 0.1, dtype="f4"),
+                "lpy": np.full(20, 0.1, dtype="f4"),
+            }
+        )
+        self.ap.channel_locs = None
+        mock_gmm.return_value = (None, None, self.ap.info)
+
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+        try:
+            with self.assertRaises(analyse.AutoPicassoError):
+                self.ap.gaussian_mixture_cluster(0, {"min_locs": 10})
+            dumped = os.path.join(folder, "error_state", "locs.hdf5")
+            self.assertTrue(
+                os.path.exists(dumped),
+                "current locs should be saved on a module error",
+            )
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_save_state_on_error_dumps_channel_locs(self):
+        """_save_state_on_error dumps aggregation channel_locs too."""
+        ch_locs = pd.DataFrame(
+            {
+                "x": np.random.rand(5).astype("f4"),
+                "y": np.random.rand(5).astype("f4"),
+            }
+        )
+        self.ap.locs = None
+        self.ap.channel_locs = [ch_locs, ch_locs.copy()]
+        self.ap.channel_info = [
+            [{"Width": 10, "Height": 10, "Frames": 100}],
+            [{"Width": 10, "Height": 10, "Frames": 100}],
+        ]
+        self.ap.channel_tags = ["chan_a", "chan_b"]
+
+        folder = os.path.join(self.results_folder, "err_dump")
+        os.makedirs(folder, exist_ok=True)
+        try:
+            self.ap._save_state_on_error(folder)
+            error_dir = os.path.join(folder, "error_state")
+            self.assertTrue(
+                os.path.exists(os.path.join(error_dir, "chan_a.hdf5"))
+            )
+            self.assertTrue(
+                os.path.exists(os.path.join(error_dir, "chan_b.hdf5"))
+            )
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    @patch("picasso_workflow.analyse.AutoPicasso._save_locs")
+    def test_save_state_on_error_never_raises(self, mock_save):
+        """A failure while dumping must not mask the original error."""
+        # force the save to blow up; the helper must swallow it (log a
+        # warning) and return normally so the caller's real error survives.
+        mock_save.side_effect = RuntimeError("disk full")
+        self.ap.locs = pd.DataFrame({"x": [1.0], "y": [2.0]})
+        self.ap.channel_locs = None
+        folder = os.path.join(self.results_folder, "err_noraise")
+        os.makedirs(folder, exist_ok=True)
+        try:
+            self.assertIsNone(self.ap._save_state_on_error(folder))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
     @patch("picasso_workflow.analyse.distance.cdist")
     def nneighbor(self, mock_cdist):
@@ -644,9 +767,51 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
 
+    @patch("picasso_workflow.analyse.picasso_outpost.nndistribution_from_csr")
+    def test_fit_csr_plot_max_dist_controls_display_range(self, mock_nnd):
+        """plot_max_dist sets the plotting range, independent of the fit.
+
+        The plotting loop evaluates the CSR curve on ``rvals`` spanning
+        0..bin_max; capturing that range shows whether the display extent
+        follows the data (default) or the explicit plot_max_dist.
+        """
+        captured = []
+
+        def _fake(r, *a, **k):
+            r = np.asarray(r, dtype=float)
+            captured.append(float(np.max(r)) if r.size else 0.0)
+            return np.zeros_like(r)
+
+        mock_nnd.side_effect = _fake
+        self.ap.info = []
+        neighbors = np.array([[2, 5, 7], [3, 5, 8], [2, 4, 6], [2, 4, 7]])
+        folder = os.path.join(self.results_folder, "00_fit_csr")
+
+        # default: display range driven by the (small) data distances
+        captured.clear()
+        self.ap.fit_csr(0, {"nneighbors": neighbors, "dimensionality": 2})
+        default_max = max(captured)
+        shutil.rmtree(folder)
+
+        # explicit plot_max_dist extends the display far beyond the data
+        captured.clear()
+        self.ap.fit_csr(
+            0,
+            {
+                "nneighbors": neighbors,
+                "dimensionality": 2,
+                "plot_max_dist": 500,
+            },
+        )
+        plot_max = max(captured)
+        shutil.rmtree(folder)
+
+        self.assertLess(default_max, 100)
+        self.assertAlmostEqual(plot_max, 500.0, places=6)
+
     @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
     def spinna(self, mock_sptmp):
-        mock_sptmp.return_value = (0, 1)
+        mock_sptmp.return_value = (0, [])
         info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
         locs_dtype = [
             ("frame", "u4"),
@@ -701,6 +866,412 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.spinna(0, parameters)
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
+
+    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
+    @patch("picasso_workflow.analyse.picasso_outpost.screen_label_uncertainty")
+    def test_spinna_label_uncertainty_screen(self, mock_screen, mock_sptmp):
+        """Screening routes to screen_label_uncertainty, feeds the
+        best-fit value into single_spinna_run and prepends the scan
+        figures to the reported figures."""
+        best_unc = {"CD86": 6.0}
+        scan = {
+            "CD86": {
+                "candidates": [2.0, 4.0, 6.0, 8.0],
+                "scores": [0.4, 0.3, 0.1, 0.2],
+            }
+        }
+        scan_figs = ["scanA.png"]
+        mock_screen.return_value = (best_unc, scan, scan_figs)
+        mock_sptmp.return_value = ("spinna-results", ["nnd.png"])
+
+        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                    for i in range(len(self.ap.movie))
+                ],
+                dtype=locs_dtype,
+            )
+        )
+        self.ap.channel_locs = [locs]
+        self.ap.channel_info = [info]
+        self.ap.channel_tags = ["CD86"]
+
+        parameters = {
+            "labeling_efficiency": {"CD86": 0.54},
+            "labeling_uncertainty": 5,
+            "labeling_uncertainty_screen": {
+                "min": 2.0,
+                "max": 8.0,
+                "step": 2.0,
+            },
+            "n_simulate": 50000,
+            "fp_mask_dict": None,
+            "density": [0.00009],
+            "random_rot_mode": "2D",
+            "n_nearest_neighbors": 4,
+            "sim_repeats": 5,
+            "fit_NND_bin": 5,
+            "fit_NND_maxdist": 300,
+            "granularity": 30,
+            "structures": [
+                {
+                    "Molecular targets": ["CD86"],
+                    "Structure title": "monomer",
+                    "CD86_x": [0],
+                    "CD86_y": [0],
+                    "CD86_z": [0],
+                },
+                {
+                    "Molecular targets": ["CD86"],
+                    "Structure title": "dimer",
+                    "CD86_x": [-10, 10],
+                    "CD86_y": [0, 0],
+                    "CD86_z": [0, 0],
+                },
+            ],
+        }
+        parameters, results = self.ap.spinna(0, parameters)
+
+        # the same candidate grid is screened for every target
+        mock_screen.assert_called_once()
+        self.assertEqual(
+            mock_screen.call_args.kwargs["label_unc"],
+            {"CD86": [2.0, 4.0, 6.0, 8.0]},
+        )
+        # the best-fit scalar is what actually gets simulated
+        self.assertEqual(mock_sptmp.call_args.kwargs["label_unc"], best_unc)
+        # results carry the best value, the scan and the scan figures
+        self.assertEqual(results["best_labeling_uncertainty"], best_unc)
+        self.assertEqual(results["labeling_uncertainty_scan"], scan)
+        self.assertEqual(results["fp_figs"], scan_figs + ["nnd.png"])
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
+
+    @patch("picasso_workflow.picasso_outpost._plot_label_unc_scan")
+    @patch(
+        "picasso_workflow.picasso_outpost.spinna."
+        "compare_models_given_label_unc"
+    )
+    def test_screen_label_uncertainty_selects_best(
+        self, mock_compare, mock_plot
+    ):
+        """screen_label_uncertainty scans multi-candidate targets, keeps
+        the lowest-scoring value and leaves single-candidate targets
+        untouched."""
+        Structure = picasso_outpost.spinna.Structure
+        mono_a = Structure("mono_A")
+        mono_a.define_coordinates("A", [0.0], [0.0], [0.0])
+        mono_b = Structure("mono_B")
+        mono_b.define_coordinates("B", [0.0], [0.0], [0.0])
+        structures = [mono_a, mono_b]
+
+        # A screened over 3 values (best is 4.0 -> lowest score), B fixed
+        label_unc = {"A": [2.0, 4.0, 6.0], "B": [5.0]}
+        mock_compare.side_effect = [(0.5,), (0.1,), (0.3,)]
+        mock_plot.return_value = "scan_A.png"
+
+        exp_data = {
+            "A": np.random.rand(20, 2) * 100,
+            "B": np.random.rand(20, 2) * 100,
+        }
+
+        best, scan, figs = picasso_outpost.screen_label_uncertainty(
+            structures=structures,
+            label_unc=label_unc,
+            le={"A": 0.5, "B": 0.5},
+            granularity=10,
+            exp_data=exp_data,
+            mask_dict=None,
+            width=1000.0,
+            height=1000.0,
+            depth=None,
+            random_rot_mode="2D",
+            sim_repeats=1,
+            asynch=False,
+            result_dir="/tmp",
+            save_filename="/tmp/spinna-run",
+        )
+
+        self.assertEqual(best, {"A": 4.0, "B": 5.0})
+        self.assertEqual(mock_compare.call_count, 3)
+        # empty savedir avoids picasso's single-candidate save crash
+        self.assertEqual(mock_compare.call_args.kwargs["savedir"], "")
+        self.assertEqual(scan["A"]["candidates"], [2.0, 4.0, 6.0])
+        self.assertEqual(scan["A"]["scores"], [0.5, 0.1, 0.3])
+        self.assertNotIn("B", scan)
+        self.assertEqual(figs, ["scan_A.png"])
+
+    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
+    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_fit_le_run")
+    def test_spinna_pair_distance_screen(self, mock_fitle, mock_sptmp):
+        """pair_distance_screen routes to fit_le (not single_spinna_run),
+        passing the distance grid and per-target label_unc lists, and
+        populates the fitted results."""
+        mock_fitle.return_value = (
+            "res",
+            ["nnd.png"],
+            {"CD80": 52.0, "CD86": 60.0},
+            {"CD80": 5.0, "CD86": 5.0},
+            12.0,
+            0.08,
+        )
+
+        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+
+        def _mklocs():
+            return pd.DataFrame(
+                np.rec.array(
+                    [
+                        tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                        for i in range(len(self.ap.movie))
+                    ],
+                    dtype=locs_dtype,
+                )
+            )
+
+        self.ap.channel_locs = [_mklocs(), _mklocs()]
+        self.ap.channel_info = [info, info]
+        self.ap.channel_tags = ["CD80", "CD86"]
+
+        parameters = {
+            "labeling_efficiency": {"CD80": 0.5, "CD86": 0.6},
+            "labeling_uncertainty": 5,
+            "pair_distance_screen": {"min": 10.0, "max": 30.0, "step": 10.0},
+            "n_simulate": 50000,
+            "fp_mask_dict": None,
+            "density": [0.00009, 0.00009],
+            "random_rot_mode": "2D",
+            "n_nearest_neighbors": 4,
+            "sim_repeats": 5,
+            "fit_NND_bin": 5,
+            "fit_NND_maxdist": 300,
+            "granularity": 30,
+            "structures": [
+                {
+                    "Molecular targets": ["CD80"],
+                    "Structure title": "monoCD80",
+                    "CD80_x": [0],
+                    "CD80_y": [0],
+                    "CD80_z": [0],
+                },
+                {
+                    "Molecular targets": ["CD86"],
+                    "Structure title": "monoCD86",
+                    "CD86_x": [0],
+                    "CD86_y": [0],
+                    "CD86_z": [0],
+                },
+            ],
+        }
+        parameters, results = self.ap.spinna(0, parameters)
+
+        # fit_le is used, the stoichiometry-only path is not
+        mock_fitle.assert_called_once()
+        mock_sptmp.assert_not_called()
+
+        kwargs = mock_fitle.call_args.kwargs
+        self.assertEqual(kwargs["distances"], [10.0, 20.0, 30.0])
+        self.assertEqual(kwargs["label_unc"], {"CD80": [5], "CD86": [5]})
+        self.assertEqual(kwargs["target_a"], "CD80")
+        self.assertEqual(kwargs["target_b"], "CD86")
+
+        # fitted quantities are surfaced in the results
+        self.assertEqual(results["best_pair_distance"], 12.0)
+        self.assertEqual(
+            results["fitted_labeling_efficiency"],
+            {"CD80": 52.0, "CD86": 60.0},
+        )
+        self.assertEqual(
+            results["best_labeling_uncertainty"],
+            {"CD80": 5.0, "CD86": 5.0},
+        )
+        self.assertEqual(results["fp_figs"], ["nnd.png"])
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
+
+    @patch("picasso_workflow.picasso_outpost.plot_spinna_nnd")
+    @patch("picasso_workflow.picasso_outpost.spinna.fit_le")
+    def test_single_spinna_fit_le_run(self, mock_fit_le, mock_plot):
+        """single_spinna_fit_le_run forwards the screen inputs to
+        spinna.fit_le, plots the best-fit mixer and returns the fitted
+        quantities."""
+        best_mixer = MagicMock()
+        best_mixer.get_structure_names.return_value = ["mA", "mB", "het"]
+        mock_fit_le.return_value = (
+            {"A": 52.0, "B": 60.0},  # le_values
+            {"A": 5.0, "B": 5.0},  # fitted_label_unc
+            12.0,  # best_distance
+            0.08,  # best_score
+            np.array([50.0, 30.0, 20.0]),  # best_props
+            best_mixer,
+        )
+        mock_plot.return_value = ["nnd.png"]
+
+        exp_data = {
+            "A": np.random.rand(10, 2) * 100,
+            "B": np.random.rand(10, 2) * 100,
+        }
+
+        tmpdir = tempfile.mkdtemp()
+        try:
+            out = picasso_outpost.single_spinna_fit_le_run(
+                target_a="A",
+                target_b="B",
+                exp_data=exp_data,
+                granularity=10,
+                label_unc={"A": [2.0, 4.0], "B": [5.0]},
+                distances=[10.0, 20.0, 30.0],
+                mask_dict=None,
+                width=1000.0,
+                height=1000.0,
+                depth=None,
+                random_rot_mode="2D",
+                sim_repeats=1,
+                asynch=False,
+                NND_bin=5.0,
+                NND_maxdist=300.0,
+                nn_plotted=4,
+                n_simulated={"A": 100, "B": 100},
+                result_dir=tmpdir,
+                save_filename=os.path.join(tmpdir, "fitle"),
+            )
+        finally:
+            shutil.rmtree(tmpdir)
+
+        (
+            results,
+            fp_fig,
+            le_values,
+            fitted_label_unc,
+            best_distance,
+            best_score,
+        ) = out
+
+        mock_fit_le.assert_called_once()
+        kw = mock_fit_le.call_args.kwargs
+        self.assertEqual(kw["distances"], [10.0, 20.0, 30.0])
+        self.assertEqual(kw["label_unc"], {"A": [2.0, 4.0], "B": [5.0]})
+        self.assertEqual(kw["target_a"], "A")
+        self.assertEqual(kw["target_b"], "B")
+        # empty savedir avoids picasso's single-candidate save crash
+        self.assertEqual(kw["savedir"], "")
+
+        self.assertEqual(best_distance, 12.0)
+        self.assertEqual(best_score, 0.08)
+        self.assertEqual(le_values, {"A": 52.0, "B": 60.0})
+        self.assertEqual(fitted_label_unc, {"A": 5.0, "B": 5.0})
+        self.assertEqual(fp_fig, ["nnd.png"])
+        self.assertEqual(results["Best pair distance (nm)"], 12.0)
+
+        mock_plot.assert_called_once()
+        self.assertIs(mock_plot.call_args.kwargs["mixer"], best_mixer)
+
+    @patch("picasso_workflow.analyse.picasso_outpost.plot_spinna_nnd")
+    @patch("picasso_workflow.analyse.spinna.fit_le")
+    def test_labeling_efficiency_analysis_screen(self, mock_fit_le, mock_plot):
+        """pair_distance_screen and labeling_uncertainty_screen expand
+        into the distance list and per-tag label_unc lists that
+        spinna.fit_le consumes, and the fitted values reach results."""
+        best_mixer = MagicMock()
+        best_mixer.get_structure_names.return_value = ["mA", "mB", "het"]
+        mock_fit_le.return_value = (
+            {"CD80": 52.0, "CD86": 60.0},  # le_values (percent)
+            {"CD80": 6.0, "CD86": 6.0},  # fitted_label_unc
+            12.0,  # best_distance
+            0.08,  # best_score
+            np.array([50.0, 30.0, 20.0]),  # best_props
+            best_mixer,
+        )
+        # the module reads fp_fig_out[0..3]
+        mock_plot.return_value = ["a.png", "b.png", "c.png", "d.png"]
+
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+
+        def _mklocs():
+            return pd.DataFrame(
+                np.rec.array(
+                    [
+                        tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                        for i in range(len(self.ap.movie))
+                    ],
+                    dtype=locs_dtype,
+                )
+            )
+
+        self.ap.channel_locs = [_mklocs(), _mklocs()]
+        self.ap.channel_tags = ["CD80", "CD86"]
+
+        parameters = {
+            "target_name": "CD80",
+            "reference_name": "CD86",
+            "pair_distance": 10,
+            "pair_distance_screen": {"min": 8.0, "max": 16.0, "step": 4.0},
+            "labeling_uncertainty": {"CD80": 5, "CD86": 5},
+            "labeling_uncertainty_screen": {
+                "min": 2.0,
+                "max": 6.0,
+                "step": 2.0,
+            },
+            "n_simulate": 50000,
+            "density": {"CD80": 9e-5, "CD86": 9e-5},
+            "granularity": 30,
+            "sim_repeats": 5,
+            "nn_nth": 2,
+        }
+        parameters, results = self.ap.labeling_efficiency_analysis(
+            0, parameters
+        )
+
+        mock_fit_le.assert_called_once()
+        kw = mock_fit_le.call_args.kwargs
+        self.assertEqual(kw["distances"], [8.0, 12.0, 16.0])
+        self.assertEqual(
+            kw["label_unc"],
+            {"CD80": [2.0, 4.0, 6.0], "CD86": [2.0, 4.0, 6.0]},
+        )
+        self.assertEqual(kw["target_a"], "CD80")
+        self.assertEqual(kw["target_b"], "CD86")
+        # empty savedir avoids picasso's single-candidate save crash
+        self.assertEqual(kw["savedir"], "")
+
+        self.assertEqual(results["best_pair_distance"], 12.0)
+        self.assertEqual(
+            results["best_labeling_uncertainty"],
+            {"CD80": 6.0, "CD86": 6.0},
+        )
+        self.assertAlmostEqual(results["labeling_efficiency"]["CD80"], 0.52)
+        self.assertAlmostEqual(results["labeling_efficiency"]["CD86"], 0.60)
+
+        shutil.rmtree(
+            os.path.join(
+                self.results_folder, "00_labeling_efficiency_analysis"
+            )
+        )
 
     @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
     @patch("picasso_workflow.analyse.io.save_locs")

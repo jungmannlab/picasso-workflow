@@ -1,4 +1,4 @@
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv, find_dotenv, dotenv_values
 
 try:
     from picasso_workflow._version import __version__
@@ -108,21 +108,53 @@ def _load_yaml(path) -> dict:
         return yaml.safe_load(f) or {}
 
 
+def _mask_value(value: str | None) -> str:
+    """Mask a .env value so logs reveal only that (and roughly what) it is.
+
+    The result shows whether the value is set and its first/last few
+    characters, with the middle replaced by ``*``. Short values are fully
+    starred so nothing meaningful leaks. Values may be secrets (e.g. the
+    Confluence token), so the raw text is never logged.
+
+    Parameters
+    ----------
+    value : str or None
+        The value to mask (``None`` for an unset key).
+
+    Returns
+    -------
+    str
+        The masked representation.
+    """
+    if value is None:
+        return "<unset>"
+    if value == "":
+        return "<empty>"
+    n = len(value)
+    if n <= 6:
+        return "*" * n
+    show = min(4, n // 4)
+    return f"{value[:show]}{'*' * (n - 2 * show)}{value[-show:]}"
+
+
 def _log_dotenv():
     """Locate the .env file actually used by load_dotenv() and log it.
 
     ``load_dotenv()`` (no args) walks up from the caller's ``__file__``
     directory looking for a ``.env``; ``find_dotenv()`` with default
     ``usecwd=False`` reproduces that, since this function is called from
-    the same module body.
+    the same module body. Values are masked (see :func:`_mask_value`) so a
+    secret such as the Confluence token never lands in the logs.
     """
     dotenv_path = find_dotenv()
     if dotenv_path:
         logger.info(f"Loading .env from: {dotenv_path}")
         try:
-            with open(dotenv_path, "r") as f:
-                content = f.read()
-            logger.info(f".env content:\n{content}")
+            values = dotenv_values(dotenv_path)
+            masked = "\n".join(
+                f"{key}={_mask_value(val)}" for key, val in values.items()
+            )
+            logger.info(f".env content (values masked):\n{masked}")
         except OSError as exc:
             logger.warning(f"Could not read .env at {dotenv_path}: {exc}")
     else:

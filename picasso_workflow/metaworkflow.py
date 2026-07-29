@@ -638,6 +638,62 @@ class AbstractWorkflowCoordinator(abc.ABC):
         """
         return hashlib.shake_128(s.encode("utf-8")).hexdigest(int(length / 2))
 
+    def _run_token(self) -> str:
+        """Return an id unique to this submission, shared across its ranks.
+
+        On the cluster every rank of a single ``srun``/``sbatch`` shares
+        ``SLURM_JOB_ID`` while distinct submissions differ, so it uniquely
+        and consistently identifies a run with no cross-rank handoff. Off the
+        cluster there is only rank 0, so the process id separates quick
+        successive re-runs.
+
+        This token is woven into report (and result-folder) names so that a
+        re-run of the same analysis -- e.g. with a parameter tuned -- started
+        while a previous run of the same name is still going gets its own
+        pages instead of the create-or-reuse fallback silently reporting into
+        the previous run's page.
+
+        Returns
+        -------
+        str
+            The run token.
+        """
+        return os.getenv("SLURM_JOB_ID") or f"p{os.getpid()}"
+
+    def _cleanup_stale_coordination_files(
+        self, max_age_s: float = 86400
+    ) -> None:
+        """Best-effort removal of old cross-rank coordination files.
+
+        The ``.pwf_runstamp_*`` and ``.pwf_pageid_*`` handoff files live in the
+        shared root folder and are scoped per run, so leftovers from finished
+        runs are harmless but accumulate. Delete only those older than
+        ``max_age_s`` -- a concurrent run's live files are always recent, so
+        age-gating keeps this from deleting another running job's handoff.
+        Any error is swallowed; cleanup must never abort a run.
+
+        Parameters
+        ----------
+        max_age_s : float, optional
+            Age threshold in seconds. Default one day.
+        """
+        try:
+            now = time.time()
+            for name in os.listdir(self.root_folder):
+                if not (
+                    name.startswith(".pwf_runstamp")
+                    or name.startswith(".pwf_pageid_")
+                ):
+                    continue
+                path = os.path.join(self.root_folder, name)
+                try:
+                    if now - os.path.getmtime(path) > max_age_s:
+                        os.remove(path)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+
     def _shared_runstamp(self) -> str:
         """Return a run timestamp (``%y%m%d-%H%M``) identical across ranks.
 
@@ -645,6 +701,11 @@ class AbstractWorkflowCoordinator(abc.ABC):
         (hence result folders) so they can cooperate on one aggregation.
         Rank 0 writes the stamp to a shared file in the root folder; worker
         ranks read it (waiting briefly for it to appear).
+
+        The handoff file is scoped by :meth:`_run_token` so two runs of the
+        same analysis in the same location no longer overwrite each other's
+        stamp -- otherwise a worker of one run could read the other run's
+        timestamp and drift onto the wrong pages.
 
         Returns
         -------
@@ -657,8 +718,11 @@ class AbstractWorkflowCoordinator(abc.ABC):
             On a worker rank, if the stamp does not appear within the
             wait window.
         """
-        stamp_file = os.path.join(self.root_folder, ".pwf_runstamp")
+        stamp_file = os.path.join(
+            self.root_folder, f".pwf_runstamp_{self._run_token()}"
+        )
         if self.rank == 0:
+            self._cleanup_stale_coordination_files()
             stamp = datetime.now().strftime("%y%m%d-%H%M")
             os.makedirs(self.root_folder, exist_ok=True)
             with open(stamp_file, "w") as f:
@@ -984,11 +1048,22 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         all_workflow_module_sets, tags = tiler.run(workflow_modules)
         print(all_workflow_module_sets)
         print(tags)
+        # Token unique to this submission (see _run_token): woven into the
+        # base name so a re-run of the same tag started while a previous run
+        # is still going gets its own page instead of reusing the previous
+        # run's page via the create-or-reuse fallback. Omitted when continuing
+        # a previous run, which deliberately re-adopts the earlier identity.
+        run_token = self._run_token()
         for wkfl_mods, tag in zip(all_workflow_module_sets, tags):
             execution_item += 1
             if execution_item % self.size != self.rank:
                 continue
-            report_name = tag + "_" + datetime.now().strftime("%y%m%d-%H%M")
+            base_name = tag
+            if not continue_previous_runners:
+                base_name = tag + "_" + run_token
+            report_name = (
+                base_name + "_" + datetime.now().strftime("%y%m%d-%H%M")
+            )
             text = f"""
                 Worker of rank {self.rank} working on {report_name}
                 (execution item {execution_item})"""
@@ -1166,8 +1241,11 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         #     cooperate on each group and the single workflows within it are
         #     distributed across ranks inside AggregationWorkflowRunner.run().
         # A shared timestamp keeps report names (and result folders)
-        # identical across ranks for the cooperative case.
+        # identical across ranks for the cooperative case. The run token
+        # (SLURM job id, natively identical across a job's ranks) makes those
+        # names unique across separate runs of the same analysis.
         runstamp = self._shared_runstamp()
+        run_token = self._run_token()
         n_groups = len(self.dataset_filepaths)
         distribute_groups = n_groups >= self.size
 
@@ -1187,52 +1265,68 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 runner_rank, runner_size = self.rank, self.size
 
             parent_page_id = None
-            if rname := datasets.get("report_name"):
-                report_name = rname + "_" + runstamp
-                dedicated_page = True
-                # Create the aggregation's dedicated Confluence page (page
-                # owner only). Every child single-dataset workflow -- on this
-                # rank and, in cooperative mode, on the other ranks -- uses
-                # this page as its parent, so if it is missing they all fail
-                # later with a confusing "page not found". Create-or-reuse,
-                # then confirm it is actually queryable (get_page_properties
-                # retries for eventual consistency) so a silently dropped
-                # creation surfaces here, loudly, on the owning rank instead
-                # of cascading across every child.
-                if owns_page:
-                    try:
-                        # create_page returns the new page's id directly,
-                        # which is immediately valid. A title lookup, by
-                        # contrast, hits Confluence Cloud's search index,
-                        # which lags page creation by seconds to minutes --
-                        # the root cause of the cross-rank "page not found"
-                        # races. So resolve the id from the creation itself
-                        # and only fall back to a title lookup when the page
-                        # already exists (e.g. a re-run), where the older
-                        # page is already indexed.
-                        parent_page_id = self.ci.create_page(report_name, "")
-                    except confluence.ConfluenceInterfaceError as e:
-                        logger.warning(
-                            f"create_page for '{report_name}' failed "
-                            f"({e}); the page may already exist -- "
-                            "resolving by title."
-                        )
-                        parent_page_id, _ = self.ci.get_page_properties(
-                            page_title=report_name
-                        )
-                    # In cooperative mode the other ranks attach their child
-                    # workflows to this same page. Publish its id so they use
-                    # it directly instead of an eventually-consistent title
-                    # lookup that can race this creation.
-                    if not distribute_groups:
-                        self._publish_page_id(report_name, parent_page_id)
-                else:
-                    # Cooperative worker rank: block until the page owner has
-                    # created the parent page and published its id.
-                    parent_page_id = self._await_page_id(report_name)
+            # Every cooperating rank must agree on the parent page name. Use
+            # the group's explicit report_name when given, otherwise the
+            # investigation's analysis_name, and always suffix the *shared*
+            # run timestamp. Relying on a per-rank datetime.now() (the
+            # WorkflowRunner postfix fallback) makes worker ranks drift by a
+            # minute across a clock boundary and hunt for a page that never
+            # existed -- so the timestamp is fixed here and threaded through
+            # as the runner postfix below.
+            # The per-run token goes into the *base* name -- before the
+            # %y%m%d-%H%M timestamp postfix -- so that two runs of the same
+            # analysis started within the same minute get distinct pages
+            # instead of the second's create_page failing and silently
+            # resolving (create-or-reuse) onto the first, still-running run's
+            # page. Keeping the timestamp as the trailing postfix preserves
+            # the downstream postfix/continue-runner parsing that expects a
+            # ``_YYMMDD-HHMM`` suffix. When *continuing* a previous run the
+            # token is omitted: resuming means deliberately re-adopting the
+            # earlier run's identity, and _check_previous_runner matches it by
+            # the stable, token-free base name.
+            rname = datasets.get("report_name")
+            base_name = rname or self.analysis_name
+            if not continue_previous_runners:
+                base_name = base_name + "_" + run_token
+            report_name = base_name + "_" + runstamp
+            dedicated_page = bool(rname)
+            # Create the aggregation's parent Confluence page (page owner
+            # only). Every child single-dataset workflow -- on this rank and,
+            # in cooperative mode, on the other ranks -- uses this page as its
+            # parent, so if it is missing they all fail later with a confusing
+            # "page not found". Create-or-reuse, then publish the id so
+            # cooperating ranks attach by id rather than racing an
+            # eventually-consistent title lookup.
+            if owns_page:
+                try:
+                    # create_page returns the new page's id directly, which
+                    # is immediately valid. A title lookup, by contrast, hits
+                    # Confluence Cloud's search index, which lags page
+                    # creation by seconds to minutes -- the root cause of the
+                    # cross-rank "page not found" races. So resolve the id
+                    # from the creation itself and only fall back to a title
+                    # lookup when the page already exists (e.g. a re-run),
+                    # where the older page is already indexed.
+                    parent_page_id = self.ci.create_page(report_name, "")
+                except confluence.ConfluenceInterfaceError as e:
+                    logger.warning(
+                        f"create_page for '{report_name}' failed "
+                        f"({e}); the page may already exist -- "
+                        "resolving by title."
+                    )
+                    parent_page_id, _ = self.ci.get_page_properties(
+                        page_title=report_name
+                    )
+                # In cooperative mode the other ranks attach their child
+                # workflows to this same page. Publish its id so they use
+                # it directly instead of an eventually-consistent title
+                # lookup that can race this creation.
+                if not distribute_groups:
+                    self._publish_page_id(report_name, parent_page_id)
             else:
-                report_name = self.analysis_name
-                dedicated_page = False
+                # Cooperative worker rank: block until the page owner has
+                # created the parent page and published its id.
+                parent_page_id = self._await_page_id(report_name)
 
             reporter_config, analysis_config = self.get_configs(
                 report_name, self.root_folder, parent_page_id=parent_page_id
@@ -1250,7 +1344,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 workflow_modules_multi,
                 continue_previous_runner=continue_previous_runners,
                 single_workflow_parallel=False,
-                postfix="",
+                postfix=runstamp,
                 rank=runner_rank,
                 size=runner_size,
             )

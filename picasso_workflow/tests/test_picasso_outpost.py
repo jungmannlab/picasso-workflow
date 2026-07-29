@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 import numpy as np
 import pandas as pd
+import pytest
 
 # import matplotlib.pyplot as plt
 # from matplotlib import cm
@@ -88,6 +89,10 @@ class TestPicassoOutpost(unittest.TestCase):
         assert p.shape == r.shape
 
     def test_04b_nndist_loglikelihood_csr(self):
+        # Seeded: the multi-spot case below draws random observations and
+        # asserts loglike <= 0, which is not guaranteed for a continuous
+        # density - unseeded, this test failed roughly 1 run in 12.
+        np.random.seed(42)
         rho = 0.2
         r = np.linspace(0, 20, num=30)
         pdists = [
@@ -112,6 +117,9 @@ class TestPicassoOutpost(unittest.TestCase):
         assert loglike <= 0
 
     def test_04c_estimate_density_from_neighbordists(self):
+        # Seeded for the same reason: the fit tolerance below is checked
+        # against randomly drawn observations.
+        np.random.seed(42)
         rho = 0.3
         r = np.linspace(0, 10, num=50)
         kmin = 1
@@ -874,3 +882,35 @@ class TestPicassoOutpost(unittest.TestCase):
         logger.debug(
             f"Mean uncertainties - X: {mean_x_unc:.3f}, Y: {mean_y_unc:.3f}"
         )
+
+
+def test_04d_estimate_density_rejects_empty_distance_window():
+    """A window excluding every distance names the offending parameter.
+
+    This used to surface as "zero-size array to reduction operation
+    maximum" from deep inside scipy, never mentioning min_dist/max_dist.
+    """
+    # k = 1..3, distances rising with k, as real NN distances do.
+    nn_dists = np.array(
+        [
+            np.linspace(100, 900, 50),
+            np.linspace(200, 1500, 50),
+            np.linspace(400, 2200, 50),
+        ]
+    )
+    with pytest.raises(ValueError) as excinfo:
+        picasso_outpost.estimate_density_from_neighbordists(
+            nn_dists, 1e-3, kmin=1, min_dist=50.0, max_dist=300.0
+        )
+    msg = str(excinfo.value)
+    assert "leaves 0 of 50" in msg
+    assert "max_dist=300.0" in msg
+    assert "k=3" in msg  # first neighbour order with no survivors
+    assert "400" in msg  # observed range is reported
+
+
+def test_04e_nndistribution_from_csr_tolerates_empty_array():
+    out = picasso_outpost.nndistribution_from_csr(
+        np.array([]), 2, 1e-3, min_dist=50.0, max_dist=300.0
+    )
+    assert out.size == 0

@@ -2056,6 +2056,206 @@ def spinna_batch(parameters_filename):
     return result_dir, fp_summary, fp_fig
 
 
+def _plot_label_unc_scan(
+    target,
+    candidates,
+    scores,
+    best_idx,
+    save_filename,
+    result_dir,
+):
+    """Plot the labeling-uncertainty screening curve for one target.
+
+    Parameters
+    ----------
+    target : str
+        Molecular target name.
+    candidates : list of float
+        Screened labeling uncertainties in nm.
+    scores : list of float
+        Kolmogorov-Smirnov fit score for each candidate.
+    best_idx : int
+        Index of the best-fit candidate.
+    save_filename : str
+        Base filename (without extension) for the saved figure.
+    result_dir : str
+        Directory the returned figure path is anchored to.
+
+    Returns
+    -------
+    fp_fig : str
+        Filepath of the saved ``.png`` figure.
+    """
+    fig, ax = plt.subplots(1, figsize=(5.5, 4), constrained_layout=True)
+    ax.plot(candidates, scores, "o-", color=spinna.NN_COLORS[0])
+    ax.plot(
+        candidates[best_idx],
+        scores[best_idx],
+        "o",
+        color=spinna.NN_COLORS[2],
+        markersize=10,
+        label=f"best: {candidates[best_idx]:.2f} nm",
+    )
+    ax.set_xlabel("Labeling uncertainty (nm)")
+    ax.set_ylabel("Kolmogorov-Smirnov score")
+    ax.set_title(f"Labeling uncertainty screening: {target}")
+    ax.legend()
+    fname = f"{save_filename}_labelunc_scan_{target}"
+    for ext in ["png", "svg"]:
+        fig.savefig(f"{fname}.{ext}")
+    plt.close(fig)
+    return os.path.join(
+        result_dir, f"{save_filename}_labelunc_scan_{target}.png"
+    )
+
+
+def screen_label_uncertainty(
+    structures,
+    label_unc,
+    le,
+    granularity,
+    exp_data,
+    mask_dict,
+    width,
+    height,
+    depth,
+    random_rot_mode,
+    sim_repeats,
+    asynch,
+    result_dir,
+    save_filename,
+    fitting_mode="coarse-to-fine",
+):
+    """Screen a range of labeling uncertainties, one target at a time.
+
+    For every molecular target whose ``label_unc`` entry lists more than
+    one candidate, each candidate is scored by fitting a target-only
+    sub-model to the experimental nearest-neighbour distances. This
+    mirrors picasso's private ``spinna._fit_label_unc_for_target`` but
+    retains the per-candidate scores so a screening curve can be plotted.
+    The candidate with the lowest Kolmogorov-Smirnov score is selected.
+
+    Parameters
+    ----------
+    structures : list of spinna.Structure
+        The SPINNA model.
+    label_unc : dict
+        Maps each target name to a list of candidate labeling
+        uncertainties in nm. A single-element list fixes that target's
+        value (no screening).
+    le : dict
+        Labeling efficiency per target (0-1).
+    granularity : int
+        SPINNA granularity, see ``spinna.generate_N_structures``.
+    exp_data : dict
+        Experimental coordinates (nm) per target.
+    mask_dict : dict or None
+        Mask dictionary, see ``spinna.StructureMixer``.
+    width, height, depth : float or None
+        ROI dimensions in nm (``depth`` is None for 2D).
+    random_rot_mode : {"2D", "3D"} or None
+        Molecule rotation mode.
+    sim_repeats : int
+        Number of simulation repeats per candidate (``N_sim``).
+    asynch : bool
+        Whether picasso uses multiprocessing during fitting.
+    result_dir : str
+        Directory the returned figure paths are anchored to.
+    save_filename : str
+        Base filename (without extension) for saved figures/CSVs.
+    fitting_mode : {"coarse-to-fine", "bayesian", "brute-force"}, optional
+        Stoichiometry fitting mode forwarded to picasso. Default is
+        "coarse-to-fine".
+
+    Returns
+    -------
+    best_label_unc : dict
+        Best-fit labeling uncertainty (float, nm) per target.
+    scan : dict
+        Maps each screened target to a dict with ``"candidates"`` and
+        ``"scores"`` lists.
+    fp_figs : list of str
+        Filepaths of the saved screening figures (one per screened
+        target).
+    """
+    targets = spinna._targets_from_structures(structures)
+    # nn_counts keys for all target pairs (reset per candidate fit)
+    nn_keys = [
+        f"{t1}-{t2}" for i, t1 in enumerate(targets) for t2 in targets[i:]
+    ]
+    # starting scalar for every target (first candidate), used for the
+    # targets that are not currently being screened
+    label_unc_start = {t: float(label_unc[t][0]) for t in targets}
+
+    best_label_unc = {}
+    scan = {}
+    fp_figs = []
+    for target in targets:
+        candidates = [float(c) for c in label_unc[target]]
+        if len(candidates) == 1:
+            best_label_unc[target] = candidates[0]
+            continue
+
+        # only this target's monomers matter for its self-NND scan
+        target_model = [s for s in structures if s.targets == [target]]
+        if not target_model:
+            logger.warning(
+                f"No monomer structure found for target {target}; cannot "
+                "screen its labeling uncertainty. Using the first candidate."
+            )
+            best_label_unc[target] = candidates[0]
+            continue
+
+        nn_counts = {key: 0 for key in nn_keys}
+        nn_counts[f"{target}-{target}"] = 1
+
+        scores = []
+        for k, candidate in enumerate(candidates):
+            label_unc_input = dict(label_unc_start)
+            label_unc_input[target] = candidate
+            score = spinna.compare_models_given_label_unc(
+                models=[target_model],
+                exp_data=exp_data,
+                granularity=granularity,
+                label_unc=label_unc_input,
+                le=le,
+                mask_dict=mask_dict,
+                width=width,
+                height=height,
+                depth=depth,
+                random_rot_mode=random_rot_mode,
+                nn_counts=nn_counts,
+                N_sim=sim_repeats,
+                asynch=asynch,
+                # empty savedir: the target sub-model here has a single
+                # candidate, which crashes picasso's fit_stoichiometry
+                # CSV-save branch (2-D N_structures vs 1-D props).
+                savedir="",
+                progress_title=(
+                    f"Screening label_unc for {target}: "
+                    f"{candidate:.2f} nm ({k + 1}/{len(candidates)})"
+                ),
+                fitting_mode=fitting_mode,
+            )[0]
+            scores.append(float(score))
+
+        best_idx = int(np.argmin(scores))
+        best_label_unc[target] = candidates[best_idx]
+        scan[target] = {"candidates": candidates, "scores": scores}
+        fp_figs.append(
+            _plot_label_unc_scan(
+                target=target,
+                candidates=candidates,
+                scores=scores,
+                best_idx=best_idx,
+                save_filename=save_filename,
+                result_dir=result_dir,
+            )
+        )
+
+    return best_label_unc, scan, fp_figs
+
+
 def single_spinna_run(
     structures,
     label_unc,
@@ -2320,6 +2520,171 @@ def plot_spinna_nnd(
     return fp_fig
 
 
+def single_spinna_fit_le_run(
+    target_a,
+    target_b,
+    exp_data,
+    granularity,
+    label_unc,
+    distances,
+    mask_dict,
+    width,
+    height,
+    depth,
+    random_rot_mode,
+    sim_repeats,
+    asynch,
+    NND_bin,
+    NND_maxdist,
+    nn_plotted,
+    n_simulated,
+    result_dir,
+    save_filename,
+    fitting_mode="coarse-to-fine",
+):
+    """Fit labeling efficiency and screen the pair distance of two targets.
+
+    Thin wrapper around picasso's ``spinna.fit_le``. It builds the
+    monomer-A / monomer-B / heterodimer model family internally, screens
+    the heterodimer separation over ``distances`` (and, per target, the
+    labeling uncertainty over ``label_unc``), forces labeling efficiency
+    to 100% during the fit and recovers it from the fitted proportions.
+    The ``structures`` and ``labeling_efficiency`` inputs of the SPINNA
+    module are therefore not used in this mode.
+
+    Parameters
+    ----------
+    target_a, target_b : str
+        The two molecular target names; both must be keys in
+        ``exp_data``.
+    exp_data : dict
+        Experimental coordinates (nm) per target.
+    granularity : int
+        SPINNA granularity, see ``spinna.generate_N_structures``.
+    label_unc : dict
+        Maps each target to a list of candidate labeling uncertainties in
+        nm. A single-element list fixes that target's value.
+    distances : list of float
+        Candidate heterodimer separations in nm to screen.
+    mask_dict : dict or None
+        Mask dictionary, see ``spinna.StructureMixer``.
+    width, height, depth : float or None
+        ROI dimensions in nm (``depth`` is None for 2D).
+    random_rot_mode : {"2D", "3D"} or None
+        Molecule rotation mode.
+    sim_repeats : int
+        Number of simulation repeats (``N_sim``).
+    asynch : bool
+        Whether picasso uses multiprocessing during fitting.
+    NND_bin : float
+        Histogram bin size in nm.
+    NND_maxdist : float
+        Maximum distance shown in nm.
+    nn_plotted : int
+        Number of nearest neighbours to plot.
+    n_simulated : dict
+        Number of molecules per target used when plotting the fitted
+        NND histograms.
+    result_dir : str
+        Directory the returned figure paths are anchored to.
+    save_filename : str
+        Base filename (without extension) for saved figures/summary.
+    fitting_mode : {"coarse-to-fine", "bayesian", "brute-force"}, optional
+        Stoichiometry fitting mode forwarded to picasso. Default is
+        "coarse-to-fine".
+
+    Returns
+    -------
+    results : dict
+        Human-readable summary of the fit.
+    fp_fig : list of str
+        Filepaths of the saved NND figures.
+    le_values : dict
+        Fitted labeling efficiency [%] per target.
+    fitted_label_unc : dict
+        Fitted labeling uncertainty [nm] per target.
+    best_distance : float
+        Best-fit heterodimer separation in nm.
+    best_score : float
+        Kolmogorov-Smirnov score of the best fit.
+    """
+    (
+        le_values,
+        fitted_label_unc,
+        best_distance,
+        best_score,
+        best_props,
+        best_mixer,
+    ) = spinna.fit_le(
+        target_a=target_a,
+        target_b=target_b,
+        exp_data=exp_data,
+        granularity=granularity,
+        label_unc=label_unc,
+        distances=distances,
+        N_sim=sim_repeats,
+        mask_dict=mask_dict,
+        width=width,
+        height=height,
+        depth=depth,
+        random_rot_mode=random_rot_mode,
+        asynch=asynch,
+        # empty savedir: avoid picasso's fit_stoichiometry crash on the
+        # single-candidate target sub-model used when screening labeling
+        # uncertainty (see labeling_efficiency_analysis for details).
+        savedir="",
+        fitting_mode=fitting_mode,
+    )
+
+    targets = [target_a, target_b]
+    results = {}
+    results["Date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    results["File location of structures"] = save_filename
+    results["Molecular targets"] = targets
+    results["Fitted labeling efficiency (%)"] = {
+        target: le_values[target] for target in targets
+    }
+    results["Fitted label uncertainty (nm)"] = {
+        target: fitted_label_unc[target] for target in targets
+    }
+    results["Best pair distance (nm)"] = best_distance
+    results["Rotation mode"] = random_rot_mode
+    results["Modified Kolmogorov-Smirnov score"] = best_score
+    results["Fitted structures names"] = best_mixer.get_structure_names()
+    results["Fitted proportions of structures"] = best_props
+    results["NND bin size (nm)"] = NND_bin
+    results["NND max distance (nm)"] = NND_maxdist
+
+    # save .txt with summary of the results
+    with open(f"{save_filename}_fit_le_summary.txt", "w") as f:
+        for key, value in results.items():
+            f.write(f"{key}: {value}\n")
+
+    # plot and save the NND plots for the best-fit mixer
+    fp_fig = plot_spinna_nnd(
+        mixer=best_mixer,
+        targets=targets,
+        exp_data=exp_data,
+        opt_props=best_props,
+        n_simulated=n_simulated,
+        sim_repeats=sim_repeats,
+        NND_bin=NND_bin,
+        NND_maxdist=NND_maxdist,
+        nn_plotted=nn_plotted,
+        save_filename=save_filename,
+        result_dir=result_dir,
+    )
+
+    return (
+        results,
+        fp_fig,
+        le_values,
+        fitted_label_unc,
+        best_distance,
+        best_score,
+    )
+
+
 def load_structures_from_dict(structure_dict):
     """Loads structures (SingleStructure's) from dict with format as
     those saved in .yaml files.
@@ -2389,6 +2754,53 @@ def generate_N_structures(structures, N_total, res_factor, save=""):
 ########################################################################
 
 
+def _check_distance_window(nn_dists, kmin, min_dist, max_dist):
+    """Check that the [min_dist, max_dist] window retains distances.
+
+    Filtering to a window that excludes every distance for some neighbour
+    order leaves an empty array, which used to surface far downstream as
+    ``ValueError: zero-size array to reduction operation maximum``, with a
+    traceback deep inside scipy that never mentions the offending
+    parameter. Fail here instead, naming it.
+
+    Parameters
+    ----------
+    nn_dists : array
+        Nearest-neighbour distances, shape ``(k,)`` or ``(k, N)``. Row
+        ``r`` holds the distances for neighbour order ``k = r + kmin``.
+    kmin : int
+        The smallest neighbour order present in ``nn_dists``.
+    min_dist, max_dist : float
+        The filter window.
+
+    Raises
+    ------
+    ValueError
+        If any neighbour order has no distance inside the window.
+    """
+    rows = np.atleast_2d(np.asarray(nn_dists, dtype=float))
+    for row, dist in enumerate(rows):
+        k = row + kmin
+        if dist.size == 0:
+            continue
+        n_keep = int(np.count_nonzero((dist >= min_dist) & (dist <= max_dist)))
+        if n_keep == 0:
+            raise ValueError(
+                f"min_dist={min_dist}, max_dist={max_dist} leaves "
+                f"{n_keep} of {dist.size} k={k} nearest-neighbour "
+                f"distances (observed range {np.min(dist):.4g}-"
+                f"{np.max(dist):.4g}). Widen the [min_dist, max_dist] "
+                f"window or lower the number of neighbours fitted."
+            )
+        if n_keep < 2:
+            logger.warning(
+                f"min_dist={min_dist}, max_dist={max_dist} leaves only "
+                f"{n_keep} of {dist.size} k={k} nearest-neighbour "
+                f"distances; the fit for this neighbour order is "
+                f"unlikely to be meaningful."
+            )
+
+
 def estimate_density_from_neighbordists(
     nn_dists,
     rho_init,
@@ -2434,6 +2846,8 @@ def estimate_density_from_neighbordists(
     result : scipy.optimize.OptimizeResult
         The full minimizer result.
     """
+    _check_distance_window(nn_dists, kmin, min_dist, max_dist)
+
     bounds = [
         (rho_init / rho_bound_factor, rho_init * rho_bound_factor)
     ]  # rho must be positive
@@ -2613,6 +3027,12 @@ def nndistribution_from_csr(
     # pdf = gaussian_pdf(r, 4, k*rho*4)
     # # pdf = gaussian_pdf(r, 4+k*rho, .8)
     # return pdf #/ np.sum(pdf)
+    # An empty r reaches np.max() below and raises an opaque
+    # "zero-size array to reduction operation" - callers filtering by
+    # [min_dist, max_dist] can easily produce one.
+    if np.size(r) == 0:
+        return np.asarray(r, dtype=float)
+
     lam = rho * np.pi ** (d / 2) / _gamma(d / 2 + 1)
     factor = d / _factorial(k - 1) * lam**k * r ** (d * k - 1)
     dist = factor * np.exp(-lam * r**d)

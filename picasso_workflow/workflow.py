@@ -29,6 +29,8 @@ from picasso_workflow.confluence import (
     ConfluenceReporter,
     ConfluenceInterface,
     ConfluenceInterfaceError,
+    aggregation_abort_body,
+    _PARAM_BLACKLIST,
 )
 from picasso_workflow.html_reporter import (
     HTMLReporter,
@@ -535,16 +537,28 @@ class AggregationWorkflowRunner:
         self.sgl_workflow_locations = sgl_folders
         self.save(self.result_folder)
 
+        failures = self._failed_single_datasets(
+            sgl_dataset_success, sgl_folders, tags
+        )
+
         # Write the HTML overview already now (even when not all singles
         # succeed) so a partial run still has a navigable local index.
-        self._write_html_overview(sgl_folders)
+        self._write_html_overview(sgl_folders, failures=failures)
 
-        if not all(sgl_dataset_success):
+        if failures:
+            # Name the offenders: hunting for which of N datasets failed,
+            # and why, used to mean opening every result folder by hand.
+            detail = "\n".join(
+                f"  [{i:02d}] {tag or '(no tag)'}: {description}\n"
+                f"         {folder}"
+                for i, tag, folder, description in failures
+            )
             msg = (
-                "Not all single datasets were analysed successfully. "
-                + "Therefore, no aggregation analysis is started."
+                f"{len(failures)} of {n_sgl} single datasets failed, so no "
+                f"aggregation analysis is started:\n{detail}"
             )
             logger.error(msg)
+            self._report_aggregation_abort(failures, n_sgl)
             raise WorkflowError(msg)
 
         # Then, run the aggregation workflow
@@ -608,7 +622,10 @@ class AggregationWorkflowRunner:
         self._write_html_overview(sgl_folders, self._agg_report_folder)
 
     def _write_html_overview(
-        self, sgl_folders: list, agg_folder: str | None = None
+        self,
+        sgl_folders: list,
+        agg_folder: str | None = None,
+        failures: list | None = None,
     ) -> None:
         """Write the top-level ``index.html`` linking the child reports.
 
@@ -622,6 +639,10 @@ class AggregationWorkflowRunner:
             The single-dataset result folders (each holds a ``report.html``).
         agg_folder : str, optional
             The aggregation result folder, if the aggregation step has run.
+        failures : list of tuple, optional
+            ``(index, tag, folder, description)`` per failed single
+            dataset, listed in the overview table so a partial run shows
+            what went wrong.
         """
         if not self._html_reporting:
             return
@@ -645,6 +666,14 @@ class AggregationWorkflowRunner:
             ("Single datasets", len(sgl_folders)),
             ("Reports found", sum(1 for _, _, ok in child_reports if ok)),
         ]
+        if failures:
+            rows.append(
+                ("Failed datasets", f"{len(failures)} of {len(sgl_folders)}")
+            )
+            for idx, tag, _folder, description in failures:
+                rows.append(
+                    (f"Failed [{idx:02d}] {tag or '(no tag)'}", description)
+                )
         try:
             write_aggregation_index(
                 self.result_folder,
@@ -655,6 +684,111 @@ class AggregationWorkflowRunner:
             )
         except Exception as e:  # reporting must never abort the analysis
             logger.error(f"Could not write HTML aggregation index: {e}")
+
+    def _report_aggregation_abort(self, failures: list, n_total: int) -> None:
+        """Post the skipped-aggregation summary to the run's parent page.
+
+        Best effort: a reporting problem must not replace the analysis
+        failure that is about to be raised.
+
+        Parameters
+        ----------
+        failures : list of tuple
+            ``(index, tag, folder, description)`` per failed dataset.
+        n_total : int
+            Total number of single datasets.
+        """
+        ci = getattr(self, "ci", None)
+        if ci is None:
+            return
+        try:
+            confluence_config = self.reporter_config.get(
+                "ConfluenceReporter", {}
+            )
+            page_id = confluence_config.get("parent_page_id")
+            page_name = self.reporter_config.get("report_name", "")
+            if not page_id:
+                logger.debug(
+                    "No parent page id; skipping the Confluence summary of "
+                    "the skipped aggregation."
+                )
+                return
+            ci.update_page_content(
+                page_name,
+                page_id,
+                aggregation_abort_body(failures, n_total),
+            )
+        except Exception as e:
+            logger.error(
+                f"Could not report the skipped aggregation to Confluence: {e}"
+            )
+
+    def _describe_single_failure(self, i: int) -> str:
+        """Explain why single dataset ``i`` failed, from its results.
+
+        Parameters
+        ----------
+        i : int
+            Index of the single dataset.
+
+        Returns
+        -------
+        str
+            The failing module and exception, e.g.
+            ``"fit_csr: ValueError: min_dist=50.0, max_dist=300.0 leaves
+            0 of 99 ..."``. Falls back to the last module reached when no
+            error was recorded (results written before failures were
+            recorded), or a plain note when there are no results at all.
+        """
+        try:
+            results = self.all_results["single_dataset"][i]
+        except (KeyError, IndexError, TypeError):
+            results = None
+        if not results:
+            return "no results recorded"
+
+        for key, res in reversed(list(results.items())):
+            if not isinstance(res, dict):
+                continue
+            error = res.get("error")
+            if error:
+                return (
+                    f"{key}: {error.get('type', 'Error')}: "
+                    f"{error.get('message', '')}"
+                )
+            if res.get("success") is False:
+                return f"{key}: failed (no exception recorded)"
+
+        last = list(results)[-1] if results else None
+        return f"no error recorded; last module reached was {last}"
+
+    def _failed_single_datasets(
+        self, sgl_dataset_success: list, sgl_folders: list, tags: list
+    ) -> list:
+        """Collect a description of every failed single dataset.
+
+        Parameters
+        ----------
+        sgl_dataset_success : list of bool
+            Per-dataset success flags.
+        sgl_folders : list of str
+            Per-dataset result folders.
+        tags : list of str
+            Per-dataset tags.
+
+        Returns
+        -------
+        list of tuple
+            ``(index, tag, folder, description)`` for each failure.
+        """
+        failures = []
+        for i, ok in enumerate(sgl_dataset_success):
+            if ok:
+                continue
+            tag = tags[i] if i < len(tags) else ""
+            folder = sgl_folders[i] if i < len(sgl_folders) else ""
+            failures.append((i, tag, folder, self._describe_single_failure(i)))
+        return failures
 
     @staticmethod
     def _single_marker_path(folder: str) -> str:
@@ -1067,6 +1201,10 @@ class WorkflowRunner:
 
         # now, run the modules
         all_previously_succeeded = True
+        # Bind up front: a module raising on the very first iteration used
+        # to leave this unbound and fail with UnboundLocalError below,
+        # masking the real error.
+        success = False
         for i, (module_name, module_parameters) in enumerate(
             self.workflow_modules
         ):
@@ -1098,7 +1236,14 @@ class WorkflowRunner:
             try:
                 success = self.call_module(module_name, i, module_parameters)
             except AutoPicassoError:
-                pass
+                success = False
+            except Exception:
+                # Any other exception used to escape before save(), so the
+                # failing module never reached WorkflowRunner.yaml. Record
+                # it, then let it propagate as before.
+                success = False
+                self.save(self.result_folder)
+                raise
 
             self.save(self.result_folder)
             if not success:
@@ -1227,6 +1372,75 @@ class WorkflowRunner:
         )
         return self.results.get(module_id, {}).get("success", False)
 
+    def _report_module_error(self, e, fun_name, i, parameters, key):
+        """Log, report and record a module failure.
+
+        Posts a detailed error section to every reporter and records the
+        failure in ``self.results`` so the next ``save()`` writes it to
+        ``WorkflowRunner.yaml`` -- otherwise the failing module leaves no
+        trace on disk at all.
+
+        Parameters
+        ----------
+        e : Exception
+            The exception raised by the module.
+        fun_name : str
+            Name of the failed module.
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            The module's resolved parameters.
+        key : str
+            Results key of the module, ``f"{i:02d}_{fun_name}"``.
+        """
+        logger.error(e)
+        logger.error(traceback.format_exc())
+
+        partial = getattr(e, "_pwf_partial_results", None) or {}
+        # The preceding module's results are the inputs this one worked
+        # from; self.results is insertion-ordered.
+        previous_results = next(reversed(list(self.results.values())), None)
+
+        if e.__traceback__ is not None:
+            tb_text = "".join(
+                traceback.format_exception(type(e), e, e.__traceback__)
+            )
+        else:
+            tb_text = traceback.format_exc()
+
+        for reporter in self.reporters:
+            try:
+                reporter.report_error(
+                    e,
+                    fun_name,
+                    i=i,
+                    parameters=parameters,
+                    result_folder=partial.get("folder"),
+                    previous_results=previous_results,
+                )
+            except Exception as report_exc:
+                logger.error(f"Could not report the error: {report_exc}")
+                logger.error(traceback.format_exc())
+
+        self.results[key] = {
+            **partial,
+            "success": False,
+            "error": {
+                "type": type(e).__name__,
+                "message": str(e),
+                "traceback": tb_text,
+                "module": fun_name,
+                "index": i,
+            },
+            # Filtered: an injected live object would be yaml.dump'd as an
+            # !!python/object tag and break the reload path.
+            "parameters": {
+                k: v
+                for k, v in parameters.items()
+                if k not in _PARAM_BLACKLIST
+            },
+        }
+
     def call_module(self, fun_name: str, i: int, parameters: dict) -> bool:
         """Run one workflow module: analyse, then report.
 
@@ -1271,19 +1485,14 @@ class WorkflowRunner:
         try:
             parameters, self.results[key] = fun_ap(i, parameters)
         except AutoPicassoError as e:
-            logger.error(e)
-            logger.error(traceback.format_exc())
-            analyse_error = copy.copy(e)
-            for reporter in self.reporters:
-                reporter.report_error(e, fun_name)
-            # raise e
+            # Bind the exception itself, not a copy: copy.copy() goes
+            # through __reduce__ and drops __traceback__, so the re-raise
+            # below used to surface with a stack that stopped here.
+            analyse_error = e
+            self._report_module_error(e, fun_name, i, parameters, key)
         except Exception as e:
-            logger.error(e)
-            logger.error(traceback.format_exc())
-            analyse_error = copy.copy(e)
-            for reporter in self.reporters:
-                reporter.report_error(e, fun_name)
-            # raise e
+            analyse_error = e
+            self._report_module_error(e, fun_name, i, parameters, key)
 
         # If the analysis step crashed, self.results[key] was never
         # written; skip the per-module success-path Confluence reporter

@@ -7,9 +7,13 @@ the reporter config it builds must drop ``ConfluenceReporter`` and include
 ``HTMLReporter``.
 """
 
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from picasso_workflow.metaworkflow import SingleWorkflowCoordinator
+from picasso_workflow.metaworkflow import (
+    AggregationWorkflowCoordinator,
+    SingleWorkflowCoordinator,
+)
 from picasso_workflow.confluence import NullConfluenceInterface
 
 
@@ -131,3 +135,78 @@ def test_publish_page_id_noop_for_missing_id(tmp_path):
     import os
 
     assert not os.path.exists(coord._page_id_file("report"))
+
+
+@patch("picasso_workflow.metaworkflow.time.sleep", lambda *a, **k: None)
+@patch("picasso_workflow.metaworkflow.AggregationWorkflowRunner")
+@patch("picasso_workflow.metaworkflow.io.load_info")
+def test_prepare_analysis_shares_run_stamped_name_across_ranks(
+    mock_load_info, mock_awr, tmp_path
+):
+    """Cooperating ranks must agree on one run-stamped parent-page name.
+
+    Regression: for a single aggregation group whose src_loc carries no
+    explicit ``report_name`` (only ``#tags``/``filepath``), the coordinator
+    took an else branch that named the page after ``analysis_name`` alone and
+    left each rank's runner to append its own ``datetime.now()`` postfix. Two
+    ranks crossing a minute boundary then built ``..._1216`` vs ``..._1217``,
+    and the worker rank looked for a parent page that never existed. The
+    shared run timestamp must be baked into the name and threaded through as
+    the runner postfix so every rank derives the identical name.
+    """
+    mock_load_info.return_value = [
+        {
+            "#tags": ["Cell 1_GFPNb", "Cell 1_NCR3-batch4"],
+            "filepath": ["/data/a_locs.hdf5", "/data/b_locs.hdf5"],
+        }
+    ]
+    fake_awr = MagicMock()
+    fake_awr.result_folder = str(tmp_path)
+    fake_awr.parameter_tiler = None
+    mock_awr.config_from_dicts.return_value = fake_awr
+
+    def make_coord(rank, size):
+        coord = AggregationWorkflowCoordinator(
+            "src.yaml",
+            "260727-le",
+            str(tmp_path),
+            None,
+            None,
+            None,
+            document_confluence=False,
+        )
+        # override the SLURM-derived (rank 0, size 1) identity
+        coord.rank = rank
+        coord.size = size
+        return coord
+
+    # One group, two ranks -> cooperative mode. Rank 0 (page owner) runs
+    # first and publishes the shared stamp + page id; rank 1 is the worker.
+    coord0 = make_coord(0, 2)
+    coord0.prepare_analysis([("dummy_module", {})], [])
+    coord1 = make_coord(1, 2)
+    coord1.prepare_analysis([("dummy_module", {})], [])
+
+    calls = mock_awr.config_from_dicts.call_args_list
+    assert len(calls) == 2
+    name0 = calls[0].args[0]["report_name"]
+    name1 = calls[1].args[0]["report_name"]
+    postfix0 = calls[0].kwargs["postfix"]
+    postfix1 = calls[1].kwargs["postfix"]
+
+    token = coord0._run_token()
+    stamp = (
+        (Path(coord0.root_folder) / f".pwf_runstamp_{token}")
+        .read_text()
+        .strip()
+    )
+
+    # identical name across ranks, carrying the shared run stamp and the
+    # per-run token (which disambiguates concurrent runs of the same name) ...
+    assert name0 == name1 == f"260727-le_{token}_{stamp}"
+    # ... and the same stamp handed to the runner as its postfix, so it can
+    # never fall back to a per-rank datetime.now().
+    assert postfix0 == postfix1 == stamp
+    # the owner published the parent page id under that shared name, so the
+    # worker rank resolved it instead of racing a title lookup.
+    assert Path(coord0._page_id_file(name0)).exists()
