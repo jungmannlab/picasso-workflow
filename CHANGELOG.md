@@ -1,20 +1,16 @@
-Changelog
-=========
+# Changelog
 
 All notable changes to picasso-workflow are documented here.
 
-The format follows `Keep a Changelog <https://keepachangelog.com>`_.
-Versions are derived from git tags by vcs-versioning, so entries are
-collected under "Unreleased" until a tag is cut.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Versions are derived from git tags by setuptools-scm, so entries are collected
+under `[Unreleased]` until a tag is cut.
 
 This file was started after v0.5.6; earlier history is in the git log.
 
+## [Unreleased]
 
-Unreleased
-----------
-
-Added
-~~~~~
+### Added
 
 - Confluence error reports now identify the failing module by index and
   name in a heading, list the parameters it was called with, name the
@@ -22,65 +18,62 @@ Added
   folder and the preceding module's results. Previously only the
   exception message and traceback were posted, so diagnosing a failure
   meant guessing which parameter value had caused it.
-- Failed modules are recorded in ``WorkflowRunner.yaml`` with their
+- Failed modules are recorded in `WorkflowRunner.yaml` with their
   index, parameters, exception type, message and traceback.
 - Per-channel parameters: module parameters can differ between channels
-  of an aggregation workflow via a ``("$$map", "<column>", <default>)``
-  command backed by a column in ``single_dataset_tileparameters``. The
+  of an aggregation workflow via a `("$$map", "<column>", <default>)`
+  command backed by a column in `single_dataset_tileparameters`. The
   GUI shows the resolved per-channel values beneath the parameter row
   and round-trips the dataset table through the generated script.
 
-Changed
-~~~~~~~
+### Changed
 
-- The Zeiss ``.czi`` reader (``aicsimageio`` + ``aicspylibczi`` + ``fsspec``)
-  moved from the base dependencies to an optional ``formats`` extra
-  (``pip install "picasso_workflow[formats]"``). aicspylibczi has no
+- The Zeiss `.czi` reader (`aicsimageio` + `aicspylibczi` + `fsspec`)
+  moved from the base dependencies to an optional `formats` extra
+  (`pip install "picasso_workflow[formats]"`). aicspylibczi has no
   aarch64 wheels and source-builds via a C++/cmake toolchain, and
   aicsimageio dragged an old imagecodecs that failed to build on the
-  py3.10 arm64 container, so a bare ``pip install -e .`` now resolves
-  entirely from wheels. The ``convert_zeiss_movie`` module raises a clear
+  py3.10 arm64 container, so a bare `pip install -e .` now resolves
+  entirely from wheels. The `convert_zeiss_movie` module raises a clear
   ImportError pointing at the extra when the reader is absent; no other
   workflow is affected.
-- ``estimate_density_from_neighbordists`` now validates the
-  ``[min_dist, max_dist]`` window per neighbour order and fails with a
+- `estimate_density_from_neighbordists` now validates the
+  `[min_dist, max_dist]` window per neighbour order and fails with a
   message naming the parameter and the surviving counts, e.g.
-  ``min_dist=50, max_dist=300 leaves 0 of 530 k=4 nearest-neighbour
-  distances (observed range 338.3-2.264e+04)``.
+  `min_dist=50, max_dist=300 leaves 0 of 530 k=4 nearest-neighbour
+  distances (observed range 338.3-2.264e+04)`.
 
   BEHAVIOUR CHANGE: runs in which some neighbour order had no distances
   inside the window previously fitted on the remaining orders and now
   raise instead. Workflows believed to be healthy may start failing;
   widen the window or reduce the number of neighbours fitted.
-
 - Tracebacks are posted inside a Confluence code macro, so their line
   structure is preserved. They were previously HTML-escaped without a
   wrapper and reflowed into a single unreadable paragraph.
-- CI now runs a ``black --check`` + ``flake8`` lint job on a GitHub-hosted
-  runner (``.github/workflows/lint.yml``), so style regressions are caught
+- CI now runs a `black --check` + `flake8` lint job on a GitHub-hosted
+  runner (`.github/workflows/lint.yml`), so style regressions are caught
   in CI and not only by the local pre-commit hook. Linter versions are
-  pinned to match ``.pre-commit-config.yaml``.
+  pinned to match `.pre-commit-config.yaml`.
 
-Fixed
-~~~~~
+### Fixed
 
-- An exception other than ``AutoPicassoError`` escaped
-  ``WorkflowRunner.run()`` before ``save()``, so the failing module left
-  no trace in ``WorkflowRunner.yaml``.
-- A module raising ``AutoPicassoError`` on the first iteration of
-  ``run()`` raised ``UnboundLocalError`` on ``success``, masking the
+- An exception other than `AutoPicassoError` escaped
+  `WorkflowRunner.run()` before `save()`, so the failing module left
+  no trace in `WorkflowRunner.yaml`.
+- A module raising `AutoPicassoError` on the first iteration of
+  `run()` raised `UnboundLocalError` on `success`, masking the
   real error.
-- ``call_module`` re-raised a ``copy.copy()`` of the exception, which
-  drops ``__traceback__``; the propagated error stopped at the re-raise
+- `call_module` re-raised a `copy.copy()` of the exception, which
+  drops `__traceback__`; the propagated error stopped at the re-raise
   rather than pointing at the code that failed.
-- ``fit_csr`` used truthiness to detect optional parameters, so
-  ``min_dist=0``, ``max_dist=0`` and ``bkg_fraction=0`` were silently
+- `fit_csr` used truthiness to detect optional parameters, so
+  `min_dist=0`, `max_dist=0` and `bkg_fraction=0` were silently
   replaced by defaults.
-- ``nndistribution_from_csr`` raised "zero-size array to reduction
+- `nndistribution_from_csr` raised "zero-size array to reduction
   operation maximum" on an empty distance array instead of returning an
   empty result.
 - The GUI's "Remove Dataset" button did nothing, silently, when a
   channel was selected, and its buttons were ordered inconsistently.
 - Commands could not be assigned to nested (dict) sub-parameters: the
-  ``cmd`` dialog raised ``KeyError`` on accept, and a nested command
+  `cmd` dialog raised `KeyError` on accept, and a nested command
   value was discarded when the workflow was reloaded.

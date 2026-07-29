@@ -86,11 +86,11 @@ This repo already matches the aligned target — no S0A-2 migration pending here
   (gitignored, importable as `picasso_workflow.__version__`); fallback outside a
   git checkout is `0.3.3.dev0`. Release = merge to `master`, then
   `git tag vX.Y.Z && git push origin vX.Y.Z` (format `vMAJOR.MINOR.PATCH`).
-- **Changelog on release:** the changelog is `CHANGELOG.txt` at the repo root
-  (Keep a Changelog, in reStructuredText, with `Added` / `Changed` / `Fixed`
-  subsections). Add an entry under the top **`Unreleased`** section in every PR;
-  at release, promote `Unreleased` to a dated, tagged section (e.g.
-  `v1.2.3 - YYYY-MM-DD`). Because the version comes from git tags, the changelog
+- **Changelog on release:** the changelog is `CHANGELOG.md` at the repo root
+  (Keep a Changelog, in Markdown, with `### Added` / `### Changed` / `### Fixed`
+  subsections — matching monet / PycroFlow / picasso-registry). Add an entry
+  under the top **`## [Unreleased]`** section in every PR; at release, promote
+  `[Unreleased]` to a dated, tagged section (e.g. `## [1.2.3] - YYYY-MM-DD`). Because the version comes from git tags, the changelog
   is the human-facing record of what each tag contains.
 - **Packaging:** `pyproject.toml` only (no `setup.py` / `setup.cfg`). Runtime
   deps and the `[cluster]` extra live there.
