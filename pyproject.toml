@@ -32,9 +32,6 @@ dependencies = [
     # "coverage>=6.5,<6.6",
     "pytest==8.1.1",
     "isort==5.13.2",
-    "aicspylibczi>=3.1.1",
-    "fsspec>=2022.8.0",
-    "aicsimageio",
     "psutil",
     "atlassian-python-api",
     "memory-profiler>=0.61.0",
@@ -53,6 +50,17 @@ picasso-workflow-gui = "picasso_workflow._launcher:main"
 cluster = [
     "mpi4py>=4.0.2",
 ]
+# Zeiss .czi reader used only by the optional ``convert_zeiss_movie`` module
+# (picasso_outpost.convert_zeiss_file). aicspylibczi has no aarch64 wheels and
+# source-builds via a C++/cmake toolchain, and aicsimageio drags an old
+# imagecodecs that fails to build on the py3.10 arm64 container -- so the CZI
+# stack lives here rather than in the base deps, keeping ``pip install -e .``
+# wheel-only. Install with ``pip install -e ".[formats]"`` to enable CZI import.
+formats = [
+    "aicsimageio",
+    "aicspylibczi>=3.1.1",
+    "fsspec>=2022.8.0",
+]
 
 [tool.setuptools]
 packages = ["picasso_workflow"]
@@ -69,6 +77,7 @@ fallback_version = "0.3.3.dev0"
 picasso_workflow = ["picasso-workflow.ico"]
 
 [tool.black]
+target-version = ["py310"]
 line-length = 79
 include = "\\.pyi?$"
 exclude = '''
@@ -98,7 +107,7 @@ extend-ignore = "E203,E501,W503"
 # extend-exclude keeps flake8's sensible defaults and additionally skips the
 # generated/snapshot test fixtures and the isolated experimental modules
 # (not imported by the package) that still carry WIP F-codes.
-extend-exclude = "docs,picasso_workflow/spinna_mle.py,picasso_workflow/spinna_mle_2.py,picasso_workflow/nn_redistribution.py,picasso_workflow/tests/TestData"
+extend-exclude = "docs,picasso_workflow/_version.py,picasso_workflow/spinna_mle.py,picasso_workflow/spinna_mle_2.py,picasso_workflow/nn_redistribution.py,picasso_workflow/tests/TestData"
 
 [tool.bandit]
 exclude = "/tests"
