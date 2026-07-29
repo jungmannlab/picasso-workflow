@@ -24,7 +24,6 @@ from matplotlib.colors import LogNorm
 import yaml
 import os
 from datetime import datetime
-from aicsimageio import AICSImage
 
 from picasso import (
     io,
@@ -1905,27 +1904,25 @@ def convert_zeiss_file(filepath_czi, filepath_raw, info=None):
         are entered. Necessary keys: ``'Byte Order'``, ``'Camera'``,
         ``'Micro-Manager Metadata'``.
     """
-    img = AICSImage(filepath_czi)
-
-    with open(filepath_raw, "wb") as f:
-        img.get_image_data().squeeze().tofile(f)
+    # picasso reads Zeiss ``.czi`` movies natively (via its optional
+    # ``czifile`` reader), returning a ``(T, Y, X)`` movie.
+    with io.load_czi(filepath_czi)[0] as movie:
+        data = movie[:].squeeze()
 
     if info is None:
         info = {"Byte Order": "<", "Camera": "FusionBT"}
         info["File"] = filepath_raw
-        info["Height"] = img.get_image_data().shape[-2]
-        info["Width"] = img.get_image_data().shape[-1]
-        info["Frames"] = img.get_image_data().shape[0]
-        info["Data Type"] = img.get_image_data().dtype.name
+        info["Height"] = data.shape[-2]
+        info["Width"] = data.shape[-1]
+        info["Frames"] = data.shape[0]
+        info["Data Type"] = data.dtype.name
         info["Micro-Manager Metadata"] = {
             "FusionBT-ReadoutMode": 1,
             "Filter": 561,
         }
 
-    filepath_info = os.path.splitext(filepath_raw)[0] + ".yaml"
-
-    with open(filepath_info, "w") as f:
-        yaml.dump(info, f)
+    # save_raw writes both the ``.raw`` movie and its ``.yaml`` sidecar.
+    io.save_raw(filepath_raw, data, [info])
 
 
 #############################################################################

@@ -9,7 +9,7 @@ Description: Test the module picasso_outpost.py
 import os
 import logging
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import numpy as np
 import pandas as pd
 import pytest
@@ -68,11 +68,20 @@ class TestPicassoOutpost(unittest.TestCase):
         )
         logger.debug(f"shift: {shift}")
 
-    @patch("picasso_workflow.picasso_outpost.AICSImage")
-    def test_03_convert_zeiss_file(self, mock_aicsi):
+    @patch("picasso_workflow.picasso_outpost.io.load_czi")
+    def test_03_convert_zeiss_file(self, mock_load_czi):
+        # picasso's io.load_czi returns (movie, [info]); the movie is
+        # array-like and reduces to a (T, Y, X) numpy array on slicing.
+        movie = np.zeros((12, 8, 8), dtype=np.uint16)
+        mock_movie = MagicMock()
+        mock_movie.__enter__.return_value = mock_movie
+        mock_movie.__getitem__.return_value = movie
+        mock_load_czi.return_value = (mock_movie, [{}])
+
         temp_folder = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
         )
+        os.makedirs(temp_folder, exist_ok=True)
         filepath_czi = os.path.join(temp_folder, "zeissfile.czi")
         filepath_raw = os.path.join(temp_folder, "myrawfile.raw")
         info = {"Byte Order": "<", "Camera": "FusionBT"}
