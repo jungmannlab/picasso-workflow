@@ -1,14 +1,21 @@
 name: Python Unit Tests and Coverage
 
+# NOTE: auto-run DEACTIVATED (2026-07-29). This self-hosted (Windows + Confluence
+# secrets) unit-test job is superseded by "Unit Tests (hosted)"
+# (unit-tests-hosted.yml, ubuntu-latest) for the required merge gate. It hangs
+# "pending" without a registered self-hosted runner, so it's manual-only for now
+# (Actions tab -> this workflow -> "Run workflow"). To reactivate, uncomment the
+# push / pull_request triggers below.
 on:
-  push:
-    branches:
-      - master
-      - develop
-  pull_request:
-    branches:
-      - master
-      - develop
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - master
+  #     - develop
+  # pull_request:
+  #   branches:
+  #     - master
+  #     - develop
 
 jobs:
   test:
