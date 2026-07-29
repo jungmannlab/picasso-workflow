@@ -12,6 +12,11 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- CI: a hosted unit-test workflow (`.github/workflows/unit-tests-hosted.yml`,
+  `ubuntu-latest`) that installs the wheel-only base, pulls the Qt runtime libs
+  and runs the unit tier headless (`QT_QPA_PLATFORM=offscreen`). Intended as the
+  required merge gate alongside Lint, so PRs no longer depend on the self-hosted
+  Windows/SLURM runners being online.
 - Confluence error reports now identify the failing module by index and
   name in a heading, list the parameters it was called with, name the
   innermost picasso-workflow stack frame, and link the module result
@@ -28,6 +33,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- Bumped the picasso pin to `picassosr>=0.11.0a2` (the currently required
+  pre-release; resolves from PyPI).
 - The Zeiss `.czi` reader (`aicsimageio` + `aicspylibczi` + `fsspec`)
   moved from the base dependencies to an optional `formats` extra
   (`pip install "picasso_workflow[formats]"`). aicspylibczi has no
@@ -57,6 +64,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `PathParser` (the cross-machine file-path converter used by `spinna_batch`
+  via `util.convert_filepath_for_machine`) raised `KeyError: 'Drivepaths'` on
+  any machine whose config has no `Drivepaths` section — i.e. a fresh install /
+  CI / any non-lab machine (only `config_template.yaml` ships, not a populated
+  `config.yaml`). It now defaults to an empty drive map, which `convert_path`
+  already treats as "no known drive root -> return the path unchanged". This
+  makes the unit tier hermetic (fixes `test_analyse.py::test_modules` and
+  `test_spinna_batch_single_dataset` off the lab machines) and stops the module
+  from hard-crashing when no drive mapping is configured.
 - An exception other than `AutoPicassoError` escaped
   `WorkflowRunner.run()` before `save()`, so the failing module left
   no trace in `WorkflowRunner.yaml`.

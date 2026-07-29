@@ -62,7 +62,12 @@ class PathParser:
         #     paths = [p.strip() for p in paths.split(",")]
         #     self.drive_paths[machine] = paths
 
-        self.drive_paths = CONFIG["Drivepaths"]
+        # Default to no drive mapping when the config has no "Drivepaths"
+        # section (e.g. a fresh install / CI / any non-lab machine that never
+        # wrote a config.yaml). convert_path treats an empty map as "no known
+        # drive root -> return the path unchanged", which is the correct
+        # behaviour off the lab machines and keeps the unit tests hermetic.
+        self.drive_paths = CONFIG.get("Drivepaths", {})
         logger.debug(f"drivepaths: {self.drive_paths}")
 
     def windows_path_to_curr_os(self, winpath: str, drive_map: dict) -> str:
