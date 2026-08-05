@@ -1764,12 +1764,18 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         df_locs = pd.DataFrame(self.locs)
         gbframe = df_locs.groupby("frame")
-        photons_mean = gbframe["photons"].mean()
-        photons_std = gbframe["photons"].std()
-        sx_mean = gbframe["sx"].mean()
-        sx_std = gbframe["sx"].std()
-        sy_mean = gbframe["sy"].mean()
-        sy_std = gbframe["sy"].std()
+        # groupby only yields rows for frames that actually contain
+        # localizations. If some frames have none (e.g. the light switched
+        # on mid-acquisition), those frames are dropped and the aggregated
+        # series would be shorter than ``frames``, causing an x/y length
+        # mismatch in the plots below. Reindex onto the full frame range so
+        # empty frames become NaN (drawn as gaps) and x/y always align.
+        photons_mean = gbframe["photons"].mean().reindex(frames)
+        photons_std = gbframe["photons"].std().reindex(frames)
+        sx_mean = gbframe["sx"].mean().reindex(frames)
+        sx_std = gbframe["sx"].std().reindex(frames)
+        sy_mean = gbframe["sy"].mean().reindex(frames)
+        sy_std = gbframe["sy"].std().reindex(frames)
 
         fig, ax = plt.subplots(nrows=2, sharex=True)
         ax[0].plot(frames, photons_mean, color="b", label="mean photons")

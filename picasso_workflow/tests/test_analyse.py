@@ -2256,6 +2256,37 @@ class TestAnalyse(unittest.TestCase):
 
         os.remove(filepath)
 
+    def test_07b_AutoPicasso_plot_locs_vs_frame_missing_frames(self):
+        """Frames without localizations must not break the plot.
+
+        Regression: when the illumination switches on mid-acquisition, the
+        early frames contain no localizations. ``groupby("frame")`` drops
+        them, so the per-frame aggregates were shorter than the full frame
+        range and matplotlib raised "x and y must have same first
+        dimension". The aggregates are now reindexed onto every frame.
+        """
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("sx", "f4"),
+            ("sy", "f4"),
+        ]
+        # Localizations only appear in the second half of the movie.
+        first_lit_frame = len(self.ap.movie) // 2
+        self.ap.locs = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(first_lit_frame, len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.locs = pd.DataFrame(self.ap.locs)
+
+        filepath = os.path.join(self.results_folder, "lvf_missing.png")
+        self.ap._plot_locs_vs_frame(filepath)
+
+        os.remove(filepath)
+
     def test_08_conditional_branch_true(self):
         """Test conditional_branch when condition evaluates to True"""
         # Set up mock locs data
