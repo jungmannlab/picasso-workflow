@@ -13,16 +13,21 @@ name: Cluster Tests (SLURM)
 # Set the repository-level Actions variable PW_TEST_DATA_DIR to the path
 # of the real-data directory on the cluster to enable Tier 4.
 
+# NOTE: auto-run DEACTIVATED (2026-07-29) until a self-hosted cluster runner is
+# registered and these SLURM tests are fixed for good -- otherwise they hang
+# "pending" on every push/PR and block merges. Manual trigger only for now
+# (Actions tab -> this workflow -> "Run workflow"). To reactivate, uncomment the
+# push / pull_request triggers below.
 on:
-  push:
-    branches:
-      - master
-      - develop
-  pull_request:
-    branches:
-      - master
-      - develop
   workflow_dispatch:
+  # push:
+  #   branches:
+  #     - master
+  #     - develop
+  # pull_request:
+  #   branches:
+  #     - master
+  #     - develop
 
 jobs:
   # ---------------------------------------------------------------------------
