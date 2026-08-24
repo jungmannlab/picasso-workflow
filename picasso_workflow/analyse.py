@@ -1635,6 +1635,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Spline-PSF calibration (dict, or a path to a picasso spline
                 calibration file). Required for the ``spline`` methods; the
                 spline fit also yields z (3D) directly.
+            ``camera_calibration`` : dict or str
+                Per-pixel sCMOS camera calibration (dict, or a path to a
+                picasso camera calibration file) correcting the
+                pixel-dependent noise model during fitting.
             ``eps`` : float
                 Convergence criterion passed to the fitter.
             ``max_it`` : int
@@ -1677,6 +1681,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters.get("spline_calibration"),
             io.load_spline_calibration,
         )
+        # sCMOS cameras: a per-pixel noise/offset/gain calibration corrects
+        # the pixel-dependent variance during spot extraction and fitting.
+        camera_calibration = _load_calibration(
+            parameters.get("camera_calibration"),
+            io.load_camera_calibration,
+        )
 
         fit_kwargs = {}
         if (eps := parameters.get("eps")) is not None:
@@ -1691,6 +1701,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             box=parameters["box_size"],
             fitting_method=fitting_method,
             spline_calibration=spline_calibration,
+            camera_calibration=camera_calibration,
             multiprocess=multiprocess,
             **fit_kwargs,
         )

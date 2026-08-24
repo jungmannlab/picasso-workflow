@@ -318,6 +318,8 @@ class AbstractModuleCollection(abc.ABC):
             ``spline_calibration`` : dict or str
                 Spline-PSF calibration (dict or path); required for the
                 ``spline`` methods and yields z directly.
+            ``camera_calibration`` : dict or str
+                Per-pixel sCMOS camera calibration (dict or path).
             ``eps`` : float
                 Fitter convergence criterion.
             ``max_it`` : int

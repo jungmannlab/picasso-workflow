@@ -220,6 +220,24 @@ class TestAnalyseModules(unittest.TestCase):
         assert results["fit_method"] == "spline"
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
+        # sCMOS camera_calibration given as a path is resolved via the loader
+        mock_fit.reset_mock()
+        cam_cal = {"gain": 1.0}
+        with patch(
+            "picasso_workflow.analyse.io.load_camera_calibration",
+            return_value=cam_cal,
+        ) as mock_loader:
+            parameters = {
+                "box_size": 7,
+                "fit_parallel": False,
+                "camera_calibration": "cam.yaml",
+            }
+            self.ap.localize(0, parameters)
+        mock_loader.assert_called_once_with("cam.yaml")
+        _, kwargs = mock_fit.call_args
+        assert kwargs["camera_calibration"] == cam_cal
+        shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
     def load_picassoconfig(self):
         pass
 
