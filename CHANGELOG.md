@@ -99,6 +99,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `picasso_outpost.convert_zeiss_file` was left half-refactored by the
+  earlier "aicsimageio removal" change: it still constructed an unused
+  `AICSImage` and referenced an undefined `data`, so it raised
+  `NameError`/`F821` and failed both `flake8` (lint gate) and its unit test.
+  It now reads the `.czi` natively via picasso's `io.load_czi`
+  (`data = movie[:].squeeze()`) and the dead `aicsimageio` import was removed.
+  (The now-unused `[formats]` optional dependency can be dropped as a
+  follow-up.)
 - Pinned `atlassian-python-api>=3.41,<5`. The previously unpinned dependency
   resolved to 5.0.x, whose Confluence-client restructure (Cloud/Server
   subclasses, `get_page_by_title` `space` → `space_key`, relocated
