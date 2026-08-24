@@ -292,7 +292,7 @@ _SPECS = [
         provides=["locs"],
         optional=["picasso_config"],
         relation=W,
-        picasso_symbol="picasso.gausslq.fit_spots_parallel",
+        picasso_symbol="picasso.localize.fit",
         scopes=_SINGLE,
         summary="Localize the spots previously identified.",
     ),

@@ -46,7 +46,6 @@ from picasso import (
     aim,
     clusterer,
     # g5m,
-    gausslq,
     io,
     lib,
     localize,
@@ -1572,41 +1571,26 @@ class AutoPicasso(util.AbstractModuleCollection):
             Results updated with ``locs_vs_frame`` (if requested) and
             ``locs_columns`` (the localization column names).
         """
-        em = self.camera_info["Gain"] > 1
-        spots = localize.get_spots(
-            self.movie,
-            self.identifications,
-            parameters["box_size"],
-            self.camera_info,
-        )
+        # picasso 0.11 moved all fitting into picasso.fitting and removed the
+        # gausslq GPU helpers; drive it through the high-level localize.fit,
+        # which internally extracts spots, fits, and builds the locs DataFrame.
+        # GPU vs CPU and single- vs multi-process are selected by the
+        # fitting_method / multiprocess arguments.
         if self.analysis_config["gpufit_installed"]:
-            theta = gausslq.fit_spots_gpufit(spots)
-            self.locs = gausslq.locs_from_fits_gpufit(
-                self.identifications, theta, parameters["box_size"], em
-            )
+            fitting_method = "gausslq-gpu"
+            multiprocess = True
         else:
-            if parameters["fit_parallel"]:
-                # theta = gausslq.fit_spots_parallel(spots, asynch=False)
-                fs = gausslq.fit_spots_parallel(spots, asynch=True)
-                # n_tasks = len(fs)
-                # with tqdm(total=n_tasks, unit="task") as progress_bar:
-                #     for f in _futures.as_completed(fs):
-                #         progress_bar.update()
-                theta = gausslq.fits_from_futures(fs)
-                em = self.camera_info["Gain"] > 1
-                self.locs = gausslq.locs_from_fits(
-                    self.identifications, theta, parameters["box_size"], em
-                )
-            else:
-                theta = np.empty((len(spots), 6), dtype=np.float32)
-                theta.fill(np.nan)
-                # for i in tqdm(range(len(spots))):
-                for i in range(len(spots)):
-                    theta[i] = gausslq.fit_spot(spots[i])
+            fitting_method = "gausslq"
+            multiprocess = bool(parameters["fit_parallel"])
 
-                self.locs = gausslq.locs_from_fits(
-                    self.identifications, theta, parameters["box_size"], em
-                )
+        self.locs, _fit_info = localize.fit(
+            self.movie,
+            camera_info=self.camera_info,
+            identifications=self.identifications,
+            box=parameters["box_size"],
+            fitting_method=fitting_method,
+            multiprocess=multiprocess,
+        )
 
         if pars := parameters.get("locs_vs_frame"):
             if "filename" in pars.keys():
@@ -1626,7 +1610,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # "Convergence Criterion": convergence,
             # "Max. Iterations": max_iterations,
             "Pixelsize": float(self.pixelsize),
-            "Fit method": "gausslq",
+            "Fit method": fitting_method,
             "Wrapped by": "picasso-workflow : localize",
             # "parameters": parameters,
         }

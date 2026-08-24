@@ -33,8 +33,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
-- Bumped the picasso pin to `picassosr>=0.11.0a2` (the currently required
-  pre-release; resolves from PyPI).
+- Bumped the picasso pin to `picassosr>=0.11.0` (final release; resolves
+  from PyPI).
+- Migrated the `localize` module's gauss fitting off the deprecated
+  `picasso.gausslq` API (removed/deprecated in picasso 0.11: the
+  `fit_spots_gpufit` / `locs_from_fits_gpufit` GPU helpers were deleted, and
+  the whole module now warns and is slated for removal in picasso 1.0). It now
+  calls the high-level `picasso.localize.fit`, selecting `gausslq-gpu` vs
+  `gausslq` and single- vs multi-process from `gpufit_installed` and the
+  `fit_parallel` parameter. The recorded "Fit method" now reflects the actual
+  method used.
 - The Zeiss `.czi` reader (`aicsimageio` + `aicspylibczi` + `fsspec`)
   moved from the base dependencies to an optional `formats` extra
   (`pip install "picasso_workflow[formats]"`). aicspylibczi has no

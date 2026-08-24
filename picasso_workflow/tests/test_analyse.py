@@ -152,30 +152,20 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
 
-    @patch("picasso_workflow.analyse.gausslq.locs_from_fits")
-    @patch("picasso_workflow.analyse.gausslq.fit_spot")
-    @patch("picasso_workflow.analyse.localize.get_spots")
-    def localize(self, mock_get_spots, mock_fit_spot, mock_locs_from_fits):
+    @patch("picasso_workflow.analyse.localize.fit")
+    def localize(self, mock_fit):
         nspots = 5
-        mock_get_spots.return_value = tuple(
-            [
-                np.random.randint(0, 1000, size=(7, 7), dtype=np.uint16)
-                for i in range(nspots)
-            ]
+        # picasso 0.11 localize.fit returns (locs DataFrame, fit info list).
+        locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    tuple(np.random.rand(len(self.locs_dtype)))
+                    for i in range(nspots)
+                ],
+                dtype=self.locs_dtype,
+            )
         )
-        # fit parameters
-        mock_fit_spot.return_value = [0, 0, 0, 0, 0, 0]
-
-        mock_locs_from_fits.return_value = np.rec.array(
-            [
-                tuple(np.random.rand(len(self.locs_dtype)))
-                for i in range(nspots)
-            ],
-            dtype=self.locs_dtype,
-        )
-        mock_locs_from_fits.return_value = pd.DataFrame(
-            mock_locs_from_fits.return_value
-        )
+        mock_fit.return_value = (locs, [])
         self.ap.info = []
 
         parameters = {"box_size": 7, "fit_parallel": False}
