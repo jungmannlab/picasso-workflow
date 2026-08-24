@@ -238,6 +238,25 @@ class TestAnalyseModules(unittest.TestCase):
         assert kwargs["camera_calibration"] == cam_cal
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
+        # GPU is orthogonal to the model: with a GPU fitter configured, an
+        # explicit base method is routed to its -gpu variant, and the default
+        # resolves to gausslq-gpu.
+        self.ap.analysis_config["gpufit_installed"] = True
+        try:
+            mock_fit.reset_mock()
+            self.ap.localize(0, {"box_size": 7, "fitting_method": "gaussmle"})
+            _, kwargs = mock_fit.call_args
+            assert kwargs["fitting_method"] == "gaussmle-gpu"
+            shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
+            mock_fit.reset_mock()
+            self.ap.localize(0, {"box_size": 7})
+            _, kwargs = mock_fit.call_args
+            assert kwargs["fitting_method"] == "gausslq-gpu"
+            shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+        finally:
+            self.ap.analysis_config["gpufit_installed"] = False
+
     def load_picassoconfig(self):
         pass
 
@@ -250,22 +269,36 @@ class TestAnalyseModules(unittest.TestCase):
         from picasso.registration import tform
 
         n = 4
-        self.ap.channel_locs = [
-            pd.DataFrame({"x": np.arange(n) * 1.0, "y": np.arange(n) * 2.0})
-            for _ in range(2)
-        ]
-        self.ap.channel_info = [[], []]
-        self.ap.channel_tags = ["c0", "c1"]
+
+        def fresh_channels():
+            self.ap.channel_locs = [
+                pd.DataFrame(
+                    {"x": np.arange(n) * 1.0, "y": np.arange(n) * 2.0}
+                )
+                for _ in range(2)
+            ]
+            self.ap.channel_info = [[], []]
+            self.ap.channel_tags = ["c0", "c1"]
+
+        fresh_channels()
         mock_load_movie.return_value = (MockPicassoMovie(), {})
 
-        # identity transforms -> localizations must be unchanged
+        # reference channel 0 -> identity (skipped); channel 1 -> a real
+        # translation so we can check it is actually warped by the inverse.
         ident = tform.identity("affine").to_dict()
+        shift = {
+            "model": "affine",
+            "matrix": [[1.0, 0.0, 10.0], [0.0, 1.0, 20.0], [0.0, 0.0, 1.0]],
+            "domain": None,
+        }
         calibration = {
             "registration_model": "affine",
-            "channel_transforms": [ident, ident],
-            "rms": [0.0, 0.0],
+            "channel_transforms": [ident, shift],
+            "rms": [1.0],
         }
-        before = self.ap.channel_locs[1]["x"].to_numpy().copy()
+        ref_before = self.ap.channel_locs[0]["x"].to_numpy().copy()
+        ch1_xy = self.ap.channel_locs[1][["x", "y"]].to_numpy()
+        expected_ch1 = tform.from_dict(shift).inverse().apply(ch1_xy)
         with patch(
             "picasso.registration."
             "calibrate_channel_registration_from_beads",
@@ -281,10 +314,31 @@ class TestAnalyseModules(unittest.TestCase):
         mock_calibrate.assert_called_once()
         mock_save_cal.assert_called_once()
         assert results["registration_model"] == "affine"
-        # identity registration leaves coordinates unchanged
+        # reference channel untouched, and no registration record appended
         np.testing.assert_allclose(
-            self.ap.channel_locs[1]["x"].to_numpy(), before
+            self.ap.channel_locs[0]["x"].to_numpy(), ref_before
         )
+        assert self.ap.channel_info[0] == []
+        # non-reference channel warped by the inverse transform, and recorded
+        np.testing.assert_allclose(
+            self.ap.channel_locs[1][["x", "y"]].to_numpy(), expected_ch1
+        )
+        assert len(self.ap.channel_info[1]) == 1
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_register_channels")
+        )
+
+        # bead-movie / channel count mismatch raises a clear error
+        fresh_channels()
+        with self.assertRaises(analyse.AutoPicassoError):
+            self.ap.register_channels(
+                0,
+                {
+                    "bead_movies": ["only_one.tif"],
+                    "box_size": 7,
+                    "min_gradient": 500,
+                },
+            )
         shutil.rmtree(
             os.path.join(self.results_folder, "00_register_channels")
         )
