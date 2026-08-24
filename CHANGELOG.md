@@ -99,6 +99,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- Pinned `atlassian-python-api>=3.41,<5`. The previously unpinned dependency
+  resolved to 5.0.x, whose Confluence-client restructure (Cloud/Server
+  subclasses, `get_page_by_title` `space` → `space_key`, relocated
+  `create_page` / `update_page` / `attach_file` / … methods) broke
+  `ConfluenceInterface` with a `TypeError`. The pin restores the API the
+  reporter targets; migrating to 5.x is a separate follow-up. The live
+  Confluence tests (`Test_A_ConfluenceInterface`, `Test_C_ConfluenceReporter`)
+  are now `@pytest.mark.integration` so a bare `pytest` (unit tier) no longer
+  runs them even when a `TEST_CONFLUENCE_TOKEN` is configured — they run under
+  `pytest -m integration`, and still skip when no token is set.
 - `PathParser` (the cross-machine file-path converter used by `spinna_batch`
   via `util.convert_filepath_for_machine`) raised `KeyError: 'Drivepaths'` on
   any machine whose config has no `Drivepaths` section — i.e. a fresh install /

@@ -25,6 +25,7 @@ _TEST_CREDS = resolve_confluence_credentials("ConfluenceTest")
 _CONFLUENCE_AVAILABLE = bool(_TEST_CREDS.get("token"))
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not _CONFLUENCE_AVAILABLE,
     reason="Confluence test token not set (TEST_CONFLUENCE_TOKEN)",
@@ -1374,6 +1375,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
 
 
 # @unittest.skip('')
+@pytest.mark.integration
 @pytest.mark.skipif(
     not _CONFLUENCE_AVAILABLE,
     reason="Confluence test token not set (TEST_CONFLUENCE_TOKEN)",
