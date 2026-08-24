@@ -244,6 +244,51 @@ class TestAnalyseModules(unittest.TestCase):
     def zfit(self):
         pass
 
+    @patch("picasso_workflow.analyse.io.save_any_calibration")
+    @patch("picasso_workflow.analyse.io.load_movie")
+    def register_channels(self, mock_load_movie, mock_save_cal):
+        from picasso.registration import tform
+
+        n = 4
+        self.ap.channel_locs = [
+            pd.DataFrame({"x": np.arange(n) * 1.0, "y": np.arange(n) * 2.0})
+            for _ in range(2)
+        ]
+        self.ap.channel_info = [[], []]
+        self.ap.channel_tags = ["c0", "c1"]
+        mock_load_movie.return_value = (MockPicassoMovie(), {})
+
+        # identity transforms -> localizations must be unchanged
+        ident = tform.identity("affine").to_dict()
+        calibration = {
+            "registration_model": "affine",
+            "channel_transforms": [ident, ident],
+            "rms": [0.0, 0.0],
+        }
+        before = self.ap.channel_locs[1]["x"].to_numpy().copy()
+        with patch(
+            "picasso.registration."
+            "calibrate_channel_registration_from_beads",
+            return_value=calibration,
+        ) as mock_calibrate:
+            parameters = {
+                "bead_movies": ["b0.tif", "b1.tif"],
+                "box_size": 7,
+                "min_gradient": 500,
+            }
+            parameters, results = self.ap.register_channels(0, parameters)
+
+        mock_calibrate.assert_called_once()
+        mock_save_cal.assert_called_once()
+        assert results["registration_model"] == "affine"
+        # identity registration leaves coordinates unchanged
+        np.testing.assert_allclose(
+            self.ap.channel_locs[1]["x"].to_numpy(), before
+        )
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_register_channels")
+        )
+
     @patch("picasso_workflow.analyse.io.load_movie")
     def export_brightfield(self, mock_load):
         frame = np.random.randint(0, 1000, size=(1, 32, 32))

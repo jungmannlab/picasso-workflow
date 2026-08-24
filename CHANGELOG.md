@@ -30,6 +30,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 - `localize` module: new optional `camera_calibration` parameter (a dict or
   a path to a picasso camera calibration file) enabling the picasso 0.11
   per-pixel sCMOS noise model during fitting.
+- New `register_channels` aggregation module: fits a higher-degree-of-freedom
+  channel transform (affine / projective / polynomial) from fiducial-bead
+  movies via `picasso.registration` and warps each channel's localizations
+  into the reference frame. Complements the existing translation-only
+  `align_channels`. (3D localization is available via the `spline` fitting
+  method above and, for astigmatism, the existing `zfit` module.) Note: the
+  transform math is unit-tested with identity transforms and mocks; real
+  bead-data validation belongs to the integration tier.
 
 - CI: a hosted unit-test workflow (`.github/workflows/unit-tests-hosted.yml`,
   `ubuntu-latest`) that installs the wheel-only base, pulls the Qt runtime libs

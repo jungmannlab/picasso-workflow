@@ -1128,6 +1128,43 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
+    def register_channels(self):
+        """Register channels via picasso 0.11 bead-based transforms.
+
+        Fits a higher-degree-of-freedom transform (affine / projective /
+        polynomial) between channels from fiducial-bead images using
+        ``picasso.registration`` and warps each channel's localizations into
+        the reference frame. Complements the translation-only
+        :meth:`align_channels`.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``bead_movies`` : list of str
+                One bead-calibration movie file per channel, in channel order.
+            ``box_size`` : int
+                Box size used to detect and fit the beads.
+            ``min_gradient`` : float or list
+                Minimum net gradient for a bead candidate.
+
+            Optional keys:
+
+            ``model`` : str
+                Transform model: ``"affine"`` (default), ``"projective"``,
+                ``"polynomial2"`` or ``"polynomial3"``.
+            ``reference`` : int
+                Index of the reference channel. Default 0.
+            ``filepaths`` : list of str
+                Channel hdf5 files to load first (as in ``align_channels``).
+        results : dict
+            Module results (see class docstring).
+        """
+
+    @abc.abstractmethod
     def combine_channels(self):
         """Combine multiple channels into one dataset (e.g. for RESI).
 

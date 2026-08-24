@@ -696,6 +696,18 @@ _SPECS = [
         summary="Align multiple channels to each other (aggregation workflow).",
     ),
     _s(
+        "register_channels",
+        requires=["channel_locs"],
+        provides=["channel_locs", "report_items"],
+        relation=E,
+        picasso_symbol=(
+            "picasso.registration.calibrate_channel_registration_from_beads"
+        ),
+        scopes=_AGG,
+        summary="Register channels via bead-based affine/projective/polynomial"
+        " transforms (aggregation workflow).",
+    ),
+    _s(
         "combine_channels",
         requires=["channel_locs"],
         provides=["combined_locs"],
