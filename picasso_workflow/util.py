@@ -266,6 +266,19 @@ class AbstractModuleCollection(abc.ABC):
                 ``zscore`` and ``bins``.
             ``ids_vs_frame`` : dict
                 Identifications-vs-time plot parameters: ``filename``.
+            ``identify_parallel`` : bool
+                Run identification on multiple cores. Default is True.
+            ``temporal_median_window`` : int
+                Window (frames) of the picasso 0.11 temporal-median
+                background filter. Omit to disable.
+            ``temporal_median_stride`` : int
+                Stride (frames) for the temporal-median filter.
+            ``gaussian_filter_sigma`` : float
+                Sigma of a spatial Gaussian pre-filter. Omit to disable.
+            ``roi`` : tuple or list
+                One or more rectangular ROIs to restrict detection to.
+            ``frame_bounds`` : tuple or list
+                One or more ``(start, end)`` frame ranges to detect within.
         results : dict
             Module results (see class docstring).
 

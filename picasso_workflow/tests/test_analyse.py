@@ -152,6 +152,27 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
 
+        # picasso 0.11 identify filters are forwarded to localize.identify
+        with patch(
+            "picasso_workflow.analyse.localize.identify"
+        ) as mock_identify:
+            mock_identify.return_value = (self.ap.identifications, {})
+            parameters = {
+                "box_size": 7,
+                "min_gradient": 500,
+                "temporal_median_window": 20,
+                "gaussian_filter_sigma": 1.5,
+                "identify_parallel": False,
+            }
+            self.ap.identify(0, parameters)
+            _, kwargs = mock_identify.call_args
+            assert kwargs["temporal_median_window"] == 20
+            assert kwargs["gaussian_filter_sigma"] == 1.5
+            assert kwargs["threaded"] is False
+            # unset filters are not forwarded (picasso defaults preserved)
+            assert "temporal_median_stride" not in kwargs
+        shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
+
     @patch("picasso_workflow.analyse.localize.fit")
     def localize(self, mock_fit):
         nspots = 5

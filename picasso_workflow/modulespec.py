@@ -282,7 +282,7 @@ _SPECS = [
         provides=["identifications"],
         optional=["picasso_config"],
         relation=W,
-        picasso_symbol="picasso.localize.identify_async",
+        picasso_symbol="picasso.localize.identify",
         scopes=_SINGLE,
         summary="Identify localization sites in a loaded movie.",
     ),

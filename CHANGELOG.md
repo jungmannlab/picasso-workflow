@@ -20,6 +20,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   calibration file) and yields z (3D) directly, and the fitter's `eps`
   (convergence) and `max_it` (iteration cap) are now exposable. The
   resolved fit method is recorded in the results and the Confluence report.
+- `identify` module: now uses the picasso 0.11 threaded `localize.identify`
+  entry point and exposes its new background-suppression and scoping
+  options — `temporal_median_window` / `temporal_median_stride` (temporal
+  median filter), `gaussian_filter_sigma` (spatial Gaussian pre-filter),
+  and one-or-more `roi` / `frame_bounds`. `identify_parallel` toggles
+  multi-core detection. Unset options fall back to the picasso defaults
+  (no filtering, whole movie), so existing workflows are unaffected.
 
 - CI: a hosted unit-test workflow (`.github/workflows/unit-tests-hosted.yml`,
   `ubuntu-latest`) that installs the wheel-only base, pulls the Qt runtime libs

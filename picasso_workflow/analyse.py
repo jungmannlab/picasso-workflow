@@ -1458,6 +1458,21 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ``zscore`` and ``bins``.
             ``ids_vs_frame`` : dict
                 Identifications-vs-time plot parameters: ``filename``.
+            ``identify_parallel`` : bool
+                Run identification on multiple cores. Default is True.
+            ``temporal_median_window`` : int
+                Window (in frames) of the picasso 0.11 temporal-median
+                background filter applied before spot detection. Omit to
+                disable.
+            ``temporal_median_stride`` : int
+                Stride (in frames) for the temporal-median filter.
+            ``gaussian_filter_sigma`` : float
+                Sigma of a spatial Gaussian pre-filter for spot detection.
+                Omit to disable.
+            ``roi`` : tuple or list
+                One or more rectangular ROIs to restrict detection to.
+            ``frame_bounds`` : tuple or list
+                One or more ``(start, end)`` frame ranges to detect within.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
@@ -1501,13 +1516,35 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["auto_netgrad"] = res
             parameters["min_gradient"] = res["estd_net_grad"]
 
-        curr, futures = localize.identify_async(
+        # picasso 0.11 identification supports optional background-suppression
+        # filters (temporal median, spatial Gaussian) and multiple ROIs /
+        # frame bounds via the threaded localize.identify entry point. Only
+        # forward the ones the workflow actually set so the picasso defaults
+        # (no filtering, whole movie) are preserved otherwise.
+        identify_kwargs = {}
+        for key in (
+            "roi",
+            "frame_bounds",
+            "temporal_median_window",
+            "temporal_median_stride",
+            "gaussian_filter_sigma",
+        ):
+            if (val := parameters.get(key)) is not None:
+                identify_kwargs[key] = val
+
+        result = localize.identify(
             self.movie,
             parameters["min_gradient"],
             parameters["box_size"],
-            roi=None,
+            threaded=bool(parameters.get("identify_parallel", True)),
+            **identify_kwargs,
         )
-        self.identifications = localize.identifications_from_futures(futures)
+        # identify returns (identifications, info) by default; tolerate a
+        # bare DataFrame in case return_info is dropped in a later picasso.
+        if isinstance(result, tuple):
+            self.identifications = result[0]
+        else:
+            self.identifications = result
         results["num_identifications"] = len(self.identifications)
 
         if (pars := parameters.get("ids_vs_frame")) is not None:
@@ -1529,6 +1566,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             # "Data Type": ,
             # "parameters": parameters,
         }
+        for key in (
+            "temporal_median_window",
+            "temporal_median_stride",
+            "gaussian_filter_sigma",
+        ):
+            if key in identify_kwargs:
+                new_info[key] = identify_kwargs[key]
         self.info = self.info + [new_info]
 
         return parameters, results
