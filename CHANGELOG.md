@@ -12,6 +12,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- `localize` module: new optional `fitting_method` parameter exposing the
+  picasso 0.11 fitting models (`gausslq` (default), `gaussmle`, the
+  `-rotated` / `-spherical` Gaussian variants, `spline` experimental-PSF
+  fitting, and their `-gpu` counterparts). Spline fitting additionally
+  accepts a `spline_calibration` (a dict or a path to a picasso spline
+  calibration file) and yields z (3D) directly, and the fitter's `eps`
+  (convergence) and `max_it` (iteration cap) are now exposable. The
+  resolved fit method is recorded in the results and the Confluence report.
+
 - CI: a hosted unit-test workflow (`.github/workflows/unit-tests-hosted.yml`,
   `ubuntu-latest`) that installs the wheel-only base, pulls the Qt runtime libs
   and runs the unit tier headless (`QT_QPA_PLATFORM=offscreen`). Intended as the

@@ -168,10 +168,35 @@ class TestAnalyseModules(unittest.TestCase):
         mock_fit.return_value = (locs, [])
         self.ap.info = []
 
+        # default: gausslq (no GPU configured), fit_parallel honored
         parameters = {"box_size": 7, "fit_parallel": False}
-
         parameters, results = self.ap.localize(0, parameters)
+        _, kwargs = mock_fit.call_args
+        assert kwargs["fitting_method"] == "gausslq"
+        assert kwargs["multiprocess"] is False
+        assert results["fit_method"] == "gausslq"
+        shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
+        # explicit fitting_method + spline calibration + fitter controls
+        mock_fit.reset_mock()
+        spline_cal = {"coeff": [1, 2, 3]}
+        parameters = {
+            "box_size": 7,
+            "fit_parallel": True,
+            "fitting_method": "spline",
+            "spline_calibration": spline_cal,
+            "eps": 0.001,
+            "max_it": 100,
+        }
+        parameters, results = self.ap.localize(0, parameters)
+        _, kwargs = mock_fit.call_args
+        assert kwargs["fitting_method"] == "spline"
+        # a dict calibration is passed through untouched
+        assert kwargs["spline_calibration"] == spline_cal
+        assert kwargs["multiprocess"] is True
+        assert kwargs["eps"] == 0.001
+        assert kwargs["max_it"] == 100
+        assert results["fit_method"] == "spline"
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
     def load_picassoconfig(self):

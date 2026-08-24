@@ -1161,6 +1161,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
+        <li>Fit method: {results.get('fit_method', 'gausslq')}</li>
         <li>Locs Column names: {results['locs_columns']}</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """

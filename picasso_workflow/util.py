@@ -293,11 +293,22 @@ class AbstractModuleCollection(abc.ABC):
 
             ``box_size`` : int
                 Detection box size in pixels.
-            ``fit_parallel`` : bool
-                Whether to fit on multiple cores.
 
             Optional keys:
 
+            ``fit_parallel`` : bool
+                Whether to fit on multiple cores. Default is True.
+            ``fitting_method`` : str
+                picasso 0.11 fitting model (e.g. ``"gausslq"`` (default),
+                ``"gaussmle"``, ``-rotated`` / ``-spherical`` variants,
+                ``"spline"``, or their ``-gpu`` counterparts).
+            ``spline_calibration`` : dict or str
+                Spline-PSF calibration (dict or path); required for the
+                ``spline`` methods and yields z directly.
+            ``eps`` : float
+                Fitter convergence criterion.
+            ``max_it`` : int
+                Maximum number of fit iterations.
             ``locs_vs_frame`` : dict
                 Plot-vs-time parameters (arguments of ``_plot_locs_vs_frame``).
             ``save_locs`` : dict

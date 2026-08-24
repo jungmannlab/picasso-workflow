@@ -130,6 +130,33 @@ def generate_random_code(length):
     return random_code
 
 
+def _load_calibration(calibration, loader):
+    """Resolve a picasso calibration given as a dict or a file path.
+
+    Several picasso 0.11 fitting entry points accept calibration dicts
+    (spline PSF, sCMOS camera, 3D astigmatism). Workflow parameters may
+    supply either the dict itself or a path to a saved calibration file;
+    this normalizes both to the dict picasso expects.
+
+    Parameters
+    ----------
+    calibration : dict or str or None
+        The calibration dict, a path to a picasso calibration file, or
+        None.
+    loader : callable
+        The ``picasso.io`` loader to use when ``calibration`` is a path
+        (e.g. ``io.load_spline_calibration``).
+
+    Returns
+    -------
+    dict or None
+        The calibration dict, or None if ``calibration`` was None.
+    """
+    if calibration is None or isinstance(calibration, dict):
+        return calibration
+    return loader(calibration)
+
+
 def create_unique_filename(folder, fn, len_code=6):
     """Build a filename in ``folder`` made unique by a random code.
 
@@ -1548,11 +1575,26 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             ``box_size`` : int
                 Detection box size in pixels.
-            ``fit_parallel`` : bool
-                Whether to fit on multiple cores.
 
             Optional keys:
 
+            ``fit_parallel`` : bool
+                Whether to fit on multiple cores. Default is True.
+            ``fitting_method`` : str
+                picasso 0.11 fitting model, e.g. ``"gausslq"`` (default),
+                ``"gaussmle"`` (maximum-likelihood), the ``-rotated`` /
+                ``-spherical`` Gaussian variants, ``"spline"`` (experimental
+                PSF), or their ``-gpu`` counterparts. If omitted, defaults to
+                ``"gausslq-gpu"`` when a GPU fitter is configured, else
+                ``"gausslq"``.
+            ``spline_calibration`` : dict or str
+                Spline-PSF calibration (dict, or a path to a picasso spline
+                calibration file). Required for the ``spline`` methods; the
+                spline fit also yields z (3D) directly.
+            ``eps`` : float
+                Convergence criterion passed to the fitter.
+            ``max_it`` : int
+                Maximum number of fit iterations.
             ``locs_vs_frame`` : dict
                 Plot-vs-time parameters (arguments of
                 :meth:`_plot_locs_vs_frame`).
@@ -1571,17 +1613,32 @@ class AutoPicasso(util.AbstractModuleCollection):
             Results updated with ``locs_vs_frame`` (if requested) and
             ``locs_columns`` (the localization column names).
         """
-        # picasso 0.11 moved all fitting into picasso.fitting and removed the
-        # gausslq GPU helpers; drive it through the high-level localize.fit,
-        # which internally extracts spots, fits, and builds the locs DataFrame.
-        # GPU vs CPU and single- vs multi-process are selected by the
-        # fitting_method / multiprocess arguments.
-        if self.analysis_config["gpufit_installed"]:
-            fitting_method = "gausslq-gpu"
-            multiprocess = True
-        else:
-            fitting_method = "gausslq"
-            multiprocess = bool(parameters["fit_parallel"])
+        # picasso 0.11 moved all fitting into picasso.fitting; drive it through
+        # the high-level localize.fit, which extracts spots, fits, and builds
+        # the locs DataFrame. The fitting model is selectable via
+        # ``fitting_method`` (default: gausslq, or gausslq-gpu when a GPU fitter
+        # is configured). Spline-PSF methods additionally need a
+        # ``spline_calibration`` (a dict or a path to a picasso spline
+        # calibration file), which also yields z (3D) directly from the fit.
+        fitting_method = parameters.get("fitting_method")
+        if fitting_method is None:
+            fitting_method = (
+                "gausslq-gpu"
+                if self.analysis_config["gpufit_installed"]
+                else "gausslq"
+            )
+        multiprocess = bool(parameters.get("fit_parallel", True))
+
+        spline_calibration = _load_calibration(
+            parameters.get("spline_calibration"),
+            io.load_spline_calibration,
+        )
+
+        fit_kwargs = {}
+        if (eps := parameters.get("eps")) is not None:
+            fit_kwargs["eps"] = eps
+        if (max_it := parameters.get("max_it")) is not None:
+            fit_kwargs["max_it"] = max_it
 
         self.locs, _fit_info = localize.fit(
             self.movie,
@@ -1589,7 +1646,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             identifications=self.identifications,
             box=parameters["box_size"],
             fitting_method=fitting_method,
+            spline_calibration=spline_calibration,
             multiprocess=multiprocess,
+            **fit_kwargs,
         )
 
         if pars := parameters.get("locs_vs_frame"):
@@ -1625,6 +1684,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             self._save_locs(pars["filename"])
 
         results["locs_columns"] = list(self.locs.columns)
+        results["fit_method"] = fitting_method
         return parameters, results
 
     @module_decorator
