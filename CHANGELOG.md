@@ -20,6 +20,10 @@ This file was started after v0.5.6; earlier history is in the git log.
   calibration file) and yields z (3D) directly, and the fitter's `eps`
   (convergence) and `max_it` (iteration cap) are now exposable. The
   resolved fit method is recorded in the results and the Confluence report.
+  These parameters (`fitting_method`, `spline_calibration`,
+  `camera_calibration`, `eps`, `max_it`) are also selectable in the GUI's
+  `localize` module form — `spline_calibration` is where the spline-PSF
+  calibration file is entered.
 - `identify` module: now uses the picasso 0.11 threaded `localize.identify`
   entry point and exposes its new background-suppression and scoping
   options — `temporal_median_window` / `temporal_median_stride` (temporal

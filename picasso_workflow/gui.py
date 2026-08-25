@@ -980,6 +980,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 fit_parallel : bool
                     whether to fit on multiple cores
             optional items:
+                fitting_method : str
+                    picasso 0.11 fitting model (gausslq (default), gaussmle,
+                    rotated/spherical variants, spline, or -gpu counterparts)
+                spline_calibration : str or dict
+                    spline-PSF calibration (path or dict); required for the
+                    spline methods, which yield z directly
+                camera_calibration : str or dict
+                    per-pixel sCMOS camera calibration (path or dict)
+                eps : float
+                    fitter convergence criterion
+                max_it : int
+                    maximum number of fit iterations
                 locs_vs_frame : dict
                     for plotting locs vs time
                     items correspond to arguments of _plot_locs_vs_frame
@@ -1015,6 +1027,64 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "whether to fit on multiple cores",
                 "default": False,
                 "required": True,
+            },
+            "fitting_method": {
+                "type": "str",
+                "description": "picasso 0.11 fitting model. GPU is applied "
+                "automatically for the gausslq/gaussmle/spline bases when a "
+                "GPU fitter is configured; pick a -gpu variant explicitly for "
+                "the rotated/spherical models. The 'spline' methods require "
+                "spline_calibration and yield z (3D) directly.",
+                "options": [
+                    "gausslq",
+                    "gaussmle",
+                    "gausslq-rotated",
+                    "gausslq-spherical",
+                    "gaussmle-rotated",
+                    "gaussmle-spherical",
+                    "gausslq-gpu",
+                    "gaussmle-gpu",
+                    "gausslq-rotated-gpu",
+                    "gausslq-spherical-gpu",
+                    "gaussmle-rotated-gpu",
+                    "gaussmle-spherical-gpu",
+                    "spline",
+                    "spline-mle",
+                    "spline-gpu",
+                    "spline-mle-gpu",
+                    "avg",
+                ],
+                "default": "gausslq",
+                "required": False,
+            },
+            "spline_calibration": {
+                "type": "str",
+                "description": "Path to a picasso spline-PSF calibration "
+                "file. Required for the 'spline' fitting methods; the spline "
+                "fit then yields z (3D) directly. (May also be supplied as a "
+                "dict programmatically.)",
+                "required": False,
+            },
+            "camera_calibration": {
+                "type": "str",
+                "description": "Path to a picasso per-pixel sCMOS camera "
+                "calibration file (offset/gain/variance). (May also be a "
+                "dict.)",
+                "required": False,
+            },
+            "eps": {
+                "type": "float",
+                "description": "Fitter convergence criterion. Omit to use "
+                "picasso's default.",
+                "min": 0.0,
+                "required": False,
+            },
+            "max_it": {
+                "type": "int",
+                "description": "Maximum number of fit iterations. Omit to use "
+                "picasso's default.",
+                "min": 1,
+                "required": False,
             },
             "locs_vs_frame": {
                 "type": "dict",
