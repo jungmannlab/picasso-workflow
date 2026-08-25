@@ -920,6 +920,46 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 },
                 "default": "{'filename': 'ids_vs_frame.png'}",
             },
+            "identify_parallel": {
+                "type": "bool",
+                "description": "Run identification on multiple cores.",
+                "default": True,
+                "required": False,
+            },
+            "temporal_median_window": {
+                "type": "int",
+                "description": "Window (frames) of the picasso 0.11 temporal-"
+                "median background filter applied before spot detection. "
+                "Omit to disable.",
+                "min": 1,
+                "required": False,
+            },
+            "temporal_median_stride": {
+                "type": "int",
+                "description": "Stride (frames) for the temporal-median "
+                "filter.",
+                "min": 1,
+                "required": False,
+            },
+            "gaussian_filter_sigma": {
+                "type": "float",
+                "description": "Sigma of a spatial Gaussian pre-filter for "
+                "spot detection. Omit to disable.",
+                "min": 0.0,
+                "required": False,
+            },
+            "roi": {
+                "type": "list",
+                "description": "One or more rectangular ROIs to restrict "
+                "detection to.",
+                "required": False,
+            },
+            "frame_bounds": {
+                "type": "list",
+                "description": "One or more (start, end) frame ranges to "
+                "detect within.",
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -1058,7 +1098,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
             },
             "spline_calibration": {
-                "type": "str",
+                "type": "path",
                 "description": "Path to a picasso spline-PSF calibration "
                 "file. Required for the 'spline' fitting methods; the spline "
                 "fit then yields z (3D) directly. (May also be supplied as a "
@@ -1066,7 +1106,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
             },
             "camera_calibration": {
-                "type": "str",
+                "type": "path",
                 "description": "Path to a picasso per-pixel sCMOS camera "
                 "calibration file (offset/gain/variance). (May also be a "
                 "dict.)",
@@ -1178,6 +1218,29 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "Keep in mind this must be a path on the cluster for now"
                 " (i.e. /fs/mpib/pool-miblab5/... instead of /Volumes/pool...)",
                 "default": "",
+                "required": False,
+            },
+            "fitting_method": {
+                "type": "str",
+                "description": "2D fitter the localizations came from; used "
+                "by picasso 0.11 to compute the axial localization precision. "
+                "Match the localize step's method.",
+                "options": ["gausslq", "gaussmle"],
+                "default": "gausslq",
+                "required": False,
+            },
+            "gpu": {
+                "type": "bool",
+                "description": "Fit the z coordinates on a CUDA-capable GPU.",
+                "default": False,
+                "required": False,
+            },
+            "filter": {
+                "type": "int",
+                "description": "picasso z-fit RMSD filter (0 = no filtering, "
+                "the default here; 2 = picasso's own default).",
+                "options": [0, 2],
+                "default": 0,
                 "required": False,
             },
             # "save_locs": {

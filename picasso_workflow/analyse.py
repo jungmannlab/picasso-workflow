@@ -1767,6 +1767,15 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``fp_calibration`` : str
                 Filepath to the 3D calibration YAML file; if not given, it is
                 resolved from the picasso config via camera and wavelength.
+            ``fitting_method`` : str
+                2D fitter the localizations came from (``"gausslq"`` (default)
+                or ``"gaussmle"``); used by picasso 0.11 to compute the axial
+                localization precision. Match the ``localize`` step's method.
+            ``gpu`` : bool
+                Fit the z coordinates on a CUDA-capable GPU. Default False.
+            ``filter`` : int
+                picasso z-fit RMSD filter (0 = no filtering, the default here;
+                2 = picasso's own default).
             ``save_locs`` : dict
                 If saving localizations is requested (arguments of
                 ``save_locs``).
@@ -1819,15 +1828,28 @@ class AutoPicasso(util.AbstractModuleCollection):
         with open(path, "r") as f:
             z_calibration = yaml.full_load(f)
 
+        # picasso 0.11: ``fitting_method`` (gausslq/gaussmle) selects how the
+        # axial localization precision is computed -- match the 2D fitter used
+        # in the localize step; ``gpu`` runs the z fit on a CUDA device.
+        # ``filter`` defaults to 0 to keep the previous behaviour of not
+        # RMSD-filtering the z fits (picasso's own default is 2).
         self.locs, self.info = zfit.zfit(
             self.locs,
             self.info,
             calibration=z_calibration,
             magnification_factor=magnification_factor,
             pixelsize=pixelsize,
-            filter=0,
+            fitting_method=parameters.get("fitting_method", "gausslq"),
+            filter=parameters.get("filter", 0),
             multiprocess=True,
+            gpu=bool(parameters.get("gpu", False)),
         )
+        if self.locs is None:
+            raise AutoPicassoError(
+                "picasso zfit.zfit produced no z-fitted localizations; "
+                "check the z calibration and that the localizations carry "
+                "astigmatic widths (sx, sy)."
+            )
 
         # generate a z coordinate histogram
         fig, ax = plt.subplots()
