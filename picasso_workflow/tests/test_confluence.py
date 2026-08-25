@@ -25,6 +25,7 @@ _TEST_CREDS = resolve_confluence_credentials("ConfluenceTest")
 _CONFLUENCE_AVAILABLE = bool(_TEST_CREDS.get("token"))
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not _CONFLUENCE_AVAILABLE,
     reason="Confluence test token not set (TEST_CONFLUENCE_TOKEN)",
@@ -395,6 +396,22 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "combine_map": "placeholderforcombinemap",
         }
         self.cr.combine_channels(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def register_channels(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 1.3,
+            "registration_model": "affine",
+            "registration_rms": [0.1, 0.2],
+        }
+        self.cr.register_channels(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -1358,6 +1375,7 @@ class Test_B_ConfluenceReporter(unittest.TestCase):
 
 
 # @unittest.skip('')
+@pytest.mark.integration
 @pytest.mark.skipif(
     not _CONFLUENCE_AVAILABLE,
     reason="Confluence test token not set (TEST_CONFLUENCE_TOKEN)",

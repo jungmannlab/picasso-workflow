@@ -266,6 +266,19 @@ class AbstractModuleCollection(abc.ABC):
                 ``zscore`` and ``bins``.
             ``ids_vs_frame`` : dict
                 Identifications-vs-time plot parameters: ``filename``.
+            ``identify_parallel`` : bool
+                Run identification on multiple cores. Default is True.
+            ``temporal_median_window`` : int
+                Window (frames) of the picasso 0.11 temporal-median
+                background filter. Omit to disable.
+            ``temporal_median_stride`` : int
+                Stride (frames) for the temporal-median filter.
+            ``gaussian_filter_sigma`` : float
+                Sigma of a spatial Gaussian pre-filter. Omit to disable.
+            ``roi`` : tuple or list
+                One or more rectangular ROIs to restrict detection to.
+            ``frame_bounds`` : tuple or list
+                One or more ``(start, end)`` frame ranges to detect within.
         results : dict
             Module results (see class docstring).
 
@@ -293,11 +306,24 @@ class AbstractModuleCollection(abc.ABC):
 
             ``box_size`` : int
                 Detection box size in pixels.
-            ``fit_parallel`` : bool
-                Whether to fit on multiple cores.
 
             Optional keys:
 
+            ``fit_parallel`` : bool
+                Whether to fit on multiple cores. Default is True.
+            ``fitting_method`` : str
+                picasso 0.11 fitting model (e.g. ``"gausslq"`` (default),
+                ``"gaussmle"``, ``-rotated`` / ``-spherical`` variants,
+                ``"spline"``, or their ``-gpu`` counterparts).
+            ``spline_calibration`` : dict or str
+                Spline-PSF calibration (dict or path); required for the
+                ``spline`` methods and yields z directly.
+            ``camera_calibration`` : dict or str
+                Per-pixel sCMOS camera calibration (dict or path).
+            ``eps`` : float
+                Fitter convergence criterion.
+            ``max_it`` : int
+                Maximum number of fit iterations.
             ``locs_vs_frame`` : dict
                 Plot-vs-time parameters (arguments of ``_plot_locs_vs_frame``).
             ``save_locs`` : dict
@@ -1097,6 +1123,43 @@ class AbstractModuleCollection(abc.ABC):
                 hdf5 files outside the main workflow to shift as well (e.g.
                 clustered localizations when the workflow continued with
                 cluster centers).
+        results : dict
+            Module results (see class docstring).
+        """
+
+    @abc.abstractmethod
+    def register_channels(self):
+        """Register channels via picasso 0.11 bead-based transforms.
+
+        Fits a higher-degree-of-freedom transform (affine / projective /
+        polynomial) between channels from fiducial-bead images using
+        ``picasso.registration`` and warps each channel's localizations into
+        the reference frame. Complements the translation-only
+        :meth:`align_channels`.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``bead_movies`` : list of str
+                One bead-calibration movie file per channel, in channel order.
+            ``box_size`` : int
+                Box size used to detect and fit the beads.
+            ``min_gradient`` : float or list
+                Minimum net gradient for a bead candidate.
+
+            Optional keys:
+
+            ``model`` : str
+                Transform model: ``"affine"`` (default), ``"projective"``,
+                ``"polynomial2"`` or ``"polynomial3"``.
+            ``reference`` : int
+                Index of the reference channel. Default 0.
+            ``filepaths`` : list of str
+                Channel hdf5 files to load first (as in ``align_channels``).
         results : dict
             Module results (see class docstring).
         """

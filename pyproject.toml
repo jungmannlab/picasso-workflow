@@ -16,7 +16,7 @@ dependencies = [
     "tables",
     "numba",
     "openpyxl==3.1.2",
-    "picassosr>=0.11.0a2",
+    "picassosr>=0.11.0",
     # GUI uses PyQt6 directly; keep in sync with picasso's constraint
     "PyQt6>=6.10.2,<7",
     # Embedded HTML report viewer in the GUI Results tab (QWebEngineView);
@@ -33,7 +33,10 @@ dependencies = [
     "pytest==8.1.1",
     "isort==5.13.2",
     "psutil",
-    "atlassian-python-api",
+    # atlassian-python-api 5.0 restructured the Confluence client (Cloud/Server
+    # subclasses, get_page_by_title space -> space_key, methods relocated),
+    # which breaks ConfluenceInterface. Pin below it until that migration.
+    "atlassian-python-api>=3.41,<5",
     "memory-profiler>=0.61.0",
     "loguru>=0.7.3",
     "h5py",

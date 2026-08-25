@@ -152,43 +152,196 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
 
-    @patch("picasso_workflow.analyse.gausslq.locs_from_fits")
-    @patch("picasso_workflow.analyse.gausslq.fit_spot")
-    @patch("picasso_workflow.analyse.localize.get_spots")
-    def localize(self, mock_get_spots, mock_fit_spot, mock_locs_from_fits):
-        nspots = 5
-        mock_get_spots.return_value = tuple(
-            [
-                np.random.randint(0, 1000, size=(7, 7), dtype=np.uint16)
-                for i in range(nspots)
-            ]
-        )
-        # fit parameters
-        mock_fit_spot.return_value = [0, 0, 0, 0, 0, 0]
+        # picasso 0.11 identify filters are forwarded to localize.identify
+        with patch(
+            "picasso_workflow.analyse.localize.identify"
+        ) as mock_identify:
+            mock_identify.return_value = (self.ap.identifications, {})
+            parameters = {
+                "box_size": 7,
+                "min_gradient": 500,
+                "temporal_median_window": 20,
+                "gaussian_filter_sigma": 1.5,
+                "identify_parallel": False,
+            }
+            self.ap.identify(0, parameters)
+            _, kwargs = mock_identify.call_args
+            assert kwargs["temporal_median_window"] == 20
+            assert kwargs["gaussian_filter_sigma"] == 1.5
+            assert kwargs["threaded"] is False
+            # unset filters are not forwarded (picasso defaults preserved)
+            assert "temporal_median_stride" not in kwargs
+        shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
 
-        mock_locs_from_fits.return_value = np.rec.array(
-            [
-                tuple(np.random.rand(len(self.locs_dtype)))
-                for i in range(nspots)
-            ],
-            dtype=self.locs_dtype,
+    @patch("picasso_workflow.analyse.localize.fit")
+    def localize(self, mock_fit):
+        nspots = 5
+        # picasso 0.11 localize.fit returns (locs DataFrame, fit info list).
+        locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    tuple(np.random.rand(len(self.locs_dtype)))
+                    for i in range(nspots)
+                ],
+                dtype=self.locs_dtype,
+            )
         )
-        mock_locs_from_fits.return_value = pd.DataFrame(
-            mock_locs_from_fits.return_value
-        )
+        mock_fit.return_value = (locs, [])
         self.ap.info = []
 
+        # default: gausslq (no GPU configured), fit_parallel honored
         parameters = {"box_size": 7, "fit_parallel": False}
-
         parameters, results = self.ap.localize(0, parameters)
-
+        _, kwargs = mock_fit.call_args
+        assert kwargs["fitting_method"] == "gausslq"
+        assert kwargs["multiprocess"] is False
+        assert results["fit_method"] == "gausslq"
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
+        # explicit fitting_method + spline calibration + fitter controls
+        mock_fit.reset_mock()
+        spline_cal = {"coeff": [1, 2, 3]}
+        parameters = {
+            "box_size": 7,
+            "fit_parallel": True,
+            "fitting_method": "spline",
+            "spline_calibration": spline_cal,
+            "eps": 0.001,
+            "max_it": 100,
+        }
+        parameters, results = self.ap.localize(0, parameters)
+        _, kwargs = mock_fit.call_args
+        assert kwargs["fitting_method"] == "spline"
+        # a dict calibration is passed through untouched
+        assert kwargs["spline_calibration"] == spline_cal
+        assert kwargs["multiprocess"] is True
+        assert kwargs["eps"] == 0.001
+        assert kwargs["max_it"] == 100
+        assert results["fit_method"] == "spline"
+        shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
+        # sCMOS camera_calibration given as a path is resolved via the loader
+        mock_fit.reset_mock()
+        cam_cal = {"gain": 1.0}
+        with patch(
+            "picasso_workflow.analyse.io.load_camera_calibration",
+            return_value=cam_cal,
+        ) as mock_loader:
+            parameters = {
+                "box_size": 7,
+                "fit_parallel": False,
+                "camera_calibration": "cam.yaml",
+            }
+            self.ap.localize(0, parameters)
+        mock_loader.assert_called_once_with("cam.yaml")
+        _, kwargs = mock_fit.call_args
+        assert kwargs["camera_calibration"] == cam_cal
+        shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
+        # GPU is orthogonal to the model: with a GPU fitter configured, an
+        # explicit base method is routed to its -gpu variant, and the default
+        # resolves to gausslq-gpu.
+        self.ap.analysis_config["gpufit_installed"] = True
+        try:
+            mock_fit.reset_mock()
+            self.ap.localize(0, {"box_size": 7, "fitting_method": "gaussmle"})
+            _, kwargs = mock_fit.call_args
+            assert kwargs["fitting_method"] == "gaussmle-gpu"
+            shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
+            mock_fit.reset_mock()
+            self.ap.localize(0, {"box_size": 7})
+            _, kwargs = mock_fit.call_args
+            assert kwargs["fitting_method"] == "gausslq-gpu"
+            shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+        finally:
+            self.ap.analysis_config["gpufit_installed"] = False
 
     def load_picassoconfig(self):
         pass
 
     def zfit(self):
         pass
+
+    @patch("picasso_workflow.analyse.io.save_any_calibration")
+    @patch("picasso_workflow.analyse.io.load_movie")
+    def register_channels(self, mock_load_movie, mock_save_cal):
+        from picasso.registration import tform
+
+        n = 4
+
+        def fresh_channels():
+            self.ap.channel_locs = [
+                pd.DataFrame(
+                    {"x": np.arange(n) * 1.0, "y": np.arange(n) * 2.0}
+                )
+                for _ in range(2)
+            ]
+            self.ap.channel_info = [[], []]
+            self.ap.channel_tags = ["c0", "c1"]
+
+        fresh_channels()
+        mock_load_movie.return_value = (MockPicassoMovie(), {})
+
+        # reference channel 0 -> identity (skipped); channel 1 -> a real
+        # translation so we can check it is actually warped by the inverse.
+        ident = tform.identity("affine").to_dict()
+        shift = {
+            "model": "affine",
+            "matrix": [[1.0, 0.0, 10.0], [0.0, 1.0, 20.0], [0.0, 0.0, 1.0]],
+            "domain": None,
+        }
+        calibration = {
+            "registration_model": "affine",
+            "channel_transforms": [ident, shift],
+            "rms": [1.0],
+        }
+        ref_before = self.ap.channel_locs[0]["x"].to_numpy().copy()
+        ch1_xy = self.ap.channel_locs[1][["x", "y"]].to_numpy()
+        expected_ch1 = tform.from_dict(shift).inverse().apply(ch1_xy)
+        with patch(
+            "picasso.registration."
+            "calibrate_channel_registration_from_beads",
+            return_value=calibration,
+        ) as mock_calibrate:
+            parameters = {
+                "bead_movies": ["b0.tif", "b1.tif"],
+                "box_size": 7,
+                "min_gradient": 500,
+            }
+            parameters, results = self.ap.register_channels(0, parameters)
+
+        mock_calibrate.assert_called_once()
+        mock_save_cal.assert_called_once()
+        assert results["registration_model"] == "affine"
+        # reference channel untouched, and no registration record appended
+        np.testing.assert_allclose(
+            self.ap.channel_locs[0]["x"].to_numpy(), ref_before
+        )
+        assert self.ap.channel_info[0] == []
+        # non-reference channel warped by the inverse transform, and recorded
+        np.testing.assert_allclose(
+            self.ap.channel_locs[1][["x", "y"]].to_numpy(), expected_ch1
+        )
+        assert len(self.ap.channel_info[1]) == 1
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_register_channels")
+        )
+
+        # bead-movie / channel count mismatch raises a clear error
+        fresh_channels()
+        with self.assertRaises(analyse.AutoPicassoError):
+            self.ap.register_channels(
+                0,
+                {
+                    "bead_movies": ["only_one.tif"],
+                    "box_size": 7,
+                    "min_gradient": 500,
+                },
+            )
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_register_channels")
+        )
 
     @patch("picasso_workflow.analyse.io.load_movie")
     def export_brightfield(self, mock_load):

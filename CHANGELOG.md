@@ -12,6 +12,33 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- `localize` module: new optional `fitting_method` parameter exposing the
+  picasso 0.11 fitting models (`gausslq` (default), `gaussmle`, the
+  `-rotated` / `-spherical` Gaussian variants, `spline` experimental-PSF
+  fitting, and their `-gpu` counterparts). Spline fitting additionally
+  accepts a `spline_calibration` (a dict or a path to a picasso spline
+  calibration file) and yields z (3D) directly, and the fitter's `eps`
+  (convergence) and `max_it` (iteration cap) are now exposable. The
+  resolved fit method is recorded in the results and the Confluence report.
+- `identify` module: now uses the picasso 0.11 threaded `localize.identify`
+  entry point and exposes its new background-suppression and scoping
+  options — `temporal_median_window` / `temporal_median_stride` (temporal
+  median filter), `gaussian_filter_sigma` (spatial Gaussian pre-filter),
+  and one-or-more `roi` / `frame_bounds`. `identify_parallel` toggles
+  multi-core detection. Unset options fall back to the picasso defaults
+  (no filtering, whole movie), so existing workflows are unaffected.
+- `localize` module: new optional `camera_calibration` parameter (a dict or
+  a path to a picasso camera calibration file) enabling the picasso 0.11
+  per-pixel sCMOS noise model during fitting.
+- New `register_channels` aggregation module: fits a higher-degree-of-freedom
+  channel transform (affine / projective / polynomial) from fiducial-bead
+  movies via `picasso.registration` and warps each channel's localizations
+  into the reference frame. Complements the existing translation-only
+  `align_channels`. (3D localization is available via the `spline` fitting
+  method above and, for astigmatism, the existing `zfit` module.) Note: the
+  transform math is unit-tested with identity transforms and mocks; real
+  bead-data validation belongs to the integration tier.
+
 - CI: a hosted unit-test workflow (`.github/workflows/unit-tests-hosted.yml`,
   `ubuntu-latest`) that installs the wheel-only base, pulls the Qt runtime libs
   and runs the unit tier headless (`QT_QPA_PLATFORM=offscreen`). Intended as the
@@ -33,8 +60,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
-- Bumped the picasso pin to `picassosr>=0.11.0a2` (the currently required
-  pre-release; resolves from PyPI).
+- Bumped the picasso pin to `picassosr>=0.11.0` (final release; resolves
+  from PyPI).
+- Migrated the `localize` module's gauss fitting off the deprecated
+  `picasso.gausslq` API (removed/deprecated in picasso 0.11: the
+  `fit_spots_gpufit` / `locs_from_fits_gpufit` GPU helpers were deleted, and
+  the whole module now warns and is slated for removal in picasso 1.0). It now
+  calls the high-level `picasso.localize.fit`, selecting `gausslq-gpu` vs
+  `gausslq` and single- vs multi-process from `gpufit_installed` and the
+  `fit_parallel` parameter. The recorded "Fit method" now reflects the actual
+  method used.
 - The Zeiss `.czi` reader (`aicsimageio` + `aicspylibczi` + `fsspec`)
   moved from the base dependencies to an optional `formats` extra
   (`pip install "picasso_workflow[formats]"`). aicspylibczi has no
@@ -64,6 +99,24 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `picasso_outpost.convert_zeiss_file` was left half-refactored by the
+  earlier "aicsimageio removal" change: it still constructed an unused
+  `AICSImage` and referenced an undefined `data`, so it raised
+  `NameError`/`F821` and failed both `flake8` (lint gate) and its unit test.
+  It now reads the `.czi` natively via picasso's `io.load_czi`
+  (`data = movie[:].squeeze()`) and the dead `aicsimageio` import was removed.
+  (The now-unused `[formats]` optional dependency can be dropped as a
+  follow-up.)
+- Pinned `atlassian-python-api>=3.41,<5`. The previously unpinned dependency
+  resolved to 5.0.x, whose Confluence-client restructure (Cloud/Server
+  subclasses, `get_page_by_title` `space` → `space_key`, relocated
+  `create_page` / `update_page` / `attach_file` / … methods) broke
+  `ConfluenceInterface` with a `TypeError`. The pin restores the API the
+  reporter targets; migrating to 5.x is a separate follow-up. The live
+  Confluence tests (`Test_A_ConfluenceInterface`, `Test_C_ConfluenceReporter`)
+  are now `@pytest.mark.integration` so a bare `pytest` (unit tier) no longer
+  runs them even when a `TEST_CONFLUENCE_TOKEN` is configured — they run under
+  `pytest -m integration`, and still skip when no token is set.
 - `PathParser` (the cross-machine file-path converter used by `spinna_batch`
   via `util.convert_filepath_for_machine`) raised `KeyError: 'Drivepaths'` on
   any machine whose config has no `Drivepaths` section — i.e. a fresh install /

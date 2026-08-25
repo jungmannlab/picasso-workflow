@@ -46,7 +46,6 @@ from picasso import (
     aim,
     clusterer,
     # g5m,
-    gausslq,
     io,
     lib,
     localize,
@@ -129,6 +128,39 @@ def generate_random_code(length):
     letters = string.ascii_letters
     random_code = "".join(random.choices(letters, k=length))
     return random_code
+
+
+# picasso 0.11 fitting methods whose base name has a plain ``-gpu`` variant.
+# GPU is orthogonal to the model choice, so when a GPU fitter is configured
+# these bases are routed to their ``-gpu`` counterpart (see ``localize``).
+_GPU_BASE_FIT_METHODS = ("gausslq", "gaussmle", "spline")
+
+
+def _load_calibration(calibration, loader):
+    """Resolve a picasso calibration given as a dict or a file path.
+
+    Several picasso 0.11 fitting entry points accept calibration dicts
+    (spline PSF, sCMOS camera, 3D astigmatism). Workflow parameters may
+    supply either the dict itself or a path to a saved calibration file;
+    this normalizes both to the dict picasso expects.
+
+    Parameters
+    ----------
+    calibration : dict or str or None
+        The calibration dict, a path to a picasso calibration file, or
+        None.
+    loader : callable
+        The ``picasso.io`` loader to use when ``calibration`` is a path
+        (e.g. ``io.load_spline_calibration``).
+
+    Returns
+    -------
+    dict or None
+        The calibration dict, or None if ``calibration`` was None.
+    """
+    if calibration is None or isinstance(calibration, dict):
+        return calibration
+    return loader(calibration)
 
 
 def create_unique_filename(folder, fn, len_code=6):
@@ -1432,6 +1464,21 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ``zscore`` and ``bins``.
             ``ids_vs_frame`` : dict
                 Identifications-vs-time plot parameters: ``filename``.
+            ``identify_parallel`` : bool
+                Run identification on multiple cores. Default is True.
+            ``temporal_median_window`` : int
+                Window (in frames) of the picasso 0.11 temporal-median
+                background filter applied before spot detection. Omit to
+                disable.
+            ``temporal_median_stride`` : int
+                Stride (in frames) for the temporal-median filter.
+            ``gaussian_filter_sigma`` : float
+                Sigma of a spatial Gaussian pre-filter for spot detection.
+                Omit to disable.
+            ``roi`` : tuple or list
+                One or more rectangular ROIs to restrict detection to.
+            ``frame_bounds`` : tuple or list
+                One or more ``(start, end)`` frame ranges to detect within.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
@@ -1475,13 +1522,30 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["auto_netgrad"] = res
             parameters["min_gradient"] = res["estd_net_grad"]
 
-        curr, futures = localize.identify_async(
+        # picasso 0.11 identification supports optional background-suppression
+        # filters (temporal median, spatial Gaussian) and multiple ROIs /
+        # frame bounds via the threaded localize.identify entry point. Only
+        # forward the ones the workflow actually set so the picasso defaults
+        # (no filtering, whole movie) are preserved otherwise.
+        identify_kwargs = {}
+        for key in (
+            "roi",
+            "frame_bounds",
+            "temporal_median_window",
+            "temporal_median_stride",
+            "gaussian_filter_sigma",
+        ):
+            if (val := parameters.get(key)) is not None:
+                identify_kwargs[key] = val
+
+        # identify returns (identifications, info); return_info defaults True.
+        self.identifications, _id_info = localize.identify(
             self.movie,
             parameters["min_gradient"],
             parameters["box_size"],
-            roi=None,
+            threaded=bool(parameters.get("identify_parallel", True)),
+            **identify_kwargs,
         )
-        self.identifications = localize.identifications_from_futures(futures)
         results["num_identifications"] = len(self.identifications)
 
         if (pars := parameters.get("ids_vs_frame")) is not None:
@@ -1492,17 +1556,26 @@ class AutoPicasso(util.AbstractModuleCollection):
             pars["filename"] = os.path.join(results["folder"], filename)
             results["ids_vs_frame"] = self._plot_ids_vs_frame(**pars)
 
-        # add info
+        # add info. min_gradient may be a scalar or, in picasso 0.11, a
+        # per-channel list; keep the list form rather than coercing to float.
+        min_gradient = parameters["min_gradient"]
+        if isinstance(min_gradient, (list, tuple, np.ndarray)):
+            min_gradient_info = [float(g) for g in min_gradient]
+        else:
+            min_gradient_info = float(min_gradient)
         new_info = {
             "Generated by": "picasso-workflow : identify",
             "Box Size": parameters["box_size"],
-            "Min. Net Gradient": float(parameters["min_gradient"]),
+            "Min. Net Gradient": min_gradient_info,
             # "Width": ,
             # "Height": ,
             # "Frames": len(self.movie),
             # "Data Type": ,
             # "parameters": parameters,
         }
+        # record every forwarded identify option (filters, ROIs, frame
+        # bounds) so the run is reproducible from the info list.
+        new_info.update(identify_kwargs)
         self.info = self.info + [new_info]
 
         return parameters, results
@@ -1549,11 +1622,30 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             ``box_size`` : int
                 Detection box size in pixels.
-            ``fit_parallel`` : bool
-                Whether to fit on multiple cores.
 
             Optional keys:
 
+            ``fit_parallel`` : bool
+                Whether to fit on multiple cores. Default is True.
+            ``fitting_method`` : str
+                picasso 0.11 fitting model, e.g. ``"gausslq"`` (default),
+                ``"gaussmle"`` (maximum-likelihood), the ``-rotated`` /
+                ``-spherical`` Gaussian variants, ``"spline"`` (experimental
+                PSF), or their ``-gpu`` counterparts. If omitted, defaults to
+                ``"gausslq-gpu"`` when a GPU fitter is configured, else
+                ``"gausslq"``.
+            ``spline_calibration`` : dict or str
+                Spline-PSF calibration (dict, or a path to a picasso spline
+                calibration file). Required for the ``spline`` methods; the
+                spline fit also yields z (3D) directly.
+            ``camera_calibration`` : dict or str
+                Per-pixel sCMOS camera calibration (dict, or a path to a
+                picasso camera calibration file) correcting the
+                pixel-dependent noise model during fitting.
+            ``eps`` : float
+                Convergence criterion passed to the fitter.
+            ``max_it`` : int
+                Maximum number of fit iterations.
             ``locs_vs_frame`` : dict
                 Plot-vs-time parameters (arguments of
                 :meth:`_plot_locs_vs_frame`).
@@ -1572,41 +1664,53 @@ class AutoPicasso(util.AbstractModuleCollection):
             Results updated with ``locs_vs_frame`` (if requested) and
             ``locs_columns`` (the localization column names).
         """
-        em = self.camera_info["Gain"] > 1
-        spots = localize.get_spots(
-            self.movie,
-            self.identifications,
-            parameters["box_size"],
-            self.camera_info,
-        )
-        if self.analysis_config["gpufit_installed"]:
-            theta = gausslq.fit_spots_gpufit(spots)
-            self.locs = gausslq.locs_from_fits_gpufit(
-                self.identifications, theta, parameters["box_size"], em
-            )
-        else:
-            if parameters["fit_parallel"]:
-                # theta = gausslq.fit_spots_parallel(spots, asynch=False)
-                fs = gausslq.fit_spots_parallel(spots, asynch=True)
-                # n_tasks = len(fs)
-                # with tqdm(total=n_tasks, unit="task") as progress_bar:
-                #     for f in _futures.as_completed(fs):
-                #         progress_bar.update()
-                theta = gausslq.fits_from_futures(fs)
-                em = self.camera_info["Gain"] > 1
-                self.locs = gausslq.locs_from_fits(
-                    self.identifications, theta, parameters["box_size"], em
-                )
-            else:
-                theta = np.empty((len(spots), 6), dtype=np.float32)
-                theta.fill(np.nan)
-                # for i in tqdm(range(len(spots))):
-                for i in range(len(spots)):
-                    theta[i] = gausslq.fit_spot(spots[i])
+        # picasso 0.11 moved all fitting into picasso.fitting; drive it through
+        # the high-level localize.fit, which extracts spots, fits, and builds
+        # the locs DataFrame. The fitting model is selectable via
+        # ``fitting_method`` (default: gausslq). GPU is orthogonal to the model
+        # choice: when a GPU fitter is configured, the base gausslq / gaussmle /
+        # spline methods are routed to their ``-gpu`` variant (unless the caller
+        # already picked an explicit variant). Spline-PSF methods additionally
+        # need a ``spline_calibration`` (dict or path), which yields z (3D).
+        use_gpu = bool(self.analysis_config.get("gpufit_installed", False))
+        fitting_method = parameters.get("fitting_method")
+        if fitting_method is None:
+            fitting_method = "gausslq-gpu" if use_gpu else "gausslq"
+        elif use_gpu and fitting_method in _GPU_BASE_FIT_METHODS:
+            fitting_method = f"{fitting_method}-gpu"
+        multiprocess = bool(parameters.get("fit_parallel", True))
 
-                self.locs = gausslq.locs_from_fits(
-                    self.identifications, theta, parameters["box_size"], em
-                )
+        spline_calibration = _load_calibration(
+            parameters.get("spline_calibration"),
+            io.load_spline_calibration,
+        )
+        # sCMOS cameras: a per-pixel noise/offset/gain calibration corrects
+        # the pixel-dependent variance during spot extraction and fitting.
+        camera_calibration = _load_calibration(
+            parameters.get("camera_calibration"),
+            io.load_camera_calibration,
+        )
+
+        # eps / max_it default to None in localize.fit (= use picasso's
+        # defaults), so they can be forwarded unconditionally.
+        self.locs, _fit_info = localize.fit(
+            self.movie,
+            camera_info=self.camera_info,
+            identifications=self.identifications,
+            box=parameters["box_size"],
+            fitting_method=fitting_method,
+            spline_calibration=spline_calibration,
+            camera_calibration=camera_calibration,
+            multiprocess=multiprocess,
+            eps=parameters.get("eps"),
+            max_it=parameters.get("max_it"),
+        )
+        if self.locs is None:
+            raise AutoPicassoError(
+                "picasso localize.fit produced no localizations "
+                f"(fitting_method={fitting_method!r}); the movie region may "
+                "be empty or fitting was aborted."
+            )
 
         if pars := parameters.get("locs_vs_frame"):
             if "filename" in pars.keys():
@@ -1626,7 +1730,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # "Convergence Criterion": convergence,
             # "Max. Iterations": max_iterations,
             "Pixelsize": float(self.pixelsize),
-            "Fit method": "gausslq",
+            "Fit method": fitting_method,
             "Wrapped by": "picasso-workflow : localize",
             # "parameters": parameters,
         }
@@ -1641,6 +1745,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             self._save_locs(pars["filename"])
 
         results["locs_columns"] = list(self.locs.columns)
+        results["fit_method"] = fitting_method
         return parameters, results
 
     @module_decorator
@@ -8499,6 +8604,28 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["tags"] = parameters["tags"]
         return parameters, results
 
+    def _load_channels_from_filepaths(self, filepaths):
+        """Load per-channel localizations from hdf5 files into channel state.
+
+        Populates ``self.channel_locs``, ``self.channel_info`` and
+        ``self.channel_tags`` from the given files, one entry per channel.
+        Shared by the channel aggregation modules (``align_channels``,
+        ``register_channels``).
+
+        Parameters
+        ----------
+        filepaths : list of str
+            hdf5 localization files, one per channel, in channel order.
+        """
+        self.channel_locs = []
+        self.channel_info = []
+        self.channel_tags = []
+        for fp in filepaths:
+            locs, info = io.load_locs(fp)
+            self.channel_locs.append(locs)
+            self.channel_info.append(info)
+            self.channel_tags.append(os.path.split(fp)[1])
+
     #    @profile_resource_usage
     @module_decorator
     def align_channels(self, i, parameters, results):
@@ -8536,14 +8663,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize = self.pixelsize
         rcode = generate_random_code(6)
         if parameters.get("filepaths"):
-            self.channel_locs = []
-            self.channel_info = []
-            self.channel_tags = []
-            for fp in parameters["filepaths"]:
-                locs, info = io.load_locs(fp)
-                self.channel_locs.append(locs)
-                self.channel_info.append(info)
-                self.channel_tags.append(os.path.split(fp)[1])
+            self._load_channels_from_filepaths(parameters["filepaths"])
         if parameters.get("fp_fiducials"):
             fiducial_locs = []
             fiducial_info = []
@@ -8703,6 +8823,123 @@ class AutoPicasso(util.AbstractModuleCollection):
         }
         for i in range(len(self.channel_info)):
             self.channel_info[i].append(new_info)
+
+        return parameters, results
+
+    #    @profile_resource_usage
+    @module_decorator
+    def register_channels(self, i, parameters, results):
+        """Register channels via picasso 0.11 bead-based transforms.
+
+        Unlike :meth:`align_channels` (translation-only cross-correlation),
+        this fits a higher-degree-of-freedom transform (affine, projective or
+        polynomial) between channels from images of fiducial beads, using
+        ``picasso.registration``, and warps each channel's localizations into
+        the reference channel frame. The channel localizations must already be
+        loaded (``self.channel_locs``) or be given via ``filepaths``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``bead_movies`` : list of str
+                One bead-calibration movie file per channel, in channel order.
+            ``box_size`` : int
+                Box size used to detect and fit the beads.
+            ``min_gradient`` : float or list
+                Minimum net gradient for a bead candidate (shared or per
+                channel).
+
+            Optional keys:
+
+            ``model`` : str
+                Transform model: ``"affine"`` (default), ``"projective"``,
+                ``"polynomial2"`` or ``"polynomial3"``.
+            ``reference`` : int
+                Index of the reference channel. Default 0.
+            ``filepaths`` : list of str
+                Channel hdf5 files to load into ``self.channel_locs`` first
+                (as in :meth:`align_channels`). If omitted, the channels
+                already held are used.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results with ``registration_model``, ``registration_rms`` (per
+            non-reference channel), and ``fp_calibration`` (the saved
+            calibration file).
+        """
+        from picasso import registration
+        from picasso.registration import tform
+
+        if parameters.get("filepaths"):
+            self._load_channels_from_filepaths(parameters["filepaths"])
+
+        if not getattr(self, "channel_locs", None):
+            raise AutoPicassoError(
+                "register_channels requires channel localizations: pass "
+                "'filepaths', or run a module that populates channel_locs "
+                "first."
+            )
+
+        bead_movies = []
+        for fp in parameters["bead_movies"]:
+            movie, _bead_info = io.load_movie(fp)
+            bead_movies.append(movie)
+
+        if len(bead_movies) != len(self.channel_locs):
+            raise AutoPicassoError(
+                "register_channels needs one bead movie per channel: got "
+                f"{len(bead_movies)} bead movies for "
+                f"{len(self.channel_locs)} channels."
+            )
+
+        model = parameters.get("model", "affine")
+        reference = int(parameters.get("reference", 0))
+        calibration = registration.calibrate_channel_registration_from_beads(
+            bead_movies,
+            parameters["box_size"],
+            parameters["min_gradient"],
+            model=model,
+            reference=reference,
+        )
+
+        fp_calibration = os.path.join(
+            results["folder"], "channel_registration.yaml"
+        )
+        io.save_any_calibration(fp_calibration, calibration)
+        results["fp_calibration"] = fp_calibration
+        results["registration_model"] = calibration["registration_model"]
+        results["registration_rms"] = calibration.get("rms")
+
+        # channel_transforms map reference -> channel; invert to bring each
+        # channel's localizations into the reference frame. The reference
+        # channel maps to itself (identity), so skip it: it stays untouched
+        # and gets no registration record.
+        for ch, t_dict in enumerate(calibration["channel_transforms"]):
+            if ch == reference:
+                continue
+            transform = tform.from_dict(t_dict)
+            locs = self.channel_locs[ch]
+            xy = locs[["x", "y"]].to_numpy()
+            xy_ref = transform.inverse().apply(xy)
+            locs["x"] = xy_ref[:, 0]
+            locs["y"] = xy_ref[:, 1]
+            self.channel_info[ch].append(
+                {
+                    "Generated by": "picasso-workflow : register_channels",
+                    "registration model": model,
+                    "reference channel": reference,
+                }
+            )
 
         return parameters, results
 
