@@ -55,6 +55,22 @@ def _select_palette(win, name):
     cb.setCurrentIndex(idx)  # sets even if greyed (programmatic)
 
 
+def test_module_descriptor_implements_all_modules():
+    """ModuleDescriptor must implement every AbstractModuleCollection module.
+
+    A missing GUI descriptor leaves an abstract method unimplemented, so
+    ``ModuleDescriptor()`` (and hence ``gui.Window()``) raises TypeError at
+    construction. The ``window`` fixture swallows that as a skip, so assert it
+    directly here: the class must have no leftover abstract methods and must be
+    constructible.
+    """
+    missing = sorted(gui.ModuleDescriptor.__abstractmethods__)
+    assert not missing, f"ModuleDescriptor missing descriptors for: {missing}"
+    md = gui.ModuleDescriptor()
+    params_spec, results_spec = md.register_channels()
+    assert isinstance(params_spec, dict) and isinstance(results_spec, dict)
+
+
 def test_palette_filtered_by_scope(window):
     # Single tab (index 0) is the default.
     window.workflow_tabs.setCurrentIndex(0)

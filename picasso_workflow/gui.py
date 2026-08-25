@@ -2983,6 +2983,122 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def register_channels(self):
+        """Register channels via bead-based transforms (aggregation workflow).
+
+        Fits a higher-degree-of-freedom transform (affine / projective /
+        polynomial) between channels from fiducial-bead movies and warps each
+        channel's localizations into the reference channel frame. Complements
+        the translation-only align_channels.
+
+        Parameters
+        ----------
+        i : int
+            the index of the module
+        parameters : dict
+            with required keys:
+                bead_movies : list of str
+                    one bead-calibration movie file per channel, in order
+                box_size : int
+                    box size used to detect and fit the beads
+                min_gradient : float or list
+                    minimum net gradient for a bead candidate
+            and optional keys:
+                model : str
+                    transform model (affine / projective / polynomial2 /
+                    polynomial3)
+                reference : int
+                    index of the reference channel
+                filepaths : list of str
+                    channel hdf5 files to load first
+        results : dict
+            the results this function generates. This is created
+            in the decorator wrapper
+        """
+        parameters_spec = {
+            "bead_movies": {
+                "type": "list",
+                "description": "One bead-calibration movie file per channel, \
+                    in channel order.",
+                "element_type": "str",
+                "required": True,
+            },
+            "box_size": {
+                "type": "int",
+                "description": "Box size used to detect and fit the beads.",
+                "min": 1,
+                "max": 51,
+                "default": 7,
+                "required": True,
+            },
+            "min_gradient": {
+                "type": "float",
+                "description": "Minimum net gradient for a bead candidate \
+                    (shared, or a per-channel list).",
+                "min": 0.0,
+                "required": True,
+            },
+            "model": {
+                "type": "str",
+                "description": "Transform model: 'affine' (default), \
+                    'projective', 'polynomial2' or 'polynomial3'.",
+                "default": "affine",
+                "required": False,
+            },
+            "reference": {
+                "type": "int",
+                "description": "Index of the reference channel.",
+                "min": 0,
+                "max": 10,
+                "default": 0,
+                "required": False,
+            },
+            "filepaths": {
+                "type": "list",
+                "description": "Channel localization hdf5 files to load first \
+                    (as in align_channels). If omitted, the channels already \
+                    held are used.",
+                "element_type": "str",
+                "required": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "registration_model": {
+                "type": "str",
+                "description": "The fitted transform model.",
+            },
+            "registration_rms": {
+                "type": "list",
+                "description": "Per-non-reference-channel registration RMS \
+                    residual (px).",
+            },
+            "fp_calibration": {
+                "type": "str",
+                "description": "Filepath of the saved channel registration \
+                    calibration.",
+            },
+        }
+
+        return parameters_spec, results_spec
+
     def combine_channels(self):
         """Combines multiple channels into one dataset. This is relevant
         e.g. for RESI.

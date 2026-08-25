@@ -99,6 +99,13 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- The new `register_channels` module was missing its GUI descriptor, so
+  opening the GUI raised `TypeError: Can't instantiate abstract class
+  ModuleDescriptor with abstract method register_channels`. Added the
+  `ModuleDescriptor.register_channels` descriptor and a regression test
+  asserting `ModuleDescriptor` implements every abstract module — the GUI
+  test `window` fixture had been silently *skipping* this class of failure
+  (it treats any `Window()` construction error as a skip).
 - `picasso_outpost.convert_zeiss_file` was left half-refactored by the
   earlier "aicsimageio removal" change: it still constructed an unused
   `AICSImage` and referenced an undefined `data`, so it raised
