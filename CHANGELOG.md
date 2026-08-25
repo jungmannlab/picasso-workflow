@@ -32,12 +32,19 @@ This file was started after v0.5.6; earlier history is in the git log.
   multi-core detection. Unset options fall back to the picasso defaults
   (no filtering, whole movie), so existing workflows are unaffected. These
   options are also selectable in the GUI's `identify` module form.
-- `zfit` module: new optional `fitting_method` (`gausslq` (default) /
-  `gaussmle` — match the `localize` step so picasso 0.11 computes the axial
-  localization precision correctly), `gpu` (fit z on a CUDA device), and
-  `filter` (z-fit RMSD filter) parameters, all exposed in the GUI. Also
-  guards against `zfit.zfit` returning no localizations instead of crashing
-  on the z histogram.
+- `zfit` module: new optional `fitting_method` (default `auto` — inferred
+  from the `"Fit method"` the `localize` module recorded, so it need not be
+  set to match by hand; override with `gausslq`/`gaussmle`), used by picasso
+  0.11 to compute the axial localization precision. Also new `gpu` (fit z on
+  a CUDA device) and `filter` (z-fit RMSD filter) parameters, all exposed in
+  the GUI. Guards against `zfit.zfit` returning no localizations instead of
+  crashing on the z histogram.
+- GUI: parameter forms support conditional visibility via a `visible_if`
+  spec key — a field is shown only while a controlling parameter holds one of
+  the listed values. Used so the `localize` `spline_calibration` field
+  appears only for the `spline` fitting methods. `_load_calibration` also
+  tolerates an empty-string path (treats it as unset) so leaving an optional
+  calibration field blank in the GUI no longer errors.
 - `localize` module: new optional `camera_calibration` parameter (a dict or
   a path to a picasso camera calibration file) enabling the picasso 0.11
   per-pixel sCMOS noise model during fitting.

@@ -1104,6 +1104,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "fit then yields z (3D) directly. (May also be supplied as a "
                 "dict programmatically.)",
                 "required": False,
+                "visible_if": {
+                    "fitting_method": [
+                        "spline",
+                        "spline-mle",
+                        "spline-gpu",
+                        "spline-mle-gpu",
+                    ]
+                },
             },
             "camera_calibration": {
                 "type": "path",
@@ -1224,9 +1232,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "2D fitter the localizations came from; used "
                 "by picasso 0.11 to compute the axial localization precision. "
-                "Match the localize step's method.",
-                "options": ["gausslq", "gaussmle"],
-                "default": "gausslq",
+                "'auto' (default) infers it from the localize step's recorded "
+                "method; override with gausslq/gaussmle if needed.",
+                "options": ["auto", "gausslq", "gaussmle"],
+                "default": "auto",
                 "required": False,
             },
             "gpu": {
@@ -14949,7 +14958,60 @@ class Window(QtWidgets.QMainWindow):
         # Add stretch at the end to push widgets to the top
         self.module_parameters_layout.addStretch()
 
+        self._wire_conditional_visibility(module_params)
         self._refresh_param_summaries()
+
+    def _current_widget_text(self, widget):
+        """Return a widget's current value as a string (for ``visible_if``)."""
+        if isinstance(widget, QtWidgets.QComboBox):
+            return widget.currentText()
+        if isinstance(widget, QtWidgets.QCheckBox):
+            return str(widget.isChecked())
+        if isinstance(widget, QtWidgets.QLineEdit):
+            return widget.text()
+        if isinstance(widget, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)):
+            return str(widget.value())
+        return ""
+
+    def _wire_conditional_visibility(self, module_params):
+        """Show a parameter row only while a controlling parameter matches.
+
+        A spec may declare ``"visible_if": {control_param: [values]}``; the
+        row is shown only while ``control_param``'s widget currently holds one
+        of ``values`` (e.g. reveal ``spline_calibration`` only for the spline
+        fitting methods). The controlling widget's change signal keeps it live.
+
+        Parameters
+        ----------
+        module_params : dict
+            The module's parameter spec (name -> metadata).
+        """
+        for param_name, param_metadata in module_params.items():
+            visible_if = param_metadata.get("visible_if")
+            if not visible_if:
+                continue
+            dep_info = self.parameter_widgets.get(param_name)
+            if dep_info is None:
+                continue
+            for control_name, allowed in visible_if.items():
+                ctrl_info = self.parameter_widgets.get(control_name)
+                if ctrl_info is None:
+                    continue
+                ctrl_widget = ctrl_info.widget
+                allowed_set = {str(v) for v in allowed}
+
+                def _apply(
+                    _=None, dep=dep_info, cw=ctrl_widget, allowed=allowed_set
+                ):
+                    dep.row_widget.setVisible(
+                        self._current_widget_text(cw) in allowed
+                    )
+
+                if isinstance(ctrl_widget, QtWidgets.QComboBox):
+                    ctrl_widget.currentTextChanged.connect(_apply)
+                elif isinstance(ctrl_widget, QtWidgets.QCheckBox):
+                    ctrl_widget.stateChanged.connect(_apply)
+                _apply()
 
     def _validate_parameters(self):
         """Validate that all required parameters are filled.

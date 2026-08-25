@@ -263,6 +263,21 @@ class TestAnalyseModules(unittest.TestCase):
     def zfit(self):
         pass
 
+    def test_infer_zfit_fitting_method(self):
+        # gaussmle* variants -> gaussmle; everything else -> gausslq
+        self.ap.info = [{"Box Size": 7}, {"Fit method": "gaussmle-gpu"}]
+        assert self.ap._infer_zfit_fitting_method() == "gaussmle"
+        self.ap.info = [{"Fit method": "gausslq-rotated"}]
+        assert self.ap._infer_zfit_fitting_method() == "gausslq"
+        # spline localizations already carry z; fall back to gausslq label
+        self.ap.info = [{"Fit method": "spline"}]
+        assert self.ap._infer_zfit_fitting_method() == "gausslq"
+        # no recorded method -> default gausslq
+        self.ap.info = [{"Box Size": 7}]
+        assert self.ap._infer_zfit_fitting_method() == "gausslq"
+        self.ap.info = []
+        assert self.ap._infer_zfit_fitting_method() == "gausslq"
+
     @patch("picasso_workflow.analyse.io.save_any_calibration")
     @patch("picasso_workflow.analyse.io.load_movie")
     def register_channels(self, mock_load_movie, mock_save_cal):

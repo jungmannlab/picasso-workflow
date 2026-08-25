@@ -358,8 +358,9 @@ class AbstractModuleCollection(abc.ABC):
             Optional keys:
 
             ``fitting_method`` : str
-                2D fitter the localizations came from (``"gausslq"`` (default)
-                or ``"gaussmle"``); used to compute the axial precision.
+                2D fitter the localizations came from (``"gausslq"`` or
+                ``"gaussmle"``); used to compute the axial precision. Default
+                ``"auto"`` infers it from the localize step's recorded method.
             ``gpu`` : bool
                 Fit z on a CUDA-capable GPU. Default False.
             ``filter`` : int
