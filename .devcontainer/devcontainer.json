@@ -30,7 +30,8 @@
   //  outranks ~/.claude and is NOT shared back to the host.)
   "mounts": [
     "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind",
-    "source=/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/tests,target=/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/tests,type=bind"
+    "source=/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/tests,target=/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/tests,type=bind",
+    "source=/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/templates,target=/Volumes/pool-miblab1/users/hgrabmayr/picasso-workflow-examples/templates,type=bind",
   ],
 
   // Bring up the default-deny egress firewall every time the container starts.

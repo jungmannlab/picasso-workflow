@@ -107,6 +107,7 @@ from picasso_workflow import (
 )
 from picasso_workflow import __version__ as picassoworkflowversion
 from picasso_workflow.outpost_modules import render
+from picasso_workflow.progress import PicassoProgressProxy
 from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
 # logger = logging.getLogger(__name__)
@@ -134,6 +135,28 @@ def generate_random_code(length):
 # GPU is orthogonal to the model choice, so when a GPU fitter is configured
 # these bases are routed to their ``-gpu`` counterpart (see ``localize``).
 _GPU_BASE_FIT_METHODS = ("gausslq", "gaussmle", "spline")
+
+
+def _gpu_fitting_available():
+    """Whether picasso's numba-CUDA fitting backend can actually run.
+
+    picasso gates every ``-gpu`` fitting method on
+    ``numba.cuda.is_available()``, which needs both the CUDA driver and
+    libNVVM; without them the fit aborts deep inside picasso. Mirror that
+    gate so a misconfigured GPU request can be rejected up front. Any failure
+    to import or probe numba counts as "not available".
+
+    Returns
+    -------
+    bool
+        True if a usable CUDA GPU fitting backend is present.
+    """
+    try:
+        from numba import cuda
+
+        return bool(cuda.is_available())
+    except Exception:
+        return False
 
 
 def _load_calibration(calibration, loader):
@@ -463,6 +486,39 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         self.results_folder = os.path.normpath(results_folder)
         self.analysis_config = analysis_config
+        # Intra-module progress / cooperative abort. The WorkflowRunner sets
+        # these before each module; left None they disable progress wiring so
+        # picasso is called exactly as before (and unit tests are unaffected).
+        self._progress_callback = None
+        self._abort_callback = None
+
+    def _make_progress_proxy(self, total=None, phase=None):
+        """Build a picasso progress proxy for the current module, or None.
+
+        Returns None unless a progress callback has been wired in by the
+        runner, so modules can pass the result straight to picasso without
+        changing behaviour when progress tracking is off.
+
+        Parameters
+        ----------
+        total : int, optional
+            Count corresponding to 100 % (e.g. number of frames/spots).
+        phase : str, optional
+            Short label forwarded as the progress message.
+
+        Returns
+        -------
+        PicassoProgressProxy or None
+        """
+        if self._progress_callback is None:
+            return None
+        return PicassoProgressProxy(
+            self._progress_callback, total=total, phase=phase
+        )
+
+    def _picasso_abort(self):
+        """The wired abort callback, or None (picasso treats None as no-op)."""
+        return self._abort_callback
 
     @property
     def info_mm_entry(self):
@@ -1540,14 +1596,29 @@ class AutoPicasso(util.AbstractModuleCollection):
             if (val := parameters.get(key)) is not None:
                 identify_kwargs[key] = val
 
+        # forward intra-module progress / abort when the runner wired them in
+        proxy = self._make_progress_proxy(
+            total=len(self.movie), phase="identify"
+        )
+        if proxy is not None:
+            identify_kwargs["progress_callback"] = proxy
+            if (abort := self._picasso_abort()) is not None:
+                identify_kwargs["abort_callback"] = abort
+
         # identify returns (identifications, info); return_info defaults True.
-        self.identifications, _id_info = localize.identify(
+        _id_result = localize.identify(
             self.movie,
             parameters["min_gradient"],
             parameters["box_size"],
             threaded=bool(parameters.get("identify_parallel", True)),
             **identify_kwargs,
         )
+        if _id_result is None:
+            # picasso returns None when identification was aborted mid-run.
+            raise AutoPicassoError(
+                "picasso identify was aborted before completion."
+            )
+        self.identifications, _id_info = _id_result
         results["num_identifications"] = len(self.identifications)
 
         if (pars := parameters.get("ids_vs_frame")) is not None:
@@ -1680,6 +1751,22 @@ class AutoPicasso(util.AbstractModuleCollection):
             fitting_method = "gausslq-gpu" if use_gpu else "gausslq"
         elif use_gpu and fitting_method in _GPU_BASE_FIT_METHODS:
             fitting_method = f"{fitting_method}-gpu"
+
+        # A ``-gpu`` method aborts deep inside picasso if the numba-CUDA
+        # backend is not usable (no driver, or - most commonly - a missing
+        # libNVVM / CUDA toolkit). Reject it up front with an actionable
+        # message rather than letting a long localize job fail late.
+        if fitting_method.endswith("-gpu") and not _gpu_fitting_available():
+            raise AutoPicassoError(
+                f"Fitting method {fitting_method!r} requires a GPU, but "
+                "numba.cuda.is_available() is False, so picasso would abort "
+                "the fit. Usually the CUDA driver is present but libNVVM (the "
+                "CUDA toolkit) is not: install a CUDA toolkit in this "
+                "environment, or on a module-based cluster `module load "
+                "cuda/<version>` (which also sets CUDA_HOME). To fit on the "
+                "CPU instead, choose a fitting_method without the '-gpu' "
+                "suffix."
+            )
         multiprocess = bool(parameters.get("fit_parallel", True))
 
         spline_calibration = _load_calibration(
@@ -1692,6 +1779,16 @@ class AutoPicasso(util.AbstractModuleCollection):
             parameters.get("camera_calibration"),
             io.load_camera_calibration,
         )
+
+        # forward intra-module progress / abort when the runner wired them in
+        fit_progress_kw = {}
+        proxy = self._make_progress_proxy(
+            total=len(self.identifications), phase="localize"
+        )
+        if proxy is not None:
+            fit_progress_kw["progress_callback"] = proxy
+            if (abort := self._picasso_abort()) is not None:
+                fit_progress_kw["abort_callback"] = abort
 
         # eps / max_it default to None in localize.fit (= use picasso's
         # defaults), so they can be forwarded unconditionally.
@@ -1706,6 +1803,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             multiprocess=multiprocess,
             eps=parameters.get("eps"),
             max_it=parameters.get("max_it"),
+            **fit_progress_kw,
         )
         if self.locs is None:
             raise AutoPicassoError(
@@ -2473,6 +2571,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize = self.pixelsize
         progress = parameters.get("progress", None)
         # progress = lib.MockProgress().set_value,  # parameters.get("progress", None)
+        if progress is None:
+            # fall back to the runner's intra-module progress proxy, if wired
+            progress = self._make_progress_proxy(
+                total=parameters["segmentation"], phase="undrift (aim)"
+            )
 
         # dirty debug: picasso.aim.aim expects the existence of
         # info[1]["Pixelsize"]
@@ -2552,14 +2655,22 @@ class AutoPicasso(util.AbstractModuleCollection):
         for i in range(parameters.get("max_iter_segmentations", 3)):
             # if the segmentation is too low, the process raises an error
             # adaptively increase the value.
+            # forward the runner's progress proxy if wired, else a no-op.
+            seg_cb = (
+                self._make_progress_proxy(
+                    total=parameters["segmentation"], phase="undrift (rcc)"
+                )
+                or lib.MockProgress().set_value
+            )
+            rcc_cb = seg_cb
             try:
                 self.drift, self.locs = postprocess.undrift(
                     self.locs,
                     self.info,
                     segmentation=parameters["segmentation"],
                     display=False,
-                    segmentation_callback=lib.MockProgress().set_value,
-                    rcc_callback=lib.MockProgress().set_value,
+                    segmentation_callback=seg_cb,
+                    rcc_callback=rcc_cb,
                 )
                 results["success"] = True
                 break
@@ -7373,6 +7484,15 @@ class AutoPicasso(util.AbstractModuleCollection):
             # (or in clusters below min_locs) are dropped by the clusterer.
             n_locs_in = len(self.locs)
 
+            # intra-module progress: cluster() takes a ProgressDialog-like
+            # object; the proxy satisfies that interface.
+            if (
+                proxy := self._make_progress_proxy(
+                    total=len(self.locs), phase="cluster"
+                )
+            ) is not None:
+                kwargs["progress"] = proxy
+
             # label locs according to clusters
             # logger.debug(
             #     f"starting clusterer on self.locs with kwargs {kwargs}"
@@ -7432,6 +7552,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 }
                 if radius_z is not None:  # 3D
                     kwargs["radius_z"] = radius_z
+
+                if (
+                    proxy := self._make_progress_proxy(
+                        total=len(locs), phase=f"cluster {tag}"
+                    )
+                ) is not None:
+                    kwargs["progress"] = proxy
 
                 n_locs_in = len(locs)
 

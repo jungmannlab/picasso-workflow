@@ -43,6 +43,14 @@ from picasso_workflow.util import (
     ParameterTiler,
     DictSimpleTyper,
 )
+from picasso_workflow import progress as pwprogress
+from picasso_workflow.progress import (
+    ProgressManager,
+    RUNNING,
+    DONE,
+    FAILED,
+    ABORTED,
+)
 
 
 # For loading yaml files
@@ -436,6 +444,20 @@ class AggregationWorkflowRunner:
         sgl_dataset_success = [None] * n_sgl
         sgl_folders = [None] * n_sgl
 
+        # progress tracking at the aggregation level: one entry per single
+        # dataset. Rank 0 owns the shared progress.json; worker ranks write a
+        # per-rank file (see ProgressManager). Each single WorkflowRunner also
+        # writes its own progress.json in its subfolder.
+        self.progress = ProgressManager(
+            self.result_folder,
+            kind="aggregation",
+            rank=self.rank,
+            size=self.size,
+            report_name=report_name,
+        )
+        self.progress.datasets_init(tags)
+        self.progress.mark_running()
+
         # Multi-node parallelism: distribute the single-dataset workflows
         # across the SLURM ranks (each rank runs i %% size == rank), writing
         # results to the shared result folder and a completion marker. Rank 0
@@ -485,6 +507,7 @@ class AggregationWorkflowRunner:
                     postfix=self.postfix,
                 )
             self.cpage_names.append(wr.reporter_config["report_name"])
+            self.progress.dataset_update(i, RUNNING)
             # Never let an unhandled error escape before the completion
             # marker is written - otherwise rank 0 would wait on the barrier
             # until timeout. A failed single still marks the run as failed,
@@ -495,6 +518,7 @@ class AggregationWorkflowRunner:
                 logger.error(f"Single dataset {i} ({tag}) failed: {e}")
                 logger.error(traceback.format_exc())
                 success = False
+            self.progress.dataset_update(i, DONE if success else FAILED)
             sgl_dataset_success[i] = success
             self.all_results["single_dataset"][i] = getattr(
                 wr, "results", None
@@ -513,7 +537,9 @@ class AggregationWorkflowRunner:
                 f"({sum(bool(s) for s in owned)}/{len(owned)} ok); "
                 "leaving aggregation to rank 0."
             )
-            return all(owned) if owned else True
+            rank_ok = all(owned) if owned else True
+            self.progress.finish(DONE if rank_ok else FAILED)
+            return rank_ok
 
         # Rank 0 (or a single-task run): wait for the single datasets handled
         # by other ranks and load their results from disk.
@@ -558,6 +584,7 @@ class AggregationWorkflowRunner:
                 f"aggregation analysis is started:\n{detail}"
             )
             logger.error(msg)
+            self.progress.finish(FAILED)
             self._report_aggregation_abort(failures, n_sgl)
             raise WorkflowError(msg)
 
@@ -614,9 +641,10 @@ class AggregationWorkflowRunner:
             )
         self.cpage_names.append(wr.reporter_config["report_name"])
         self._agg_report_folder = wr.result_folder
-        wr.run()
+        agg_success = wr.run()
         self.all_results["aggregation"] = wr.results
         self.save(self.result_folder)
+        self.progress.finish(DONE if agg_success else FAILED)
 
         # Refresh the HTML overview now that the aggregation report exists.
         self._write_html_overview(sgl_folders, self._agg_report_folder)
@@ -995,6 +1023,11 @@ class WorkflowRunner:
 
         self.parameter_command_executor = ParameterCommandExecutor(self)
         self.results = {}
+        # Progress tracking. ``progress`` is built lazily in run() (needs the
+        # result folder and module list); ``_abort_requested`` supports a
+        # cooperative in-process stop, complementing the on-disk abort flag.
+        self.progress = None
+        self._abort_requested = False
 
     @classmethod
     def config_from_dicts(
@@ -1199,6 +1232,10 @@ class WorkflowRunner:
                     f"Requested module {module_name} not implemented."
                 )
 
+        # progress tracking: build the emitter and announce the module list
+        progress = self._ensure_progress()
+        progress.start([name for name, _ in self.workflow_modules])
+
         # now, run the modules
         all_previously_succeeded = True
         # Bind up front: a module raising on the very first iteration used
@@ -1225,32 +1262,93 @@ class WorkflowRunner:
                 # will be re-analyzed.
                 logger.debug(f"""Module {i}, {module_name} has been previously
                     analyzed. Skipping.""")
+                progress.module_skipped(i)
                 continue
             else:
                 all_previously_succeeded = False
+
+            # cooperative abort: stop cleanly at the next module boundary if
+            # an abort was requested (in-process or via the on-disk flag).
+            if self._abort_callback():
+                logger.warning(
+                    f"Abort requested; stopping before module {i} "
+                    f"({module_name})."
+                )
+                success = False
+                progress.finish(ABORTED)
+                return success
             # all modules are called with iteration and parameter dict
             # as arguments
             module_parameters = self.parameter_command_executor.run(
                 module_parameters, curr_rootidx=i
             )
+            progress.module_start(i)
             try:
                 success = self.call_module(module_name, i, module_parameters)
             except AutoPicassoError:
                 success = False
+                progress.module_end(i, FAILED)
             except Exception:
                 # Any other exception used to escape before save(), so the
                 # failing module never reached WorkflowRunner.yaml. Record
                 # it, then let it propagate as before.
                 success = False
+                progress.module_end(i, FAILED)
+                progress.finish(FAILED)
                 self.save(self.result_folder)
                 raise
+            else:
+                progress.module_end(i, DONE if success else FAILED)
 
             self.save(self.result_folder)
             if not success:
                 break
         else:
             success = True
+
+        if progress.state["state"] == RUNNING:
+            progress.finish(DONE if success else FAILED)
         return success
+
+    def _ensure_progress(self) -> ProgressManager:
+        """Return the run's :class:`ProgressManager`, building it if needed.
+
+        Built lazily because it needs both the result folder (set at
+        initialization) and, conceptually, the module list (only meaningful
+        at ``run`` time). May be pre-set by a coordinator to inject sinks.
+
+        Returns
+        -------
+        ProgressManager
+        """
+        if self.progress is None:
+            self.progress = ProgressManager(
+                self.result_folder,
+                kind="single",
+                report_name=getattr(self, "report_name", None),
+            )
+        # Wire the analysis worker so long picasso calls can report
+        # intra-module progress and honour aborts.
+        if getattr(self, "autopicasso", None) is not None:
+            self.autopicasso._abort_callback = self._abort_callback
+        return self.progress
+
+    def _abort_callback(self) -> bool:
+        """Whether the run should abort (in-process flag or on-disk flag).
+
+        Passed to picasso's long-running calls and checked between modules,
+        so a GUI/operator can stop a run gracefully at the next checkpoint.
+
+        Returns
+        -------
+        bool
+        """
+        if self._abort_requested:
+            return True
+        try:
+            return pwprogress.abort_requested(self.result_folder)
+        except Exception:
+            return False
 
     ##########################################################################
     # UTIL FUNCTIONS
@@ -1472,6 +1570,17 @@ class WorkflowRunner:
         """
         key = f"{i:02d}_{fun_name}"
         logger.debug(f"Working on {key}")
+
+        # Wire intra-module progress: long picasso calls forward their frame/
+        # spot/segment counts through this callback, which the analysis worker
+        # converts to a 0..1 fraction for module ``i``.
+        if self.progress is not None:
+            self.autopicasso._progress_callback = (
+                lambda fraction, msg=None, _i=i: self.progress.module_progress(
+                    _i, fraction, msg
+                )
+            )
+            self.autopicasso._abort_callback = self._abort_callback
 
         # For conditional_branch module, inject the parameter_command_executor
         # so it can resolve sub-module parameters

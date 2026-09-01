@@ -240,9 +240,15 @@ class TestAnalyseModules(unittest.TestCase):
 
         # GPU is orthogonal to the model: with a GPU fitter configured, an
         # explicit base method is routed to its -gpu variant, and the default
-        # resolves to gausslq-gpu.
+        # resolves to gausslq-gpu. picasso is mocked here, so the CUDA
+        # backend is presented as available to get past the fail-fast guard.
         self.ap.analysis_config["gpufit_installed"] = True
+        gpu_patch = patch(
+            "picasso_workflow.analyse._gpu_fitting_available",
+            return_value=True,
+        )
         try:
+            gpu_patch.start()
             mock_fit.reset_mock()
             self.ap.localize(0, {"box_size": 7, "fitting_method": "gaussmle"})
             _, kwargs = mock_fit.call_args
@@ -255,10 +261,83 @@ class TestAnalyseModules(unittest.TestCase):
             assert kwargs["fitting_method"] == "gausslq-gpu"
             shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
         finally:
+            gpu_patch.stop()
             self.ap.analysis_config["gpufit_installed"] = False
 
     def load_picassoconfig(self):
         pass
+
+    @patch("picasso_workflow.analyse.localize.fit")
+    def test_localize_gpu_guard(self, mock_fit):
+        """A -gpu fitting method fails fast with an actionable error when the
+        CUDA backend is unavailable, does not block CPU methods, and passes
+        through when the GPU is available."""
+        nspots = 3
+        locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    tuple(np.random.rand(len(self.locs_dtype)))
+                    for _ in range(nspots)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        mock_fit.return_value = (locs, [])
+        self.ap.info = []
+        # pixelsize is a read-only property; it falls back to
+        # camera_info["Pixelsize"] (130, from setUp).
+        self.ap.identifications = pd.DataFrame({"frame": [0, 1, 2]})
+        spline_cal = {"coeff": [1, 2, 3]}
+
+        def _localize(method):
+            return self.ap.localize(
+                0,
+                {
+                    "box_size": 7,
+                    "fit_parallel": False,
+                    "fitting_method": method,
+                    "spline_calibration": spline_cal,
+                },
+            )
+
+        def _cleanup():
+            shutil.rmtree(
+                os.path.join(self.results_folder, "00_localize"),
+                ignore_errors=True,
+            )
+
+        # GPU requested but unavailable -> fail fast, before calling picasso.
+        with patch(
+            "picasso_workflow.analyse._gpu_fitting_available",
+            return_value=False,
+        ):
+            with self.assertRaises(analyse.AutoPicassoError) as ctx:
+                _localize("spline-mle-gpu")
+        assert "numba.cuda.is_available()" in str(ctx.exception)
+        mock_fit.assert_not_called()
+        _cleanup()
+
+        # A CPU spline method is never blocked by the guard.
+        mock_fit.reset_mock()
+        with patch(
+            "picasso_workflow.analyse._gpu_fitting_available",
+            return_value=False,
+        ):
+            _localize("spline-mle")
+        _, kwargs = mock_fit.call_args
+        assert kwargs["fitting_method"] == "spline-mle"
+        _cleanup()
+
+        # When the GPU backend is available, the -gpu method passes through.
+        mock_fit.reset_mock()
+        with patch(
+            "picasso_workflow.analyse._gpu_fitting_available",
+            return_value=True,
+        ):
+            _localize("spline-mle-gpu")
+        _, kwargs = mock_fit.call_args
+        assert kwargs["fitting_method"] == "spline-mle-gpu"
+        _cleanup()
 
     def zfit(self):
         pass

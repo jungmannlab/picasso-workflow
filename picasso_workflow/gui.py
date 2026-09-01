@@ -9,6 +9,7 @@ Initial Date: August 4, 2024
 from __future__ import annotations
 
 from picasso_workflow import util, CONFIG
+from picasso_workflow import progress as pwprogress
 from picasso_workflow.modulespec import MODULE_REGISTRY, Scope
 from picasso_workflow import workflow_references as wfref
 from loguru import logger
@@ -16,6 +17,8 @@ import subprocess
 import os
 import re
 import sys
+import json
+import shlex
 import yaml
 import importlib.util
 
@@ -7560,10 +7563,14 @@ class SlurmCommunicator:
         return result["success"]
 
     def assemble_slurm_commands(
-        self, host_cluster, scriptname="start_workflow.py"
+        self, host_cluster, scriptname="start_workflow.py", modules=None
     ):
         """Assembles picasso-workflow specific commands for running a batch
         job on a SLURM cluster.
+
+        ``modules`` overrides the environment modules to ``module load`` (a
+        list of names). None falls back to the cluster's configured
+        ``Modules``; an empty list loads nothing.
         """
         cluster_env = CONFIG.get("ClusterEnvironment", {}).get(host_cluster)
         conda_env = cluster_env.get("conda_env", "picasso-workflow")
@@ -7587,6 +7594,22 @@ class SlurmCommunicator:
 
         # if not use_pw_module:
         #     commands.append(f"conda activate {conda_env}")
+
+        # Load environment modules (from the Run tab's Modules field, or config
+        # ClusterEnvironment.<host>.Modules when not overridden). GPU fitting
+        # (e.g. spline-mle-gpu) needs a CUDA toolkit that provides libNVVM; on
+        # module-based HPC systems the cleanest way is to `module load
+        # cuda/<ver>`, which also sets CUDA_HOME so numba finds it. Harmless on
+        # CPU-only runs.
+        if modules is None:
+            modules = cluster_env.get("Modules", []) or []
+        for module_name in modules:
+            commands.append(f"module load {module_name}")
+
+        # Ignore ~/.local/lib site-packages: a stray user-site install (e.g.
+        # numba) otherwise shadows the conda env's package and can break CUDA
+        # discovery. Keep the job pinned to the env resolved below.
+        commands.append("export PYTHONNOUSERSITE=1")
 
         # instead of using slurm modules, let's directly append paths.
         bin_path = cluster_env.get("BinPath", None)
@@ -7895,21 +7918,100 @@ class SlurmCommunicator:
                     "success": True,
                 }
 
-        # If squeue doesn't show the job, check if it's completed using sacct
+        # If squeue doesn't show the job, it has left the queue: query sacct
+        # for the terminal state plus the diagnostics that explain a failure
+        # (exit code, peak memory for OOM, elapsed time). squeue drops a job
+        # the moment it finishes, so this fallback is the only way to learn
+        # whether it COMPLETED, FAILED, TIMEOUT or was OUT_OF_MEMORY.
         sacct_cmd = (
-            f"sacct --job={job_id} --format=State --noheader --parsable2"
+            f"sacct --job={job_id} "
+            "--format=State,ExitCode,MaxRSS,Elapsed --noheader --parsable2"
         )
         sacct_result = self.execute_ssh_command(sacct_cmd)
 
         if sacct_result["success"] and sacct_result["stdout"].strip():
-            status = sacct_result["stdout"].strip().split("\n")[0]
-            return {"status": status, "details": {}, "success": True}
+            # first line is the top-level job step; take the widest state.
+            line = sacct_result["stdout"].strip().split("\n")[0]
+            fields = line.split("|")
+            status = fields[0] if fields else "UNKNOWN"
+            details = {}
+            if len(fields) > 1 and fields[1]:
+                details["exit_code"] = fields[1]
+            if len(fields) > 2 and fields[2]:
+                details["max_rss"] = fields[2]
+            if len(fields) > 3 and fields[3]:
+                details["elapsed"] = fields[3]
+            return {"status": status, "details": details, "success": True}
 
         return {
             "status": "UNKNOWN",
             "details": {"error": result["stderr"]},
             "success": False,
         }
+
+    def fetch_progress(self, remote_folder):
+        """Fetch the most recent ``progress.json`` under ``remote_folder``.
+
+        A run writes ``progress.json`` into a timestamped subfolder whose name
+        is only known at runtime, so we locate the newest one by mtime over
+        SSH and cat it. This reuses the same SSH transport as the job-status
+        queries -- no cluster-side daemon is needed.
+
+        Parameters
+        ----------
+        remote_folder : str
+            Remote path of the run's results folder.
+
+        Returns
+        -------
+        dict or None
+            The parsed progress state, or None if not found/unreadable.
+        """
+        if not remote_folder:
+            return None
+        folder = shlex.quote(remote_folder)
+        # newest progress.json by modification time, path only
+        find_cmd = (
+            f"find {folder} -name progress.json -printf '%T@ %p\\n' "
+            "2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-"
+        )
+        res = self.execute_ssh_command(find_cmd)
+        path = (res.get("stdout") or "").strip()
+        if not path:
+            return None
+        cat = self.execute_ssh_command(f"cat {shlex.quote(path)}")
+        if not cat.get("success"):
+            return None
+        try:
+            return json.loads(cat["stdout"])
+        except (ValueError, KeyError):
+            return None
+
+    def write_abort_flag(self, remote_folder):
+        """Drop an ``abort.flag`` in every run folder under ``remote_folder``.
+
+        The running workflow checks this file between modules and inside long
+        picasso calls, so this requests a graceful stop (complementary to
+        ``scancel``, which kills hard).
+
+        Parameters
+        ----------
+        remote_folder : str
+            Remote path of the run's results folder.
+
+        Returns
+        -------
+        dict
+            The SSH command result.
+        """
+        folder = shlex.quote(remote_folder)
+        # place a flag next to every progress.json (single + aggregation runs)
+        cmd = (
+            f"for d in $(find {folder} -name progress.json "
+            "-printf '%h\\n' 2>/dev/null); do touch \"$d/abort.flag\"; done; "
+            f"touch {folder}/abort.flag"
+        )
+        return self.execute_ssh_command(cmd)
 
     def cancel_job(self, job_id):
         """Cancel a SLURM job.
@@ -9762,6 +9864,54 @@ class Window(QtWidgets.QMainWindow):
         )
         cluster_config_layout.addWidget(self.cluster_gpus_spin)
 
+        # SLURM partition (queue). GPU nodes usually live in a dedicated
+        # partition, so a --gres=gpu request must target it or the job never
+        # schedules. Populated per selected cluster from config
+        # (SlurmPartitions) and editable, so an unlisted partition can be
+        # typed by hand. Blank -> omit --partition and use SLURM's default.
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Partition:"))
+        self.cluster_partition_combo = QtWidgets.QComboBox()
+        self.cluster_partition_combo.setEditable(True)
+        self.cluster_partition_combo.setToolTip(
+            "SLURM partition to submit to (adds '#SBATCH --partition=...'). "
+            "GPU nodes usually require a dedicated partition; leave blank to "
+            "use the cluster default partition."
+        )
+        cluster_config_layout.addWidget(self.cluster_partition_combo)
+        self._populate_cluster_partitions(
+            str(self.cluster_host_combo.currentText())
+        )
+        # Repopulate when the cluster changes (each cluster has its own
+        # partitions).
+        self.cluster_host_combo.currentTextChanged.connect(
+            self._populate_cluster_partitions
+        )
+
+        # Environment modules to `module load` in the job (space-separated).
+        # Prefilled per cluster from config (ClusterEnvironment.<host>.Modules)
+        # and editable. GPU fitting needs a CUDA toolkit providing libNVVM, so
+        # a cuda module is loaded here (also sets CUDA_HOME for numba). Blank
+        # -> load nothing.
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Modules:"))
+        self.cluster_modules_edit = QtWidgets.QLineEdit()
+        self.cluster_modules_edit.setPlaceholderText("e.g., cuda/13.0")
+        self.cluster_modules_edit.setToolTip(
+            "Environment modules to `module load` in the SLURM job, "
+            "space-separated (e.g. 'cuda/13.0'). Required for GPU fitting "
+            "(provides libNVVM / CUDA_HOME). Leave blank to load nothing."
+        )
+        # Tracks the last programmatically applied default, so a manual edit is
+        # preserved across cluster changes while an untouched field follows the
+        # new cluster's config.
+        self._cluster_modules_default = ""
+        cluster_config_layout.addWidget(self.cluster_modules_edit)
+        self._populate_cluster_modules(
+            str(self.cluster_host_combo.currentText())
+        )
+        self.cluster_host_combo.currentTextChanged.connect(
+            self._populate_cluster_modules
+        )
+
         # Memory
         cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"))
         self.cluster_memory_edit = QtWidgets.QLineEdit()
@@ -9872,6 +10022,9 @@ class Window(QtWidgets.QMainWindow):
             "Enter job ID or auto-filled from submission"
         )
         job_id_layout.addWidget(self.job_id_input, stretch=1)
+
+        # --- live progress monitor -----------------------------------------
+        self._build_progress_monitor(run_on_cluster_layout)
 
         # Display area for job information
         job_display_label = QtWidgets.QLabel("Job Information:")
@@ -13837,6 +13990,323 @@ class Window(QtWidgets.QMainWindow):
         # print(f"Created workflow script: {output_path}")
         return output_path
 
+    def _populate_cluster_partitions(self, host_cluster):
+        """Fill the Partition dropdown for the selected cluster.
+
+        Reads the partitions configured for ``host_cluster`` from config
+        ``SlurmPartitions``. Preserves the current selection when it is still
+        valid for the new cluster, otherwise selects ``SlurmDefault.partition``
+        (if offered) or the first listed partition; clears the field when the
+        cluster has no configured partitions (so no ``--partition`` is
+        emitted).
+        """
+        options = [
+            str(p)
+            for p in CONFIG.get("SlurmPartitions", {}).get(
+                str(host_cluster), []
+            )
+        ]
+        default = str(CONFIG.get("SlurmDefault", {}).get("partition", ""))
+        current = self.cluster_partition_combo.currentText().strip()
+        # Muted while we rebuild so the reset does not re-trigger handlers.
+        self.cluster_partition_combo.blockSignals(True)
+        self.cluster_partition_combo.clear()
+        self.cluster_partition_combo.addItems(options)
+        if current in options:
+            self.cluster_partition_combo.setCurrentText(current)
+        elif default in options:
+            self.cluster_partition_combo.setCurrentText(default)
+        elif options:
+            self.cluster_partition_combo.setCurrentText(options[0])
+        else:
+            self.cluster_partition_combo.setCurrentText("")
+        self.cluster_partition_combo.blockSignals(False)
+
+    def _configured_modules(self, host_cluster):
+        """Modules configured for ``host_cluster``
+        (``ClusterEnvironment.<host>.Modules``), as a list of strings."""
+        cluster_env = CONFIG.get("ClusterEnvironment", {}).get(
+            str(host_cluster), {}
+        )
+        return [str(m) for m in (cluster_env or {}).get("Modules", []) or []]
+
+    def _populate_cluster_modules(self, host_cluster):
+        """Fill the Modules field for the selected cluster.
+
+        Sets the space-separated `module load` list from config
+        (``ClusterEnvironment.<host>.Modules``). Preserves a manual edit: only
+        an untouched field (still equal to the previously applied default, or
+        empty) follows the new cluster's default.
+        """
+        new_default = " ".join(self._configured_modules(host_cluster))
+        current = self.cluster_modules_edit.text().strip()
+        if current == "" or current == self._cluster_modules_default:
+            self.cluster_modules_edit.setText(new_default)
+        self._cluster_modules_default = new_default
+
+    # ------------------------------------------------------------------ #
+    # Live progress monitor
+    # ------------------------------------------------------------------ #
+
+    # SLURM states that mean the job has stopped (no point polling further)
+    _SLURM_TERMINAL = {
+        "COMPLETED",
+        "FAILED",
+        "TIMEOUT",
+        "OUT_OF_MEMORY",
+        "CANCELLED",
+        "NODE_FAIL",
+        "BOOT_FAIL",
+        "DEADLINE",
+        "PREEMPTED",
+    }
+    _SLURM_COLORS = {
+        "PENDING": "#9e9e9e",
+        "RUNNING": "#1976d2",
+        "COMPLETING": "#1976d2",
+        "COMPLETED": "#2e7d32",
+        "FAILED": "#c62828",
+        "TIMEOUT": "#c62828",
+        "OUT_OF_MEMORY": "#c62828",
+        "CANCELLED": "#c62828",
+        "NODE_FAIL": "#c62828",
+    }
+
+    def _build_progress_monitor(self, parent_layout):
+        """Build the live progress widgets and the polling timer.
+
+        The monitor fuses two sources: the SLURM job state (authority on
+        whether the job is alive and, on failure, why) and the run's
+        ``progress.json`` (authority on which module and how far). Neither
+        alone is complete -- a killed job freezes ``progress.json`` mid-module
+        while only SLURM knows it died.
+
+        Parameters
+        ----------
+        parent_layout : QtWidgets.QLayout
+            The layout to add the monitor widgets to.
+        """
+        # monitor state (also used when running locally)
+        self._monitor_remote_folder = getattr(
+            self, "_monitor_remote_folder", None
+        )
+        self._monitor_local_folder = getattr(
+            self, "_monitor_local_folder", None
+        )
+        self._monitor_busy = False
+        self._local_process = None
+
+        box = QtWidgets.QGroupBox("Live progress")
+        box_layout = QtWidgets.QVBoxLayout(box)
+
+        # top row: SLURM state chip + auto-refresh controls
+        top_row = QtWidgets.QHBoxLayout()
+        self.monitor_state_label = QtWidgets.QLabel("Job state: -")
+        self.monitor_state_label.setStyleSheet(
+            "padding: 2px 8px; border-radius: 4px; color: white; "
+            "background-color: #9e9e9e;"
+        )
+        top_row.addWidget(self.monitor_state_label)
+        top_row.addStretch(1)
+
+        self.autorefresh_checkbox = QtWidgets.QCheckBox("Auto-refresh (15s)")
+        self.autorefresh_checkbox.setChecked(True)
+        self.autorefresh_checkbox.stateChanged.connect(
+            self._on_autorefresh_toggled
+        )
+        top_row.addWidget(self.autorefresh_checkbox)
+
+        refresh_now_button = QtWidgets.QPushButton("Refresh now")
+        refresh_now_button.clicked.connect(self._refresh_monitor)
+        top_row.addWidget(refresh_now_button)
+        box_layout.addLayout(top_row)
+
+        # overall progress bar
+        self.overall_progress_bar = QtWidgets.QProgressBar()
+        self.overall_progress_bar.setRange(0, 100)
+        self.overall_progress_bar.setValue(0)
+        self.overall_progress_bar.setFormat("Overall: %p%")
+        box_layout.addWidget(self.overall_progress_bar)
+
+        # per-module / per-dataset tree
+        self.module_tree = QtWidgets.QTreeWidget()
+        self.module_tree.setHeaderLabels(
+            ["#", "Module", "Status", "%", "Elapsed"]
+        )
+        self.module_tree.setRootIsDecorated(False)
+        self.module_tree.setMaximumHeight(180)
+        header = self.module_tree.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        box_layout.addWidget(self.module_tree)
+
+        parent_layout.addWidget(box)
+
+        # polling timer. 15 s because each SSH round-trip (squeue/sacct/cat)
+        # can take several seconds; a shorter interval would stack requests.
+        self.monitor_timer = QtCore.QTimer(self)
+        self.monitor_timer.setInterval(15000)
+        self.monitor_timer.timeout.connect(self._refresh_monitor)
+
+    def _on_autorefresh_toggled(self, _state):
+        """Start/stop the polling timer when the checkbox is toggled."""
+        if self.autorefresh_checkbox.isChecked():
+            self._start_monitor()
+        else:
+            self.monitor_timer.stop()
+
+    def _start_monitor(self):
+        """Start polling (immediate refresh, then every 15 s)."""
+        if self.autorefresh_checkbox.isChecked():
+            self.monitor_timer.start()
+        self._refresh_monitor()
+
+    def _stop_monitor(self):
+        """Stop the polling timer."""
+        self.monitor_timer.stop()
+
+    def _refresh_monitor(self):
+        """Poll SLURM + progress.json once and update the display.
+
+        Runs synchronously (like the existing job-status buttons); a busy
+        guard prevents overlapping polls when an SSH round-trip is slow.
+        """
+        if self._monitor_busy:
+            return
+        self._monitor_busy = True
+        try:
+            slurm = None
+            state = None
+            if self._monitor_local_folder:
+                # local run: read the newest progress.json directly
+                state = pwprogress.read_latest_progress(
+                    self._monitor_local_folder
+                )
+            else:
+                job_id = self.job_id_input.text().strip()
+                comm = getattr(self, "slurm_communicator", None)
+                if job_id and comm is not None:
+                    try:
+                        slurm = comm.get_job_status(int(job_id))
+                    except Exception as e:
+                        logger.debug(f"monitor: job status failed: {e}")
+                    try:
+                        state = comm.fetch_progress(
+                            self._monitor_remote_folder
+                        )
+                    except Exception as e:
+                        logger.debug(f"monitor: fetch_progress failed: {e}")
+            self._update_monitor_display(slurm, state)
+            self._maybe_stop_monitor(slurm, state)
+        except Exception as e:
+            logger.debug(f"monitor refresh error: {e}")
+        finally:
+            self._monitor_busy = False
+
+    def _maybe_stop_monitor(self, slurm, state):
+        """Stop polling once the run has reached a terminal state."""
+        if slurm and slurm.get("status") in self._SLURM_TERMINAL:
+            self._stop_monitor()
+            return
+        if self._monitor_local_folder and state:
+            if state.get("state") in ("done", "failed", "aborted"):
+                # local process finished (no SLURM authority to consult)
+                if (
+                    self._local_process is None
+                    or self._local_process.poll() is not None
+                ):
+                    self._stop_monitor()
+
+    def _update_monitor_display(self, slurm, state):
+        """Render the fused SLURM + progress state into the widgets."""
+        # --- SLURM state chip (or local run state) ---
+        if slurm and slurm.get("success"):
+            status = slurm.get("status", "UNKNOWN")
+            color = self._SLURM_COLORS.get(status, "#616161")
+            text = f"Job state: {status}"
+            details = slurm.get("details") or {}
+            # fuse: SLURM says *why* it died, progress.json says *where*
+            if status in self._SLURM_TERMINAL and status != "COMPLETED":
+                where = self._current_module_label(state)
+                if where:
+                    text += f" during {where}"
+                extra = []
+                if details.get("exit_code"):
+                    extra.append(f"exit {details['exit_code']}")
+                if details.get("max_rss"):
+                    extra.append(f"MaxRSS {details['max_rss']}")
+                if extra:
+                    text += "  (" + ", ".join(extra) + ")"
+            self.monitor_state_label.setText(text)
+            self.monitor_state_label.setStyleSheet(
+                "padding: 2px 8px; border-radius: 4px; color: white; "
+                f"background-color: {color};"
+            )
+        elif self._monitor_local_folder:
+            run_state = (state or {}).get("state", "-")
+            self.monitor_state_label.setText(f"Local run: {run_state}")
+        else:
+            self.monitor_state_label.setText("Job state: -")
+
+        # --- overall bar + module tree from progress.json ---
+        if not state:
+            return
+        self.overall_progress_bar.setValue(
+            int(round(pwprogress.overall_fraction(state) * 100))
+        )
+        self.module_tree.clear()
+        modules = state.get("modules") or []
+        if modules:
+            for m in modules:
+                frac = m.get("fraction")
+                pct = (
+                    f"{frac * 100:.0f}"
+                    if isinstance(frac, (int, float))
+                    else "-"
+                )
+                elapsed = m.get("elapsed")
+                el = (
+                    f"{elapsed:.1f}s"
+                    if isinstance(elapsed, (int, float))
+                    else "-"
+                )
+                item = QtWidgets.QTreeWidgetItem(
+                    [
+                        str(m.get("i", "")),
+                        str(m.get("name", "")),
+                        str(m.get("status", "")),
+                        pct,
+                        el,
+                    ]
+                )
+                self.module_tree.addTopLevelItem(item)
+        else:
+            # aggregation run: show per-dataset rows instead
+            for d in state.get("datasets") or []:
+                item = QtWidgets.QTreeWidgetItem(
+                    [
+                        str(d.get("i", "")),
+                        str(d.get("tag") or "(no tag)"),
+                        str(d.get("state", "")),
+                        "-",
+                        "-",
+                    ]
+                )
+                self.module_tree.addTopLevelItem(item)
+
+    def _current_module_label(self, state):
+        """A short 'module i/N name' label for the active module, or ''."""
+        if not state:
+            return ""
+        cur = state.get("current")
+        modules = state.get("modules") or []
+        total = state.get("total")
+        if cur is not None and 0 <= cur < len(modules):
+            return f"module {cur + 1}/{total} {modules[cur].get('name', '')}"
+        return ""
+
     def assemble_slurm_scripts(self):
         import getpass
 
@@ -13856,6 +14326,9 @@ class Window(QtWidgets.QMainWindow):
         results_folder_host = self.pathparser.convert_path(
             results_folder_local, host_cluster
         )
+        # remember where to poll progress.json / drop the abort flag
+        self._monitor_remote_folder = results_folder_host
+        self._monitor_local_folder = None
 
         if self.cluster_username_edit.text().strip() == "$USER":
             username = getpass.getuser()
@@ -13907,6 +14380,13 @@ class Window(QtWidgets.QMainWindow):
             slurm_options["mail-user"] = email
             slurm_options["mail-type"] = "ALL"
 
+        # Target a specific partition/queue when chosen. GPU nodes usually
+        # require it, so a --gres=gpu request lands nowhere without it. Empty
+        # -> omit, letting SLURM use its default partition.
+        partition = self.cluster_partition_combo.currentText().strip()
+        if partition:
+            slurm_options["partition"] = partition
+
         # Request GPUs only when asked for (--gres=gpu:N)
         n_gpus = self.cluster_gpus_spin.value()
         if n_gpus > 0:
@@ -13914,8 +14394,11 @@ class Window(QtWidgets.QMainWindow):
 
         # use_pw_mod = self.cluster_use_module.isChecked()
 
+        # Modules to `module load` come from the Run tab's field
+        # (space-separated); an empty field loads nothing.
+        modules = self.cluster_modules_edit.text().split()
         commands = self.slurm_communicator.assemble_slurm_commands(
-            host_cluster, scriptname=scriptname
+            host_cluster, scriptname=scriptname, modules=modules
         )
         # scriptname=scriptname, use_pw_module=True)
         # scriptname=scriptname, use_pw_module=False)
@@ -14013,6 +14496,9 @@ class Window(QtWidgets.QMainWindow):
             self.job_info_display.append(
                 f"Job submitted successfully!\nJob ID: {result['job_id']}"
             )
+            # cluster run -> poll the remote progress.json, not a local one
+            self._monitor_local_folder = None
+            self._start_monitor()
             # print(f"Starting SLURM on Cluster - Job ID: {result['job_id']}")
         else:
             self.job_info_display.append(
@@ -14043,12 +14529,77 @@ class Window(QtWidgets.QMainWindow):
         #     print("Failed to start SLURM on Cluster")
 
     def start_locally(self):
-        """"""
-        # TODO: load workflow
-        print("starting workflow locally")
+        """Run the workflow locally as a subprocess and monitor its progress.
+
+        Generates the same ``start_workflow.py`` used for cluster runs, then
+        launches it with the current interpreter in the results folder and
+        points the live monitor at the local ``progress.json``.
+        """
+        results_folder = self.results_folder_display.text().strip()
+        for q in ('"', "'"):
+            if results_folder[:1] == q and results_folder[-1:] == q:
+                results_folder = results_folder[1:-1]
+        if not results_folder:
+            self.job_info_display.append(
+                "Error: set a results folder before running locally."
+            )
+            return
+        if not os.path.exists(results_folder):
+            os.makedirs(results_folder)
+
+        try:
+            script_path = self.create_python_script(None, None)
+        except Exception as e:
+            self.job_info_display.append(
+                f"Could not generate the workflow script:\n{e}"
+            )
+            logger.error(traceback.format_exc())
+            return
+
+        # clear any stale abort flag from a previous run in this folder
+        pwprogress.clear_abort(results_folder)
+        log_path = os.path.join(results_folder, "local_run.log")
+        try:
+            self._local_logfile = open(log_path, "w")
+            self._local_process = subprocess.Popen(
+                [sys.executable, script_path],
+                cwd=results_folder,
+                stdout=self._local_logfile,
+                stderr=subprocess.STDOUT,
+                env={**os.environ, "PWD": results_folder},
+            )
+        except Exception as e:
+            self.job_info_display.append(f"Failed to launch local run:\n{e}")
+            logger.error(traceback.format_exc())
+            return
+
+        self.job_info_display.append(
+            f"Started local workflow (PID {self._local_process.pid}).\n"
+            f"Logging to {log_path}"
+        )
+        # local run -> poll the local progress.json tree, not the cluster
+        self._monitor_local_folder = results_folder
+        self._start_monitor()
 
     def on_cancel_job(self):
-        """Cancel the current SLURM job."""
+        """Cancel the current run (graceful abort, then hard cancel).
+
+        For a local run this requests a graceful stop via the abort flag and
+        terminates the subprocess. For a cluster run it drops the abort flag
+        in the remote run folder (so the workflow stops cleanly at the next
+        module boundary) and also issues ``scancel``.
+        """
+        # local run: abort flag + terminate the subprocess
+        if getattr(self, "_monitor_local_folder", None):
+            pwprogress.request_abort(self._monitor_local_folder)
+            proc = getattr(self, "_local_process", None)
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+            self.job_info_display.append(
+                "Requested graceful abort of the local run."
+            )
+            return
+
         if (
             not hasattr(self, "slurm_communicator")
             or self.slurm_communicator is None
@@ -14064,6 +14615,18 @@ class Window(QtWidgets.QMainWindow):
                 "Error: No job ID specified.\nPlease enter a job ID."
             )
             return
+
+        # request a graceful stop first, so the workflow can finish the
+        # current module and write a clean terminal state before scancel.
+        remote_folder = getattr(self, "_monitor_remote_folder", None)
+        if remote_folder:
+            try:
+                self.slurm_communicator.write_abort_flag(remote_folder)
+                self.job_info_display.append(
+                    "Requested graceful abort (abort.flag written)."
+                )
+            except Exception as e:
+                logger.debug(f"could not write remote abort flag: {e}")
 
         try:
             job_id_int = int(job_id)

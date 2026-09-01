@@ -167,6 +167,62 @@ class TestWorkflow(unittest.TestCase):
 
         shutil.rmtree(wr.result_folder)
 
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_a05b_run_writes_progress_json(self, mock_call_module):
+        """A successful run emits a progress.json marking every module done."""
+        from picasso_workflow import progress as pwprogress
+
+        mock_call_module.return_value = True
+        reporter_config = {"report_name": "progressreport"}
+        analysis_config = {"result_location": self.results_folder}
+        workflow_modules = [
+            ("load_dataset_movie", {"b": 3}),
+            ("identify", {"min_gradient": 1}),
+        ]
+        wr = WorkflowRunner.config_from_dicts(
+            reporter_config, analysis_config, workflow_modules
+        )
+        wr.run()
+
+        state = pwprogress.read_progress(wr.result_folder)
+        self.assertIsNotNone(state)
+        self.assertEqual(state["state"], "done")
+        self.assertEqual(state["total"], 2)
+        self.assertTrue(all(m["status"] == "done" for m in state["modules"]))
+        self.assertEqual(pwprogress.overall_fraction(state), 1.0)
+        shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_a05c_abort_flag_stops_run(self, mock_call_module):
+        """An abort flag stops the run before the next module, state aborted."""
+        from picasso_workflow import progress as pwprogress
+
+        mock_call_module.return_value = True
+        reporter_config = {"report_name": "abortreport"}
+        analysis_config = {"result_location": self.results_folder}
+        workflow_modules = [
+            ("load_dataset_movie", {"b": 3}),
+            ("identify", {"min_gradient": 1}),
+        ]
+        wr = WorkflowRunner.config_from_dicts(
+            reporter_config, analysis_config, workflow_modules
+        )
+        # request abort before running: no module should execute
+        pwprogress.request_abort(wr.result_folder)
+        success = wr.run()
+
+        self.assertFalse(success)
+        self.assertEqual(mock_call_module.call_count, 0)
+        state = pwprogress.read_progress(wr.result_folder)
+        self.assertEqual(state["state"], "aborted")
+        shutil.rmtree(wr.result_folder)
+
     def test_b01_AggregationWR_init(self):
         awr = AggregationWorkflowRunner()
         assert awr.sgl_workflow_locations == []

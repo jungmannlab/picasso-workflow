@@ -12,6 +12,59 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **Progress tracking** for workflow runs, overall and per module. A new
+  `picasso_workflow/progress.py` provides a `ProgressManager` emitter that the
+  runners drive at module boundaries; it fans updates out to sinks — an atomic
+  `progress.json` written into the run's result folder (the universal, cross-
+  process source of truth) and a `[progress]` log line. `WorkflowRunner`
+  records per-module status (`pending`/`running`/`done`/`failed`/`skipped`)
+  and timing; `AggregationWorkflowRunner` tracks per-dataset state (rank 0
+  owns `progress.json`, worker ranks write `progress.rank<N>.json`).
+- **Intra-module progress**: the long picasso calls (`identify`, `localize`
+  fit, `smlm_clusterer`, `undrift_rcc`, `undrift_aim`) now forward their
+  frame/spot/segment counts through picasso's progress callbacks, converted to
+  a 0..1 fraction via `PicassoProgressProxy`. Wiring is inert unless the runner
+  attaches a callback, so behaviour (and unit tests) are unchanged when
+  progress tracking is off.
+- **Cooperative abort**: a run stops gracefully at the next module boundary
+  (and inside long picasso calls, via `abort_callback`) when an `abort.flag`
+  file appears in its result folder, complementing a hard `scancel`.
+- **GUI live progress monitor** (Run tab): a SLURM-state chip, an overall
+  progress bar and a per-module/per-dataset tree, refreshed every **15 s**
+  (chosen because each SSH round-trip is slow). It fuses two sources —
+  `squeue`/`sacct` for the job's liveness and terminal cause (exit code, peak
+  memory on OOM) and the run's `progress.json` for which module and how far —
+  so a killed job reads as e.g. "OUT_OF_MEMORY during module 3/8 localize"
+  rather than a frozen bar. `SlurmCommunicator` gains `fetch_progress()` and
+  `write_abort_flag()`; **Cancel Job** now requests a graceful abort before
+  `scancel`.
+- **Local execution** (Run tab): *Start Workflow locally* now actually runs
+  the generated `start_workflow.py` as a subprocess and drives the same
+  monitor from the local `progress.json` (previously a stub).
+
+- Run tab (SLURM): new **Partition** dropdown, populated per cluster from the
+  new `SlurmPartitions` config section (editable, so an unlisted partition can
+  be typed). The chosen partition is emitted as `#SBATCH --partition=…` in the
+  generated SLURM script. GPU nodes usually live in a dedicated partition, so
+  this is required for a `--gres=gpu` request (e.g. `spline-mle-gpu`) to
+  schedule. `SlurmDefault` gains `partition` (preselected default) and `gpus`
+  keys.
+- `localize` module: fail-fast guard for GPU fitting. When a resolved
+  `fitting_method` ends in `-gpu` but `numba.cuda.is_available()` is False
+  (e.g. libNVVM / CUDA toolkit missing), the module now raises an actionable
+  `AutoPicassoError` up front instead of aborting deep inside picasso after a
+  long spot-extraction, and points at the CUDA-toolkit / `module load cuda`
+  fix or dropping the `-gpu` suffix to fit on the CPU.
+- SLURM job scripts now `module load` environment modules and export
+  `PYTHONNOUSERSITE=1`. This makes GPU fitting (`spline-mle-gpu`) work on
+  module-based HPC systems: a CUDA module provides libNVVM and sets
+  `CUDA_HOME` so numba's `cuda.is_available()` is True, and disabling
+  `~/.local` site-packages stops a stray user-site install from shadowing the
+  conda env. The modules are editable on the Run tab in a new **Modules**
+  field (space-separated), prefilled per cluster from
+  `ClusterEnvironment.<host>.Modules` (e.g. `cuda/13.0`); a blank field loads
+  nothing.
+
 - `localize` module: new optional `fitting_method` parameter exposing the
   picasso 0.11 fitting models (`gausslq` (default), `gaussmle`, the
   `-rotated` / `-spherical` Gaussian variants, `spline` experimental-PSF
