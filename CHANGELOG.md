@@ -10,6 +10,20 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- Generated SLURM scripts now exit with the workflow's real status: the `srun`
+  step's exit code is captured (`PW_RC=$?`) and the batch script ends with
+  `exit ${PW_RC:-0}`. Previously the trailing `echo` made the batch script
+  exit 0 even when the `srun` step was cancelled/killed (e.g. SIGTERM, MPI
+  teardown), so SLURM misreported a dead run as `COMPLETED`.
+- Live-progress monitor: a job SLURM reports `COMPLETED` while the tracked
+  progress never reached 100% is now flagged amber as "COMPLETED but workflow
+  unfinished (stopped at <module>)" instead of a misleading green COMPLETED.
+- Live-progress box layout: only the module tree grows when the box is
+  resized vertically; the job-state chip and the overall progress bar keep
+  their natural height (fixed vertical size policy; the tree gets the stretch).
+
 ### Added
 
 - `localize` now logs an anchor line at the start of the fit (method, spot

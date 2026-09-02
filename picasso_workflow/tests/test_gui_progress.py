@@ -122,3 +122,40 @@ def test_active_stage_module_label_points_at_running(win):
     label = win._active_stage_module_label([_agg(["done", "running"]), s0, s1])
     assert "[single 01]" in label
     assert "module 2/2 b" in label
+
+
+@pytest.fixture(scope="module")
+def full_window():
+    """A real Window (widgets constructed), for display-rendering tests."""
+    from PyQt6 import QtWidgets
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    try:
+        w = gui.Window()
+    except Exception as e:  # pragma: no cover - environment dependent
+        pytest.skip(f"Could not construct GUI window: {e}")
+    yield w
+    w.close()
+    del app
+
+
+def test_completed_but_unfinished_is_flagged(full_window):
+    """SLURM COMPLETED while progress < 100% is flagged, not shown green."""
+    slurm = {"success": True, "status": "COMPLETED", "details": {}}
+    # a single run stuck mid-way: module b still running at 30%
+    s = _single(0, "running", [("a", "done", 1.0), ("b", "running", 0.3)])
+    full_window._update_monitor_display(slurm, [s])
+    text = full_window.monitor_state_label.text()
+    assert "unfinished" in text
+    assert "stopped at" in text
+    assert "#f9a825" in full_window.monitor_state_label.styleSheet()
+
+
+def test_completed_and_finished_shows_plain_completed(full_window):
+    """A genuinely finished run keeps the plain green COMPLETED chip."""
+    slurm = {"success": True, "status": "COMPLETED", "details": {}}
+    s = _single(0, "done", [("a", "done", 1.0), ("b", "done", 1.0)])
+    full_window._update_monitor_display(slurm, [s])
+    text = full_window.monitor_state_label.text()
+    assert text == "Job state: COMPLETED"
+    assert "unfinished" not in text

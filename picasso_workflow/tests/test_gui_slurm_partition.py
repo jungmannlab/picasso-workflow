@@ -87,6 +87,27 @@ def test_slurm_script_includes_partition_directive():
     assert "--partition" not in without
 
 
+def test_slurm_script_propagates_workflow_exit_code():
+    """The batch script captures the srun step's status and exits with it, so a
+    killed/failed workflow is reported as FAILED (not COMPLETED)."""
+    comm = gui.SlurmCommunicator("host", "user")
+    commands = comm.assemble_slurm_commands("hpcl8XXX", scriptname="wf.py")
+    # srun immediately followed by capturing its exit status
+    srun_i = next(i for i, c in enumerate(commands) if c.startswith("srun "))
+    assert commands[srun_i + 1] == "PW_RC=$?"
+
+    script = comm.create_slurm_script("job", commands)
+    # the script exits with the captured code as its final statement
+    lines = [ln.strip() for ln in script.splitlines() if ln.strip()]
+    assert lines[-1] == "exit ${PW_RC:-0}"
+    # srun (and its capture) come before the exit
+    assert "srun python wf.py" in script
+
+    # other callers, which never set PW_RC, still exit 0 (${PW_RC:-0})
+    plain = comm.create_slurm_script("job", ["echo hi"])
+    assert plain.strip().splitlines()[-1].strip() == "exit ${PW_RC:-0}"
+
+
 def test_slurm_commands_load_configured_modules():
     """Configured environment modules (e.g. cuda for GPU fitting) are emitted
     as `module load` lines, and ~/.local shadowing is disabled."""

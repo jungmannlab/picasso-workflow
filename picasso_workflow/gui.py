@@ -7632,7 +7632,14 @@ class SlurmCommunicator:
         if conda_prefix:
             commands.append(f"export CONDA_PREFIX={conda_prefix}")
 
+        # Capture the workflow's exit status. srun propagates the step's
+        # failure (e.g. 143 = 128 + SIGTERM when a rank is killed / an MPI
+        # teardown cancels the step). create_slurm_script exits the batch
+        # script with this, so a failed/cancelled run is reported as FAILED
+        # rather than COMPLETED (a bare `srun ...` followed by an `echo` would
+        # otherwise make the batch script exit 0 regardless).
         commands.append(f"srun python {scriptname}")
+        commands.append("PW_RC=$?")
 
         return commands
 
@@ -7722,9 +7729,17 @@ class SlurmCommunicator:
         for cmd in commands:
             script_lines.append(cmd)
 
-        # Add job completion timestamp
+        # Add job completion timestamp, then exit with the workflow's status so
+        # SLURM reports the job's real outcome. PW_RC is set by
+        # assemble_slurm_commands after the srun step; ${PW_RC:-0} keeps other
+        # callers (which never set it) exiting 0 as before.
         script_lines.extend(
-            ["", 'echo ""', 'echo "Job completed at: $(date)"']
+            [
+                "",
+                'echo ""',
+                'echo "Job completed at: $(date) (exit ${PW_RC:-0})"',
+                "exit ${PW_RC:-0}",
+            ]
         )
 
         return "\n".join(script_lines)
@@ -14148,6 +14163,12 @@ class Window(QtWidgets.QMainWindow):
             "padding: 2px 8px; border-radius: 4px; color: white; "
             "background-color: #9e9e9e;"
         )
+        # Fixed vertical size: the state chip must not absorb the box's extra
+        # height when it is resized - only the module tree should grow.
+        self.monitor_state_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         top_row.addWidget(self.monitor_state_label)
         top_row.addStretch(1)
 
@@ -14163,26 +14184,38 @@ class Window(QtWidgets.QMainWindow):
         top_row.addWidget(refresh_now_button)
         box_layout.addLayout(top_row)
 
-        # overall progress bar
+        # overall progress bar. Fixed vertical size, as the state chip: the
+        # bar keeps its natural height when the box is resized.
         self.overall_progress_bar = QtWidgets.QProgressBar()
         self.overall_progress_bar.setRange(0, 100)
         self.overall_progress_bar.setValue(0)
         self.overall_progress_bar.setFormat("Overall: %p%")
+        self.overall_progress_bar.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         box_layout.addWidget(self.overall_progress_bar)
 
-        # per-module / per-dataset tree
+        # per-module / per-dataset tree. This is the only element that grows
+        # vertically: a minimum height keeps it usable, an Expanding policy plus
+        # the layout stretch factor make it - and nothing else - absorb the
+        # box's extra height.
         self.module_tree = QtWidgets.QTreeWidget()
         self.module_tree.setHeaderLabels(
             ["#", "Module", "Status", "%", "Elapsed"]
         )
         self.module_tree.setRootIsDecorated(False)
-        self.module_tree.setMaximumHeight(180)
+        self.module_tree.setMinimumHeight(180)
+        self.module_tree.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
         header = self.module_tree.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(
             1, QtWidgets.QHeaderView.ResizeMode.Stretch
         )
-        box_layout.addWidget(self.module_tree)
+        box_layout.addWidget(self.module_tree, 1)
 
         parent_layout.addWidget(box)
 
@@ -14380,6 +14413,20 @@ class Window(QtWidgets.QMainWindow):
                     extra.append(f"MaxRSS {details['max_rss']}")
                 if extra:
                     text += "  (" + ", ".join(extra) + ")"
+            elif (
+                status == "COMPLETED"
+                and states
+                and (self._overall_progress(agg, singles, states) < 0.999)
+            ):
+                # SLURM says the job finished cleanly, but the tracked progress
+                # never reached 100%: the workflow stopped short (a killed step
+                # whose batch script still exited 0, an early return, ...).
+                # Flag it rather than showing a misleading green COMPLETED.
+                where = self._active_stage_module_label(states)
+                text = "Job state: COMPLETED but workflow unfinished"
+                if where:
+                    text += f" (stopped at {where})"
+                color = "#f9a825"  # amber
             self.monitor_state_label.setText(text)
             self.monitor_state_label.setStyleSheet(
                 "padding: 2px 8px; border-radius: 4px; color: white; "
