@@ -681,6 +681,17 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
                 "default": False,
             },
+            "stage_to_local": {
+                "type": "bool",
+                "description": (
+                    "Copy the movie to node-local scratch ($TMPDIR) before "
+                    "loading, so identify/localize read frames locally "
+                    "instead of over the network filesystem. Recommended for "
+                    "large movies on a slow/edgy shared filesystem."
+                ),
+                "required": False,
+                "default": False,
+            },
         }
 
         results_spec = {

@@ -37,6 +37,13 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- `load_dataset_movie`: new optional `stage_to_local` flag (GUI checkbox, off
+  by default) that copies the movie to node-local scratch (`$SLURM_TMPDIR` /
+  `$TMPDIR`, auto-cleaned by SLURM) before loading, so the per-frame reads of
+  identify/localize are local instead of over a slow/edgy shared filesystem —
+  the fix for identify/localize crawling or hanging on large movies read over
+  NFS. Split OME-TIFF/MMStack series and `.raw` sidecars are staged as a set;
+  best-effort, falling back to the network path on any error.
 - `localize` now logs an anchor line at the start of the fit (method, spot
   count, box, multiprocess) and at the end (localization count, elapsed time,
   spots/s), and wires picasso's spot-extraction progress

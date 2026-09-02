@@ -139,6 +139,64 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_load_dataset_movie")
         )
 
+    def test_movie_staging(self):
+        """A split OME-TIFF series is discovered and copied to local scratch,
+        without pulling in an unrelated neighbouring movie."""
+        with (
+            tempfile.TemporaryDirectory() as src,
+            tempfile.TemporaryDirectory() as scratch,
+        ):
+            base = os.path.join(src, "mov_MMStack_Pos3")
+            parts = [
+                base + ".ome.tif",
+                base + "_1.ome.tif",
+                base + "_2.ome.tif",
+            ]
+            for p in parts:
+                with open(p, "wb") as f:
+                    f.write(b"x" * 2048)
+            # a different position in the same folder must NOT be staged
+            other = os.path.join(src, "mov_MMStack_Pos30.ome.tif")
+            with open(other, "wb") as f:
+                f.write(b"y" * 16)
+
+            found = self.ap._movie_files_to_stage(parts[0])
+            assert set(found) == set(parts)
+            assert other not in found
+
+            saved = os.environ.get("SLURM_TMPDIR")
+            os.environ.pop("SLURM_TMPDIR", None)
+            os.environ["TMPDIR"] = scratch
+            try:
+                results = {}
+                local = self.ap._stage_movie_local(parts[0], 0, results)
+            finally:
+                if saved is not None:
+                    os.environ["SLURM_TMPDIR"] = saved
+
+            assert local.startswith(scratch)
+            assert os.path.basename(local) == "mov_MMStack_Pos3.ome.tif"
+            assert os.path.isfile(local)
+            staged = sorted(os.listdir(results["staged_movie_dir"]))
+            assert staged == sorted(os.path.basename(p) for p in parts)
+
+    def test_movie_staging_falls_back_on_error(self):
+        """Staging never aborts a run: an unreadable source returns the
+        original path."""
+        saved = os.environ.get("SLURM_TMPDIR")
+        os.environ.pop("SLURM_TMPDIR", None)
+        with tempfile.TemporaryDirectory() as scratch:
+            os.environ["TMPDIR"] = scratch
+            try:
+                results = {}
+                missing = os.path.join(scratch, "nope", "movie.ome.tif")
+                local = self.ap._stage_movie_local(missing, 0, results)
+            finally:
+                if saved is not None:
+                    os.environ["SLURM_TMPDIR"] = saved
+        assert local == missing
+        assert "staged_movie_dir" not in results
+
     def identify(self):
         parameters = {
             "box_size": 7,

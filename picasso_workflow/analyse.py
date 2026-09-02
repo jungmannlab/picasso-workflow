@@ -24,6 +24,7 @@ import os
 import pickle
 import platform
 import random
+import re
 import string
 import subprocess
 import sys
@@ -1088,6 +1089,107 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["filename_raw"] = filename_raw
         return parameters, results
 
+    def _movie_files_to_stage(self, filename):
+        """Every file that must travel with ``filename`` to load it locally.
+
+        A picasso movie can span several files -- a split OME-TIFF / MMStack
+        series is stored as ``<base>.ome.tif`` plus ``<base>_1.ome.tif``,
+        ``<base>_2.ome.tif`` ... -- or carry a sidecar (a ``.raw`` movie's
+        ``.yaml``). Return the movie file together with any such companions in
+        the same directory so staging copies a self-contained set.
+
+        Parameters
+        ----------
+        filename : str
+            Path to the movie file named in the workflow.
+
+        Returns
+        -------
+        list of str
+            Absolute paths to copy (always includes ``filename``).
+        """
+        files = [filename]
+        directory = os.path.dirname(filename) or "."
+        name = os.path.basename(filename)
+        lower = name.lower()
+        if lower.endswith(".ome.tif") or lower.endswith(".ome.tiff"):
+            # MMStack split parts: <stem>_<N>.ome.tif(f), matched like picasso
+            stem = re.sub(r"\.ome\.tiff?$", "", name, flags=re.IGNORECASE)
+            pattern = re.compile(
+                re.escape(stem) + r"_\d+\.ome\.tiff?$", re.IGNORECASE
+            )
+            try:
+                for entry in os.scandir(directory):
+                    if entry.is_file() and pattern.match(entry.name):
+                        files.append(entry.path)
+            except OSError:
+                pass
+        elif lower.endswith(".raw"):
+            sidecar = filename + ".yaml"
+            if os.path.exists(sidecar):
+                files.append(sidecar)
+        return sorted(set(files))
+
+    def _stage_movie_local(self, filename, i, results):
+        """Copy the movie (and companions) to node-local scratch; return the
+        local path.
+
+        On a slow / intermittent shared filesystem the tens of thousands of
+        per-frame reads that identify and localize make can crawl or hang. A
+        single bulk copy to local disk (``$TMPDIR`` / ``$SLURM_TMPDIR``, auto
+        -cleaned by SLURM at job end) turns every later read local. This is
+        best-effort: any failure logs a warning and returns the original
+        network path, so staging can never abort a run.
+
+        Parameters
+        ----------
+        filename : str
+            The movie path on the shared filesystem.
+        i : int
+            Module index (used to keep the scratch dir unique).
+        results : dict
+            Module results; the staging destination is recorded under
+            ``staged_movie_dir`` for provenance.
+
+        Returns
+        -------
+        str
+            The local movie path, or ``filename`` if staging failed.
+        """
+        import shutil
+
+        base = (
+            os.environ.get("SLURM_TMPDIR")
+            or os.environ.get("TMPDIR")
+            or os.path.join("/tmp", os.environ.get("USER", "pwf"))
+        )
+        stage_dir = os.path.join(base, f"pwf_movie_stage_{os.getpid()}_{i}")
+        try:
+            os.makedirs(stage_dir, exist_ok=True)
+            to_copy = self._movie_files_to_stage(filename)
+            total_bytes = 0
+            t0 = time.time()
+            for src in to_copy:
+                shutil.copy2(
+                    src, os.path.join(stage_dir, os.path.basename(src))
+                )
+                total_bytes += os.path.getsize(src)
+            dt = time.time() - t0
+            local = os.path.join(stage_dir, os.path.basename(filename))
+            logger.info(
+                f"load_dataset_movie: staged {len(to_copy)} file(s) "
+                f"({total_bytes / 1e9:.1f} GB) to {stage_dir} in {dt:.1f} s; "
+                "reading the movie from local scratch."
+            )
+            results["staged_movie_dir"] = stage_dir
+            return local
+        except Exception as exc:
+            logger.warning(
+                "load_dataset_movie: could not stage the movie to local "
+                f"scratch ({exc}); loading from the original path {filename}."
+            )
+            return filename
+
     #    @profile_resource_usage
     @module_decorator
     def load_dataset_movie(self, i, parameters, results):
@@ -1112,6 +1214,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Parameters for creating a subsampled movie.
             ``load_camera_info`` : bool
                 Whether to load camera configuration from ``picasso.CONFIG``.
+            ``stage_to_local`` : bool
+                Copy the movie (and any split-series/sidecar companions) to
+                node-local scratch (``$TMPDIR``) before loading, so the
+                per-frame reads of identify/localize are local rather than
+                over a slow/edgy shared filesystem. Best-effort: falls back to
+                the original path on any error. Default False.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
@@ -1126,7 +1234,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             width, height) and, if requested, ``sample_movie``.
         """
         results["picasso version"] = picassoversion
-        self.movie, self.info = io.load_movie(parameters["filename"])
+        filename = parameters["filename"]
+        # Optionally stage the movie onto node-local scratch first. On a slow
+        # or edgy shared filesystem the per-frame reads of identify/localize
+        # can crawl or hang; a single bulk copy to local disk makes every
+        # subsequent read local. Best-effort: falls back to the network path.
+        if parameters.get("stage_to_local"):
+            filename = self._stage_movie_local(filename, i, results)
+        self.movie, self.info = io.load_movie(filename)
         results["movie.shape"] = self.movie.shape
 
         if parameters.get("load_camera_info"):
