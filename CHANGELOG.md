@@ -12,6 +12,11 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `localize` locs-vs-frame plot no longer requires the Gaussian `sx`/`sy`
+  width columns, which spline fits don't produce (they crashed with
+  `KeyError: sx`). The second panel now shows `sx`/`sy` when present, else the
+  spline axial position `z`, else is omitted — so the plot works for any
+  fitting method.
 - Live-progress tree no longer collapses on every refresh: the user's
   expand/collapse of the aggregation root and stage groups is captured
   (keyed by dataset slot) before the per-poll rebuild and reapplied after, so

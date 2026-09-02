@@ -2208,7 +2208,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     def _plot_locs_vs_frame(self, filename):
-        """Plot per-frame mean photons and PSF widths (sx, sy).
+        """Plot per-frame mean photons and a fitter-appropriate shape metric.
+
+        Different picasso fitters yield different localization columns:
+        Gaussian fits carry the PSF widths ``sx`` / ``sy``, while spline fits
+        carry the axial position ``z`` (3D) and no widths. The second panel
+        therefore shows ``sx`` / ``sy`` when present, else ``z``, else is
+        omitted, so the plot works for any fitting method.
 
         Parameters
         ----------
@@ -2222,51 +2228,51 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         results = {}
         frames = np.arange(len(self.movie))
-        # bins = np.arange(len(self.movie) + 1) - .5
 
         df_locs = pd.DataFrame(self.locs)
         gbframe = df_locs.groupby("frame")
-        # groupby only yields rows for frames that actually contain
-        # localizations. If some frames have none (e.g. the light switched
-        # on mid-acquisition), those frames are dropped and the aggregated
-        # series would be shorter than ``frames``, causing an x/y length
-        # mismatch in the plots below. Reindex onto the full frame range so
-        # empty frames become NaN (drawn as gaps) and x/y always align.
-        photons_mean = gbframe["photons"].mean().reindex(frames)
-        photons_std = gbframe["photons"].std().reindex(frames)
-        sx_mean = gbframe["sx"].mean().reindex(frames)
-        sx_std = gbframe["sx"].std().reindex(frames)
-        sy_mean = gbframe["sy"].mean().reindex(frames)
-        sy_std = gbframe["sy"].std().reindex(frames)
-
-        fig, ax = plt.subplots(nrows=2, sharex=True)
-        ax[0].plot(frames, photons_mean, color="b", label="mean photons")
+        cols = set(df_locs.columns)
         xhull = np.concatenate([frames, frames[::-1]])
-        yhull = np.concatenate(
-            [
-                photons_mean + photons_std,
-                photons_mean[::-1] - photons_std[::-1],
-            ]
-        )
-        ax[0].fill_between(
-            xhull, yhull, color="b", alpha=0.2, label="std photons"
-        )
-        ax[0].set_xlabel("frame")
-        ax[0].set_ylabel("photons")
-        ax[0].legend()
-        ax[1].plot(frames, sx_mean, color="c", label="mean sx")
-        yhull = np.concatenate(
-            [sx_mean + sx_std, sx_mean[::-1] - sx_std[::-1]]
-        )
-        ax[1].fill_between(xhull, yhull, color="c", alpha=0.2, label="std sx")
-        ax[1].plot(frames, sy_mean, color="m", label="mean sy")
-        yhull = np.concatenate(
-            [sy_mean + sy_std, sy_mean[::-1] - sy_std[::-1]]
-        )
-        ax[1].fill_between(xhull, yhull, color="m", alpha=0.2, label="std sy")
-        ax[1].set_xlabel("frame")
-        ax[1].set_ylabel("width")
-        ax[1].legend()
+
+        def per_frame(col):
+            # Per-frame mean/std, reindexed onto the full frame range: groupby
+            # only yields frames that contain localizations, so empty frames
+            # (e.g. the light switched on mid-acquisition) would otherwise
+            # shorten the series and misalign x/y. Reindexing makes them NaN
+            # (drawn as gaps) and keeps every series the length of ``frames``.
+            grp = gbframe[col]
+            return grp.mean().reindex(frames), grp.std().reindex(frames)
+
+        def band(ax, mean, std, color, label):
+            ax.plot(frames, mean, color=color, label=f"mean {label}")
+            yhull = np.concatenate([mean + std, mean[::-1] - std[::-1]])
+            ax.fill_between(
+                xhull, yhull, color=color, alpha=0.2, label=f"std {label}"
+            )
+
+        # Second panel: Gaussian widths if present, else the spline z, else
+        # nothing (a single photons panel).
+        has_widths = "sx" in cols and "sy" in cols
+        has_z = "z" in cols
+        n_panels = 2 if (has_widths or has_z) else 1
+        fig, axes = plt.subplots(nrows=n_panels, sharex=True, squeeze=False)
+        axes = axes[:, 0]
+
+        band(axes[0], *per_frame("photons"), "b", "photons")
+        axes[0].set_ylabel("photons")
+        axes[0].legend()
+
+        if has_widths:
+            band(axes[1], *per_frame("sx"), "c", "sx")
+            band(axes[1], *per_frame("sy"), "m", "sy")
+            axes[1].set_ylabel("width")
+            axes[1].legend()
+        elif has_z:
+            band(axes[1], *per_frame("z"), "c", "z")
+            axes[1].set_ylabel("z [nm]")
+            axes[1].legend()
+        axes[-1].set_xlabel("frame")
+
         results["filename"] = filename
         fig.savefig(results["filename"])
         plt.close(fig)

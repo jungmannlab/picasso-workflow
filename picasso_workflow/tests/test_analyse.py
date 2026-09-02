@@ -197,6 +197,34 @@ class TestAnalyseModules(unittest.TestCase):
         assert local == missing
         assert "staged_movie_dir" not in results
 
+    def test_plot_locs_vs_frame_adapts_to_columns(self):
+        """The locs-vs-frame plot works for Gaussian locs (sx/sy) and for
+        spline locs (z, no widths) alike, rather than requiring sx/sy."""
+        n = 30
+        gauss = pd.DataFrame(
+            {
+                "frame": np.random.randint(0, 100, n),
+                "photons": np.random.rand(n),
+                "sx": np.random.rand(n),
+                "sy": np.random.rand(n),
+            }
+        )
+        spline = pd.DataFrame(
+            {
+                "frame": np.random.randint(0, 100, n),
+                "photons": np.random.rand(n),
+                "z": np.random.rand(n) * 500,
+                "lpz": np.random.rand(n),
+            }
+        )
+        for locs in (gauss, spline):
+            self.ap.locs = locs
+            fp = os.path.join(self.results_folder, "lvf.png")
+            out = self.ap._plot_locs_vs_frame(fp)
+            assert out["filename"] == fp
+            assert os.path.exists(fp)
+            os.remove(fp)
+
     def identify(self):
         parameters = {
             "box_size": 7,
