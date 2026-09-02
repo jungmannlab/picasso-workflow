@@ -12,6 +12,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `identify` no longer records the live progress/abort callbacks in
+  `self.info`. They were merged in via `new_info.update(identify_kwargs)`, but
+  those objects hold a `threading.Lock` (through the ProgressManager), so a
+  later `io.save_locs` → `save_info` → `yaml.dump` failed with
+  `TypeError: cannot pickle '_thread.lock' object` (first hit at the
+  `find_gold` save). Only the real identify parameters (filters, ROI, frame
+  bounds) are recorded now. Affected any progress-tracked run that saves locs,
+  not just spline.
 - `find_gold`: when no gold is found, the empty gold file now saves instead of
   crashing. The empty set was built as `pd.DataFrame(columns=…)` (object-dtype
   columns), which `io.save_locs` → `to_records` → HDF5 rejects

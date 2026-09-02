@@ -248,6 +248,51 @@ class TestAnalyseModules(unittest.TestCase):
         assert os.path.exists(results["fp_nogold"])
         shutil.rmtree(os.path.join(self.results_folder, "00_find_gold"))
 
+    @patch("picasso_workflow.analyse.localize.identify")
+    def test_identify_info_omits_progress_callbacks(self, mock_identify):
+        """identify records its parameters in self.info but NOT the live
+        progress/abort callbacks, which hold a threading.Lock that would break
+        io.save_locs -> save_info -> yaml.dump ('cannot pickle _thread.lock').
+        """
+        import yaml as _yaml
+
+        mock_identify.return_value = (pd.DataFrame({"frame": [0, 1, 2]}), {})
+        self.ap.info = []
+        # wire progress/abort as the runner does
+        self.ap._progress_callback = lambda *a, **k: None
+        self.ap._abort_callback = lambda: False
+        try:
+            self.ap.identify(
+                0,
+                {
+                    "box_size": 7,
+                    "min_gradient": 500,
+                    "temporal_median_window": 20,
+                    "gaussian_filter_sigma": 1.5,
+                },
+            )
+        finally:
+            self.ap._progress_callback = None
+            self.ap._abort_callback = None
+
+        # the callbacks were forwarded to picasso...
+        _, kwargs = mock_identify.call_args
+        assert "progress_callback" in kwargs
+        assert "abort_callback" in kwargs
+        # ...but must NOT have leaked into the saved info
+        info = self.ap.info[-1]
+        assert "progress_callback" not in info
+        assert "abort_callback" not in info
+        # real params are still recorded
+        assert info["temporal_median_window"] == 20
+        assert info["gaussian_filter_sigma"] == 1.5
+        # and the whole info list is now yaml-serializable (the failure mode)
+        _yaml.dump_all(self.ap.info)
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_identify"),
+            ignore_errors=True,
+        )
+
     def identify(self):
         parameters = {
             "box_size": 7,

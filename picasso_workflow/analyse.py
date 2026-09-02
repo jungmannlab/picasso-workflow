@@ -1803,8 +1803,18 @@ class AutoPicasso(util.AbstractModuleCollection):
             # "parameters": parameters,
         }
         # record every forwarded identify option (filters, ROIs, frame
-        # bounds) so the run is reproducible from the info list.
-        new_info.update(identify_kwargs)
+        # bounds) so the run is reproducible from the info list -- but NOT the
+        # progress/abort callbacks, which are live objects holding a
+        # threading.Lock (via the ProgressManager) that io.save_locs ->
+        # save_info -> yaml.dump cannot serialize ("cannot pickle
+        # '_thread.lock' object").
+        new_info.update(
+            {
+                k: v
+                for k, v in identify_kwargs.items()
+                if k not in ("progress_callback", "abort_callback")
+            }
+        )
         self.info = self.info + [new_info]
 
         return parameters, results
