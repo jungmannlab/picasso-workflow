@@ -32,6 +32,20 @@ This file was started after v0.5.6; earlier history is in the git log.
   so this isolates a GPU-side crash from the CPU path. `assemble_slurm_commands`
   gained `faulthandler=` / `cpu_only=` flags.
 
+### Changed
+
+- Aggregation runner distributes single-dataset workflows across SLURM ranks
+  by **dynamic self-scheduling** instead of a static `i % size` split. Each
+  rank races to claim the next dataset via an atomic `mkdir` on the shared
+  result folder (claim dir scoped by SLURM job id, so stale claims from a
+  crashed attempt never block a rerun) and advances only after finishing its
+  current one — so a rank that draws light datasets immediately picks up the
+  next unclaimed one, keeping every node busy even when the spot-heavy
+  datasets cluster. Coordination stays entirely on the shared filesystem
+  (no MPI); the completion-marker barrier and rank-0 gather were already
+  assignment-agnostic and are unchanged. Single-task (off-cluster) runs skip
+  claiming and run every dataset as before.
+
 ### Fixed
 
 - Progress reporting: a module that fails while resolving its `$`-command

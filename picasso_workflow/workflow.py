@@ -459,15 +459,22 @@ class AggregationWorkflowRunner:
         self.progress.mark_running()
 
         # Multi-node parallelism: distribute the single-dataset workflows
-        # across the SLURM ranks (each rank runs i %% size == rank), writing
-        # results to the shared result folder and a completion marker. Rank 0
-        # then waits for every marker, loads the single results produced by
-        # other ranks from disk, and runs the aggregation. With a single
-        # task (off-cluster) this reduces to the previous sequential run.
+        # across the SLURM ranks by dynamic self-scheduling. Each rank walks
+        # the dataset list and races to claim the next one (an atomic mkdir on
+        # the shared filesystem); the winner runs it and only then advances.
+        # A rank that finishes a light dataset immediately claims the next
+        # unclaimed one, so both nodes stay busy even when the heavy
+        # (spot-rich) datasets happen to cluster - which a static i %% size
+        # split cannot avoid. Results and a completion marker go to the shared
+        # result folder; rank 0 then waits for every marker, loads the results
+        # produced by other ranks from disk, and runs the aggregation. With a
+        # single task (off-cluster) every dataset runs here.
+        claim_dir = self._claim_dir()
+        if self.size > 1:
+            os.makedirs(claim_dir, exist_ok=True)
         logger.debug(
-            f"Aggregation runner rank {self.rank}/{self.size} handling "
-            f"single datasets {list(range(self.rank, n_sgl, self.size))} "
-            f"of {n_sgl}."
+            f"Aggregation runner rank {self.rank}/{self.size} claiming "
+            f"single datasets dynamically ({n_sgl} total)."
         )
 
         for i, (parameter_set, tag) in enumerate(
@@ -479,8 +486,8 @@ class AggregationWorkflowRunner:
             sgl_folders[i] = os.path.join(
                 self.result_folder, sgl_name + "_" + self.postfix
             )
-            if i % self.size != self.rank:
-                continue  # handled by another rank
+            if self.size > 1 and not self._claim_dataset(claim_dir, i):
+                continue  # claimed by another rank
 
             sgl_wkfl_reporter_config["report_name"] = sgl_name
             sgl_wkfl_analysis_config["result_location"] = self.result_folder
@@ -866,6 +873,62 @@ class AggregationWorkflowRunner:
                 return f.read().strip()
         except FileNotFoundError:
             return None
+
+    def _claim_dir(self) -> str:
+        """Per-launch directory of dataset claims for dynamic scheduling.
+
+        Scoped by SLURM job id so a claim means "a rank is running this
+        dataset in *this* launch". A stale claim left by a crashed earlier
+        attempt (same result folder, new job) then never blocks a rerun, while
+        the persistent per-folder completion marker records "finished" across
+        launches. Off-cluster (no SLURM_JOB_ID) it falls back to ``local``,
+        but claiming is skipped entirely for a single task anyway.
+
+        Returns
+        -------
+        str
+            The claim directory for this launch.
+        """
+        job = os.getenv("SLURM_JOB_ID") or "local"
+        return os.path.join(self.result_folder, "_pwf_claims", str(job))
+
+    def _claim_dataset(self, claim_dir: str, i: int) -> bool:
+        """Atomically claim single dataset ``i`` for this rank.
+
+        Creating a directory is atomic on a shared (NFS) filesystem - the
+        server serialises the MKDIR - so exactly one rank wins the race for
+        each dataset. This turns each rank's ordered pass into greedy
+        "next-available" self-scheduling: a rank advances to the next dataset
+        only after finishing its current one, so a free rank always grabs the
+        next unclaimed dataset and no rank idles while work remains.
+
+        Parameters
+        ----------
+        claim_dir : str
+            The per-launch claim directory (see :meth:`_claim_dir`).
+        i : int
+            Index of the single dataset to claim.
+
+        Returns
+        -------
+        bool
+            True if this rank claimed the dataset, False if another rank
+            already owns it. On an unexpected filesystem error it returns True
+            (run it here): a redundant run only wastes time and the last marker
+            and results win, whereas skipping could drop the dataset and hang
+            rank 0's barrier.
+        """
+        try:
+            os.mkdir(os.path.join(claim_dir, f"{i:04d}"))
+            return True
+        except FileExistsError:
+            return False
+        except Exception as e:
+            logger.warning(
+                f"Claim for single dataset {i} could not be created ({e}); "
+                f"running it on rank {self.rank} to be safe."
+            )
+            return True
 
     def _wait_for_single_markers(
         self,

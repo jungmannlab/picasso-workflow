@@ -527,3 +527,61 @@ class Test_E_AggregationFailureTraceability(unittest.TestCase):
         awr.reporter_config = {"report_name": "r", "ConfluenceReporter": {}}
         awr._report_aggregation_abort([(0, "t", "/f", "d")], 1)
         awr.ci.update_page_content.assert_not_called()
+
+
+# --- dynamic single-dataset scheduling (atomic filesystem claims) -----------
+
+
+def _bare_runner(rank=0, result_folder="."):
+    """An AggregationWorkflowRunner with just the fields the claim helpers
+    touch, bypassing __init__ (no config needed)."""
+    r = AggregationWorkflowRunner.__new__(AggregationWorkflowRunner)
+    r.rank = rank
+    r.result_folder = result_folder
+    return r
+
+
+def test_claim_dataset_is_exclusive_and_covers_all(tmp_path):
+    """Two ranks racing over the same datasets: each dataset is claimed by
+    exactly one rank, and every dataset is claimed."""
+    claim_dir = str(tmp_path / "claims")
+    os.makedirs(claim_dir)
+    r0, r1 = _bare_runner(rank=0), _bare_runner(rank=1)
+
+    claimed0, claimed1 = [], []
+    for i in range(6):
+        # both ranks reach dataset i; the atomic mkdir lets exactly one win
+        if r0._claim_dataset(claim_dir, i):
+            claimed0.append(i)
+        if r1._claim_dataset(claim_dir, i):
+            claimed1.append(i)
+
+    assert sorted(claimed0 + claimed1) == list(range(6))  # all covered
+    assert set(claimed0) & set(claimed1) == set()  # none double-claimed
+    # re-claiming an owned dataset fails (idempotent skip)
+    assert r1._claim_dataset(claim_dir, claimed0[0]) is False
+
+
+def test_claim_dir_is_job_scoped(tmp_path, monkeypatch):
+    """The claim dir is keyed by SLURM job id, so a new launch (new job) gets
+    a fresh dir and stale claims never block a rerun; off-cluster -> 'local'.
+    """
+    r = _bare_runner(result_folder=str(tmp_path))
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    d1 = r._claim_dir()
+    monkeypatch.setenv("SLURM_JOB_ID", "67890")
+    d2 = r._claim_dir()
+    assert d1 != d2 and "12345" in d1 and "67890" in d2
+
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    assert r._claim_dir().endswith(os.path.join("_pwf_claims", "local"))
+
+
+def test_claim_dataset_survives_fs_error(tmp_path):
+    """An unexpected filesystem error claims the dataset locally (run it) so it
+    is never silently dropped."""
+    r = _bare_runner()
+    # claim dir does not exist -> os.mkdir raises FileNotFoundError, which is
+    # not FileExistsError, so the dataset is run here rather than skipped
+    missing = str(tmp_path / "does_not_exist")
+    assert r._claim_dataset(missing, 0) is True
