@@ -14676,6 +14676,12 @@ class Window(QtWidgets.QMainWindow):
             results_folder_local = results_folder_local[1:-1]
         if not os.path.exists(results_folder_local):
             os.makedirs(results_folder_local)
+        # SLURM opens the --output/--error files at job launch and does NOT
+        # create their parent directory; a missing logs/ dir means the job's
+        # stdout/stderr (the only place a traceback / OOM message lands) are
+        # lost. The results folder is on the cluster-shared filesystem, so
+        # creating it here makes it exist for the job.
+        os.makedirs(os.path.join(results_folder_local, "logs"), exist_ok=True)
         results_folder_host = self.pathparser.convert_path(
             results_folder_local, host_cluster
         )
@@ -14745,8 +14751,10 @@ class Window(QtWidgets.QMainWindow):
             job_name,
             commands,
             slurm_options=slurm_options,
-            output_file=f"{results_folder_host}/logs/%A.log",
-            error_file=f"{results_folder_host}/logs/%A_err.log",
+            # %j is the job id (the correct token for a non-array job; %A is
+            # the array-master id, which only coincides with %j by accident).
+            output_file=f"{results_folder_host}/logs/%j.log",
+            error_file=f"{results_folder_host}/logs/%j_err.log",
             working_directory=results_folder_host,
         )
         script_path = self.slurm_communicator.write_slurm_script(

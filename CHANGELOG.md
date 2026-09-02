@@ -12,6 +12,11 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- SLURM logs are now reliably captured: the generated submission creates the
+  `logs/` directory before submitting (SLURM opens `--output`/`--error` at
+  launch and does not create their parent, so a missing dir silently dropped
+  the job's stdout/stderr — where a traceback / OOM message lands), and the
+  log filenames use `%j` (job id) instead of `%A` (array-master id).
 - Live-progress monitor no longer shows a previous run's progress while a
   resubmitted job is still pending. The results folder accumulates one
   subfolder per run, so polling the tree returned every past run's
