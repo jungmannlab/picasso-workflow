@@ -12,6 +12,21 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- Progress reporting: a module that fails while resolving its `$`-command
+  parameters (e.g. `$get_prior_result` referencing a module absent from the
+  workflow) now finalizes the run's progress as failed instead of leaving it
+  stuck at `running`. The `parameter_command_executor.run` call was outside
+  the per-module try/except, so such a failure escaped without
+  `module_end`/`finish`, and the live monitor showed the dataset as still
+  running long after the rank had moved on.
+- Live-progress monitor merges the per-rank aggregation states in a multi-rank
+  (SLURM) run. Each rank writes its own aggregation progress file and only
+  advances the datasets it owns (round-robin), so the monitor previously
+  showed only one rank's datasets; it now combines them, taking the
+  most-advanced state per dataset.
+- `find_similar`: empty pick set now saved with the localizations' numeric
+  dtypes rather than a hardcoded Gaussian column list (`sx`/`sy`/`ellipticity`,
+  object dtype) — same object-dtype-HDF5 crash as `find_gold`, for spline data.
 - `identify` no longer records the live progress/abort callbacks in
   `self.info`. They were merged in via `new_info.update(identify_kwargs)`, but
   those objects hold a `threading.Lock` (through the ProgressManager), so a

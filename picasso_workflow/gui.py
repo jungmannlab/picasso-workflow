@@ -14412,9 +14412,58 @@ class Window(QtWidgets.QMainWindow):
         token = re.compile(rf"_{re.escape(str(job_id))}(?:_|$)")
         return [s for s in states if token.search(s.get("report_name") or "")]
 
+    # dataset-state precedence for merging per-rank aggregation views
+    _DATASET_STATE_RANK = {
+        "pending": 0,
+        "running": 1,
+        "aborted": 2,
+        "failed": 2,
+        "skipped": 3,
+        "done": 3,
+    }
+
+    def _merged_aggregation_state(self, states):
+        """Merge the per-rank aggregation states into one, or None.
+
+        In a multi-rank (SLURM) run each rank writes its own aggregation
+        progress file and only advances the datasets it owns (round-robin),
+        leaving the rest ``pending``. Reading the tree therefore yields several
+        aggregation states with complementary, mostly-pending datasets lists.
+        Combine them so the datasets list reflects every rank: for each dataset
+        index keep the most-advanced state seen across ranks.
+
+        Parameters
+        ----------
+        states : list of dict
+            All progress states read from the run.
+
+        Returns
+        -------
+        dict or None
+            A single aggregation state with a merged datasets list, or None if
+            there is no aggregation state.
+        """
+        agg_states = [s for s in states if s.get("kind") == "aggregation"]
+        if not agg_states:
+            return None
+        if len(agg_states) == 1:
+            return agg_states[0]
+        rank = self._DATASET_STATE_RANK
+        best = {}
+        for s in agg_states:
+            for d in s.get("datasets") or []:
+                i = d.get("i")
+                if i not in best or rank.get(d.get("state"), 0) > rank.get(
+                    best[i].get("state"), 0
+                ):
+                    best[i] = d
+        merged = dict(agg_states[0])
+        merged["datasets"] = [best[i] for i in sorted(best)]
+        return merged
+
     def _top_state(self, states):
         """The run's top-level state: the aggregation one, else the only one."""
-        agg = next((s for s in states if s.get("kind") == "aggregation"), None)
+        agg = self._merged_aggregation_state(states)
         if agg is not None:
             return agg
         return states[0] if states else None
@@ -14437,7 +14486,7 @@ class Window(QtWidgets.QMainWindow):
     def _update_monitor_display(self, slurm, states):
         """Render the fused SLURM + multi-stage progress into the widgets."""
         states = states or []
-        agg = next((s for s in states if s.get("kind") == "aggregation"), None)
+        agg = self._merged_aggregation_state(states)
         singles = [s for s in states if s.get("kind") != "aggregation"]
         top = self._top_state(states)
 

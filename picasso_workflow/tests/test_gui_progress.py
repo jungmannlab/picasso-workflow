@@ -116,6 +116,36 @@ def test_overall_progress_single_run(win):
     assert abs(win._overall_progress(None, [s], [s]) - 0.5) < 1e-6
 
 
+def test_merge_aggregation_states_combines_ranks(win):
+    """Per-rank aggregation views (each advancing only the datasets it owns,
+    round-robin) merge into one datasets list reflecting every rank."""
+    rank0 = {
+        "kind": "aggregation",
+        "report_name": "myrun_240101-1200",
+        "datasets": [
+            {"i": 0, "tag": "c0", "state": "failed"},
+            {"i": 1, "tag": "c1", "state": "pending"},
+            {"i": 2, "tag": "c2", "state": "running"},
+        ],
+    }
+    rank1 = {
+        "kind": "aggregation",
+        "report_name": "myrun_240101-1200",
+        "datasets": [
+            {"i": 0, "tag": "c0", "state": "pending"},
+            {"i": 1, "tag": "c1", "state": "done"},
+            {"i": 2, "tag": "c2", "state": "pending"},
+        ],
+    }
+    merged = win._merged_aggregation_state([rank0, rank1])
+    states = {d["i"]: d["state"] for d in merged["datasets"]}
+    assert states == {0: "failed", 1: "done", 2: "running"}
+
+    # single-rank passthrough and no-aggregation cases
+    assert win._merged_aggregation_state([rank0]) is rank0
+    assert win._merged_aggregation_state([]) is None
+
+
 def test_active_stage_module_label_points_at_running(win):
     s0 = _single(0, "done", [("a", "done", 1.0)])
     s1 = _single(1, "running", [("a", "done", 1.0), ("b", "running", 0.3)])

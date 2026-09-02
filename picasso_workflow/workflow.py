@@ -1279,11 +1279,18 @@ class WorkflowRunner:
                 return success
             # all modules are called with iteration and parameter dict
             # as arguments
-            module_parameters = self.parameter_command_executor.run(
-                module_parameters, curr_rootidx=i
-            )
             progress.module_start(i)
             try:
+                # Resolve the $-commands (e.g. $get_prior_result) inside the
+                # try: a failure here -- such as referencing a module that
+                # does not exist in this workflow -- must be recorded as a
+                # module failure and finalize the run's progress, rather than
+                # escaping with the progress state stuck at RUNNING (which
+                # leaves the live monitor showing the dataset as still running
+                # long after the rank has moved on).
+                module_parameters = self.parameter_command_executor.run(
+                    module_parameters, curr_rootidx=i
+                )
                 success = self.call_module(module_name, i, module_parameters)
             except AutoPicassoError:
                 success = False

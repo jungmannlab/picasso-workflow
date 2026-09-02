@@ -13099,28 +13099,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             logger.debug("""
                 Not many picks found in specified phase space.""")
-            try:
-                # dt_orig = self.locs.dtype
-                # if not isinstance(dt_orig, list) and len(dt_orig) == 2:
-                #     dt_orig = dt_orig[1]
-                # dtypes = self.locs.dtype + [("group", "<i4")]
-                column_names = [
-                    "frame",
-                    "x",
-                    "y",
-                    "photons",
-                    "sx",
-                    "sy",
-                    "bg",
-                    "lpx",
-                    "lpy",
-                    "ellipticity",
-                    "net_gradient",
-                    "group",
-                ]
-            except Exception as e:
-                raise e
-            picked_locs = pd.DataFrame(columns=column_names)
+            # Empty pick set, but keep self.locs's column dtypes (+ a group
+            # column), so io.save_locs -> to_records -> HDF5 does not choke on
+            # object-dtype columns. An empty pd.DataFrame(columns=[...]) has
+            # object dtypes, and a hardcoded Gaussian column list
+            # (sx/sy/ellipticity) does not match spline localizations.
+            picked_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
+            picked_locs["group"] = pd.Series(dtype="int32")
         results["n_picked_locs"] = len(picked_locs)
         results["n_locs"] = len(self.locs)
 
