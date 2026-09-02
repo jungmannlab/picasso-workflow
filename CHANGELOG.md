@@ -10,6 +10,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- `gaussian_mixture_cluster`: new `mode` option (`auto` / `astigmatism` /
+  `spline`, GUI-selectable) forwarded to `g5m`. `auto` (default) infers the z
+  model from the recorded fit method, so spline runs use `lpz` straight from
+  the localizations and need no astigmatism calibration, while Gaussian runs
+  are unchanged. Clarified that the `calibration` input is the astigmatism
+  z-calibration, only used to derive `lpz` when it is absent (never for spline
+  fits, which provide `lpz` directly). Pixel size is already read from the
+  metadata by `g5m`, so no calibration is needed for spline 3D clustering.
+
 ### Fixed
 
 - Progress reporting: a module that fails while resolving its `$`-command

@@ -2544,10 +2544,21 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "calibration": {
                 "type": "dict",
-                "description": "Calibration dictionary with x and y \
-                        coefficients, z step size and the number of frames.\
-                        Only required for 3D data.",
+                "description": "Astigmatism z-calibration (x/y coefficients, "
+                "magnification). Only used in mode='astigmatism' to derive "
+                "the axial precision when the locs lack lpz; not needed for "
+                "spline fits, which provide lpz directly.",
                 "default": None,
+                "required": False,
+            },
+            "mode": {
+                "type": "str",
+                "description": "g5m z model. 'spline' reads lpz from the locs "
+                "(spline 3D fit); 'astigmatism' derives it from calibration + "
+                "sx/sy (Gaussian fit); 'auto' infers it from the recorded fit "
+                "method.",
+                "options": ["auto", "astigmatism", "spline"],
+                "default": "auto",
                 "required": False,
             },
             # "asynch": {

@@ -7835,6 +7835,30 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    def _infer_gmm_mode(self):
+        """Infer g5m's z model from the localize fit method in the info.
+
+        A spline PSF fit yields ``z`` and ``lpz`` directly, so g5m should read
+        them (``"spline"``); a Gaussian fit needs the astigmatism calibration
+        to derive the axial precision (``"astigmatism"``). Scans the recorded
+        ``"Fit method"`` entries; defaults to ``"astigmatism"`` (g5m's own
+        default) when none indicates spline.
+
+        Returns
+        -------
+        str
+            ``"spline"`` or ``"astigmatism"``.
+        """
+        for infopart in self.info:
+            method = (
+                infopart.get("Fit method")
+                if isinstance(infopart, dict)
+                else None
+            )
+            if method is not None and "spline" in str(method):
+                return "spline"
+        return "astigmatism"
+
     @profile_resource_usage
     @module_decorator
     def gaussian_mixture_cluster(self, i, parameters, results):
@@ -7869,8 +7893,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                 bootstrapping; otherwise use the single-Gaussian SEM
                 approximation (default False).
             ``calibration`` : dict
-                Calibration with x/y coefficients, z step size and number of
-                frames. Required only for 3D data (default None).
+                Astigmatism z-calibration (x/y coefficients, magnification)
+                used only in ``mode="astigmatism"`` to derive the axial
+                precision when the locs lack ``lpz``. Not needed for spline
+                fits, which provide ``lpz`` directly (default None).
+            ``mode`` : {"auto", "astigmatism", "spline"}
+                g5m's z model. ``"spline"`` reads ``lpz`` straight from the
+                localizations (spline 3D fit); ``"astigmatism"`` derives it
+                from ``calibration`` + ``sx``/``sy`` (Gaussian fit). ``"auto"``
+                (the default) infers it from the recorded fit method, so
+                spline runs need no calibration and Gaussian runs are
+                unchanged.
             ``asynch`` : bool
                 If True, run the GMM search in parallel via multiprocessing
                 (default True).
@@ -7898,6 +7931,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
             ("bootstrap_check", False),
             ("calibration", None),
+            ("mode", "auto"),
             ("asynch", True),
             ("callback_parent", None),  # "silent"),
             ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
@@ -7922,6 +7956,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 setval == "silent" or setval == "None"
             ):
                 setval = None
+            elif oa == "mode" and setval in (None, "", "auto"):
+                # g5m's z model: 'spline' reads lpz straight from the locs
+                # (spline 3D fit), 'astigmatism' derives it from a calibration
+                # + sx/sy. Infer from the recorded fit method so spline runs
+                # need no calibration and Gaussian runs are unchanged.
+                setval = self._infer_gmm_mode()
             kwargs[oa] = setval
 
         print("G5M arguments")

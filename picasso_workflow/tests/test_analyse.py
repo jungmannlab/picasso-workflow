@@ -293,6 +293,23 @@ class TestAnalyseModules(unittest.TestCase):
             ignore_errors=True,
         )
 
+    def test_infer_gmm_mode(self):
+        """g5m z model is inferred from the recorded fit method: spline fits
+        -> 'spline' (lpz from locs), everything else -> 'astigmatism'."""
+        self.ap.info = [{"Box Size": 7}, {"Fit method": "spline-mle-gpu"}]
+        assert self.ap._infer_gmm_mode() == "spline"
+        self.ap.info = [{"Fit method": "spline"}]
+        assert self.ap._infer_gmm_mode() == "spline"
+        self.ap.info = [{"Fit method": "gausslq"}]
+        assert self.ap._infer_gmm_mode() == "astigmatism"
+        self.ap.info = [{"Fit method": "gaussmle-gpu"}]
+        assert self.ap._infer_gmm_mode() == "astigmatism"
+        # no recorded fit method -> astigmatism (g5m's own default)
+        self.ap.info = [{"Box Size": 7}]
+        assert self.ap._infer_gmm_mode() == "astigmatism"
+        self.ap.info = []
+        assert self.ap._infer_gmm_mode() == "astigmatism"
+
     def identify(self):
         parameters = {
             "box_size": 7,
