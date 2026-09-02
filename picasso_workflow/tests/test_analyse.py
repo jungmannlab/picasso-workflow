@@ -225,6 +225,29 @@ class TestAnalyseModules(unittest.TestCase):
             assert os.path.exists(fp)
             os.remove(fp)
 
+    @patch("picasso_workflow.analyse.picasso_outpost.pick_gold")
+    def test_find_gold_empty_saves(self, mock_pick_gold):
+        """With no gold found, the empty gold file still saves: the empty
+        frame keeps self.locs's numeric dtypes rather than object dtype, which
+        io.save_locs -> HDF5 rejects."""
+        mock_pick_gold.return_value = []  # 0 gold -> empty branch
+        self.ap.locs = pd.DataFrame(
+            {
+                "frame": np.array([0, 1, 2], dtype=np.uint32),
+                "x": np.array([1.0, 2.0, 3.0], dtype=np.float32),
+                "y": np.array([1.0, 2.0, 3.0], dtype=np.float32),
+                "z": np.array([10.0, 20.0, 30.0], dtype=np.float32),
+                "photons": np.array([100.0, 200.0, 300.0], dtype=np.float32),
+            }
+        )
+        self.ap.info = [{"Frames": 3, "Width": 576, "Height": 576}]
+        _, results = self.ap.find_gold(
+            0, {"diameter": 2.0, "remove_gold": False}
+        )
+        assert os.path.exists(results["fp_gold"])
+        assert os.path.exists(results["fp_nogold"])
+        shutil.rmtree(os.path.join(self.results_folder, "00_find_gold"))
+
     def identify(self):
         parameters = {
             "box_size": 7,

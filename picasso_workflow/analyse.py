@@ -12918,7 +12918,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             logger.debug("""
                 Not engouh gold particles found. Skipping further undrifting
                 steps for this file" continue without gold undrifting""")
-            gold_locs = pd.DataFrame(columns=self.locs.columns)
+            # Empty gold set, but keep self.locs's column dtypes. An empty
+            # ``pd.DataFrame(columns=...)`` has object-dtype columns, which
+            # io.save_locs -> to_records -> HDF5 rejects ("Object dtype has no
+            # native HDF5 equivalent"). Slicing self.locs to zero rows keeps
+            # each column's numeric dtype so the empty file saves fine.
+            gold_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
             nongold_locs = self.locs
         else:
             # function needs to return the locs in a r radius around the gold

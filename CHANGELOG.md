@@ -12,6 +12,11 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `find_gold`: when no gold is found, the empty gold file now saves instead of
+  crashing. The empty set was built as `pd.DataFrame(columns=…)` (object-dtype
+  columns), which `io.save_locs` → `to_records` → HDF5 rejects
+  (`Object dtype has no native HDF5 equivalent`); it now preserves the
+  localizations' numeric dtypes.
 - `localize` locs-vs-frame plot no longer requires the Gaussian `sx`/`sy`
   width columns, which spline fits don't produce (they crashed with
   `KeyError: sx`). The second panel now shows `sx`/`sy` when present, else the
