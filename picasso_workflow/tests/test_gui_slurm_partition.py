@@ -124,6 +124,9 @@ def test_slurm_commands_load_configured_modules():
     for module_name in modules:
         assert f"module load {module_name}" in commands
     assert "export PYTHONNOUSERSITE=1" in commands
+    # faulthandler dumps the Python->C stack on a native crash (e.g. a LAPACK
+    # SIGSEGV in a fit/CRLB call), so segfaults are pinpointed, not silent.
+    assert "export PYTHONFAULTHANDLER=1" in commands
     # module loads must precede the python launch that relies on them
     launch = next(i for i, c in enumerate(commands) if "python" in c)
     for module_name in modules:

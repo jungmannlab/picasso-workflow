@@ -7635,6 +7635,12 @@ class SlurmCommunicator:
         # discovery. Keep the job pinned to the env resolved below.
         commands.append("export PYTHONNOUSERSITE=1")
 
+        # Dump the Python -> C traceback on fatal signals (e.g. a LAPACK
+        # SIGSEGV inside a native fit/CRLB call, which leaves no Python
+        # exception). Inherited by multiprocessing workers, so a crash in a
+        # pool worker is pinpointed too. Negligible overhead.
+        commands.append("export PYTHONFAULTHANDLER=1")
+
         # instead of using slurm modules, let's directly append paths.
         bin_path = cluster_env.get("BinPath", None)
         if bin_path:
