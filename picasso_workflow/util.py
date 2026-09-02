@@ -354,6 +354,18 @@ class AbstractModuleCollection(abc.ABC):
 
             ``calibration`` : str or dict
                 Filepath to a calibration file, or the calibration itself.
+
+            Optional keys:
+
+            ``fitting_method`` : str
+                2D fitter the localizations came from (``"gausslq"`` or
+                ``"gaussmle"``); used to compute the axial precision. Default
+                ``"auto"`` infers it from the localize step's recorded method.
+            ``gpu`` : bool
+                Fit z on a CUDA-capable GPU. Default False.
+            ``filter`` : int
+                picasso z-fit RMSD filter (0 = none, default here; 2 =
+                picasso's default).
         results : dict
             Module results (see class docstring).
 

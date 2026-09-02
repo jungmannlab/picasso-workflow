@@ -9,6 +9,7 @@ Initial Date: August 4, 2024
 from __future__ import annotations
 
 from picasso_workflow import util, CONFIG
+from picasso_workflow import progress as pwprogress
 from picasso_workflow.modulespec import MODULE_REGISTRY, Scope
 from picasso_workflow import workflow_references as wfref
 from loguru import logger
@@ -16,6 +17,9 @@ import subprocess
 import os
 import re
 import sys
+import json
+import shlex
+import getpass
 import yaml
 import importlib.util
 
@@ -677,6 +681,17 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
                 "default": False,
             },
+            "stage_to_local": {
+                "type": "bool",
+                "description": (
+                    "Copy the movie to node-local scratch ($TMPDIR) before "
+                    "loading, so identify/localize read frames locally "
+                    "instead of over the network filesystem. Recommended for "
+                    "large movies on a slow/edgy shared filesystem."
+                ),
+                "required": False,
+                "default": False,
+            },
         }
 
         results_spec = {
@@ -920,6 +935,47 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 },
                 "default": "{'filename': 'ids_vs_frame.png'}",
             },
+            "identify_parallel": {
+                "type": "bool",
+                "description": "Run identification on multiple cores.",
+                "default": True,
+                "required": False,
+            },
+            "temporal_median_window": {
+                "type": "int",
+                "description": "Window (frames) of the picasso 0.11 temporal-"
+                "median background filter applied before spot detection. "
+                "0 (or 1) disables it; >= 2 to filter. Re-tune min_gradient "
+                "when enabling.",
+                "min": 0,
+                "required": False,
+            },
+            "temporal_median_stride": {
+                "type": "int",
+                "description": "Stride (frames) for the temporal-median "
+                "filter. Only used when the window is >= 2.",
+                "min": 0,
+                "required": False,
+            },
+            "gaussian_filter_sigma": {
+                "type": "float",
+                "description": "Sigma of a spatial Gaussian pre-filter for "
+                "spot detection. 0 disables it.",
+                "min": 0.0,
+                "required": False,
+            },
+            "roi": {
+                "type": "list",
+                "description": "One or more rectangular ROIs to restrict "
+                "detection to.",
+                "required": False,
+            },
+            "frame_bounds": {
+                "type": "list",
+                "description": "One or more (start, end) frame ranges to "
+                "detect within.",
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -980,6 +1036,18 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 fit_parallel : bool
                     whether to fit on multiple cores
             optional items:
+                fitting_method : str
+                    picasso 0.11 fitting model (gausslq (default), gaussmle,
+                    rotated/spherical variants, spline, or -gpu counterparts)
+                spline_calibration : str or dict
+                    spline-PSF calibration (path or dict); required for the
+                    spline methods, which yield z directly
+                camera_calibration : str or dict
+                    per-pixel sCMOS camera calibration (path or dict)
+                eps : float
+                    fitter convergence criterion
+                max_it : int
+                    maximum number of fit iterations
                 locs_vs_frame : dict
                     for plotting locs vs time
                     items correspond to arguments of _plot_locs_vs_frame
@@ -1015,6 +1083,72 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "whether to fit on multiple cores",
                 "default": False,
                 "required": True,
+            },
+            "fitting_method": {
+                "type": "str",
+                "description": "picasso 0.11 fitting model. GPU is applied "
+                "automatically for the gausslq/gaussmle/spline bases when a "
+                "GPU fitter is configured; pick a -gpu variant explicitly for "
+                "the rotated/spherical models. The 'spline' methods require "
+                "spline_calibration and yield z (3D) directly.",
+                "options": [
+                    "gausslq",
+                    "gaussmle",
+                    "gausslq-rotated",
+                    "gausslq-spherical",
+                    "gaussmle-rotated",
+                    "gaussmle-spherical",
+                    "gausslq-gpu",
+                    "gaussmle-gpu",
+                    "gausslq-rotated-gpu",
+                    "gausslq-spherical-gpu",
+                    "gaussmle-rotated-gpu",
+                    "gaussmle-spherical-gpu",
+                    "spline",
+                    "spline-mle",
+                    "spline-gpu",
+                    "spline-mle-gpu",
+                    "avg",
+                ],
+                "default": "gausslq",
+                "required": False,
+            },
+            "spline_calibration": {
+                "type": "path",
+                "description": "Path to a picasso spline-PSF calibration "
+                "file. Required for the 'spline' fitting methods; the spline "
+                "fit then yields z (3D) directly. (May also be supplied as a "
+                "dict programmatically.)",
+                "required": False,
+                "visible_if": {
+                    "fitting_method": [
+                        "spline",
+                        "spline-mle",
+                        "spline-gpu",
+                        "spline-mle-gpu",
+                    ]
+                },
+            },
+            "camera_calibration": {
+                "type": "path",
+                "description": "Path to a picasso per-pixel sCMOS camera "
+                "calibration file (offset/gain/variance). (May also be a "
+                "dict.)",
+                "required": False,
+            },
+            "eps": {
+                "type": "float",
+                "description": "Fitter convergence criterion. 0 (or omit) uses "
+                "picasso's per-method default.",
+                "min": 0.0,
+                "required": False,
+            },
+            "max_it": {
+                "type": "int",
+                "description": "Maximum number of fit iterations. 0 (or omit) "
+                "uses picasso's per-method default.",
+                "min": 0,
+                "required": False,
             },
             "locs_vs_frame": {
                 "type": "dict",
@@ -1108,6 +1242,30 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "Keep in mind this must be a path on the cluster for now"
                 " (i.e. /fs/mpib/pool-miblab5/... instead of /Volumes/pool...)",
                 "default": "",
+                "required": False,
+            },
+            "fitting_method": {
+                "type": "str",
+                "description": "2D fitter the localizations came from; used "
+                "by picasso 0.11 to compute the axial localization precision. "
+                "'auto' (default) infers it from the localize step's recorded "
+                "method; override with gausslq/gaussmle if needed.",
+                "options": ["auto", "gausslq", "gaussmle"],
+                "default": "auto",
+                "required": False,
+            },
+            "gpu": {
+                "type": "bool",
+                "description": "Fit the z coordinates on a CUDA-capable GPU.",
+                "default": False,
+                "required": False,
+            },
+            "filter": {
+                "type": "int",
+                "description": "picasso z-fit RMSD filter (0 = no filtering, "
+                "the default here; 2 = picasso's own default).",
+                "options": [0, 2],
+                "default": 0,
                 "required": False,
             },
             # "save_locs": {
@@ -2386,10 +2544,21 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "calibration": {
                 "type": "dict",
-                "description": "Calibration dictionary with x and y \
-                        coefficients, z step size and the number of frames.\
-                        Only required for 3D data.",
+                "description": "Astigmatism z-calibration (x/y coefficients, "
+                "magnification). Only used in mode='astigmatism' to derive "
+                "the axial precision when the locs lack lpz; not needed for "
+                "spline fits, which provide lpz directly.",
                 "default": None,
+                "required": False,
+            },
+            "mode": {
+                "type": "str",
+                "description": "g5m z model. 'spline' reads lpz from the locs "
+                "(spline 3D fit); 'astigmatism' derives it from calibration + "
+                "sx/sy (Gaussian fit); 'auto' infers it from the recorded fit "
+                "method.",
+                "options": ["auto", "astigmatism", "spline"],
+                "default": "auto",
                 "required": False,
             },
             # "asynch": {
@@ -2978,6 +3147,122 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "alignment_matrix": {
                 "type": "numpy.ndarray",
                 "description": "Transformation matrix for alignment",
+            },
+        }
+
+        return parameters_spec, results_spec
+
+    def register_channels(self):
+        """Register channels via bead-based transforms (aggregation workflow).
+
+        Fits a higher-degree-of-freedom transform (affine / projective /
+        polynomial) between channels from fiducial-bead movies and warps each
+        channel's localizations into the reference channel frame. Complements
+        the translation-only align_channels.
+
+        Parameters
+        ----------
+        i : int
+            the index of the module
+        parameters : dict
+            with required keys:
+                bead_movies : list of str
+                    one bead-calibration movie file per channel, in order
+                box_size : int
+                    box size used to detect and fit the beads
+                min_gradient : float or list
+                    minimum net gradient for a bead candidate
+            and optional keys:
+                model : str
+                    transform model (affine / projective / polynomial2 /
+                    polynomial3)
+                reference : int
+                    index of the reference channel
+                filepaths : list of str
+                    channel hdf5 files to load first
+        results : dict
+            the results this function generates. This is created
+            in the decorator wrapper
+        """
+        parameters_spec = {
+            "bead_movies": {
+                "type": "list",
+                "description": "One bead-calibration movie file per channel, \
+                    in channel order.",
+                "element_type": "str",
+                "required": True,
+            },
+            "box_size": {
+                "type": "int",
+                "description": "Box size used to detect and fit the beads.",
+                "min": 1,
+                "max": 51,
+                "default": 7,
+                "required": True,
+            },
+            "min_gradient": {
+                "type": "float",
+                "description": "Minimum net gradient for a bead candidate \
+                    (shared, or a per-channel list).",
+                "min": 0.0,
+                "required": True,
+            },
+            "model": {
+                "type": "str",
+                "description": "Transform model: 'affine' (default), \
+                    'projective', 'polynomial2' or 'polynomial3'.",
+                "default": "affine",
+                "required": False,
+            },
+            "reference": {
+                "type": "int",
+                "description": "Index of the reference channel.",
+                "min": 0,
+                "max": 10,
+                "default": 0,
+                "required": False,
+            },
+            "filepaths": {
+                "type": "list",
+                "description": "Channel localization hdf5 files to load first \
+                    (as in align_channels). If omitted, the channels already \
+                    held are used.",
+                "element_type": "str",
+                "required": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "registration_model": {
+                "type": "str",
+                "description": "The fitted transform model.",
+            },
+            "registration_rms": {
+                "type": "list",
+                "description": "Per-non-reference-channel registration RMS \
+                    residual (px).",
+            },
+            "fp_calibration": {
+                "type": "str",
+                "description": "Filepath of the saved channel registration \
+                    calibration.",
             },
         }
 
@@ -7302,10 +7587,26 @@ class SlurmCommunicator:
         return result["success"]
 
     def assemble_slurm_commands(
-        self, host_cluster, scriptname="start_workflow.py"
+        self,
+        host_cluster,
+        scriptname="start_workflow.py",
+        modules=None,
+        faulthandler=True,
+        cpu_only=False,
     ):
         """Assembles picasso-workflow specific commands for running a batch
         job on a SLURM cluster.
+
+        ``modules`` overrides the environment modules to ``module load`` (a
+        list of names). None falls back to the cluster's configured
+        ``Modules``; an empty list loads nothing.
+
+        ``faulthandler`` exports ``PYTHONFAULTHANDLER=1`` so a native crash
+        (e.g. a LAPACK/CUDA fault in a fit/CRLB call) prints a Python->C
+        traceback instead of dying silently. ``cpu_only`` exports
+        ``CUDA_VISIBLE_DEVICES=""`` to hide every GPU, forcing picasso's CPU
+        fit/CRLB kernels -- a debug switch to isolate a GPU-side crash from the
+        CPU path.
         """
         cluster_env = CONFIG.get("ClusterEnvironment", {}).get(host_cluster)
         conda_env = cluster_env.get("conda_env", "picasso-workflow")
@@ -7330,6 +7631,39 @@ class SlurmCommunicator:
         # if not use_pw_module:
         #     commands.append(f"conda activate {conda_env}")
 
+        # Load environment modules (from the Run tab's Modules field, or config
+        # ClusterEnvironment.<host>.Modules when not overridden). GPU fitting
+        # (e.g. spline-mle-gpu) needs a CUDA toolkit that provides libNVVM; on
+        # module-based HPC systems the cleanest way is to `module load
+        # cuda/<ver>`, which also sets CUDA_HOME so numba finds it. Harmless on
+        # CPU-only runs.
+        if modules is None:
+            modules = cluster_env.get("Modules", []) or []
+        for module_name in modules:
+            commands.append(f"module load {module_name}")
+
+        # Ignore ~/.local/lib site-packages: a stray user-site install (e.g.
+        # numba) otherwise shadows the conda env's package and can break CUDA
+        # discovery. Keep the job pinned to the env resolved below.
+        commands.append("export PYTHONNOUSERSITE=1")
+
+        # Dump the Python -> C traceback on fatal signals (e.g. a LAPACK
+        # SIGSEGV inside a native fit/CRLB call, which leaves no Python
+        # exception). Inherited by multiprocessing workers, so a crash in a
+        # pool worker is pinpointed too. Negligible overhead.
+        if faulthandler:
+            commands.append("export PYTHONFAULTHANDLER=1")
+
+        # Debug switch: hide every GPU so picasso's CUDA probe
+        # (cuda.is_available()) returns False and the fit/CRLB run on the
+        # (fully-guarded) CPU kernels. Isolates a GPU-side crash -- e.g. a
+        # spline CRLB kernel fault that dies as a hard SIGSEGV instead of a
+        # catchable CudaAPIError -- from the CPU path. Note picasso runs the
+        # spline CRLB on the GPU whenever one is visible, even for the CPU
+        # 'spline-mle' fit method, so this is the only lever that keeps it off.
+        if cpu_only:
+            commands.append('export CUDA_VISIBLE_DEVICES=""')
+
         # instead of using slurm modules, let's directly append paths.
         bin_path = cluster_env.get("BinPath", None)
         if bin_path:
@@ -7349,7 +7683,14 @@ class SlurmCommunicator:
         if conda_prefix:
             commands.append(f"export CONDA_PREFIX={conda_prefix}")
 
+        # Capture the workflow's exit status. srun propagates the step's
+        # failure (e.g. 143 = 128 + SIGTERM when a rank is killed / an MPI
+        # teardown cancels the step). create_slurm_script exits the batch
+        # script with this, so a failed/cancelled run is reported as FAILED
+        # rather than COMPLETED (a bare `srun ...` followed by an `echo` would
+        # otherwise make the batch script exit 0 regardless).
         commands.append(f"srun python {scriptname}")
+        commands.append("PW_RC=$?")
 
         return commands
 
@@ -7439,9 +7780,17 @@ class SlurmCommunicator:
         for cmd in commands:
             script_lines.append(cmd)
 
-        # Add job completion timestamp
+        # Add job completion timestamp, then exit with the workflow's status so
+        # SLURM reports the job's real outcome. PW_RC is set by
+        # assemble_slurm_commands after the srun step; ${PW_RC:-0} keeps other
+        # callers (which never set it) exiting 0 as before.
         script_lines.extend(
-            ["", 'echo ""', 'echo "Job completed at: $(date)"']
+            [
+                "",
+                'echo ""',
+                'echo "Job completed at: $(date) (exit ${PW_RC:-0})"',
+                "exit ${PW_RC:-0}",
+            ]
         )
 
         return "\n".join(script_lines)
@@ -7637,21 +7986,144 @@ class SlurmCommunicator:
                     "success": True,
                 }
 
-        # If squeue doesn't show the job, check if it's completed using sacct
+        # If squeue doesn't show the job, it has left the queue: query sacct
+        # for the terminal state plus the diagnostics that explain a failure
+        # (exit code, peak memory for OOM, elapsed time). squeue drops a job
+        # the moment it finishes, so this fallback is the only way to learn
+        # whether it COMPLETED, FAILED, TIMEOUT or was OUT_OF_MEMORY.
         sacct_cmd = (
-            f"sacct --job={job_id} --format=State --noheader --parsable2"
+            f"sacct --job={job_id} "
+            "--format=State,ExitCode,MaxRSS,Elapsed --noheader --parsable2"
         )
         sacct_result = self.execute_ssh_command(sacct_cmd)
 
         if sacct_result["success"] and sacct_result["stdout"].strip():
-            status = sacct_result["stdout"].strip().split("\n")[0]
-            return {"status": status, "details": {}, "success": True}
+            # first line is the top-level job step; take the widest state.
+            line = sacct_result["stdout"].strip().split("\n")[0]
+            fields = line.split("|")
+            status = fields[0] if fields else "UNKNOWN"
+            details = {}
+            if len(fields) > 1 and fields[1]:
+                details["exit_code"] = fields[1]
+            if len(fields) > 2 and fields[2]:
+                details["max_rss"] = fields[2]
+            if len(fields) > 3 and fields[3]:
+                details["elapsed"] = fields[3]
+            return {"status": status, "details": details, "success": True}
 
         return {
             "status": "UNKNOWN",
             "details": {"error": result["stderr"]},
             "success": False,
         }
+
+    def fetch_progress(self, remote_folder):
+        """Fetch the most recent ``progress.json`` under ``remote_folder``.
+
+        A run writes ``progress.json`` into a timestamped subfolder whose name
+        is only known at runtime, so we locate the newest one by mtime over
+        SSH and cat it. This reuses the same SSH transport as the job-status
+        queries -- no cluster-side daemon is needed.
+
+        Parameters
+        ----------
+        remote_folder : str
+            Remote path of the run's results folder.
+
+        Returns
+        -------
+        dict or None
+            The parsed progress state, or None if not found/unreadable.
+        """
+        if not remote_folder:
+            return None
+        folder = shlex.quote(remote_folder)
+        # newest progress.json by modification time, path only
+        find_cmd = (
+            f"find {folder} -name progress.json -printf '%T@ %p\\n' "
+            "2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-"
+        )
+        res = self.execute_ssh_command(find_cmd)
+        path = (res.get("stdout") or "").strip()
+        if not path:
+            return None
+        cat = self.execute_ssh_command(f"cat {shlex.quote(path)}")
+        if not cat.get("success"):
+            return None
+        try:
+            return json.loads(cat["stdout"])
+        except (ValueError, KeyError):
+            return None
+
+    def fetch_all_progress(self, remote_folder):
+        """Fetch *every* ``progress.json`` under ``remote_folder`` in one call.
+
+        An aggregation run has one progress file per stage (top-level
+        aggregation, each single dataset, the aggregation stage). Fetching
+        them individually would be one slow SSH round-trip each, so this cats
+        them all in a single command, separated by a marker, and splits the
+        result client-side.
+
+        Parameters
+        ----------
+        remote_folder : str
+            Remote path of the run's results folder.
+
+        Returns
+        -------
+        list of dict
+            Parsed progress states (empty if none / unreachable).
+        """
+        if not remote_folder:
+            return []
+        folder = shlex.quote(remote_folder)
+        sep = "===PWF-PROGRESS-SEP==="
+        # Rank 0 writes ``progress.json``; worker ranks write
+        # ``progress.rankN.json`` (see progress.default_sinks). Match both, or a
+        # multi-rank aggregation run reports only rank 0's share of the datasets.
+        cmd = (
+            f"for f in $(find {folder} \\( -name progress.json -o "
+            f"-name 'progress.rank*.json' \\) 2>/dev/null); "
+            f'do echo "{sep}"; cat "$f"; done'
+        )
+        res = self.execute_ssh_command(cmd)
+        out = res.get("stdout") or ""
+        states = []
+        for chunk in out.split(sep):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            try:
+                states.append(json.loads(chunk))
+            except ValueError:
+                continue
+        return states
+
+    def write_abort_flag(self, remote_folder):
+        """Drop an ``abort.flag`` in every run folder under ``remote_folder``.
+
+        The running workflow checks this file between modules and inside long
+        picasso calls, so this requests a graceful stop (complementary to
+        ``scancel``, which kills hard).
+
+        Parameters
+        ----------
+        remote_folder : str
+            Remote path of the run's results folder.
+
+        Returns
+        -------
+        dict
+            The SSH command result.
+        """
+        folder = shlex.quote(remote_folder)
+        # place a flag next to every progress.json (single + aggregation runs)
+        cmd = (
+            f"for d in $(find {folder} -name progress.json "
+            "-printf '%h\\n' 2>/dev/null); do touch \"$d/abort.flag\"; done; "
+            f"touch {folder}/abort.flag"
+        )
+        return self.execute_ssh_command(cmd)
 
     def cancel_job(self, job_id):
         """Cancel a SLURM job.
@@ -9504,6 +9976,54 @@ class Window(QtWidgets.QMainWindow):
         )
         cluster_config_layout.addWidget(self.cluster_gpus_spin)
 
+        # SLURM partition (queue). GPU nodes usually live in a dedicated
+        # partition, so a --gres=gpu request must target it or the job never
+        # schedules. Populated per selected cluster from config
+        # (SlurmPartitions) and editable, so an unlisted partition can be
+        # typed by hand. Blank -> omit --partition and use SLURM's default.
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Partition:"))
+        self.cluster_partition_combo = QtWidgets.QComboBox()
+        self.cluster_partition_combo.setEditable(True)
+        self.cluster_partition_combo.setToolTip(
+            "SLURM partition to submit to (adds '#SBATCH --partition=...'). "
+            "GPU nodes usually require a dedicated partition; leave blank to "
+            "use the cluster default partition."
+        )
+        cluster_config_layout.addWidget(self.cluster_partition_combo)
+        self._populate_cluster_partitions(
+            str(self.cluster_host_combo.currentText())
+        )
+        # Repopulate when the cluster changes (each cluster has its own
+        # partitions).
+        self.cluster_host_combo.currentTextChanged.connect(
+            self._populate_cluster_partitions
+        )
+
+        # Environment modules to `module load` in the job (space-separated).
+        # Prefilled per cluster from config (ClusterEnvironment.<host>.Modules)
+        # and editable. GPU fitting needs a CUDA toolkit providing libNVVM, so
+        # a cuda module is loaded here (also sets CUDA_HOME for numba). Blank
+        # -> load nothing.
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Modules:"))
+        self.cluster_modules_edit = QtWidgets.QLineEdit()
+        self.cluster_modules_edit.setPlaceholderText("e.g., cuda/13.0")
+        self.cluster_modules_edit.setToolTip(
+            "Environment modules to `module load` in the SLURM job, "
+            "space-separated (e.g. 'cuda/13.0'). Required for GPU fitting "
+            "(provides libNVVM / CUDA_HOME). Leave blank to load nothing."
+        )
+        # Tracks the last programmatically applied default, so a manual edit is
+        # preserved across cluster changes while an untouched field follows the
+        # new cluster's config.
+        self._cluster_modules_default = ""
+        cluster_config_layout.addWidget(self.cluster_modules_edit)
+        self._populate_cluster_modules(
+            str(self.cluster_host_combo.currentText())
+        )
+        self.cluster_host_combo.currentTextChanged.connect(
+            self._populate_cluster_modules
+        )
+
         # Memory
         cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"))
         self.cluster_memory_edit = QtWidgets.QLineEdit()
@@ -9523,6 +10043,34 @@ class Window(QtWidgets.QMainWindow):
         )
         self.cluster_timeout_edit.setMaximumWidth(100)
         cluster_config_layout.addWidget(self.cluster_timeout_edit)
+
+        # Faulthandler: dump the Python->C traceback on a native crash (a
+        # LAPACK/CUDA fault in a fit/CRLB call leaves no Python exception).
+        # On by default -- negligible overhead, and it turns a silent segfault
+        # into a pinpointed frame.
+        self.cluster_faulthandler_check = QtWidgets.QCheckBox("faulthandler")
+        self.cluster_faulthandler_check.setChecked(True)
+        self.cluster_faulthandler_check.setToolTip(
+            "Export PYTHONFAULTHANDLER=1 so a native crash (e.g. a LAPACK or "
+            "CUDA fault in a fit/CRLB call) prints a Python->C traceback in "
+            "the error log instead of dying silently. Inherited by "
+            "multiprocessing workers. Negligible overhead; recommended on."
+        )
+        cluster_config_layout.addWidget(self.cluster_faulthandler_check)
+
+        # Debug: hide every GPU (CUDA_VISIBLE_DEVICES="") so the fit/CRLB run
+        # on the CPU kernels. Off by default; use it to bisect a GPU-side crash
+        # from the CPU path (picasso runs the spline CRLB on the GPU whenever
+        # one is visible, even for the CPU 'spline-mle' fit method).
+        self.cluster_cpu_only_check = QtWidgets.QCheckBox("debug: CPU-only")
+        self.cluster_cpu_only_check.setChecked(False)
+        self.cluster_cpu_only_check.setToolTip(
+            'Export CUDA_VISIBLE_DEVICES="" to hide all GPUs, forcing '
+            "picasso's CPU fit/CRLB kernels. Debug switch to isolate a "
+            "GPU-side crash (a spline CRLB kernel fault dies as a hard "
+            "SIGSEGV, not a catchable error). Leave off for normal / GPU runs."
+        )
+        cluster_config_layout.addWidget(self.cluster_cpu_only_check)
 
         # self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
         # self.cluster_use_module.setMaximumWidth(200)
@@ -9614,6 +10162,9 @@ class Window(QtWidgets.QMainWindow):
             "Enter job ID or auto-filled from submission"
         )
         job_id_layout.addWidget(self.job_id_input, stretch=1)
+
+        # --- live progress monitor -----------------------------------------
+        self._build_progress_monitor(run_on_cluster_layout)
 
         # Display area for job information
         job_display_label = QtWidgets.QLabel("Job Information:")
@@ -13579,9 +14130,746 @@ class Window(QtWidgets.QMainWindow):
         # print(f"Created workflow script: {output_path}")
         return output_path
 
-    def assemble_slurm_scripts(self):
-        import getpass
+    def _populate_cluster_partitions(self, host_cluster):
+        """Fill the Partition dropdown for the selected cluster.
 
+        Reads the partitions configured for ``host_cluster`` from config
+        ``SlurmPartitions``. Preserves the current selection when it is still
+        valid for the new cluster, otherwise selects ``SlurmDefault.partition``
+        (if offered) or the first listed partition; clears the field when the
+        cluster has no configured partitions (so no ``--partition`` is
+        emitted).
+        """
+        options = [
+            str(p)
+            for p in CONFIG.get("SlurmPartitions", {}).get(
+                str(host_cluster), []
+            )
+        ]
+        default = str(CONFIG.get("SlurmDefault", {}).get("partition", ""))
+        current = self.cluster_partition_combo.currentText().strip()
+        # Muted while we rebuild so the reset does not re-trigger handlers.
+        self.cluster_partition_combo.blockSignals(True)
+        self.cluster_partition_combo.clear()
+        self.cluster_partition_combo.addItems(options)
+        if current in options:
+            self.cluster_partition_combo.setCurrentText(current)
+        elif default in options:
+            self.cluster_partition_combo.setCurrentText(default)
+        elif options:
+            self.cluster_partition_combo.setCurrentText(options[0])
+        else:
+            self.cluster_partition_combo.setCurrentText("")
+        self.cluster_partition_combo.blockSignals(False)
+
+    def _configured_modules(self, host_cluster):
+        """Modules configured for ``host_cluster``
+        (``ClusterEnvironment.<host>.Modules``), as a list of strings."""
+        cluster_env = CONFIG.get("ClusterEnvironment", {}).get(
+            str(host_cluster), {}
+        )
+        return [str(m) for m in (cluster_env or {}).get("Modules", []) or []]
+
+    def _populate_cluster_modules(self, host_cluster):
+        """Fill the Modules field for the selected cluster.
+
+        Sets the space-separated `module load` list from config
+        (``ClusterEnvironment.<host>.Modules``). Preserves a manual edit: only
+        an untouched field (still equal to the previously applied default, or
+        empty) follows the new cluster's default.
+        """
+        new_default = " ".join(self._configured_modules(host_cluster))
+        current = self.cluster_modules_edit.text().strip()
+        if current == "" or current == self._cluster_modules_default:
+            self.cluster_modules_edit.setText(new_default)
+        self._cluster_modules_default = new_default
+
+    # ------------------------------------------------------------------ #
+    # Live progress monitor
+    # ------------------------------------------------------------------ #
+
+    # SLURM states that mean the job has stopped (no point polling further)
+    _SLURM_TERMINAL = {
+        "COMPLETED",
+        "FAILED",
+        "TIMEOUT",
+        "OUT_OF_MEMORY",
+        "CANCELLED",
+        "NODE_FAIL",
+        "BOOT_FAIL",
+        "DEADLINE",
+        "PREEMPTED",
+    }
+    _SLURM_COLORS = {
+        "PENDING": "#9e9e9e",
+        "RUNNING": "#1976d2",
+        "COMPLETING": "#1976d2",
+        "COMPLETED": "#2e7d32",
+        "FAILED": "#c62828",
+        "TIMEOUT": "#c62828",
+        "OUT_OF_MEMORY": "#c62828",
+        "CANCELLED": "#c62828",
+        "NODE_FAIL": "#c62828",
+    }
+
+    def _build_progress_monitor(self, parent_layout):
+        """Build the live progress widgets and the polling timer.
+
+        The monitor fuses two sources: the SLURM job state (authority on
+        whether the job is alive and, on failure, why) and the run's
+        ``progress.json`` (authority on which module and how far). Neither
+        alone is complete -- a killed job freezes ``progress.json`` mid-module
+        while only SLURM knows it died.
+
+        Parameters
+        ----------
+        parent_layout : QtWidgets.QLayout
+            The layout to add the monitor widgets to.
+        """
+        # monitor state (also used when running locally)
+        self._monitor_remote_folder = getattr(
+            self, "_monitor_remote_folder", None
+        )
+        self._monitor_local_folder = getattr(
+            self, "_monitor_local_folder", None
+        )
+        self._monitor_busy = False
+        self._local_process = None
+
+        box = QtWidgets.QGroupBox("Live progress")
+        box_layout = QtWidgets.QVBoxLayout(box)
+
+        # top row: SLURM state chip + auto-refresh controls
+        top_row = QtWidgets.QHBoxLayout()
+        self.monitor_state_label = QtWidgets.QLabel("Job state: -")
+        self.monitor_state_label.setStyleSheet(
+            "padding: 2px 8px; border-radius: 4px; color: white; "
+            "background-color: #9e9e9e;"
+        )
+        # Fixed vertical size: the state chip must not absorb the box's extra
+        # height when it is resized - only the module tree should grow.
+        self.monitor_state_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        top_row.addWidget(self.monitor_state_label)
+        top_row.addStretch(1)
+
+        self.autorefresh_checkbox = QtWidgets.QCheckBox("Auto-refresh (15s)")
+        self.autorefresh_checkbox.setChecked(True)
+        self.autorefresh_checkbox.stateChanged.connect(
+            self._on_autorefresh_toggled
+        )
+        top_row.addWidget(self.autorefresh_checkbox)
+
+        refresh_now_button = QtWidgets.QPushButton("Refresh now")
+        refresh_now_button.clicked.connect(self._refresh_monitor)
+        top_row.addWidget(refresh_now_button)
+        box_layout.addLayout(top_row)
+
+        # overall progress bar. Fixed vertical size, as the state chip: the
+        # bar keeps its natural height when the box is resized.
+        self.overall_progress_bar = QtWidgets.QProgressBar()
+        self.overall_progress_bar.setRange(0, 100)
+        self.overall_progress_bar.setValue(0)
+        self.overall_progress_bar.setFormat("Overall: %p%")
+        self.overall_progress_bar.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        box_layout.addWidget(self.overall_progress_bar)
+
+        # per-module / per-dataset tree. This is the only element that grows
+        # vertically: a minimum height keeps it usable, an Expanding policy plus
+        # the layout stretch factor make it - and nothing else - absorb the
+        # box's extra height.
+        self.module_tree = QtWidgets.QTreeWidget()
+        self.module_tree.setHeaderLabels(
+            ["#", "Module", "Status", "%", "Elapsed"]
+        )
+        self.module_tree.setRootIsDecorated(False)
+        self.module_tree.setMinimumHeight(180)
+        self.module_tree.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        header = self.module_tree.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        box_layout.addWidget(self.module_tree, 1)
+
+        parent_layout.addWidget(box)
+
+        # polling timer. 15 s because each SSH round-trip (squeue/sacct/cat)
+        # can take several seconds; a shorter interval would stack requests.
+        self.monitor_timer = QtCore.QTimer(self)
+        self.monitor_timer.setInterval(15000)
+        self.monitor_timer.timeout.connect(self._refresh_monitor)
+
+    def _on_autorefresh_toggled(self, _state):
+        """Start/stop the polling timer when the checkbox is toggled."""
+        if self.autorefresh_checkbox.isChecked():
+            self._start_monitor()
+        else:
+            self.monitor_timer.stop()
+
+    def _start_monitor(self):
+        """Start polling (immediate refresh, then every 15 s)."""
+        if self.autorefresh_checkbox.isChecked():
+            self.monitor_timer.start()
+        self._refresh_monitor()
+
+    def _stop_monitor(self):
+        """Stop the polling timer."""
+        self.monitor_timer.stop()
+
+    def _ensure_slurm_communicator(self, host_cluster):
+        """Return a :class:`SlurmCommunicator` for ``host_cluster``.
+
+        Cached by host, so both job submission and the progress monitor share
+        one connection. Building it here (rather than only at submit time)
+        lets the monitor attach to a run started in a previous GUI session
+        from just the cluster fields. Does not test the connection -- callers
+        that need that (submission) call ``test_connection`` themselves.
+
+        Parameters
+        ----------
+        host_cluster : str
+            Cluster key (looked up in ``CONFIG['SlurmLoginNodes']``).
+
+        Returns
+        -------
+        SlurmCommunicator
+        """
+        if (
+            getattr(self, "slurm_communicator", None) is not None
+            and getattr(self, "_slurm_comm_host", None) == host_cluster
+        ):
+            return self.slurm_communicator
+        login_node = CONFIG["SlurmLoginNodes"][host_cluster]
+        if self.cluster_username_edit.text().strip() == "$USER":
+            username = getpass.getuser()
+        else:
+            username = self.cluster_username_edit.text().strip()
+        # match the historical discovery: prefer id_rsa, else id_ed25519,
+        # falling back to the last candidate path if neither exists.
+        ssh_key_path = None
+        for sshpath in (
+            os.path.join(os.path.expanduser("~"), ".ssh", "id_rsa"),
+            os.path.join(os.path.expanduser("~"), ".ssh", "id_ed25519"),
+        ):
+            ssh_key_path = sshpath
+            if os.path.exists(sshpath):
+                break
+        self.slurm_communicator = SlurmCommunicator(
+            login_node, username, port=22, ssh_key_path=ssh_key_path
+        )
+        self._slurm_comm_host = host_cluster
+        return self.slurm_communicator
+
+    def _resolve_monitor_target(self):
+        """Point the monitor at a run, deriving from the Run-tab fields.
+
+        This makes ``Refresh now`` work on a run started in a previous GUI
+        session: fill in the results folder (and, for a cluster run, the job
+        ID + cluster host) and refresh. A run launched from this session has
+        already set the target explicitly; the fields are used as the source
+        of truth here so changing them re-points the monitor.
+
+        - job ID present -> cluster mode: (re)connect and map the results
+          folder to its host path.
+        - no job ID -> local mode: poll the local results-folder tree.
+        """
+        results_folder = self.results_folder_display.text().strip()
+        for q in ('"', "'"):
+            if results_folder[:1] == q and results_folder[-1:] == q:
+                results_folder = results_folder[1:-1]
+        if not results_folder:
+            return
+        job_id = self.job_id_input.text().strip()
+        if job_id:
+            host_cluster = str(self.cluster_host_combo.currentText())
+            if host_cluster and host_cluster in CONFIG.get(
+                "SlurmLoginNodes", {}
+            ):
+                try:
+                    self._ensure_slurm_communicator(host_cluster)
+                    self._monitor_local_folder = None
+                    self._monitor_remote_folder = self.pathparser.convert_path(
+                        results_folder, host_cluster
+                    )
+                except Exception as e:
+                    logger.debug(f"monitor: could not connect cluster: {e}")
+        elif os.path.isdir(results_folder):
+            # no job ID: monitor a local results folder directly
+            self._monitor_local_folder = results_folder
+
+    def _refresh_monitor(self):
+        """Poll SLURM + every stage's progress.json and update the display.
+
+        Runs synchronously (like the existing job-status buttons); a busy
+        guard prevents overlapping polls when an SSH round-trip is slow.
+        Collects *all* stages (aggregation top-level + each single dataset +
+        the aggregation stage), not just the newest, so the whole run is
+        shown rather than one arbitrary stage.
+        """
+        if self._monitor_busy:
+            return
+        self._monitor_busy = True
+        try:
+            # derive what to poll from the Run-tab fields, so a run started
+            # in a previous session can be attached to by 'Refresh now'.
+            self._resolve_monitor_target()
+            slurm = None
+            states = []
+            job_id = self.job_id_input.text().strip()
+            if self._monitor_local_folder:
+                states = pwprogress.read_all_progress(
+                    self._monitor_local_folder
+                )
+            else:
+                comm = getattr(self, "slurm_communicator", None)
+                if job_id and comm is not None:
+                    try:
+                        slurm = comm.get_job_status(int(job_id))
+                    except Exception as e:
+                        logger.debug(f"monitor: job status failed: {e}")
+                    try:
+                        states = comm.fetch_all_progress(
+                            self._monitor_remote_folder
+                        )
+                    except Exception as e:
+                        logger.debug(f"monitor: fetch_progress failed: {e}")
+            # The results folder accumulates one subfolder per run, so a poll
+            # returns every past run's progress too. Scope to the current job
+            # so a still-PENDING resubmission shows nothing rather than the
+            # previous run's (completed) progress.
+            states = self._scope_states_to_current_run(states, job_id)
+            self._update_monitor_display(slurm, states)
+            self._maybe_stop_monitor(slurm, states)
+        except Exception as e:
+            logger.debug(f"monitor refresh error: {e}")
+        finally:
+            self._monitor_busy = False
+
+    def _scope_states_to_current_run(self, states, job_id):
+        """Keep only the current run's progress states.
+
+        The results folder accumulates one timestamped subfolder per run (each
+        with its own progress.json files), so polling the tree returns every
+        past run too. The run token woven into every ``report_name`` is the
+        SLURM job id (see ``metaworkflow._run_token``), so when it is known
+        keep only the stages carrying it -- while a resubmission is still
+        PENDING this yields nothing rather than a previous run's progress. With
+        no job id (local monitoring) the states are returned unchanged.
+
+        Parameters
+        ----------
+        states : list of dict
+            The progress states read from the run tree.
+        job_id : str
+            The current SLURM job id, or empty.
+
+        Returns
+        -------
+        list of dict
+            The states belonging to the current run.
+        """
+        if not states or not job_id:
+            return states
+        # match the job id as a whole ``_<id>`` token (end of name or before
+        # the next ``_``), so e.g. job 372 does not match run ...5837262.
+        token = re.compile(rf"_{re.escape(str(job_id))}(?:_|$)")
+        return [s for s in states if token.search(s.get("report_name") or "")]
+
+    # dataset-state precedence for merging per-rank aggregation views
+    _DATASET_STATE_RANK = {
+        "pending": 0,
+        "running": 1,
+        "aborted": 2,
+        "failed": 2,
+        "skipped": 3,
+        "done": 3,
+    }
+
+    def _merged_aggregation_state(self, states):
+        """Merge the per-rank aggregation states into one, or None.
+
+        In a multi-rank (SLURM) run each rank writes its own aggregation
+        progress file and only advances the datasets it owns (round-robin),
+        leaving the rest ``pending``. Reading the tree therefore yields several
+        aggregation states with complementary, mostly-pending datasets lists.
+        Combine them so the datasets list reflects every rank: for each dataset
+        index keep the most-advanced state seen across ranks.
+
+        Parameters
+        ----------
+        states : list of dict
+            All progress states read from the run.
+
+        Returns
+        -------
+        dict or None
+            A single aggregation state with a merged datasets list, or None if
+            there is no aggregation state.
+        """
+        agg_states = [s for s in states if s.get("kind") == "aggregation"]
+        if not agg_states:
+            return None
+        if len(agg_states) == 1:
+            return agg_states[0]
+        rank = self._DATASET_STATE_RANK
+        best = {}
+        for s in agg_states:
+            for d in s.get("datasets") or []:
+                i = d.get("i")
+                if i not in best or rank.get(d.get("state"), 0) > rank.get(
+                    best[i].get("state"), 0
+                ):
+                    best[i] = d
+        merged = dict(agg_states[0])
+        merged["datasets"] = [best[i] for i in sorted(best)]
+        return merged
+
+    def _top_state(self, states):
+        """The run's top-level state: the aggregation one, else the only one."""
+        agg = self._merged_aggregation_state(states)
+        if agg is not None:
+            return agg
+        return states[0] if states else None
+
+    def _maybe_stop_monitor(self, slurm, states):
+        """Stop polling once the run has reached a terminal state."""
+        if slurm and slurm.get("status") in self._SLURM_TERMINAL:
+            self._stop_monitor()
+            return
+        if self._monitor_local_folder:
+            top = self._top_state(states)
+            if top and top.get("state") in ("done", "failed", "aborted"):
+                # local process finished (no SLURM authority to consult)
+                if (
+                    self._local_process is None
+                    or self._local_process.poll() is not None
+                ):
+                    self._stop_monitor()
+
+    def _update_monitor_display(self, slurm, states):
+        """Render the fused SLURM + multi-stage progress into the widgets."""
+        states = states or []
+        agg = self._merged_aggregation_state(states)
+        singles = [s for s in states if s.get("kind") != "aggregation"]
+        top = self._top_state(states)
+
+        # --- SLURM state chip (or local run state) ---
+        if slurm and slurm.get("success"):
+            status = slurm.get("status", "UNKNOWN")
+            color = self._SLURM_COLORS.get(status, "#616161")
+            text = f"Job state: {status}"
+            details = slurm.get("details") or {}
+            # fuse: SLURM says *why* it died, progress.json says *where*
+            if status in self._SLURM_TERMINAL and status != "COMPLETED":
+                where = self._active_stage_module_label(states)
+                if where:
+                    text += f" during {where}"
+                extra = []
+                if details.get("exit_code"):
+                    extra.append(f"exit {details['exit_code']}")
+                if details.get("max_rss"):
+                    extra.append(f"MaxRSS {details['max_rss']}")
+                if extra:
+                    text += "  (" + ", ".join(extra) + ")"
+            elif (
+                status == "COMPLETED"
+                and states
+                and (self._overall_progress(agg, singles, states) < 0.999)
+            ):
+                # SLURM says the job finished cleanly, but the tracked progress
+                # never reached 100%: the workflow stopped short (a killed step
+                # whose batch script still exited 0, an early return, ...).
+                # Flag it rather than showing a misleading green COMPLETED.
+                where = self._active_stage_module_label(states)
+                text = "Job state: COMPLETED but workflow unfinished"
+                if where:
+                    text += f" (stopped at {where})"
+                color = "#f9a825"  # amber
+            self.monitor_state_label.setText(text)
+            self.monitor_state_label.setStyleSheet(
+                "padding: 2px 8px; border-radius: 4px; color: white; "
+                f"background-color: {color};"
+            )
+        elif self._monitor_local_folder:
+            run_state = (top or {}).get("state", "-")
+            self.monitor_state_label.setText(f"Local run: {run_state}")
+        else:
+            self.monitor_state_label.setText("Job state: -")
+
+        # --- overall bar ---
+        self.overall_progress_bar.setValue(
+            int(round(self._overall_progress(agg, singles, states) * 100))
+        )
+
+        # --- tree ---
+        # The tree is rebuilt from scratch each refresh, which would otherwise
+        # collapse everything (and reset to the "expand if running" default),
+        # losing the expand/collapse state of someone investigating a stage.
+        # Capture the current expansion (keyed by stable item ids) and reapply
+        # it after the rebuild; genuinely new items keep the builder default.
+        prev_expansion = self._collect_tree_expansion()
+        self.module_tree.clear()
+        if agg is not None:
+            self.module_tree.setRootIsDecorated(True)
+            self._populate_aggregation_tree(agg, singles)
+        elif len(states) == 1:
+            # plain single-dataset run: flat module list
+            self.module_tree.setRootIsDecorated(False)
+            for m in states[0].get("modules") or []:
+                self.module_tree.addTopLevelItem(self._build_module_item(m))
+        elif singles:
+            # several stages but no top-level aggregation state (yet):
+            # show each as its own collapsible group.
+            self.module_tree.setRootIsDecorated(True)
+            for s in self._sorted_singles(singles):
+                self.module_tree.addTopLevelItem(self._build_stage_item(s))
+        self._apply_tree_expansion(prev_expansion)
+
+    # -- tree builders ------------------------------------------------------
+
+    def _collect_tree_expansion(self):
+        """Map each keyed tree item to whether it is currently expanded.
+
+        Only collapsible items (the aggregation root and the stage groups)
+        carry a key (in ``Qt.UserRole`` on column 0); module leaves do not.
+        Used to preserve the user's expand/collapse across the per-refresh
+        rebuild.
+
+        Returns
+        -------
+        dict
+            ``{key: bool}`` for every keyed item currently in the tree.
+        """
+        expanded = {}
+
+        def walk(item):
+            key = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+            if key is not None:
+                expanded[key] = item.isExpanded()
+            for j in range(item.childCount()):
+                walk(item.child(j))
+
+        for k in range(self.module_tree.topLevelItemCount()):
+            walk(self.module_tree.topLevelItem(k))
+        return expanded
+
+    def _apply_tree_expansion(self, remembered):
+        """Re-apply a remembered expansion map to the freshly built tree.
+
+        Items whose key was seen before are restored to their remembered
+        state; items new this refresh keep the builder's default (a running
+        stage expands, the root expands), so first appearances still behave.
+
+        Parameters
+        ----------
+        remembered : dict
+            ``{key: bool}`` from :meth:`_collect_tree_expansion`.
+        """
+        if not remembered:
+            return
+
+        def walk(item):
+            key = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+            if key in remembered:
+                item.setExpanded(remembered[key])
+            for j in range(item.childCount()):
+                walk(item.child(j))
+
+        for k in range(self.module_tree.topLevelItemCount()):
+            walk(self.module_tree.topLevelItem(k))
+
+    def _build_module_item(self, m):
+        """A leaf tree item for a single module."""
+        frac = m.get("fraction")
+        pct = f"{frac * 100:.0f}" if isinstance(frac, (int, float)) else "-"
+        elapsed = m.get("elapsed")
+        el = f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "-"
+        return QtWidgets.QTreeWidgetItem(
+            [
+                str(m.get("i", "")),
+                str(m.get("name", "")),
+                str(m.get("status", "")),
+                pct,
+                el,
+            ]
+        )
+
+    def _stage_label(self, state):
+        """A readable label for a stage, e.g. '[single 02] cell2'."""
+        name = pwprogress.stage_name(state)
+        if pwprogress.is_aggregation_stage(state):
+            return f"[aggregation stage] {name}"
+        idx = pwprogress.dataset_index(state)
+        if idx is not None:
+            return f"[single {idx:02d}] {name}"
+        return name
+
+    def _build_stage_item(self, state):
+        """A collapsible tree item for one stage, with its modules as leaves."""
+        frac = pwprogress.overall_fraction(state)
+        parent = QtWidgets.QTreeWidgetItem(
+            [
+                "",
+                self._stage_label(state),
+                str(state.get("state", "")),
+                f"{frac * 100:.0f}",
+                "",
+            ]
+        )
+        for m in state.get("modules") or []:
+            parent.addChild(self._build_module_item(m))
+        # stable key so expansion survives a refresh (keyed by dataset slot so
+        # it carries over when a not-yet-started dataset becomes a live stage)
+        parent.setData(
+            0, QtCore.Qt.ItemDataRole.UserRole, self._stage_key(state)
+        )
+        # expand the stage that is currently running
+        parent.setExpanded(state.get("state") == "running")
+        return parent
+
+    def _stage_key(self, state):
+        """A stable expansion key for a stage: its dataset slot, or the
+        aggregation-stage marker."""
+        if pwprogress.is_aggregation_stage(state):
+            return "aggstage"
+        return f"ds:{pwprogress.dataset_index(state)}"
+
+    def _sorted_singles(self, singles):
+        """Order stages: single datasets by index, aggregation stage last."""
+
+        def key(s):
+            if pwprogress.is_aggregation_stage(s):
+                return (1, 0)
+            idx = pwprogress.dataset_index(s)
+            return (0, idx if idx is not None else 9999)
+
+        return sorted(singles, key=key)
+
+    def _populate_aggregation_tree(self, agg, singles):
+        """Build the aggregation root with one child per stage."""
+        datasets = agg.get("datasets") or []
+        n_done = sum(
+            1 for d in datasets if d.get("state") in ("done", "skipped")
+        )
+        root = QtWidgets.QTreeWidgetItem(
+            [
+                "",
+                f"[Aggregation] {pwprogress.stage_name(agg)} "
+                f"- datasets {n_done}/{len(datasets)}",
+                str(agg.get("state", "")),
+                f"{pwprogress.overall_fraction(agg) * 100:.0f}",
+                "",
+            ]
+        )
+        root.setData(0, QtCore.Qt.ItemDataRole.UserRole, "root")
+        # map dataset index -> its single stage (if it has started)
+        idx_map = {}
+        for s in singles:
+            if pwprogress.is_aggregation_stage(s):
+                continue
+            di = pwprogress.dataset_index(s)
+            if di is not None:
+                idx_map[di] = s
+
+        # one child per dataset slot, so not-yet-started datasets show too
+        for d in datasets:
+            di = d.get("i")
+            s = idx_map.get(di)
+            if s is not None:
+                root.addChild(self._build_stage_item(s))
+            else:
+                tag = d.get("tag") or "(no tag)"
+                placeholder = QtWidgets.QTreeWidgetItem(
+                    [
+                        str(di),
+                        f"[single {di:02d}] {tag}",
+                        str(d.get("state", "")),
+                        "0",
+                        "",
+                    ]
+                )
+                # same key scheme as a live stage, so expansion carries over
+                # when this dataset starts running
+                placeholder.setData(
+                    0, QtCore.Qt.ItemDataRole.UserRole, f"ds:{di}"
+                )
+                root.addChild(placeholder)
+
+        # the aggregation stage (runs after all singles)
+        agg_stage = next(
+            (s for s in singles if pwprogress.is_aggregation_stage(s)), None
+        )
+        if agg_stage is not None:
+            root.addChild(self._build_stage_item(agg_stage))
+
+        self.module_tree.addTopLevelItem(root)
+        root.setExpanded(True)
+
+    def _overall_progress(self, agg, singles, states):
+        """A single 0..1 completion fraction across all stages."""
+        if agg is None:
+            if not states:
+                return 0.0
+            return sum(pwprogress.overall_fraction(s) for s in states) / len(
+                states
+            )
+        datasets = agg.get("datasets") or []
+        n = len(datasets)
+        if n == 0:
+            return pwprogress.overall_fraction(agg)
+        idx_map = {}
+        for s in singles:
+            if pwprogress.is_aggregation_stage(s):
+                continue
+            di = pwprogress.dataset_index(s)
+            if di is not None:
+                idx_map[di] = s
+        # sum of per-dataset fractions (done=1, running=its single's fraction)
+        single_sum = 0.0
+        for d in datasets:
+            st = d.get("state")
+            if st in ("done", "skipped"):
+                single_sum += 1.0
+            elif st == "running" and d.get("i") in idx_map:
+                single_sum += pwprogress.overall_fraction(idx_map[d["i"]])
+        agg_stage = next(
+            (s for s in singles if pwprogress.is_aggregation_stage(s)), None
+        )
+        if agg_stage is not None:
+            return (single_sum + pwprogress.overall_fraction(agg_stage)) / (
+                n + 1
+            )
+        return single_sum / n
+
+    def _active_stage_module_label(self, states):
+        """Label the module running now (across stages), for failure fusion."""
+        for s in states:
+            if s.get("kind") == "aggregation":
+                continue
+            cur = s.get("current")
+            modules = s.get("modules") or []
+            if (
+                cur is not None
+                and 0 <= cur < len(modules)
+                and modules[cur].get("status") == "running"
+            ):
+                return (
+                    f"{self._stage_label(s)} module "
+                    f"{cur + 1}/{s.get('total')} "
+                    f"{modules[cur].get('name', '')}"
+                )
+        return ""
+
+    def assemble_slurm_scripts(self):
         host_cluster = str(self.cluster_host_combo.currentText())  # "hpcl8XXX"
         login_node = CONFIG["SlurmLoginNodes"][host_cluster]  # "hpcl8001"
         # print(f"'{host_cluster}', '{login_node}'")
@@ -13595,29 +14883,24 @@ class Window(QtWidgets.QMainWindow):
             results_folder_local = results_folder_local[1:-1]
         if not os.path.exists(results_folder_local):
             os.makedirs(results_folder_local)
+        # SLURM opens the --output/--error files at job launch and does NOT
+        # create their parent directory; a missing logs/ dir means the job's
+        # stdout/stderr (the only place a traceback / OOM message lands) are
+        # lost. The results folder is on the cluster-shared filesystem, so
+        # creating it here makes it exist for the job.
+        os.makedirs(os.path.join(results_folder_local, "logs"), exist_ok=True)
         results_folder_host = self.pathparser.convert_path(
             results_folder_local, host_cluster
         )
+        # remember where to poll progress.json / drop the abort flag
+        self._monitor_remote_folder = results_folder_host
+        self._monitor_local_folder = None
 
-        if self.cluster_username_edit.text().strip() == "$USER":
-            username = getpass.getuser()
-        else:
-            username = self.cluster_username_edit.text().strip()
-
-        ssh_key_path_options = [
-            os.path.join(os.path.expanduser("~"), ".ssh", "id_rsa"),
-            os.path.join(os.path.expanduser("~"), ".ssh", "id_ed25519"),
-        ]
-        for sshpath in ssh_key_path_options:
-            ssh_key_path = sshpath
-            if os.path.exists(ssh_key_path):
-                break
-        # ssh_key_path = "~/.ssh/id_rsa"
-        self.slurm_communicator = SlurmCommunicator(
-            login_node, username, port=22, ssh_key_path=ssh_key_path
-        )
-
+        self.slurm_communicator = self._ensure_slurm_communicator(host_cluster)
         self.slurm_communicator.test_connection()
+        # exposed for the submission summary / log below
+        username = self.slurm_communicator.username
+        ssh_key_path = self.slurm_communicator.ssh_key_path
 
         scriptname = "start_workflow.py"
         python_script_path = self.create_python_script(
@@ -13649,6 +14932,13 @@ class Window(QtWidgets.QMainWindow):
             slurm_options["mail-user"] = email
             slurm_options["mail-type"] = "ALL"
 
+        # Target a specific partition/queue when chosen. GPU nodes usually
+        # require it, so a --gres=gpu request lands nowhere without it. Empty
+        # -> omit, letting SLURM use its default partition.
+        partition = self.cluster_partition_combo.currentText().strip()
+        if partition:
+            slurm_options["partition"] = partition
+
         # Request GPUs only when asked for (--gres=gpu:N)
         n_gpus = self.cluster_gpus_spin.value()
         if n_gpus > 0:
@@ -13656,8 +14946,15 @@ class Window(QtWidgets.QMainWindow):
 
         # use_pw_mod = self.cluster_use_module.isChecked()
 
+        # Modules to `module load` come from the Run tab's field
+        # (space-separated); an empty field loads nothing.
+        modules = self.cluster_modules_edit.text().split()
         commands = self.slurm_communicator.assemble_slurm_commands(
-            host_cluster, scriptname=scriptname
+            host_cluster,
+            scriptname=scriptname,
+            modules=modules,
+            faulthandler=self.cluster_faulthandler_check.isChecked(),
+            cpu_only=self.cluster_cpu_only_check.isChecked(),
         )
         # scriptname=scriptname, use_pw_module=True)
         # scriptname=scriptname, use_pw_module=False)
@@ -13665,8 +14962,10 @@ class Window(QtWidgets.QMainWindow):
             job_name,
             commands,
             slurm_options=slurm_options,
-            output_file=f"{results_folder_host}/logs/%A.log",
-            error_file=f"{results_folder_host}/logs/%A_err.log",
+            # %j is the job id (the correct token for a non-array job; %A is
+            # the array-master id, which only coincides with %j by accident).
+            output_file=f"{results_folder_host}/logs/%j.log",
+            error_file=f"{results_folder_host}/logs/%j_err.log",
             working_directory=results_folder_host,
         )
         script_path = self.slurm_communicator.write_slurm_script(
@@ -13755,6 +15054,9 @@ class Window(QtWidgets.QMainWindow):
             self.job_info_display.append(
                 f"Job submitted successfully!\nJob ID: {result['job_id']}"
             )
+            # cluster run -> poll the remote progress.json, not a local one
+            self._monitor_local_folder = None
+            self._start_monitor()
             # print(f"Starting SLURM on Cluster - Job ID: {result['job_id']}")
         else:
             self.job_info_display.append(
@@ -13785,12 +15087,77 @@ class Window(QtWidgets.QMainWindow):
         #     print("Failed to start SLURM on Cluster")
 
     def start_locally(self):
-        """"""
-        # TODO: load workflow
-        print("starting workflow locally")
+        """Run the workflow locally as a subprocess and monitor its progress.
+
+        Generates the same ``start_workflow.py`` used for cluster runs, then
+        launches it with the current interpreter in the results folder and
+        points the live monitor at the local ``progress.json``.
+        """
+        results_folder = self.results_folder_display.text().strip()
+        for q in ('"', "'"):
+            if results_folder[:1] == q and results_folder[-1:] == q:
+                results_folder = results_folder[1:-1]
+        if not results_folder:
+            self.job_info_display.append(
+                "Error: set a results folder before running locally."
+            )
+            return
+        if not os.path.exists(results_folder):
+            os.makedirs(results_folder)
+
+        try:
+            script_path = self.create_python_script(None, None)
+        except Exception as e:
+            self.job_info_display.append(
+                f"Could not generate the workflow script:\n{e}"
+            )
+            logger.error(traceback.format_exc())
+            return
+
+        # clear any stale abort flag from a previous run in this folder
+        pwprogress.clear_abort(results_folder)
+        log_path = os.path.join(results_folder, "local_run.log")
+        try:
+            self._local_logfile = open(log_path, "w")
+            self._local_process = subprocess.Popen(
+                [sys.executable, script_path],
+                cwd=results_folder,
+                stdout=self._local_logfile,
+                stderr=subprocess.STDOUT,
+                env={**os.environ, "PWD": results_folder},
+            )
+        except Exception as e:
+            self.job_info_display.append(f"Failed to launch local run:\n{e}")
+            logger.error(traceback.format_exc())
+            return
+
+        self.job_info_display.append(
+            f"Started local workflow (PID {self._local_process.pid}).\n"
+            f"Logging to {log_path}"
+        )
+        # local run -> poll the local progress.json tree, not the cluster
+        self._monitor_local_folder = results_folder
+        self._start_monitor()
 
     def on_cancel_job(self):
-        """Cancel the current SLURM job."""
+        """Cancel the current run (graceful abort, then hard cancel).
+
+        For a local run this requests a graceful stop via the abort flag and
+        terminates the subprocess. For a cluster run it drops the abort flag
+        in the remote run folder (so the workflow stops cleanly at the next
+        module boundary) and also issues ``scancel``.
+        """
+        # local run: abort flag + terminate the subprocess
+        if getattr(self, "_monitor_local_folder", None):
+            pwprogress.request_abort(self._monitor_local_folder)
+            proc = getattr(self, "_local_process", None)
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+            self.job_info_display.append(
+                "Requested graceful abort of the local run."
+            )
+            return
+
         if (
             not hasattr(self, "slurm_communicator")
             or self.slurm_communicator is None
@@ -13806,6 +15173,18 @@ class Window(QtWidgets.QMainWindow):
                 "Error: No job ID specified.\nPlease enter a job ID."
             )
             return
+
+        # request a graceful stop first, so the workflow can finish the
+        # current module and write a clean terminal state before scancel.
+        remote_folder = getattr(self, "_monitor_remote_folder", None)
+        if remote_folder:
+            try:
+                self.slurm_communicator.write_abort_flag(remote_folder)
+                self.job_info_display.append(
+                    "Requested graceful abort (abort.flag written)."
+                )
+            except Exception as e:
+                logger.debug(f"could not write remote abort flag: {e}")
 
         try:
             job_id_int = int(job_id)
@@ -14700,7 +16079,60 @@ class Window(QtWidgets.QMainWindow):
         # Add stretch at the end to push widgets to the top
         self.module_parameters_layout.addStretch()
 
+        self._wire_conditional_visibility(module_params)
         self._refresh_param_summaries()
+
+    def _current_widget_text(self, widget):
+        """Return a widget's current value as a string (for ``visible_if``)."""
+        if isinstance(widget, QtWidgets.QComboBox):
+            return widget.currentText()
+        if isinstance(widget, QtWidgets.QCheckBox):
+            return str(widget.isChecked())
+        if isinstance(widget, QtWidgets.QLineEdit):
+            return widget.text()
+        if isinstance(widget, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)):
+            return str(widget.value())
+        return ""
+
+    def _wire_conditional_visibility(self, module_params):
+        """Show a parameter row only while a controlling parameter matches.
+
+        A spec may declare ``"visible_if": {control_param: [values]}``; the
+        row is shown only while ``control_param``'s widget currently holds one
+        of ``values`` (e.g. reveal ``spline_calibration`` only for the spline
+        fitting methods). The controlling widget's change signal keeps it live.
+
+        Parameters
+        ----------
+        module_params : dict
+            The module's parameter spec (name -> metadata).
+        """
+        for param_name, param_metadata in module_params.items():
+            visible_if = param_metadata.get("visible_if")
+            if not visible_if:
+                continue
+            dep_info = self.parameter_widgets.get(param_name)
+            if dep_info is None:
+                continue
+            for control_name, allowed in visible_if.items():
+                ctrl_info = self.parameter_widgets.get(control_name)
+                if ctrl_info is None:
+                    continue
+                ctrl_widget = ctrl_info.widget
+                allowed_set = {str(v) for v in allowed}
+
+                def _apply(
+                    _=None, dep=dep_info, cw=ctrl_widget, allowed=allowed_set
+                ):
+                    dep.row_widget.setVisible(
+                        self._current_widget_text(cw) in allowed
+                    )
+
+                if isinstance(ctrl_widget, QtWidgets.QComboBox):
+                    ctrl_widget.currentTextChanged.connect(_apply)
+                elif isinstance(ctrl_widget, QtWidgets.QCheckBox):
+                    ctrl_widget.stateChanged.connect(_apply)
+                _apply()
 
     def _validate_parameters(self):
         """Validate that all required parameters are filled.

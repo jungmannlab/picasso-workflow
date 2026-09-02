@@ -64,6 +64,17 @@ formats = [
     "aicspylibczi>=3.1.1",
     "fsspec>=2022.8.0",
 ]
+# GPU-accelerated fitting (``spline-mle-gpu``, and the GPU CRLB path used even
+# by the CPU ``spline-mle`` fit). picasso's CUDA code runs on the standalone
+# ``numba-cuda`` backend, NOT numba's bundled ``numba.cuda`` -- the bundled one
+# segfaults at CUDA-context creation on modern (CUDA 13) drivers. Nothing in the
+# base deps or picassosr declares numba-cuda, so a GPU run without it dies with a
+# native SIGSEGV rather than a clean error. ``numba-cuda`` pulls a matching
+# ``cuda-bindings`` automatically. Install on GPU nodes with:
+#   pip install -e ".[gpu]"
+gpu = [
+    "numba-cuda",
+]
 
 [tool.setuptools]
 packages = ["picasso_workflow"]

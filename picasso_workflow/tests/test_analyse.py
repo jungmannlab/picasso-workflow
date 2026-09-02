@@ -139,6 +139,177 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_load_dataset_movie")
         )
 
+    def test_movie_staging(self):
+        """A split OME-TIFF series is discovered and copied to local scratch,
+        without pulling in an unrelated neighbouring movie."""
+        with (
+            tempfile.TemporaryDirectory() as src,
+            tempfile.TemporaryDirectory() as scratch,
+        ):
+            base = os.path.join(src, "mov_MMStack_Pos3")
+            parts = [
+                base + ".ome.tif",
+                base + "_1.ome.tif",
+                base + "_2.ome.tif",
+            ]
+            for p in parts:
+                with open(p, "wb") as f:
+                    f.write(b"x" * 2048)
+            # a different position in the same folder must NOT be staged
+            other = os.path.join(src, "mov_MMStack_Pos30.ome.tif")
+            with open(other, "wb") as f:
+                f.write(b"y" * 16)
+
+            found = self.ap._movie_files_to_stage(parts[0])
+            assert set(found) == set(parts)
+            assert other not in found
+
+            saved = os.environ.get("SLURM_TMPDIR")
+            os.environ.pop("SLURM_TMPDIR", None)
+            os.environ["TMPDIR"] = scratch
+            try:
+                results = {}
+                local = self.ap._stage_movie_local(parts[0], 0, results)
+            finally:
+                if saved is not None:
+                    os.environ["SLURM_TMPDIR"] = saved
+
+            assert local.startswith(scratch)
+            assert os.path.basename(local) == "mov_MMStack_Pos3.ome.tif"
+            assert os.path.isfile(local)
+            staged = sorted(os.listdir(results["staged_movie_dir"]))
+            assert staged == sorted(os.path.basename(p) for p in parts)
+
+    def test_movie_staging_falls_back_on_error(self):
+        """Staging never aborts a run: an unreadable source returns the
+        original path."""
+        saved = os.environ.get("SLURM_TMPDIR")
+        os.environ.pop("SLURM_TMPDIR", None)
+        with tempfile.TemporaryDirectory() as scratch:
+            os.environ["TMPDIR"] = scratch
+            try:
+                results = {}
+                missing = os.path.join(scratch, "nope", "movie.ome.tif")
+                local = self.ap._stage_movie_local(missing, 0, results)
+            finally:
+                if saved is not None:
+                    os.environ["SLURM_TMPDIR"] = saved
+        assert local == missing
+        assert "staged_movie_dir" not in results
+
+    def test_plot_locs_vs_frame_adapts_to_columns(self):
+        """The locs-vs-frame plot works for Gaussian locs (sx/sy) and for
+        spline locs (z, no widths) alike, rather than requiring sx/sy."""
+        n = 30
+        gauss = pd.DataFrame(
+            {
+                "frame": np.random.randint(0, 100, n),
+                "photons": np.random.rand(n),
+                "sx": np.random.rand(n),
+                "sy": np.random.rand(n),
+            }
+        )
+        spline = pd.DataFrame(
+            {
+                "frame": np.random.randint(0, 100, n),
+                "photons": np.random.rand(n),
+                "z": np.random.rand(n) * 500,
+                "lpz": np.random.rand(n),
+            }
+        )
+        for locs in (gauss, spline):
+            self.ap.locs = locs
+            fp = os.path.join(self.results_folder, "lvf.png")
+            out = self.ap._plot_locs_vs_frame(fp)
+            assert out["filename"] == fp
+            assert os.path.exists(fp)
+            os.remove(fp)
+
+    @patch("picasso_workflow.analyse.picasso_outpost.pick_gold")
+    def test_find_gold_empty_saves(self, mock_pick_gold):
+        """With no gold found, the empty gold file still saves: the empty
+        frame keeps self.locs's numeric dtypes rather than object dtype, which
+        io.save_locs -> HDF5 rejects."""
+        mock_pick_gold.return_value = []  # 0 gold -> empty branch
+        self.ap.locs = pd.DataFrame(
+            {
+                "frame": np.array([0, 1, 2], dtype=np.uint32),
+                "x": np.array([1.0, 2.0, 3.0], dtype=np.float32),
+                "y": np.array([1.0, 2.0, 3.0], dtype=np.float32),
+                "z": np.array([10.0, 20.0, 30.0], dtype=np.float32),
+                "photons": np.array([100.0, 200.0, 300.0], dtype=np.float32),
+            }
+        )
+        self.ap.info = [{"Frames": 3, "Width": 576, "Height": 576}]
+        _, results = self.ap.find_gold(
+            0, {"diameter": 2.0, "remove_gold": False}
+        )
+        assert os.path.exists(results["fp_gold"])
+        assert os.path.exists(results["fp_nogold"])
+        shutil.rmtree(os.path.join(self.results_folder, "00_find_gold"))
+
+    @patch("picasso_workflow.analyse.localize.identify")
+    def test_identify_info_omits_progress_callbacks(self, mock_identify):
+        """identify records its parameters in self.info but NOT the live
+        progress/abort callbacks, which hold a threading.Lock that would break
+        io.save_locs -> save_info -> yaml.dump ('cannot pickle _thread.lock').
+        """
+        import yaml as _yaml
+
+        mock_identify.return_value = (pd.DataFrame({"frame": [0, 1, 2]}), {})
+        self.ap.info = []
+        # wire progress/abort as the runner does
+        self.ap._progress_callback = lambda *a, **k: None
+        self.ap._abort_callback = lambda: False
+        try:
+            self.ap.identify(
+                0,
+                {
+                    "box_size": 7,
+                    "min_gradient": 500,
+                    "temporal_median_window": 20,
+                    "gaussian_filter_sigma": 1.5,
+                },
+            )
+        finally:
+            self.ap._progress_callback = None
+            self.ap._abort_callback = None
+
+        # the callbacks were forwarded to picasso...
+        _, kwargs = mock_identify.call_args
+        assert "progress_callback" in kwargs
+        assert "abort_callback" in kwargs
+        # ...but must NOT have leaked into the saved info
+        info = self.ap.info[-1]
+        assert "progress_callback" not in info
+        assert "abort_callback" not in info
+        # real params are still recorded
+        assert info["temporal_median_window"] == 20
+        assert info["gaussian_filter_sigma"] == 1.5
+        # and the whole info list is now yaml-serializable (the failure mode)
+        _yaml.dump_all(self.ap.info)
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_identify"),
+            ignore_errors=True,
+        )
+
+    def test_infer_gmm_mode(self):
+        """g5m z model is inferred from the recorded fit method: spline fits
+        -> 'spline' (lpz from locs), everything else -> 'astigmatism'."""
+        self.ap.info = [{"Box Size": 7}, {"Fit method": "spline-mle-gpu"}]
+        assert self.ap._infer_gmm_mode() == "spline"
+        self.ap.info = [{"Fit method": "spline"}]
+        assert self.ap._infer_gmm_mode() == "spline"
+        self.ap.info = [{"Fit method": "gausslq"}]
+        assert self.ap._infer_gmm_mode() == "astigmatism"
+        self.ap.info = [{"Fit method": "gaussmle-gpu"}]
+        assert self.ap._infer_gmm_mode() == "astigmatism"
+        # no recorded fit method -> astigmatism (g5m's own default)
+        self.ap.info = [{"Box Size": 7}]
+        assert self.ap._infer_gmm_mode() == "astigmatism"
+        self.ap.info = []
+        assert self.ap._infer_gmm_mode() == "astigmatism"
+
     def identify(self):
         parameters = {
             "box_size": 7,
@@ -171,6 +342,51 @@ class TestAnalyseModules(unittest.TestCase):
             assert kwargs["threaded"] is False
             # unset filters are not forwarded (picasso defaults preserved)
             assert "temporal_median_stride" not in kwargs
+        shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
+
+        # GUI placeholder / off sentinels must NOT be forwarded, so picasso's
+        # defaults (no filtering, whole movie) apply. A window of 1 is a no-op
+        # median that would otherwise still switch the filter on.
+        with patch(
+            "picasso_workflow.analyse.localize.identify"
+        ) as mock_identify:
+            mock_identify.return_value = (self.ap.identifications, {})
+            parameters = {
+                "box_size": 7,
+                "min_gradient": 500,
+                "roi": "",
+                "frame_bounds": "",
+                "temporal_median_window": 1,
+                "temporal_median_stride": 1,
+                "gaussian_filter_sigma": 0.0,
+            }
+            self.ap.identify(0, parameters)
+            _, kwargs = mock_identify.call_args
+            for key in (
+                "roi",
+                "frame_bounds",
+                "temporal_median_window",
+                "temporal_median_stride",
+                "gaussian_filter_sigma",
+            ):
+                assert key not in kwargs
+        shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
+
+        # a real window (>= 2) forwards both window and stride
+        with patch(
+            "picasso_workflow.analyse.localize.identify"
+        ) as mock_identify:
+            mock_identify.return_value = (self.ap.identifications, {})
+            parameters = {
+                "box_size": 7,
+                "min_gradient": 500,
+                "temporal_median_window": 20,
+                "temporal_median_stride": 5,
+            }
+            self.ap.identify(0, parameters)
+            _, kwargs = mock_identify.call_args
+            assert kwargs["temporal_median_window"] == 20
+            assert kwargs["temporal_median_stride"] == 5
         shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
 
     @patch("picasso_workflow.analyse.localize.fit")
@@ -238,11 +454,35 @@ class TestAnalyseModules(unittest.TestCase):
         assert kwargs["camera_calibration"] == cam_cal
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
+        # GUI placeholders fall back to picasso's defaults: an empty
+        # fitting_method resolves to gausslq, and non-positive eps / max_it
+        # (the GUI's unset sentinels) become None rather than being forwarded.
+        mock_fit.reset_mock()
+        parameters = {
+            "box_size": 7,
+            "fit_parallel": False,
+            "fitting_method": "",
+            "eps": 0.0,
+            "max_it": 0,
+        }
+        self.ap.localize(0, parameters)
+        _, kwargs = mock_fit.call_args
+        assert kwargs["fitting_method"] == "gausslq"
+        assert kwargs["eps"] is None
+        assert kwargs["max_it"] is None
+        shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
         # GPU is orthogonal to the model: with a GPU fitter configured, an
         # explicit base method is routed to its -gpu variant, and the default
-        # resolves to gausslq-gpu.
+        # resolves to gausslq-gpu. picasso is mocked here, so the CUDA
+        # backend is presented as available to get past the fail-fast guard.
         self.ap.analysis_config["gpufit_installed"] = True
+        gpu_patch = patch(
+            "picasso_workflow.analyse._gpu_fitting_available",
+            return_value=True,
+        )
         try:
+            gpu_patch.start()
             mock_fit.reset_mock()
             self.ap.localize(0, {"box_size": 7, "fitting_method": "gaussmle"})
             _, kwargs = mock_fit.call_args
@@ -255,13 +495,181 @@ class TestAnalyseModules(unittest.TestCase):
             assert kwargs["fitting_method"] == "gausslq-gpu"
             shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
         finally:
+            gpu_patch.stop()
             self.ap.analysis_config["gpufit_installed"] = False
 
     def load_picassoconfig(self):
         pass
 
+    @patch("picasso_workflow.analyse.localize.fit")
+    def test_localize_gpu_guard(self, mock_fit):
+        """A -gpu fitting method fails fast with an actionable error when the
+        CUDA backend is unavailable, does not block CPU methods, and passes
+        through when the GPU is available."""
+        nspots = 3
+        locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    tuple(np.random.rand(len(self.locs_dtype)))
+                    for _ in range(nspots)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        mock_fit.return_value = (locs, [])
+        self.ap.info = []
+        # pixelsize is a read-only property; it falls back to
+        # camera_info["Pixelsize"] (130, from setUp).
+        self.ap.identifications = pd.DataFrame({"frame": [0, 1, 2]})
+        spline_cal = {"coeff": [1, 2, 3]}
+
+        def _localize(method):
+            return self.ap.localize(
+                0,
+                {
+                    "box_size": 7,
+                    "fit_parallel": False,
+                    "fitting_method": method,
+                    "spline_calibration": spline_cal,
+                },
+            )
+
+        def _cleanup():
+            shutil.rmtree(
+                os.path.join(self.results_folder, "00_localize"),
+                ignore_errors=True,
+            )
+
+        # GPU requested but unavailable -> fail fast, before calling picasso.
+        with patch(
+            "picasso_workflow.analyse._gpu_fitting_available",
+            return_value=False,
+        ):
+            with self.assertRaises(analyse.AutoPicassoError) as ctx:
+                _localize("spline-mle-gpu")
+        assert "numba.cuda.is_available()" in str(ctx.exception)
+        mock_fit.assert_not_called()
+        _cleanup()
+
+        # A CPU spline method is never blocked by the guard.
+        mock_fit.reset_mock()
+        with patch(
+            "picasso_workflow.analyse._gpu_fitting_available",
+            return_value=False,
+        ):
+            _localize("spline-mle")
+        _, kwargs = mock_fit.call_args
+        assert kwargs["fitting_method"] == "spline-mle"
+        _cleanup()
+
+        # When the GPU backend is available, the -gpu method passes through.
+        mock_fit.reset_mock()
+        with patch(
+            "picasso_workflow.analyse._gpu_fitting_available",
+            return_value=True,
+        ):
+            _localize("spline-mle-gpu")
+        _, kwargs = mock_fit.call_args
+        assert kwargs["fitting_method"] == "spline-mle-gpu"
+        _cleanup()
+
+    @patch("picasso_workflow.analyse.localize.fit")
+    def test_localize_wires_progress_callbacks(self, mock_fit):
+        """When the runner has wired progress in, localize forwards both the
+        fit progress_callback and the spot-extraction cut_progress_callback so
+        neither phase looks hung."""
+        locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    tuple(np.random.rand(len(self.locs_dtype)))
+                    for _ in range(3)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        mock_fit.return_value = (locs, [])
+        self.ap.info = []
+        self.ap.identifications = pd.DataFrame({"frame": [0, 1, 2]})
+
+        # no progress wired -> neither callback forwarded (picasso unchanged)
+        self.ap._progress_callback = None
+        self.ap.localize(0, {"box_size": 7, "fit_parallel": False})
+        _, kwargs = mock_fit.call_args
+        assert "progress_callback" not in kwargs
+        assert "cut_progress_callback" not in kwargs
+        shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
+        # progress wired -> both phases report
+        mock_fit.reset_mock()
+        self.ap._progress_callback = lambda *a, **k: None
+        try:
+            self.ap.localize(0, {"box_size": 7, "fit_parallel": False})
+        finally:
+            self.ap._progress_callback = None
+        _, kwargs = mock_fit.call_args
+        assert kwargs["progress_callback"] is not None
+        assert kwargs["cut_progress_callback"] is not None
+        shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
+    @patch("picasso.zfit.zfit")
+    def test_zfit_gpu_guard(self, mock_zfit):
+        """zfit fails fast when gpu=True but the CUDA backend is unavailable,
+        and runs normally on the CPU."""
+        # A minimal calibration file so zfit gets past loading to the guard.
+        cal = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        )
+        cal.write("X Coefficients: [0.0]\nY Coefficients: [0.0]\n")
+        cal.close()
+        self.ap.info = []
+
+        base_params = {
+            "magnification_factor": 0.79,
+            "fp_calibration": cal.name,
+            "fitting_method": "gausslq",  # explicit -> skip inference
+        }
+
+        # gpu=True + backend unavailable -> raise, before calling picasso.
+        with patch(
+            "picasso_workflow.analyse._gpu_fitting_available",
+            return_value=False,
+        ):
+            with self.assertRaises(analyse.AutoPicassoError) as ctx:
+                self.ap.zfit(0, {**base_params, "gpu": True})
+        assert "numba.cuda.is_available()" in str(ctx.exception)
+        mock_zfit.assert_not_called()
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_zfit"), ignore_errors=True
+        )
+
+        # gpu=False -> guard does not fire; picasso zfit is called.
+        zlocs = pd.DataFrame({"z": np.random.rand(5)})
+        mock_zfit.return_value = (zlocs, [])
+        self.ap.zfit(0, {**base_params, "gpu": False})
+        _, kwargs = mock_zfit.call_args
+        assert kwargs["gpu"] is False
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_zfit"), ignore_errors=True
+        )
+        os.unlink(cal.name)
+
     def zfit(self):
         pass
+
+    def test_infer_zfit_fitting_method(self):
+        # gaussmle* variants -> gaussmle; everything else -> gausslq
+        self.ap.info = [{"Box Size": 7}, {"Fit method": "gaussmle-gpu"}]
+        assert self.ap._infer_zfit_fitting_method() == "gaussmle"
+        self.ap.info = [{"Fit method": "gausslq-rotated"}]
+        assert self.ap._infer_zfit_fitting_method() == "gausslq"
+        # spline localizations already carry z; fall back to gausslq label
+        self.ap.info = [{"Fit method": "spline"}]
+        assert self.ap._infer_zfit_fitting_method() == "gausslq"
+        # no recorded method -> default gausslq
+        self.ap.info = [{"Box Size": 7}]
+        assert self.ap._infer_zfit_fitting_method() == "gausslq"
+        self.ap.info = []
+        assert self.ap._infer_zfit_fitting_method() == "gausslq"
 
     @patch("picasso_workflow.analyse.io.save_any_calibration")
     @patch("picasso_workflow.analyse.io.load_movie")

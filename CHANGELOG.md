@@ -10,7 +10,226 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- Live monitor undercounted multi-rank aggregation runs (e.g. showed 40% for a
+  fully finished 2-rank run). Both progress collectors —
+  `progress.read_all_progress` (local) and `SlurmCommunicator.fetch_all_progress`
+  (cluster, over SSH) — matched only `progress.json` and so dropped every worker
+  rank's `progress.rankN.json`, leaving the multi-rank merge with just rank 0's
+  share of the datasets. They now also collect `progress.rank*.json`, so the
+  merged view (and overall %) reflects all ranks.
+
 ### Added
+
+- `[gpu]` optional-dependencies extra (`pip install -e ".[gpu]"`) that installs
+  `numba-cuda` (+ a matching `cuda-bindings`), the backend picasso's CUDA fits
+  actually run on. Without it, numba's bundled `numba.cuda` is used, which
+  segfaults at CUDA-context creation on CUDA-13 drivers — so a GPU run died with
+  a native SIGSEGV instead of a clean error. README documents the symptom, the
+  fix, and the `~/.local` user-site shadowing trap (batch jobs are immune via
+  `PYTHONNOUSERSITE=1`; interactive shells and the local GUI are not).
+
+- `gaussian_mixture_cluster`: new `mode` option (`auto` / `astigmatism` /
+  `spline`, GUI-selectable) forwarded to `g5m`. `auto` (default) infers the z
+  model from the recorded fit method, so spline runs use `lpz` straight from
+  the localizations and need no astigmatism calibration, while Gaussian runs
+  are unchanged. Clarified that the `calibration` input is the astigmatism
+  z-calibration, only used to derive `lpz` when it is absent (never for spline
+  fits, which provide `lpz` directly). Pixel size is already read from the
+  metadata by `g5m`, so no calibration is needed for spline 3D clustering.
+
+### Added
+
+- Run tab: two debug toggles for native-crash diagnosis on the cluster.
+  **faulthandler** (on by default) exports `PYTHONFAULTHANDLER=1` so a
+  segfault in a native fit/CRLB call prints a Python->C traceback instead of
+  dying silently. **debug: CPU-only** (off) exports `CUDA_VISIBLE_DEVICES=""`
+  to hide all GPUs, forcing picasso's CPU kernels — picasso runs the spline
+  CRLB on the GPU whenever one is visible (even for the CPU `spline-mle` fit),
+  so this isolates a GPU-side crash from the CPU path. `assemble_slurm_commands`
+  gained `faulthandler=` / `cpu_only=` flags.
+
+### Changed
+
+- Aggregation runner distributes single-dataset workflows across SLURM ranks
+  by **dynamic self-scheduling** instead of a static `i % size` split. Each
+  rank races to claim the next dataset via an atomic `mkdir` on the shared
+  result folder (claim dir scoped by SLURM job id, so stale claims from a
+  crashed attempt never block a rerun) and advances only after finishing its
+  current one — so a rank that draws light datasets immediately picks up the
+  next unclaimed one, keeping every node busy even when the spot-heavy
+  datasets cluster. Coordination stays entirely on the shared filesystem
+  (no MPI); the completion-marker barrier and rank-0 gather were already
+  assignment-agnostic and are unchanged. Single-task (off-cluster) runs skip
+  claiming and run every dataset as before.
+
+### Fixed
+
+- Progress reporting: a module that fails while resolving its `$`-command
+  parameters (e.g. `$get_prior_result` referencing a module absent from the
+  workflow) now finalizes the run's progress as failed instead of leaving it
+  stuck at `running`. The `parameter_command_executor.run` call was outside
+  the per-module try/except, so such a failure escaped without
+  `module_end`/`finish`, and the live monitor showed the dataset as still
+  running long after the rank had moved on.
+- Live-progress monitor merges the per-rank aggregation states in a multi-rank
+  (SLURM) run. Each rank writes its own aggregation progress file and only
+  advances the datasets it owns (round-robin), so the monitor previously
+  showed only one rank's datasets; it now combines them, taking the
+  most-advanced state per dataset.
+- `find_similar`: empty pick set now saved with the localizations' numeric
+  dtypes rather than a hardcoded Gaussian column list (`sx`/`sy`/`ellipticity`,
+  object dtype) — same object-dtype-HDF5 crash as `find_gold`, for spline data.
+- `identify` no longer records the live progress/abort callbacks in
+  `self.info`. They were merged in via `new_info.update(identify_kwargs)`, but
+  those objects hold a `threading.Lock` (through the ProgressManager), so a
+  later `io.save_locs` → `save_info` → `yaml.dump` failed with
+  `TypeError: cannot pickle '_thread.lock' object` (first hit at the
+  `find_gold` save). Only the real identify parameters (filters, ROI, frame
+  bounds) are recorded now. Affected any progress-tracked run that saves locs,
+  not just spline.
+- `find_gold`: when no gold is found, the empty gold file now saves instead of
+  crashing. The empty set was built as `pd.DataFrame(columns=…)` (object-dtype
+  columns), which `io.save_locs` → `to_records` → HDF5 rejects
+  (`Object dtype has no native HDF5 equivalent`); it now preserves the
+  localizations' numeric dtypes.
+- `localize` locs-vs-frame plot no longer requires the Gaussian `sx`/`sy`
+  width columns, which spline fits don't produce (they crashed with
+  `KeyError: sx`). The second panel now shows `sx`/`sy` when present, else the
+  spline axial position `z`, else is omitted — so the plot works for any
+  fitting method.
+- Live-progress tree no longer collapses on every refresh: the user's
+  expand/collapse of the aggregation root and stage groups is captured
+  (keyed by dataset slot) before the per-poll rebuild and reapplied after, so
+  investigating a stage's details is not undone on the next 15 s refresh.
+- SLURM logs are now reliably captured: the generated submission creates the
+  `logs/` directory before submitting (SLURM opens `--output`/`--error` at
+  launch and does not create their parent, so a missing dir silently dropped
+  the job's stdout/stderr — where a traceback / OOM message lands), and the
+  log filenames use `%j` (job id) instead of `%A` (array-master id).
+- Live-progress monitor no longer shows a previous run's progress while a
+  resubmitted job is still pending. The results folder accumulates one
+  subfolder per run, so polling the tree returned every past run's
+  `progress.json`; the monitor now scopes the states to the current SLURM job
+  id (the run token woven into every `report_name`), so a pending resubmission
+  shows PENDING with an empty tree rather than the last run's completed stages.
+- Generated SLURM scripts now exit with the workflow's real status: the `srun`
+  step's exit code is captured (`PW_RC=$?`) and the batch script ends with
+  `exit ${PW_RC:-0}`. Previously the trailing `echo` made the batch script
+  exit 0 even when the `srun` step was cancelled/killed (e.g. SIGTERM, MPI
+  teardown), so SLURM misreported a dead run as `COMPLETED`.
+- Live-progress monitor: a job SLURM reports `COMPLETED` while the tracked
+  progress never reached 100% is now flagged amber as "COMPLETED but workflow
+  unfinished (stopped at <module>)" instead of a misleading green COMPLETED.
+- Live-progress box layout: only the module tree grows when the box is
+  resized vertically; the job-state chip and the overall progress bar keep
+  their natural height (fixed vertical size policy; the tree gets the stretch).
+
+### Added
+
+- `load_dataset_movie`: new optional `stage_to_local` flag (GUI checkbox, off
+  by default) that copies the movie to node-local scratch (`$SLURM_TMPDIR` /
+  `$TMPDIR`, auto-cleaned by SLURM) before loading, so the per-frame reads of
+  identify/localize are local instead of over a slow/edgy shared filesystem —
+  the fix for identify/localize crawling or hanging on large movies read over
+  NFS. Split OME-TIFF/MMStack series and `.raw` sidecars are staged as a set;
+  best-effort, falling back to the network path on any error.
+- `localize` now logs an anchor line at the start of the fit (method, spot
+  count, box, multiprocess) and at the end (localization count, elapsed time,
+  spots/s), and wires picasso's spot-extraction progress
+  (`cut_progress_callback`) in addition to the fit `progress_callback`. The
+  extraction phase — which silently dominates a large movie on a slow
+  filesystem — now reports forward motion too, so a slow localize is legible
+  in the SLURM log instead of looking hung.
+- `zfit` gained the same fail-fast GPU guard as `localize`: when `gpu=True`
+  but `numba.cuda.is_available()` is False, it raises an actionable
+  `AutoPicassoError` up front (pointing at the CUDA-toolkit / `module load
+  cuda` fix or `gpu=False`) instead of aborting deep inside picasso.
+
+### Fixed
+
+- `identify` / `localize` now fall back to picasso's own defaults for unset
+  optional arguments instead of forwarding the GUI's empty/minimum sentinels.
+  Previously an unset field was passed through verbatim, so `''` roi /
+  frame_bounds reached picasso as empty strings and, worse,
+  `temporal_median_window: 1` (a no-op median) switched the temporal-median
+  background filter *on* — forcing the slow filtered read path and making
+  `identify` crawl on large movies. Now roi/frame_bounds are forwarded only
+  when non-empty, the temporal-median filter only when its window is >= 2
+  (stride only alongside it), the Gaussian pre-filter only for sigma > 0, an
+  empty `fitting_method` resolves to the default, and non-positive `eps` /
+  `max_it` become None (= picasso's per-method default). The corresponding GUI
+  fields use 0 as the "off / use default" sentinel (`temporal_median_window`,
+  `temporal_median_stride`, `max_it` minimum lowered from 1 to 0).
+
+### Added
+
+- **Progress tracking** for workflow runs, overall and per module. A new
+  `picasso_workflow/progress.py` provides a `ProgressManager` emitter that the
+  runners drive at module boundaries; it fans updates out to sinks — an atomic
+  `progress.json` written into the run's result folder (the universal, cross-
+  process source of truth) and a `[progress]` log line. `WorkflowRunner`
+  records per-module status (`pending`/`running`/`done`/`failed`/`skipped`)
+  and timing; `AggregationWorkflowRunner` tracks per-dataset state (rank 0
+  owns `progress.json`, worker ranks write `progress.rank<N>.json`).
+- **Intra-module progress**: the long picasso calls (`identify`, `localize`
+  fit, `smlm_clusterer`, `undrift_rcc`, `undrift_aim`) now forward their
+  frame/spot/segment counts through picasso's progress callbacks, converted to
+  a 0..1 fraction via `PicassoProgressProxy`. Wiring is inert unless the runner
+  attaches a callback, so behaviour (and unit tests) are unchanged when
+  progress tracking is off.
+- **Cooperative abort**: a run stops gracefully at the next module boundary
+  (and inside long picasso calls, via `abort_callback`) when an `abort.flag`
+  file appears in its result folder, complementing a hard `scancel`.
+- **GUI live progress monitor** (Run tab): a SLURM-state chip, an overall
+  progress bar and a per-module/per-dataset tree, refreshed every **15 s**
+  (chosen because each SSH round-trip is slow). It fuses two sources —
+  `squeue`/`sacct` for the job's liveness and terminal cause (exit code, peak
+  memory on OOM) and the run's `progress.json` for which module and how far —
+  so a killed job reads as e.g. "OUT_OF_MEMORY during module 3/8 localize"
+  rather than a frozen bar. `SlurmCommunicator` gains `fetch_progress()` and
+  `write_abort_flag()`; **Cancel Job** now requests a graceful abort before
+  `scancel`.
+- For **aggregation** runs the monitor now shows *all stages* as a labelled,
+  collapsible tree — an `[Aggregation]` root (datasets N/M) with one
+  `[single NN] <tag>` child per dataset (each expandable to its modules) and
+  a final `[aggregation stage]` node — instead of one unlabelled single
+  workflow. All stages are fetched in a single SSH round-trip
+  (`SlurmCommunicator.fetch_all_progress` / `progress.read_all_progress`), and
+  the overall bar blends per-dataset progress with the aggregation stage.
+- The monitor can now **attach to a run started in a previous GUI session**:
+  the poll derives its target from the Run-tab fields rather than only from a
+  same-session submission. Enter the results folder (plus the job ID and
+  cluster host for a cluster run, or leave the job ID blank to watch a local
+  results folder) and click *Refresh now*. The SSH connection is built lazily
+  and cached per host (shared with submission).
+- **Local execution** (Run tab): *Start Workflow locally* now actually runs
+  the generated `start_workflow.py` as a subprocess and drives the same
+  monitor from the local `progress.json` (previously a stub).
+
+- Run tab (SLURM): new **Partition** dropdown, populated per cluster from the
+  new `SlurmPartitions` config section (editable, so an unlisted partition can
+  be typed). The chosen partition is emitted as `#SBATCH --partition=…` in the
+  generated SLURM script. GPU nodes usually live in a dedicated partition, so
+  this is required for a `--gres=gpu` request (e.g. `spline-mle-gpu`) to
+  schedule. `SlurmDefault` gains `partition` (preselected default) and `gpus`
+  keys.
+- `localize` module: fail-fast guard for GPU fitting. When a resolved
+  `fitting_method` ends in `-gpu` but `numba.cuda.is_available()` is False
+  (e.g. libNVVM / CUDA toolkit missing), the module now raises an actionable
+  `AutoPicassoError` up front instead of aborting deep inside picasso after a
+  long spot-extraction, and points at the CUDA-toolkit / `module load cuda`
+  fix or dropping the `-gpu` suffix to fit on the CPU.
+- SLURM job scripts now `module load` environment modules and export
+  `PYTHONNOUSERSITE=1`. This makes GPU fitting (`spline-mle-gpu`) work on
+  module-based HPC systems: a CUDA module provides libNVVM and sets
+  `CUDA_HOME` so numba's `cuda.is_available()` is True, and disabling
+  `~/.local` site-packages stops a stray user-site install from shadowing the
+  conda env. The modules are editable on the Run tab in a new **Modules**
+  field (space-separated), prefilled per cluster from
+  `ClusterEnvironment.<host>.Modules` (e.g. `cuda/13.0`); a blank field loads
+  nothing.
 
 - `localize` module: new optional `fitting_method` parameter exposing the
   picasso 0.11 fitting models (`gausslq` (default), `gaussmle`, the
@@ -20,13 +239,31 @@ This file was started after v0.5.6; earlier history is in the git log.
   calibration file) and yields z (3D) directly, and the fitter's `eps`
   (convergence) and `max_it` (iteration cap) are now exposable. The
   resolved fit method is recorded in the results and the Confluence report.
+  These parameters (`fitting_method`, `spline_calibration`,
+  `camera_calibration`, `eps`, `max_it`) are also selectable in the GUI's
+  `localize` module form — `spline_calibration` is where the spline-PSF
+  calibration file is entered.
 - `identify` module: now uses the picasso 0.11 threaded `localize.identify`
   entry point and exposes its new background-suppression and scoping
   options — `temporal_median_window` / `temporal_median_stride` (temporal
   median filter), `gaussian_filter_sigma` (spatial Gaussian pre-filter),
   and one-or-more `roi` / `frame_bounds`. `identify_parallel` toggles
   multi-core detection. Unset options fall back to the picasso defaults
-  (no filtering, whole movie), so existing workflows are unaffected.
+  (no filtering, whole movie), so existing workflows are unaffected. These
+  options are also selectable in the GUI's `identify` module form.
+- `zfit` module: new optional `fitting_method` (default `auto` — inferred
+  from the `"Fit method"` the `localize` module recorded, so it need not be
+  set to match by hand; override with `gausslq`/`gaussmle`), used by picasso
+  0.11 to compute the axial localization precision. Also new `gpu` (fit z on
+  a CUDA device) and `filter` (z-fit RMSD filter) parameters, all exposed in
+  the GUI. Guards against `zfit.zfit` returning no localizations instead of
+  crashing on the z histogram.
+- GUI: parameter forms support conditional visibility via a `visible_if`
+  spec key — a field is shown only while a controlling parameter holds one of
+  the listed values. Used so the `localize` `spline_calibration` field
+  appears only for the `spline` fitting methods. `_load_calibration` also
+  tolerates an empty-string path (treats it as unset) so leaving an optional
+  calibration field blank in the GUI no longer errors.
 - `localize` module: new optional `camera_calibration` parameter (a dict or
   a path to a picasso camera calibration file) enabling the picasso 0.11
   per-pixel sCMOS noise model during fitting.
@@ -99,6 +336,13 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- The new `register_channels` module was missing its GUI descriptor, so
+  opening the GUI raised `TypeError: Can't instantiate abstract class
+  ModuleDescriptor with abstract method register_channels`. Added the
+  `ModuleDescriptor.register_channels` descriptor and a regression test
+  asserting `ModuleDescriptor` implements every abstract module — the GUI
+  test `window` fixture had been silently *skipping* this class of failure
+  (it treats any `Window()` construction error as a skip).
 - `picasso_outpost.convert_zeiss_file` was left half-refactored by the
   earlier "aicsimageio removal" change: it still constructed an unused
   `AICSImage` and referenced an undefined `data`, so it raised
