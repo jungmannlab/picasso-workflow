@@ -19,6 +19,7 @@ import re
 import sys
 import json
 import shlex
+import getpass
 import yaml
 import importlib.util
 
@@ -933,21 +934,22 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "int",
                 "description": "Window (frames) of the picasso 0.11 temporal-"
                 "median background filter applied before spot detection. "
-                "Omit to disable.",
-                "min": 1,
+                "0 (or 1) disables it; >= 2 to filter. Re-tune min_gradient "
+                "when enabling.",
+                "min": 0,
                 "required": False,
             },
             "temporal_median_stride": {
                 "type": "int",
                 "description": "Stride (frames) for the temporal-median "
-                "filter.",
-                "min": 1,
+                "filter. Only used when the window is >= 2.",
+                "min": 0,
                 "required": False,
             },
             "gaussian_filter_sigma": {
                 "type": "float",
                 "description": "Sigma of a spatial Gaussian pre-filter for "
-                "spot detection. Omit to disable.",
+                "spot detection. 0 disables it.",
                 "min": 0.0,
                 "required": False,
             },
@@ -1125,16 +1127,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "eps": {
                 "type": "float",
-                "description": "Fitter convergence criterion. Omit to use "
-                "picasso's default.",
+                "description": "Fitter convergence criterion. 0 (or omit) uses "
+                "picasso's per-method default.",
                 "min": 0.0,
                 "required": False,
             },
             "max_it": {
                 "type": "int",
-                "description": "Maximum number of fit iterations. Omit to use "
-                "picasso's default.",
-                "min": 1,
+                "description": "Maximum number of fit iterations. 0 (or omit) "
+                "uses picasso's per-method default.",
+                "min": 0,
                 "required": False,
             },
             "locs_vs_frame": {
@@ -7987,6 +7989,46 @@ class SlurmCommunicator:
         except (ValueError, KeyError):
             return None
 
+    def fetch_all_progress(self, remote_folder):
+        """Fetch *every* ``progress.json`` under ``remote_folder`` in one call.
+
+        An aggregation run has one progress file per stage (top-level
+        aggregation, each single dataset, the aggregation stage). Fetching
+        them individually would be one slow SSH round-trip each, so this cats
+        them all in a single command, separated by a marker, and splits the
+        result client-side.
+
+        Parameters
+        ----------
+        remote_folder : str
+            Remote path of the run's results folder.
+
+        Returns
+        -------
+        list of dict
+            Parsed progress states (empty if none / unreachable).
+        """
+        if not remote_folder:
+            return []
+        folder = shlex.quote(remote_folder)
+        sep = "===PWF-PROGRESS-SEP==="
+        cmd = (
+            f"for f in $(find {folder} -name progress.json 2>/dev/null); "
+            f'do echo "{sep}"; cat "$f"; done'
+        )
+        res = self.execute_ssh_command(cmd)
+        out = res.get("stdout") or ""
+        states = []
+        for chunk in out.split(sep):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            try:
+                states.append(json.loads(chunk))
+            except ValueError:
+                continue
+        return states
+
     def write_abort_flag(self, remote_folder):
         """Drop an ``abort.flag`` in every run folder under ``remote_folder``.
 
@@ -14167,21 +14209,107 @@ class Window(QtWidgets.QMainWindow):
         """Stop the polling timer."""
         self.monitor_timer.stop()
 
+    def _ensure_slurm_communicator(self, host_cluster):
+        """Return a :class:`SlurmCommunicator` for ``host_cluster``.
+
+        Cached by host, so both job submission and the progress monitor share
+        one connection. Building it here (rather than only at submit time)
+        lets the monitor attach to a run started in a previous GUI session
+        from just the cluster fields. Does not test the connection -- callers
+        that need that (submission) call ``test_connection`` themselves.
+
+        Parameters
+        ----------
+        host_cluster : str
+            Cluster key (looked up in ``CONFIG['SlurmLoginNodes']``).
+
+        Returns
+        -------
+        SlurmCommunicator
+        """
+        if (
+            getattr(self, "slurm_communicator", None) is not None
+            and getattr(self, "_slurm_comm_host", None) == host_cluster
+        ):
+            return self.slurm_communicator
+        login_node = CONFIG["SlurmLoginNodes"][host_cluster]
+        if self.cluster_username_edit.text().strip() == "$USER":
+            username = getpass.getuser()
+        else:
+            username = self.cluster_username_edit.text().strip()
+        # match the historical discovery: prefer id_rsa, else id_ed25519,
+        # falling back to the last candidate path if neither exists.
+        ssh_key_path = None
+        for sshpath in (
+            os.path.join(os.path.expanduser("~"), ".ssh", "id_rsa"),
+            os.path.join(os.path.expanduser("~"), ".ssh", "id_ed25519"),
+        ):
+            ssh_key_path = sshpath
+            if os.path.exists(sshpath):
+                break
+        self.slurm_communicator = SlurmCommunicator(
+            login_node, username, port=22, ssh_key_path=ssh_key_path
+        )
+        self._slurm_comm_host = host_cluster
+        return self.slurm_communicator
+
+    def _resolve_monitor_target(self):
+        """Point the monitor at a run, deriving from the Run-tab fields.
+
+        This makes ``Refresh now`` work on a run started in a previous GUI
+        session: fill in the results folder (and, for a cluster run, the job
+        ID + cluster host) and refresh. A run launched from this session has
+        already set the target explicitly; the fields are used as the source
+        of truth here so changing them re-points the monitor.
+
+        - job ID present -> cluster mode: (re)connect and map the results
+          folder to its host path.
+        - no job ID -> local mode: poll the local results-folder tree.
+        """
+        results_folder = self.results_folder_display.text().strip()
+        for q in ('"', "'"):
+            if results_folder[:1] == q and results_folder[-1:] == q:
+                results_folder = results_folder[1:-1]
+        if not results_folder:
+            return
+        job_id = self.job_id_input.text().strip()
+        if job_id:
+            host_cluster = str(self.cluster_host_combo.currentText())
+            if host_cluster and host_cluster in CONFIG.get(
+                "SlurmLoginNodes", {}
+            ):
+                try:
+                    self._ensure_slurm_communicator(host_cluster)
+                    self._monitor_local_folder = None
+                    self._monitor_remote_folder = self.pathparser.convert_path(
+                        results_folder, host_cluster
+                    )
+                except Exception as e:
+                    logger.debug(f"monitor: could not connect cluster: {e}")
+        elif os.path.isdir(results_folder):
+            # no job ID: monitor a local results folder directly
+            self._monitor_local_folder = results_folder
+
     def _refresh_monitor(self):
-        """Poll SLURM + progress.json once and update the display.
+        """Poll SLURM + every stage's progress.json and update the display.
 
         Runs synchronously (like the existing job-status buttons); a busy
         guard prevents overlapping polls when an SSH round-trip is slow.
+        Collects *all* stages (aggregation top-level + each single dataset +
+        the aggregation stage), not just the newest, so the whole run is
+        shown rather than one arbitrary stage.
         """
         if self._monitor_busy:
             return
         self._monitor_busy = True
         try:
+            # derive what to poll from the Run-tab fields, so a run started
+            # in a previous session can be attached to by 'Refresh now'.
+            self._resolve_monitor_target()
             slurm = None
-            state = None
+            states = []
             if self._monitor_local_folder:
-                # local run: read the newest progress.json directly
-                state = pwprogress.read_latest_progress(
+                states = pwprogress.read_all_progress(
                     self._monitor_local_folder
                 )
             else:
@@ -14193,25 +14321,33 @@ class Window(QtWidgets.QMainWindow):
                     except Exception as e:
                         logger.debug(f"monitor: job status failed: {e}")
                     try:
-                        state = comm.fetch_progress(
+                        states = comm.fetch_all_progress(
                             self._monitor_remote_folder
                         )
                     except Exception as e:
                         logger.debug(f"monitor: fetch_progress failed: {e}")
-            self._update_monitor_display(slurm, state)
-            self._maybe_stop_monitor(slurm, state)
+            self._update_monitor_display(slurm, states)
+            self._maybe_stop_monitor(slurm, states)
         except Exception as e:
             logger.debug(f"monitor refresh error: {e}")
         finally:
             self._monitor_busy = False
 
-    def _maybe_stop_monitor(self, slurm, state):
+    def _top_state(self, states):
+        """The run's top-level state: the aggregation one, else the only one."""
+        agg = next((s for s in states if s.get("kind") == "aggregation"), None)
+        if agg is not None:
+            return agg
+        return states[0] if states else None
+
+    def _maybe_stop_monitor(self, slurm, states):
         """Stop polling once the run has reached a terminal state."""
         if slurm and slurm.get("status") in self._SLURM_TERMINAL:
             self._stop_monitor()
             return
-        if self._monitor_local_folder and state:
-            if state.get("state") in ("done", "failed", "aborted"):
+        if self._monitor_local_folder:
+            top = self._top_state(states)
+            if top and top.get("state") in ("done", "failed", "aborted"):
                 # local process finished (no SLURM authority to consult)
                 if (
                     self._local_process is None
@@ -14219,8 +14355,13 @@ class Window(QtWidgets.QMainWindow):
                 ):
                     self._stop_monitor()
 
-    def _update_monitor_display(self, slurm, state):
-        """Render the fused SLURM + progress state into the widgets."""
+    def _update_monitor_display(self, slurm, states):
+        """Render the fused SLURM + multi-stage progress into the widgets."""
+        states = states or []
+        agg = next((s for s in states if s.get("kind") == "aggregation"), None)
+        singles = [s for s in states if s.get("kind") != "aggregation"]
+        top = self._top_state(states)
+
         # --- SLURM state chip (or local run state) ---
         if slurm and slurm.get("success"):
             status = slurm.get("status", "UNKNOWN")
@@ -14229,7 +14370,7 @@ class Window(QtWidgets.QMainWindow):
             details = slurm.get("details") or {}
             # fuse: SLURM says *why* it died, progress.json says *where*
             if status in self._SLURM_TERMINAL and status != "COMPLETED":
-                where = self._current_module_label(state)
+                where = self._active_stage_module_label(states)
                 if where:
                     text += f" during {where}"
                 extra = []
@@ -14245,71 +14386,201 @@ class Window(QtWidgets.QMainWindow):
                 f"background-color: {color};"
             )
         elif self._monitor_local_folder:
-            run_state = (state or {}).get("state", "-")
+            run_state = (top or {}).get("state", "-")
             self.monitor_state_label.setText(f"Local run: {run_state}")
         else:
             self.monitor_state_label.setText("Job state: -")
 
-        # --- overall bar + module tree from progress.json ---
-        if not state:
-            return
+        # --- overall bar ---
         self.overall_progress_bar.setValue(
-            int(round(pwprogress.overall_fraction(state) * 100))
+            int(round(self._overall_progress(agg, singles, states) * 100))
         )
-        self.module_tree.clear()
-        modules = state.get("modules") or []
-        if modules:
-            for m in modules:
-                frac = m.get("fraction")
-                pct = (
-                    f"{frac * 100:.0f}"
-                    if isinstance(frac, (int, float))
-                    else "-"
-                )
-                elapsed = m.get("elapsed")
-                el = (
-                    f"{elapsed:.1f}s"
-                    if isinstance(elapsed, (int, float))
-                    else "-"
-                )
-                item = QtWidgets.QTreeWidgetItem(
-                    [
-                        str(m.get("i", "")),
-                        str(m.get("name", "")),
-                        str(m.get("status", "")),
-                        pct,
-                        el,
-                    ]
-                )
-                self.module_tree.addTopLevelItem(item)
-        else:
-            # aggregation run: show per-dataset rows instead
-            for d in state.get("datasets") or []:
-                item = QtWidgets.QTreeWidgetItem(
-                    [
-                        str(d.get("i", "")),
-                        str(d.get("tag") or "(no tag)"),
-                        str(d.get("state", "")),
-                        "-",
-                        "-",
-                    ]
-                )
-                self.module_tree.addTopLevelItem(item)
 
-    def _current_module_label(self, state):
-        """A short 'module i/N name' label for the active module, or ''."""
-        if not state:
-            return ""
-        cur = state.get("current")
-        modules = state.get("modules") or []
-        total = state.get("total")
-        if cur is not None and 0 <= cur < len(modules):
-            return f"module {cur + 1}/{total} {modules[cur].get('name', '')}"
+        # --- tree ---
+        self.module_tree.clear()
+        if agg is not None:
+            self.module_tree.setRootIsDecorated(True)
+            self._populate_aggregation_tree(agg, singles)
+        elif len(states) == 1:
+            # plain single-dataset run: flat module list
+            self.module_tree.setRootIsDecorated(False)
+            for m in states[0].get("modules") or []:
+                self.module_tree.addTopLevelItem(self._build_module_item(m))
+        elif singles:
+            # several stages but no top-level aggregation state (yet):
+            # show each as its own collapsible group.
+            self.module_tree.setRootIsDecorated(True)
+            for s in self._sorted_singles(singles):
+                self.module_tree.addTopLevelItem(self._build_stage_item(s))
+
+    # -- tree builders ------------------------------------------------------
+
+    def _build_module_item(self, m):
+        """A leaf tree item for a single module."""
+        frac = m.get("fraction")
+        pct = f"{frac * 100:.0f}" if isinstance(frac, (int, float)) else "-"
+        elapsed = m.get("elapsed")
+        el = f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "-"
+        return QtWidgets.QTreeWidgetItem(
+            [
+                str(m.get("i", "")),
+                str(m.get("name", "")),
+                str(m.get("status", "")),
+                pct,
+                el,
+            ]
+        )
+
+    def _stage_label(self, state):
+        """A readable label for a stage, e.g. '[single 02] cell2'."""
+        name = pwprogress.stage_name(state)
+        if pwprogress.is_aggregation_stage(state):
+            return f"[aggregation stage] {name}"
+        idx = pwprogress.dataset_index(state)
+        if idx is not None:
+            return f"[single {idx:02d}] {name}"
+        return name
+
+    def _build_stage_item(self, state):
+        """A collapsible tree item for one stage, with its modules as leaves."""
+        frac = pwprogress.overall_fraction(state)
+        parent = QtWidgets.QTreeWidgetItem(
+            [
+                "",
+                self._stage_label(state),
+                str(state.get("state", "")),
+                f"{frac * 100:.0f}",
+                "",
+            ]
+        )
+        for m in state.get("modules") or []:
+            parent.addChild(self._build_module_item(m))
+        # expand the stage that is currently running
+        parent.setExpanded(state.get("state") == "running")
+        return parent
+
+    def _sorted_singles(self, singles):
+        """Order stages: single datasets by index, aggregation stage last."""
+
+        def key(s):
+            if pwprogress.is_aggregation_stage(s):
+                return (1, 0)
+            idx = pwprogress.dataset_index(s)
+            return (0, idx if idx is not None else 9999)
+
+        return sorted(singles, key=key)
+
+    def _populate_aggregation_tree(self, agg, singles):
+        """Build the aggregation root with one child per stage."""
+        datasets = agg.get("datasets") or []
+        n_done = sum(
+            1 for d in datasets if d.get("state") in ("done", "skipped")
+        )
+        root = QtWidgets.QTreeWidgetItem(
+            [
+                "",
+                f"[Aggregation] {pwprogress.stage_name(agg)} "
+                f"- datasets {n_done}/{len(datasets)}",
+                str(agg.get("state", "")),
+                f"{pwprogress.overall_fraction(agg) * 100:.0f}",
+                "",
+            ]
+        )
+        # map dataset index -> its single stage (if it has started)
+        idx_map = {}
+        for s in singles:
+            if pwprogress.is_aggregation_stage(s):
+                continue
+            di = pwprogress.dataset_index(s)
+            if di is not None:
+                idx_map[di] = s
+
+        # one child per dataset slot, so not-yet-started datasets show too
+        for d in datasets:
+            di = d.get("i")
+            s = idx_map.get(di)
+            if s is not None:
+                root.addChild(self._build_stage_item(s))
+            else:
+                tag = d.get("tag") or "(no tag)"
+                root.addChild(
+                    QtWidgets.QTreeWidgetItem(
+                        [
+                            str(di),
+                            f"[single {di:02d}] {tag}",
+                            str(d.get("state", "")),
+                            "0",
+                            "",
+                        ]
+                    )
+                )
+
+        # the aggregation stage (runs after all singles)
+        agg_stage = next(
+            (s for s in singles if pwprogress.is_aggregation_stage(s)), None
+        )
+        if agg_stage is not None:
+            root.addChild(self._build_stage_item(agg_stage))
+
+        self.module_tree.addTopLevelItem(root)
+        root.setExpanded(True)
+
+    def _overall_progress(self, agg, singles, states):
+        """A single 0..1 completion fraction across all stages."""
+        if agg is None:
+            if not states:
+                return 0.0
+            return sum(pwprogress.overall_fraction(s) for s in states) / len(
+                states
+            )
+        datasets = agg.get("datasets") or []
+        n = len(datasets)
+        if n == 0:
+            return pwprogress.overall_fraction(agg)
+        idx_map = {}
+        for s in singles:
+            if pwprogress.is_aggregation_stage(s):
+                continue
+            di = pwprogress.dataset_index(s)
+            if di is not None:
+                idx_map[di] = s
+        # sum of per-dataset fractions (done=1, running=its single's fraction)
+        single_sum = 0.0
+        for d in datasets:
+            st = d.get("state")
+            if st in ("done", "skipped"):
+                single_sum += 1.0
+            elif st == "running" and d.get("i") in idx_map:
+                single_sum += pwprogress.overall_fraction(idx_map[d["i"]])
+        agg_stage = next(
+            (s for s in singles if pwprogress.is_aggregation_stage(s)), None
+        )
+        if agg_stage is not None:
+            return (single_sum + pwprogress.overall_fraction(agg_stage)) / (
+                n + 1
+            )
+        return single_sum / n
+
+    def _active_stage_module_label(self, states):
+        """Label the module running now (across stages), for failure fusion."""
+        for s in states:
+            if s.get("kind") == "aggregation":
+                continue
+            cur = s.get("current")
+            modules = s.get("modules") or []
+            if (
+                cur is not None
+                and 0 <= cur < len(modules)
+                and modules[cur].get("status") == "running"
+            ):
+                return (
+                    f"{self._stage_label(s)} module "
+                    f"{cur + 1}/{s.get('total')} "
+                    f"{modules[cur].get('name', '')}"
+                )
         return ""
 
     def assemble_slurm_scripts(self):
-        import getpass
-
         host_cluster = str(self.cluster_host_combo.currentText())  # "hpcl8XXX"
         login_node = CONFIG["SlurmLoginNodes"][host_cluster]  # "hpcl8001"
         # print(f"'{host_cluster}', '{login_node}'")
@@ -14330,25 +14601,11 @@ class Window(QtWidgets.QMainWindow):
         self._monitor_remote_folder = results_folder_host
         self._monitor_local_folder = None
 
-        if self.cluster_username_edit.text().strip() == "$USER":
-            username = getpass.getuser()
-        else:
-            username = self.cluster_username_edit.text().strip()
-
-        ssh_key_path_options = [
-            os.path.join(os.path.expanduser("~"), ".ssh", "id_rsa"),
-            os.path.join(os.path.expanduser("~"), ".ssh", "id_ed25519"),
-        ]
-        for sshpath in ssh_key_path_options:
-            ssh_key_path = sshpath
-            if os.path.exists(ssh_key_path):
-                break
-        # ssh_key_path = "~/.ssh/id_rsa"
-        self.slurm_communicator = SlurmCommunicator(
-            login_node, username, port=22, ssh_key_path=ssh_key_path
-        )
-
+        self.slurm_communicator = self._ensure_slurm_communicator(host_cluster)
         self.slurm_communicator.test_connection()
+        # exposed for the submission summary / log below
+        username = self.slurm_communicator.username
+        ssh_key_path = self.slurm_communicator.ssh_key_path
 
         scriptname = "start_workflow.py"
         python_script_path = self.create_python_script(

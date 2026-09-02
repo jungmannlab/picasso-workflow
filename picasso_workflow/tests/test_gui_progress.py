@@ -1,0 +1,124 @@
+#!/usr/bin/env python
+"""GUI test for the Run tab's multi-stage progress monitor logic.
+
+Exercises the pure aggregation/labelling helpers on the ``Window`` class
+without constructing the full Qt window (they touch no widgets), so it runs
+wherever PyQt6 imports. Skips gracefully where PyQt6 is unavailable.
+"""
+
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import pytest  # noqa: E402
+
+pytest.importorskip("PyQt6", reason="PyQt6 required for the GUI test")
+
+from picasso_workflow import gui  # noqa: E402
+
+
+@pytest.fixture
+def win():
+    # bypass __init__ (no QApplication / widgets needed for these helpers)
+    return gui.Window.__new__(gui.Window)
+
+
+def _single(idx, state, modules):
+    return {
+        "kind": "single",
+        "report_name": f"myrun_sgl_{idx:02d}_cell{idx}_240101-1200",
+        "state": state,
+        "total": len(modules),
+        "current": next(
+            (i for i, m in enumerate(modules) if m[1] == "running"),
+            None,
+        ),
+        "modules": [
+            {"i": i, "name": n, "status": s, "fraction": f}
+            for i, (n, s, f) in enumerate(modules)
+        ],
+    }
+
+
+def _agg(dataset_states):
+    return {
+        "kind": "aggregation",
+        "report_name": "myrun_240101-1200",
+        "state": "running",
+        "datasets": [
+            {"i": i, "tag": f"cell{i}", "state": s}
+            for i, s in enumerate(dataset_states)
+        ],
+    }
+
+
+def test_stage_label(win):
+    assert win._stage_label(_single(2, "running", [])) == (
+        "[single 02] myrun_sgl_02_cell2"
+    )
+    agg_stage = {"report_name": "myrun_aggregation_240101-1200"}
+    assert win._stage_label(agg_stage) == (
+        "[aggregation stage] myrun_aggregation"
+    )
+
+
+def test_sorted_singles_orders_datasets_then_aggregation(win):
+    s0 = _single(0, "done", [])
+    s1 = _single(1, "running", [])
+    agg_stage = {
+        "kind": "single",
+        "report_name": "myrun_aggregation_240101-1200",
+        "state": "pending",
+        "modules": [],
+    }
+    ordered = win._sorted_singles([agg_stage, s1, s0])
+    names = [win._stage_label(s) for s in ordered]
+    assert names[0].startswith("[single 00]")
+    assert names[1].startswith("[single 01]")
+    assert names[2].startswith("[aggregation stage]")
+
+
+def test_overall_progress_combines_singles_and_agg_stage(win):
+    # 2 datasets: #0 done (1.0), #1 running at 0.5; no agg stage yet
+    agg = _agg(["done", "running"])
+    s0 = _single(0, "done", [("a", "done", 1.0)])
+    s1 = _single(1, "running", [("a", "running", 0.5)])
+    overall = win._overall_progress(agg, [s0, s1], [agg, s0, s1])
+    # (1.0 + 0.5) / 2 datasets = 0.75
+    assert abs(overall - 0.75) < 1e-6
+
+
+def test_overall_progress_weights_aggregation_stage(win):
+    # both datasets done, aggregation stage half done -> (2 + 0.5)/(2+1)
+    agg = _agg(["done", "done"])
+    s0 = _single(0, "done", [("a", "done", 1.0)])
+    s1 = _single(1, "done", [("a", "done", 1.0)])
+    agg_stage = {
+        "kind": "single",
+        "report_name": "myrun_aggregation_240101-1200",
+        "state": "running",
+        "total": 2,
+        "current": 1,
+        "modules": [
+            {"i": 0, "name": "a", "status": "done", "fraction": 1.0},
+            {"i": 1, "name": "b", "status": "running", "fraction": 0.0},
+        ],
+    }
+    overall = win._overall_progress(
+        agg, [s0, s1, agg_stage], [agg, s0, s1, agg_stage]
+    )
+    assert abs(overall - (2.5 / 3)) < 1e-6
+
+
+def test_overall_progress_single_run(win):
+    s = _single(0, "running", [("a", "done", 1.0), ("b", "running", 0.0)])
+    # no aggregation state -> mean of module fractions = (1 + 0)/2 = 0.5
+    assert abs(win._overall_progress(None, [s], [s]) - 0.5) < 1e-6
+
+
+def test_active_stage_module_label_points_at_running(win):
+    s0 = _single(0, "done", [("a", "done", 1.0)])
+    s1 = _single(1, "running", [("a", "done", 1.0), ("b", "running", 0.3)])
+    label = win._active_stage_module_label([_agg(["done", "running"]), s0, s1])
+    assert "[single 01]" in label
+    assert "module 2/2 b" in label

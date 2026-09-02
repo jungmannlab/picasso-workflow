@@ -173,6 +173,51 @@ class TestAnalyseModules(unittest.TestCase):
             assert "temporal_median_stride" not in kwargs
         shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
 
+        # GUI placeholder / off sentinels must NOT be forwarded, so picasso's
+        # defaults (no filtering, whole movie) apply. A window of 1 is a no-op
+        # median that would otherwise still switch the filter on.
+        with patch(
+            "picasso_workflow.analyse.localize.identify"
+        ) as mock_identify:
+            mock_identify.return_value = (self.ap.identifications, {})
+            parameters = {
+                "box_size": 7,
+                "min_gradient": 500,
+                "roi": "",
+                "frame_bounds": "",
+                "temporal_median_window": 1,
+                "temporal_median_stride": 1,
+                "gaussian_filter_sigma": 0.0,
+            }
+            self.ap.identify(0, parameters)
+            _, kwargs = mock_identify.call_args
+            for key in (
+                "roi",
+                "frame_bounds",
+                "temporal_median_window",
+                "temporal_median_stride",
+                "gaussian_filter_sigma",
+            ):
+                assert key not in kwargs
+        shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
+
+        # a real window (>= 2) forwards both window and stride
+        with patch(
+            "picasso_workflow.analyse.localize.identify"
+        ) as mock_identify:
+            mock_identify.return_value = (self.ap.identifications, {})
+            parameters = {
+                "box_size": 7,
+                "min_gradient": 500,
+                "temporal_median_window": 20,
+                "temporal_median_stride": 5,
+            }
+            self.ap.identify(0, parameters)
+            _, kwargs = mock_identify.call_args
+            assert kwargs["temporal_median_window"] == 20
+            assert kwargs["temporal_median_stride"] == 5
+        shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
+
     @patch("picasso_workflow.analyse.localize.fit")
     def localize(self, mock_fit):
         nspots = 5
@@ -236,6 +281,24 @@ class TestAnalyseModules(unittest.TestCase):
         mock_loader.assert_called_once_with("cam.yaml")
         _, kwargs = mock_fit.call_args
         assert kwargs["camera_calibration"] == cam_cal
+        shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
+        # GUI placeholders fall back to picasso's defaults: an empty
+        # fitting_method resolves to gausslq, and non-positive eps / max_it
+        # (the GUI's unset sentinels) become None rather than being forwarded.
+        mock_fit.reset_mock()
+        parameters = {
+            "box_size": 7,
+            "fit_parallel": False,
+            "fitting_method": "",
+            "eps": 0.0,
+            "max_it": 0,
+        }
+        self.ap.localize(0, parameters)
+        _, kwargs = mock_fit.call_args
+        assert kwargs["fitting_method"] == "gausslq"
+        assert kwargs["eps"] is None
+        assert kwargs["max_it"] is None
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
         # GPU is orthogonal to the model: with a GPU fitter configured, an
@@ -338,6 +401,86 @@ class TestAnalyseModules(unittest.TestCase):
         _, kwargs = mock_fit.call_args
         assert kwargs["fitting_method"] == "spline-mle-gpu"
         _cleanup()
+
+    @patch("picasso_workflow.analyse.localize.fit")
+    def test_localize_wires_progress_callbacks(self, mock_fit):
+        """When the runner has wired progress in, localize forwards both the
+        fit progress_callback and the spot-extraction cut_progress_callback so
+        neither phase looks hung."""
+        locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    tuple(np.random.rand(len(self.locs_dtype)))
+                    for _ in range(3)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        mock_fit.return_value = (locs, [])
+        self.ap.info = []
+        self.ap.identifications = pd.DataFrame({"frame": [0, 1, 2]})
+
+        # no progress wired -> neither callback forwarded (picasso unchanged)
+        self.ap._progress_callback = None
+        self.ap.localize(0, {"box_size": 7, "fit_parallel": False})
+        _, kwargs = mock_fit.call_args
+        assert "progress_callback" not in kwargs
+        assert "cut_progress_callback" not in kwargs
+        shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
+        # progress wired -> both phases report
+        mock_fit.reset_mock()
+        self.ap._progress_callback = lambda *a, **k: None
+        try:
+            self.ap.localize(0, {"box_size": 7, "fit_parallel": False})
+        finally:
+            self.ap._progress_callback = None
+        _, kwargs = mock_fit.call_args
+        assert kwargs["progress_callback"] is not None
+        assert kwargs["cut_progress_callback"] is not None
+        shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
+
+    @patch("picasso.zfit.zfit")
+    def test_zfit_gpu_guard(self, mock_zfit):
+        """zfit fails fast when gpu=True but the CUDA backend is unavailable,
+        and runs normally on the CPU."""
+        # A minimal calibration file so zfit gets past loading to the guard.
+        cal = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        )
+        cal.write("X Coefficients: [0.0]\nY Coefficients: [0.0]\n")
+        cal.close()
+        self.ap.info = []
+
+        base_params = {
+            "magnification_factor": 0.79,
+            "fp_calibration": cal.name,
+            "fitting_method": "gausslq",  # explicit -> skip inference
+        }
+
+        # gpu=True + backend unavailable -> raise, before calling picasso.
+        with patch(
+            "picasso_workflow.analyse._gpu_fitting_available",
+            return_value=False,
+        ):
+            with self.assertRaises(analyse.AutoPicassoError) as ctx:
+                self.ap.zfit(0, {**base_params, "gpu": True})
+        assert "numba.cuda.is_available()" in str(ctx.exception)
+        mock_zfit.assert_not_called()
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_zfit"), ignore_errors=True
+        )
+
+        # gpu=False -> guard does not fire; picasso zfit is called.
+        zlocs = pd.DataFrame({"z": np.random.rand(5)})
+        mock_zfit.return_value = (zlocs, [])
+        self.ap.zfit(0, {**base_params, "gpu": False})
+        _, kwargs = mock_zfit.call_args
+        assert kwargs["gpu"] is False
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_zfit"), ignore_errors=True
+        )
+        os.unlink(cal.name)
 
     def zfit(self):
         pass

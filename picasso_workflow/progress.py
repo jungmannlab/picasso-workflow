@@ -504,6 +504,69 @@ def read_latest_progress(folder: str) -> dict | None:
         return None
 
 
+def read_all_progress(folder: str) -> list:
+    """Read every ``progress.json`` in ``folder``'s tree.
+
+    An aggregation run produces several progress files -- the top-level
+    aggregation state plus one per single-dataset stage and one for the
+    aggregation stage -- so a monitor that wants to show all stages needs
+    them all, not just the newest. Returns a list of parsed states (empty if
+    none found); order follows :func:`os.walk`.
+
+    Parameters
+    ----------
+    folder : str
+        The run's results folder (walked recursively).
+
+    Returns
+    -------
+    list of dict
+    """
+    states = []
+    for root, _dirs, files in os.walk(folder):
+        if PROGRESS_FILENAME in files:
+            try:
+                with open(os.path.join(root, PROGRESS_FILENAME)) as f:
+                    states.append(json.load(f))
+            except (OSError, ValueError):
+                continue
+    return states
+
+
+def stage_name(state: dict) -> str:
+    """A short human label for a stage, from its ``report_name``.
+
+    Strips the trailing ``_yymmdd-HHMM`` run postfix. Returns ``"(run)"`` if
+    there is no report name.
+    """
+    import re
+
+    name = (state or {}).get("report_name") or ""
+    name = re.sub(r"_\d{6}-\d{4}$", "", name)
+    return name or "(run)"
+
+
+def is_aggregation_stage(state: dict) -> bool:
+    """Whether ``state`` is the final aggregation stage (not a single dataset).
+
+    The aggregation-stage single workflow is named ``..._aggregation``; the
+    per-dataset singles are named ``..._sgl_NN[_tag]``.
+    """
+    return stage_name(state).endswith("_aggregation")
+
+
+def dataset_index(state: dict) -> int | None:
+    """The dataset index parsed from a single stage's ``_sgl_NN`` name, or None.
+
+    Used to align a single-dataset stage with its slot in the top-level
+    aggregation ``datasets`` list.
+    """
+    import re
+
+    m = re.search(r"_sgl_(\d+)", (state or {}).get("report_name") or "")
+    return int(m.group(1)) if m else None
+
+
 # --- cooperative abort ------------------------------------------------------
 
 

@@ -29,14 +29,31 @@ ConfluenceTest: # target for the pytest suite
 SlurmDefault:
   nodes: 2
   cores: 12
+  gpus: 0                # GPUs/node to request (--gres=gpu:N); 0 = no GPU
   memory: "50GB"
   timeout: "24:00:00"
+  partition: ""          # default partition preselected in the Run tab ("" = cluster default)
 SlurmLoginNodes:
   clusterXXX: cluster001
+# SLURM partitions offered in the Run tab's Partition dropdown, per cluster
+# (keyed as in SlurmLoginNodes). GPU nodes usually live in a dedicated
+# partition, so a --gres=gpu request must target one of these. The dropdown is
+# editable, so an unlisted partition can still be typed by hand.
+SlurmPartitions:
+  clusterXXX:
+    - "cpu"
+    - "gpu"
 ClusterEnvironment:
   pw_module: "picasso-workflow-gui"       # module name when use_pw_module is checked
   anaconda_module: "anaconda/3/2023.03"  # module name when use_pw_module is unchecked
   conda_env: "picasso-workflow"          # conda environment to activate
+  clusterXXX:
+    # Environment modules to `module load` in the SLURM job (editable in the
+    # Run tab's Modules field). A CUDA module provides libNVVM + sets CUDA_HOME
+    # so numba can run GPU fitting (e.g. spline-mle-gpu). Match the version to
+    # the node driver's CUDA ceiling (see `nvidia-smi`).
+    Modules:
+      - cuda/13.0
 Drivepaths:
   machine.local:
     - "/local/machine/path"

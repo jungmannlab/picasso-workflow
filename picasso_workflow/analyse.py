@@ -159,6 +159,35 @@ def _gpu_fitting_available():
         return False
 
 
+def _positive_or_none(value, cast):
+    """Return ``cast(value)`` if it is strictly positive, else None.
+
+    Several picasso arguments (``eps``, ``max_it``, filter widths) accept
+    None to mean "use the default" but reject a non-positive value. The GUI
+    emits its spinbox minimum (0 / 0.0) or an empty string for an unset
+    optional field, so map those - and any non-positive number - to None.
+
+    Parameters
+    ----------
+    value : Any
+        The raw parameter value (may be None, "", or a number).
+    cast : callable
+        ``int`` or ``float`` - how to coerce a real value.
+
+    Returns
+    -------
+    int or float or None
+        The positive, coerced value, or None.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        value = cast(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _load_calibration(calibration, loader):
     """Resolve a picasso calibration given as a dict or a file path.
 
@@ -1582,19 +1611,31 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # picasso 0.11 identification supports optional background-suppression
         # filters (temporal median, spatial Gaussian) and multiple ROIs /
-        # frame bounds via the threaded localize.identify entry point. Only
-        # forward the ones the workflow actually set so the picasso defaults
-        # (no filtering, whole movie) are preserved otherwise.
+        # frame bounds via the threaded localize.identify entry point. Forward
+        # only the ones the workflow genuinely set, so picasso's defaults (no
+        # filtering, whole movie) apply otherwise. The GUI leaves unset
+        # optional fields at their empty/minimum sentinel ('' for roi /
+        # frame_bounds, 0/1 for the numeric filters), and picasso would misread
+        # those: an empty-string roi/frame_bounds is not None, and *any* truthy
+        # temporal_median_window switches the filter on - a window of 1 is a
+        # no-op median that still forces the slower filtered read path.
         identify_kwargs = {}
-        for key in (
-            "roi",
-            "frame_bounds",
-            "temporal_median_window",
-            "temporal_median_stride",
-            "gaussian_filter_sigma",
-        ):
-            if (val := parameters.get(key)) is not None:
-                identify_kwargs[key] = val
+        # roi / frame_bounds: a real selection is a non-empty list/tuple.
+        for key in ("roi", "frame_bounds"):
+            if parameters.get(key):
+                identify_kwargs[key] = parameters[key]
+        # temporal-median background: a window needs >= 2 frames to do
+        # anything; the stride only matters alongside a window.
+        tmw = parameters.get("temporal_median_window")
+        if tmw is not None and int(tmw) >= 2:
+            identify_kwargs["temporal_median_window"] = int(tmw)
+            tms = parameters.get("temporal_median_stride")
+            if tms is not None and int(tms) >= 1:
+                identify_kwargs["temporal_median_stride"] = int(tms)
+        # spatial Gaussian pre-filter: a sigma of 0 (or less) means off.
+        gfs = parameters.get("gaussian_filter_sigma")
+        if gfs is not None and float(gfs) > 0:
+            identify_kwargs["gaussian_filter_sigma"] = float(gfs)
 
         # forward intra-module progress / abort when the runner wired them in
         proxy = self._make_progress_proxy(
@@ -1746,7 +1787,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         # already picked an explicit variant). Spline-PSF methods additionally
         # need a ``spline_calibration`` (dict or path), which yields z (3D).
         use_gpu = bool(self.analysis_config.get("gpufit_installed", False))
-        fitting_method = parameters.get("fitting_method")
+        # An empty ("" from the GUI) or missing fitting_method means "use the
+        # default", not the literal "" picasso would reject.
+        fitting_method = parameters.get("fitting_method") or None
         if fitting_method is None:
             fitting_method = "gausslq-gpu" if use_gpu else "gausslq"
         elif use_gpu and fitting_method in _GPU_BASE_FIT_METHODS:
@@ -1780,18 +1823,41 @@ class AutoPicasso(util.AbstractModuleCollection):
             io.load_camera_calibration,
         )
 
-        # forward intra-module progress / abort when the runner wired them in
+        # Forward intra-module progress / abort when the runner wired them in.
+        # localize.fit has two long phases with separate callbacks: spot
+        # extraction from the movie (cut_progress_callback) and the fit itself
+        # (progress_callback). Wiring both means the whole module reports
+        # forward motion - the extraction phase is what silently dominates a
+        # big movie on a slow filesystem, so leaving it un-wired is what makes
+        # a slow run look hung.
+        n_spots = len(self.identifications)
         fit_progress_kw = {}
-        proxy = self._make_progress_proxy(
-            total=len(self.identifications), phase="localize"
-        )
+        proxy = self._make_progress_proxy(total=n_spots, phase="localize")
         if proxy is not None:
             fit_progress_kw["progress_callback"] = proxy
+            fit_progress_kw["cut_progress_callback"] = (
+                self._make_progress_proxy(
+                    total=n_spots, phase="localize (extract spots)"
+                )
+            )
             if (abort := self._picasso_abort()) is not None:
                 fit_progress_kw["abort_callback"] = abort
 
-        # eps / max_it default to None in localize.fit (= use picasso's
-        # defaults), so they can be forwarded unconditionally.
+        # eps / max_it: None makes localize.fit pick picasso's per-method
+        # default. The GUI emits its spinbox minimum (0.0 / 0) for an unset
+        # field, and picasso requires strictly-positive values, so map any
+        # non-positive sentinel back to None (= use the default).
+        eps = _positive_or_none(parameters.get("eps"), float)
+        max_it = _positive_or_none(parameters.get("max_it"), int)
+        # Anchor lines in the (SLURM) log so a long fit is legible even when
+        # the throttled progress sink is quiet: what method, how many spots,
+        # and - at the end - how long it took and the resulting throughput.
+        logger.info(
+            f"localize: fitting {n_spots} spots with method "
+            f"{fitting_method!r} (multiprocess={multiprocess}, "
+            f"box={parameters['box_size']})."
+        )
+        t_fit_start = time.time()
         self.locs, _fit_info = localize.fit(
             self.movie,
             camera_info=self.camera_info,
@@ -1801,8 +1867,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             spline_calibration=spline_calibration,
             camera_calibration=camera_calibration,
             multiprocess=multiprocess,
-            eps=parameters.get("eps"),
-            max_it=parameters.get("max_it"),
+            eps=eps,
+            max_it=max_it,
             **fit_progress_kw,
         )
         if self.locs is None:
@@ -1811,6 +1877,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 f"(fitting_method={fitting_method!r}); the movie region may "
                 "be empty or fitting was aborted."
             )
+        t_fit = time.time() - t_fit_start
+        rate = n_spots / t_fit if t_fit > 0 else float("nan")
+        logger.info(
+            f"localize: fit {len(self.locs)} localizations in {t_fit:.1f} s "
+            f"({rate:.0f} spots/s) with method {fitting_method!r}."
+        )
 
         if pars := parameters.get("locs_vs_frame"):
             if "filename" in pars.keys():
@@ -1965,6 +2037,21 @@ class AutoPicasso(util.AbstractModuleCollection):
         if fitting_method in (None, "", "auto"):
             fitting_method = self._infer_zfit_fitting_method()
 
+        # As in ``localize``: a GPU z-fit aborts deep inside picasso if the
+        # numba-CUDA backend is not usable (typically a missing libNVVM / CUDA
+        # toolkit). Reject it up front with an actionable message.
+        gpu = bool(parameters.get("gpu", False))
+        if gpu and not _gpu_fitting_available():
+            raise AutoPicassoError(
+                "zfit was asked to fit on the GPU (gpu=True), but "
+                "numba.cuda.is_available() is False, so picasso would abort "
+                "the fit. Usually the CUDA driver is present but libNVVM (the "
+                "CUDA toolkit) is not: install a CUDA toolkit in this "
+                "environment, or on a module-based cluster `module load "
+                "cuda/<version>` (which also sets CUDA_HOME). Set gpu=False to "
+                "fit on the CPU instead."
+            )
+
         self.locs, self.info = zfit.zfit(
             self.locs,
             self.info,
@@ -1974,7 +2061,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             fitting_method=fitting_method,
             filter=parameters.get("filter", 0),
             multiprocess=True,
-            gpu=bool(parameters.get("gpu", False)),
+            gpu=gpu,
         )
         if self.locs is None:
             raise AutoPicassoError(

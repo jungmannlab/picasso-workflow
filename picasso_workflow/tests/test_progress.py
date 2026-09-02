@@ -137,6 +137,54 @@ class TestJsonSink(unittest.TestCase):
         self.assertIsNotNone(found)
         self.assertEqual(found["total"], 2)
 
+    def test_read_all_progress_collects_stages(self):
+        # simulate an aggregation run: top-level + two singles + agg stage
+        top = os.path.join(self.folder, "myrun_240101-1200")
+        os.makedirs(top)
+        p.ProgressManager(top, kind="aggregation").datasets_init(["c1", "c2"])
+        for sub in (
+            "myrun_sgl_00_c1_240101-1200",
+            "myrun_sgl_01_c2_240101-1200",
+            "myrun_aggregation_240101-1200",
+        ):
+            d = os.path.join(top, sub)
+            os.makedirs(d)
+            p.ProgressManager(d, report_name=sub).start(["a"])
+        states = p.read_all_progress(self.folder)
+        self.assertEqual(len(states), 4)
+        kinds = [s["kind"] for s in states]
+        self.assertEqual(kinds.count("aggregation"), 1)
+        self.assertEqual(kinds.count("single"), 3)
+
+
+class TestStageHelpers(unittest.TestCase):
+    def test_stage_name_strips_postfix(self):
+        self.assertEqual(
+            p.stage_name({"report_name": "myrun_sgl_02_cell_240101-1200"}),
+            "myrun_sgl_02_cell",
+        )
+        self.assertEqual(p.stage_name({}), "(run)")
+
+    def test_is_aggregation_stage(self):
+        self.assertTrue(
+            p.is_aggregation_stage(
+                {"report_name": "myrun_aggregation_240101-1200"}
+            )
+        )
+        self.assertFalse(
+            p.is_aggregation_stage(
+                {"report_name": "myrun_sgl_00_x_240101-1200"}
+            )
+        )
+
+    def test_dataset_index(self):
+        self.assertEqual(
+            p.dataset_index({"report_name": "myrun_sgl_07_x_240101-1200"}), 7
+        )
+        self.assertIsNone(
+            p.dataset_index({"report_name": "myrun_aggregation_240101-1200"})
+        )
+
 
 class TestOverallFraction(unittest.TestCase):
     def test_empty(self):

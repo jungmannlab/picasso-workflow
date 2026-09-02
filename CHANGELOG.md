@@ -12,6 +12,36 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- `localize` now logs an anchor line at the start of the fit (method, spot
+  count, box, multiprocess) and at the end (localization count, elapsed time,
+  spots/s), and wires picasso's spot-extraction progress
+  (`cut_progress_callback`) in addition to the fit `progress_callback`. The
+  extraction phase — which silently dominates a large movie on a slow
+  filesystem — now reports forward motion too, so a slow localize is legible
+  in the SLURM log instead of looking hung.
+- `zfit` gained the same fail-fast GPU guard as `localize`: when `gpu=True`
+  but `numba.cuda.is_available()` is False, it raises an actionable
+  `AutoPicassoError` up front (pointing at the CUDA-toolkit / `module load
+  cuda` fix or `gpu=False`) instead of aborting deep inside picasso.
+
+### Fixed
+
+- `identify` / `localize` now fall back to picasso's own defaults for unset
+  optional arguments instead of forwarding the GUI's empty/minimum sentinels.
+  Previously an unset field was passed through verbatim, so `''` roi /
+  frame_bounds reached picasso as empty strings and, worse,
+  `temporal_median_window: 1` (a no-op median) switched the temporal-median
+  background filter *on* — forcing the slow filtered read path and making
+  `identify` crawl on large movies. Now roi/frame_bounds are forwarded only
+  when non-empty, the temporal-median filter only when its window is >= 2
+  (stride only alongside it), the Gaussian pre-filter only for sigma > 0, an
+  empty `fitting_method` resolves to the default, and non-positive `eps` /
+  `max_it` become None (= picasso's per-method default). The corresponding GUI
+  fields use 0 as the "off / use default" sentinel (`temporal_median_window`,
+  `temporal_median_stride`, `max_it` minimum lowered from 1 to 0).
+
+### Added
+
 - **Progress tracking** for workflow runs, overall and per module. A new
   `picasso_workflow/progress.py` provides a `ProgressManager` emitter that the
   runners drive at module boundaries; it fans updates out to sinks — an atomic
@@ -38,6 +68,19 @@ This file was started after v0.5.6; earlier history is in the git log.
   rather than a frozen bar. `SlurmCommunicator` gains `fetch_progress()` and
   `write_abort_flag()`; **Cancel Job** now requests a graceful abort before
   `scancel`.
+- For **aggregation** runs the monitor now shows *all stages* as a labelled,
+  collapsible tree — an `[Aggregation]` root (datasets N/M) with one
+  `[single NN] <tag>` child per dataset (each expandable to its modules) and
+  a final `[aggregation stage]` node — instead of one unlabelled single
+  workflow. All stages are fetched in a single SSH round-trip
+  (`SlurmCommunicator.fetch_all_progress` / `progress.read_all_progress`), and
+  the overall bar blends per-dataset progress with the aggregation stage.
+- The monitor can now **attach to a run started in a previous GUI session**:
+  the poll derives its target from the Run-tab fields rather than only from a
+  same-session submission. Enter the results folder (plus the job ID and
+  cluster host for a cluster run, or leave the job ID blank to watch a local
+  results folder) and click *Refresh now*. The SSH connection is built lazily
+  and cached per host (shared with submission).
 - **Local execution** (Run tab): *Start Workflow locally* now actually runs
   the generated `start_workflow.py` as a subprocess and drives the same
   monitor from the local `progress.json` (previously a stub).
