@@ -124,6 +124,40 @@ def test_active_stage_module_label_points_at_running(win):
     assert "module 2/2 b" in label
 
 
+def test_scope_states_filters_by_job_id(win):
+    """Only stages carrying the current job id are kept; a still-pending
+    resubmission (no matching stages) yields nothing, not the old run."""
+    old = {
+        "kind": "aggregation",
+        "report_name": "myrun_5834387",
+        "state": "done",
+    }
+    old_sgl = {
+        "kind": "single",
+        "report_name": "myrun_5834387_sgl_00_cell0_260901-1740",
+        "state": "done",
+    }
+    new_sgl = {
+        "kind": "single",
+        "report_name": "myrun_5837262_sgl_00_cell0_260902-1021",
+        "state": "running",
+    }
+    states = [old, old_sgl, new_sgl]
+
+    # current job -> only its stages
+    scoped = win._scope_states_to_current_run(states, "5837262")
+    assert scoped == [new_sgl]
+
+    # a pending resubmission whose stages have not been written yet -> empty
+    assert win._scope_states_to_current_run([old, old_sgl], "5837262") == []
+
+    # no job id (local monitoring) -> unchanged
+    assert win._scope_states_to_current_run(states, "") == states
+
+    # job id must match as a whole token, not a substring of a longer id
+    assert win._scope_states_to_current_run(states, "372") == []
+
+
 @pytest.fixture(scope="module")
 def full_window():
     """A real Window (widgets constructed), for display-rendering tests."""
@@ -159,3 +193,13 @@ def test_completed_and_finished_shows_plain_completed(full_window):
     text = full_window.monitor_state_label.text()
     assert text == "Job state: COMPLETED"
     assert "unfinished" not in text
+
+
+def test_pending_job_with_no_states_shows_pending_empty(full_window):
+    """A PENDING resubmission (its stages scoped out) shows PENDING and an
+    empty tree, not a previous run's progress."""
+    slurm = {"success": True, "status": "PENDING", "details": {}}
+    full_window._update_monitor_display(slurm, [])
+    assert full_window.monitor_state_label.text() == "Job state: PENDING"
+    assert full_window.module_tree.topLevelItemCount() == 0
+    assert full_window.overall_progress_bar.value() == 0

@@ -12,6 +12,12 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- Live-progress monitor no longer shows a previous run's progress while a
+  resubmitted job is still pending. The results folder accumulates one
+  subfolder per run, so polling the tree returned every past run's
+  `progress.json`; the monitor now scopes the states to the current SLURM job
+  id (the run token woven into every `report_name`), so a pending resubmission
+  shows PENDING with an empty tree rather than the last run's completed stages.
 - Generated SLURM scripts now exit with the workflow's real status: the `srun`
   step's exit code is captured (`PW_RC=$?`) and the batch script ends with
   `exit ${PW_RC:-0}`. Previously the trailing `echo` made the batch script

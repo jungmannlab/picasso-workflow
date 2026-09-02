@@ -14341,12 +14341,12 @@ class Window(QtWidgets.QMainWindow):
             self._resolve_monitor_target()
             slurm = None
             states = []
+            job_id = self.job_id_input.text().strip()
             if self._monitor_local_folder:
                 states = pwprogress.read_all_progress(
                     self._monitor_local_folder
                 )
             else:
-                job_id = self.job_id_input.text().strip()
                 comm = getattr(self, "slurm_communicator", None)
                 if job_id and comm is not None:
                     try:
@@ -14359,12 +14359,47 @@ class Window(QtWidgets.QMainWindow):
                         )
                     except Exception as e:
                         logger.debug(f"monitor: fetch_progress failed: {e}")
+            # The results folder accumulates one subfolder per run, so a poll
+            # returns every past run's progress too. Scope to the current job
+            # so a still-PENDING resubmission shows nothing rather than the
+            # previous run's (completed) progress.
+            states = self._scope_states_to_current_run(states, job_id)
             self._update_monitor_display(slurm, states)
             self._maybe_stop_monitor(slurm, states)
         except Exception as e:
             logger.debug(f"monitor refresh error: {e}")
         finally:
             self._monitor_busy = False
+
+    def _scope_states_to_current_run(self, states, job_id):
+        """Keep only the current run's progress states.
+
+        The results folder accumulates one timestamped subfolder per run (each
+        with its own progress.json files), so polling the tree returns every
+        past run too. The run token woven into every ``report_name`` is the
+        SLURM job id (see ``metaworkflow._run_token``), so when it is known
+        keep only the stages carrying it -- while a resubmission is still
+        PENDING this yields nothing rather than a previous run's progress. With
+        no job id (local monitoring) the states are returned unchanged.
+
+        Parameters
+        ----------
+        states : list of dict
+            The progress states read from the run tree.
+        job_id : str
+            The current SLURM job id, or empty.
+
+        Returns
+        -------
+        list of dict
+            The states belonging to the current run.
+        """
+        if not states or not job_id:
+            return states
+        # match the job id as a whole ``_<id>`` token (end of name or before
+        # the next ``_``), so e.g. job 372 does not match run ...5837262.
+        token = re.compile(rf"_{re.escape(str(job_id))}(?:_|$)")
+        return [s for s in states if token.search(s.get("report_name") or "")]
 
     def _top_state(self, states):
         """The run's top-level state: the aggregation one, else the only one."""
