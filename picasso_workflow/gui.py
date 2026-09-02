@@ -7587,7 +7587,12 @@ class SlurmCommunicator:
         return result["success"]
 
     def assemble_slurm_commands(
-        self, host_cluster, scriptname="start_workflow.py", modules=None
+        self,
+        host_cluster,
+        scriptname="start_workflow.py",
+        modules=None,
+        faulthandler=True,
+        cpu_only=False,
     ):
         """Assembles picasso-workflow specific commands for running a batch
         job on a SLURM cluster.
@@ -7595,6 +7600,13 @@ class SlurmCommunicator:
         ``modules`` overrides the environment modules to ``module load`` (a
         list of names). None falls back to the cluster's configured
         ``Modules``; an empty list loads nothing.
+
+        ``faulthandler`` exports ``PYTHONFAULTHANDLER=1`` so a native crash
+        (e.g. a LAPACK/CUDA fault in a fit/CRLB call) prints a Python->C
+        traceback instead of dying silently. ``cpu_only`` exports
+        ``CUDA_VISIBLE_DEVICES=""`` to hide every GPU, forcing picasso's CPU
+        fit/CRLB kernels -- a debug switch to isolate a GPU-side crash from the
+        CPU path.
         """
         cluster_env = CONFIG.get("ClusterEnvironment", {}).get(host_cluster)
         conda_env = cluster_env.get("conda_env", "picasso-workflow")
@@ -7639,7 +7651,18 @@ class SlurmCommunicator:
         # SIGSEGV inside a native fit/CRLB call, which leaves no Python
         # exception). Inherited by multiprocessing workers, so a crash in a
         # pool worker is pinpointed too. Negligible overhead.
-        commands.append("export PYTHONFAULTHANDLER=1")
+        if faulthandler:
+            commands.append("export PYTHONFAULTHANDLER=1")
+
+        # Debug switch: hide every GPU so picasso's CUDA probe
+        # (cuda.is_available()) returns False and the fit/CRLB run on the
+        # (fully-guarded) CPU kernels. Isolates a GPU-side crash -- e.g. a
+        # spline CRLB kernel fault that dies as a hard SIGSEGV instead of a
+        # catchable CudaAPIError -- from the CPU path. Note picasso runs the
+        # spline CRLB on the GPU whenever one is visible, even for the CPU
+        # 'spline-mle' fit method, so this is the only lever that keeps it off.
+        if cpu_only:
+            commands.append('export CUDA_VISIBLE_DEVICES=""')
 
         # instead of using slurm modules, let's directly append paths.
         bin_path = cluster_env.get("BinPath", None)
@@ -10016,6 +10039,34 @@ class Window(QtWidgets.QMainWindow):
         )
         self.cluster_timeout_edit.setMaximumWidth(100)
         cluster_config_layout.addWidget(self.cluster_timeout_edit)
+
+        # Faulthandler: dump the Python->C traceback on a native crash (a
+        # LAPACK/CUDA fault in a fit/CRLB call leaves no Python exception).
+        # On by default -- negligible overhead, and it turns a silent segfault
+        # into a pinpointed frame.
+        self.cluster_faulthandler_check = QtWidgets.QCheckBox("faulthandler")
+        self.cluster_faulthandler_check.setChecked(True)
+        self.cluster_faulthandler_check.setToolTip(
+            "Export PYTHONFAULTHANDLER=1 so a native crash (e.g. a LAPACK or "
+            "CUDA fault in a fit/CRLB call) prints a Python->C traceback in "
+            "the error log instead of dying silently. Inherited by "
+            "multiprocessing workers. Negligible overhead; recommended on."
+        )
+        cluster_config_layout.addWidget(self.cluster_faulthandler_check)
+
+        # Debug: hide every GPU (CUDA_VISIBLE_DEVICES="") so the fit/CRLB run
+        # on the CPU kernels. Off by default; use it to bisect a GPU-side crash
+        # from the CPU path (picasso runs the spline CRLB on the GPU whenever
+        # one is visible, even for the CPU 'spline-mle' fit method).
+        self.cluster_cpu_only_check = QtWidgets.QCheckBox("debug: CPU-only")
+        self.cluster_cpu_only_check.setChecked(False)
+        self.cluster_cpu_only_check.setToolTip(
+            'Export CUDA_VISIBLE_DEVICES="" to hide all GPUs, forcing '
+            "picasso's CPU fit/CRLB kernels. Debug switch to isolate a "
+            "GPU-side crash (a spline CRLB kernel fault dies as a hard "
+            "SIGSEGV, not a catchable error). Leave off for normal / GPU runs."
+        )
+        cluster_config_layout.addWidget(self.cluster_cpu_only_check)
 
         # self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
         # self.cluster_use_module.setMaximumWidth(200)
@@ -14895,7 +14946,11 @@ class Window(QtWidgets.QMainWindow):
         # (space-separated); an empty field loads nothing.
         modules = self.cluster_modules_edit.text().split()
         commands = self.slurm_communicator.assemble_slurm_commands(
-            host_cluster, scriptname=scriptname, modules=modules
+            host_cluster,
+            scriptname=scriptname,
+            modules=modules,
+            faulthandler=self.cluster_faulthandler_check.isChecked(),
+            cpu_only=self.cluster_cpu_only_check.isChecked(),
         )
         # scriptname=scriptname, use_pw_module=True)
         # scriptname=scriptname, use_pw_module=False)

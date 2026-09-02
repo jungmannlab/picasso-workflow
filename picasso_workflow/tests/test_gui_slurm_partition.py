@@ -126,11 +126,28 @@ def test_slurm_commands_load_configured_modules():
     assert "export PYTHONNOUSERSITE=1" in commands
     # faulthandler dumps the Python->C stack on a native crash (e.g. a LAPACK
     # SIGSEGV in a fit/CRLB call), so segfaults are pinpointed, not silent.
+    # On by default.
     assert "export PYTHONFAULTHANDLER=1" in commands
     # module loads must precede the python launch that relies on them
     launch = next(i for i, c in enumerate(commands) if "python" in c)
     for module_name in modules:
         assert commands.index(f"module load {module_name}") < launch
+
+
+def test_slurm_commands_debug_toggles():
+    """faulthandler and CPU-only exports follow their flags."""
+    comm = gui.SlurmCommunicator("host", "user")
+
+    default = comm.assemble_slurm_commands("hpcl8XXX")
+    assert "export PYTHONFAULTHANDLER=1" in default  # on by default
+    assert not any("CUDA_VISIBLE_DEVICES" in c for c in default)  # off
+
+    off = comm.assemble_slurm_commands("hpcl8XXX", faulthandler=False)
+    assert "export PYTHONFAULTHANDLER=1" not in off
+
+    cpu = comm.assemble_slurm_commands("hpcl8XXX", cpu_only=True)
+    # empty string hides every GPU -> picasso's CUDA probe is False -> CPU path
+    assert 'export CUDA_VISIBLE_DEVICES=""' in cpu
 
 
 def test_modules_override_and_empty():
@@ -143,6 +160,12 @@ def test_modules_override_and_empty():
 
     none = comm.assemble_slurm_commands("hpcl8XXX", modules=[])
     assert not any(c.startswith("module load") for c in none)
+
+
+def test_debug_toggles_present_with_defaults(window):
+    """The Run tab exposes faulthandler (on) and CPU-only (off) toggles."""
+    assert window.cluster_faulthandler_check.isChecked() is True
+    assert window.cluster_cpu_only_check.isChecked() is False
 
 
 def test_modules_field_prefilled_from_config(window):

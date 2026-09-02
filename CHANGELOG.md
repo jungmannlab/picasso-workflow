@@ -21,6 +21,17 @@ This file was started after v0.5.6; earlier history is in the git log.
   fits, which provide `lpz` directly). Pixel size is already read from the
   metadata by `g5m`, so no calibration is needed for spline 3D clustering.
 
+### Added
+
+- Run tab: two debug toggles for native-crash diagnosis on the cluster.
+  **faulthandler** (on by default) exports `PYTHONFAULTHANDLER=1` so a
+  segfault in a native fit/CRLB call prints a Python->C traceback instead of
+  dying silently. **debug: CPU-only** (off) exports `CUDA_VISIBLE_DEVICES=""`
+  to hide all GPUs, forcing picasso's CPU kernels — picasso runs the spline
+  CRLB on the GPU whenever one is visible (even for the CPU `spline-mle` fit),
+  so this isolates a GPU-side crash from the CPU path. `assemble_slurm_commands`
+  gained `faulthandler=` / `cpu_only=` flags.
+
 ### Fixed
 
 - Progress reporting: a module that fails while resolving its `$`-command
