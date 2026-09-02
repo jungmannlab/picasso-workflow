@@ -162,6 +162,30 @@ def test_modules_override_and_empty():
     assert not any(c.startswith("module load") for c in none)
 
 
+def test_fetch_all_progress_collects_worker_rank_files():
+    """The remote poll must match worker ranks' ``progress.rankN.json``, not
+    just ``progress.json`` -- otherwise a multi-rank aggregation run reports
+    only rank 0's share of the datasets (the monitor undercount bug)."""
+    comm = gui.SlurmCommunicator("host", "user")
+    captured = {}
+
+    def fake_ssh(cmd):
+        captured["cmd"] = cmd
+        sep = "===PWF-PROGRESS-SEP==="
+        r0 = '{"kind": "aggregation", "rank": 0}'
+        r1 = '{"kind": "aggregation", "rank": 1}'
+        return {"stdout": f"{sep}\n{r0}\n{sep}\n{r1}\n", "success": True}
+
+    comm.execute_ssh_command = fake_ssh
+    states = comm.fetch_all_progress("/remote/run")
+
+    # the find pattern includes both rank 0 and worker-rank files
+    assert "-name progress.json" in captured["cmd"]
+    assert "progress.rank*.json" in captured["cmd"]
+    # and both ranks' states are parsed back
+    assert {s["rank"] for s in states} == {0, 1}
+
+
 def test_debug_toggles_present_with_defaults(window):
     """The Run tab exposes faulthandler (on) and CPU-only (off) toggles."""
     assert window.cluster_faulthandler_check.isChecked() is True

@@ -8078,8 +8078,12 @@ class SlurmCommunicator:
             return []
         folder = shlex.quote(remote_folder)
         sep = "===PWF-PROGRESS-SEP==="
+        # Rank 0 writes ``progress.json``; worker ranks write
+        # ``progress.rankN.json`` (see progress.default_sinks). Match both, or a
+        # multi-rank aggregation run reports only rank 0's share of the datasets.
         cmd = (
-            f"for f in $(find {folder} -name progress.json 2>/dev/null); "
+            f"for f in $(find {folder} \\( -name progress.json -o "
+            f"-name 'progress.rank*.json' \\) 2>/dev/null); "
             f'do echo "{sep}"; cat "$f"; done'
         )
         res = self.execute_ssh_command(cmd)

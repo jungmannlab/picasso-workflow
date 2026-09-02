@@ -524,12 +524,20 @@ def read_all_progress(folder: str) -> list:
     """
     states = []
     for root, _dirs, files in os.walk(folder):
-        if PROGRESS_FILENAME in files:
-            try:
-                with open(os.path.join(root, PROGRESS_FILENAME)) as f:
-                    states.append(json.load(f))
-            except (OSError, ValueError):
-                continue
+        # Rank 0 writes ``progress.json``; worker ranks write
+        # ``progress.rankN.json`` (see ``default_sinks``). A multi-rank
+        # aggregation run splits its datasets across ranks, so a monitor that
+        # reads only ``progress.json`` sees just rank 0's share -- collect
+        # every rank's file so the caller can merge them.
+        for fname in sorted(files):
+            if fname == PROGRESS_FILENAME or (
+                fname.startswith("progress.rank") and fname.endswith(".json")
+            ):
+                try:
+                    with open(os.path.join(root, fname)) as f:
+                        states.append(json.load(f))
+                except (OSError, ValueError):
+                    continue
     return states
 
 

@@ -156,6 +156,26 @@ class TestJsonSink(unittest.TestCase):
         self.assertEqual(kinds.count("aggregation"), 1)
         self.assertEqual(kinds.count("single"), 3)
 
+    def test_read_all_progress_collects_worker_rank_files(self):
+        # A multi-rank aggregation run: rank 0 -> progress.json, rank 1 ->
+        # progress.rank1.json, both in the same folder. read_all_progress must
+        # return both, or a merge downstream sees only rank 0's datasets.
+        top = os.path.join(self.folder, "myrun_240101-1200")
+        os.makedirs(top)
+        p.ProgressManager(
+            top, kind="aggregation", rank=0, size=2
+        ).datasets_init(["c1", "c2"])
+        p.ProgressManager(
+            top, kind="aggregation", rank=1, size=2
+        ).datasets_init(["c1", "c2"])
+        self.assertTrue(
+            os.path.exists(os.path.join(top, "progress.rank1.json"))
+        )
+        states = p.read_all_progress(self.folder)
+        self.assertEqual(len(states), 2)
+        self.assertTrue(all(s["kind"] == "aggregation" for s in states))
+        self.assertEqual({s["rank"] for s in states}, {0, 1})
+
 
 class TestStageHelpers(unittest.TestCase):
     def test_stage_name_strips_postfix(self):

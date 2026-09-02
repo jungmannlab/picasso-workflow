@@ -10,6 +10,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- Live monitor undercounted multi-rank aggregation runs (e.g. showed 40% for a
+  fully finished 2-rank run). Both progress collectors —
+  `progress.read_all_progress` (local) and `SlurmCommunicator.fetch_all_progress`
+  (cluster, over SSH) — matched only `progress.json` and so dropped every worker
+  rank's `progress.rankN.json`, leaving the multi-rank merge with just rank 0's
+  share of the datasets. They now also collect `progress.rank*.json`, so the
+  merged view (and overall %) reflects all ranks.
+
 ### Added
 
 - `[gpu]` optional-dependencies extra (`pip install -e ".[gpu]"`) that installs
