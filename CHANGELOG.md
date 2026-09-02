@@ -12,6 +12,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- `[gpu]` optional-dependencies extra (`pip install -e ".[gpu]"`) that installs
+  `numba-cuda` (+ a matching `cuda-bindings`), the backend picasso's CUDA fits
+  actually run on. Without it, numba's bundled `numba.cuda` is used, which
+  segfaults at CUDA-context creation on CUDA-13 drivers — so a GPU run died with
+  a native SIGSEGV instead of a clean error. README documents the symptom, the
+  fix, and the `~/.local` user-site shadowing trap (batch jobs are immune via
+  `PYTHONNOUSERSITE=1`; interactive shells and the local GUI are not).
+
 - `gaussian_mixture_cluster`: new `mode` option (`auto` / `astigmatism` /
   `spline`, GUI-selectable) forwarded to `g5m`. `auto` (default) infers the z
   model from the recorded fit method, so spline runs use `lpz` straight from

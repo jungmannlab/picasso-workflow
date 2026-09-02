@@ -123,6 +123,37 @@ type "terminal" hit enter). Then, one after another execute the follwing command
 	- `pip install -e .`
 - Should be platform independent. Tested on MacOS Sonoma and  Windows Server.
 
+### GPU-accelerated fitting (optional)
+
+The GPU fit methods (`spline-mle-gpu`, and the GPU CRLB path used even by the
+CPU `spline-mle` fit) need the standalone **`numba-cuda`** backend. picasso's
+CUDA code runs on `numba-cuda`, **not** numba's bundled `numba.cuda`, and
+nothing in the base dependencies or `picassosr` pulls it in. Install it on GPU
+nodes with:
+
+```bash
+pip install -e ".[gpu]"        # adds numba-cuda (+ a matching cuda-bindings)
+```
+
+**If you skip this, a GPU run does not error cleanly — it segfaults.** The
+bundled `numba.cuda` crashes at CUDA-context creation on modern (CUDA 13)
+drivers, so the SLURM job dies with a bare `Segmentation fault` deep in
+`numba/cuda/.../safe_cuda_api_call` on the first `to_device`/fit, while
+`nvidia-smi` looks perfectly healthy. If you see that, `numba-cuda` is missing
+(or shadowed — see below). The Run tab exports `PYTHONFAULTHANDLER=1` by
+default so the crash prints a Python→C traceback instead of dying silently.
+
+> **`~/.local` shadowing.** A stray `pip install --user` (or a `pip install`
+> that fell back to `--user` because the target env was not writable) fills
+> `~/.local/lib/pythonX.Y/site-packages`, which sits on `sys.path` **ahead of
+> every conda environment** — so the wrong `numba` (or any package) can be
+> imported even with the right env active. SLURM job scripts export
+> `PYTHONNOUSERSITE=1` (which disables user-site) so runs are immune, but
+> interactive shells and the local GUI are not. Always confirm what an env
+> really resolves with `PYTHONNOUSERSITE=1 python -c "import numba; print(numba.__file__)"`.
+> To make shells predictable, either clear `~/.local/lib/pythonX.Y/site-packages`
+> or add `export PYTHONNOUSERSITE=1` to your shell profile.
+
 ## Usage
 
 - see examples in the folder "examples".
