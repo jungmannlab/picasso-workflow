@@ -14490,6 +14490,12 @@ class Window(QtWidgets.QMainWindow):
         )
 
         # --- tree ---
+        # The tree is rebuilt from scratch each refresh, which would otherwise
+        # collapse everything (and reset to the "expand if running" default),
+        # losing the expand/collapse state of someone investigating a stage.
+        # Capture the current expansion (keyed by stable item ids) and reapply
+        # it after the rebuild; genuinely new items keep the builder default.
+        prev_expansion = self._collect_tree_expansion()
         self.module_tree.clear()
         if agg is not None:
             self.module_tree.setRootIsDecorated(True)
@@ -14505,8 +14511,60 @@ class Window(QtWidgets.QMainWindow):
             self.module_tree.setRootIsDecorated(True)
             for s in self._sorted_singles(singles):
                 self.module_tree.addTopLevelItem(self._build_stage_item(s))
+        self._apply_tree_expansion(prev_expansion)
 
     # -- tree builders ------------------------------------------------------
+
+    def _collect_tree_expansion(self):
+        """Map each keyed tree item to whether it is currently expanded.
+
+        Only collapsible items (the aggregation root and the stage groups)
+        carry a key (in ``Qt.UserRole`` on column 0); module leaves do not.
+        Used to preserve the user's expand/collapse across the per-refresh
+        rebuild.
+
+        Returns
+        -------
+        dict
+            ``{key: bool}`` for every keyed item currently in the tree.
+        """
+        expanded = {}
+
+        def walk(item):
+            key = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+            if key is not None:
+                expanded[key] = item.isExpanded()
+            for j in range(item.childCount()):
+                walk(item.child(j))
+
+        for k in range(self.module_tree.topLevelItemCount()):
+            walk(self.module_tree.topLevelItem(k))
+        return expanded
+
+    def _apply_tree_expansion(self, remembered):
+        """Re-apply a remembered expansion map to the freshly built tree.
+
+        Items whose key was seen before are restored to their remembered
+        state; items new this refresh keep the builder's default (a running
+        stage expands, the root expands), so first appearances still behave.
+
+        Parameters
+        ----------
+        remembered : dict
+            ``{key: bool}`` from :meth:`_collect_tree_expansion`.
+        """
+        if not remembered:
+            return
+
+        def walk(item):
+            key = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+            if key in remembered:
+                item.setExpanded(remembered[key])
+            for j in range(item.childCount()):
+                walk(item.child(j))
+
+        for k in range(self.module_tree.topLevelItemCount()):
+            walk(self.module_tree.topLevelItem(k))
 
     def _build_module_item(self, m):
         """A leaf tree item for a single module."""
@@ -14548,9 +14606,21 @@ class Window(QtWidgets.QMainWindow):
         )
         for m in state.get("modules") or []:
             parent.addChild(self._build_module_item(m))
+        # stable key so expansion survives a refresh (keyed by dataset slot so
+        # it carries over when a not-yet-started dataset becomes a live stage)
+        parent.setData(
+            0, QtCore.Qt.ItemDataRole.UserRole, self._stage_key(state)
+        )
         # expand the stage that is currently running
         parent.setExpanded(state.get("state") == "running")
         return parent
+
+    def _stage_key(self, state):
+        """A stable expansion key for a stage: its dataset slot, or the
+        aggregation-stage marker."""
+        if pwprogress.is_aggregation_stage(state):
+            return "aggstage"
+        return f"ds:{pwprogress.dataset_index(state)}"
 
     def _sorted_singles(self, singles):
         """Order stages: single datasets by index, aggregation stage last."""
@@ -14579,6 +14649,7 @@ class Window(QtWidgets.QMainWindow):
                 "",
             ]
         )
+        root.setData(0, QtCore.Qt.ItemDataRole.UserRole, "root")
         # map dataset index -> its single stage (if it has started)
         idx_map = {}
         for s in singles:
@@ -14596,17 +14667,21 @@ class Window(QtWidgets.QMainWindow):
                 root.addChild(self._build_stage_item(s))
             else:
                 tag = d.get("tag") or "(no tag)"
-                root.addChild(
-                    QtWidgets.QTreeWidgetItem(
-                        [
-                            str(di),
-                            f"[single {di:02d}] {tag}",
-                            str(d.get("state", "")),
-                            "0",
-                            "",
-                        ]
-                    )
+                placeholder = QtWidgets.QTreeWidgetItem(
+                    [
+                        str(di),
+                        f"[single {di:02d}] {tag}",
+                        str(d.get("state", "")),
+                        "0",
+                        "",
+                    ]
                 )
+                # same key scheme as a live stage, so expansion carries over
+                # when this dataset starts running
+                placeholder.setData(
+                    0, QtCore.Qt.ItemDataRole.UserRole, f"ds:{di}"
+                )
+                root.addChild(placeholder)
 
         # the aggregation stage (runs after all singles)
         agg_stage = next(

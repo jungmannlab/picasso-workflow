@@ -203,3 +203,31 @@ def test_pending_job_with_no_states_shows_pending_empty(full_window):
     assert full_window.monitor_state_label.text() == "Job state: PENDING"
     assert full_window.module_tree.topLevelItemCount() == 0
     assert full_window.overall_progress_bar.value() == 0
+
+
+def test_tree_expansion_survives_refresh(full_window):
+    """The user's expand/collapse of a node persists across refreshes, so
+    investigating details is not undone on every poll."""
+    agg = _agg(["running", "pending"])
+    s0 = _single(0, "running", [("a", "done", 1.0), ("b", "running", 0.3)])
+    full_window._update_monitor_display(None, [agg, s0])
+
+    # set a known expansion on the now-attached items
+    root = full_window.module_tree.topLevelItem(0)
+    root.setExpanded(True)
+    root.child(0).setExpanded(True)  # the ds:0 stage
+
+    # a poll with advanced progress rebuilds the tree -> expansion kept
+    s0b = _single(0, "running", [("a", "done", 1.0), ("b", "running", 0.8)])
+    full_window._update_monitor_display(None, [agg, s0b])
+    root = full_window.module_tree.topLevelItem(0)
+    assert root.isExpanded()
+    assert root.child(0).isExpanded()
+
+    # collapsing likewise persists across the next refresh
+    root.setExpanded(False)
+    root.child(0).setExpanded(False)
+    full_window._update_monitor_display(None, [agg, s0b])
+    root = full_window.module_tree.topLevelItem(0)
+    assert not root.isExpanded()
+    assert not root.child(0).isExpanded()

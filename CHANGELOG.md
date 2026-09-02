@@ -12,6 +12,10 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- Live-progress tree no longer collapses on every refresh: the user's
+  expand/collapse of the aggregation root and stage groups is captured
+  (keyed by dataset slot) before the per-poll rebuild and reapplied after, so
+  investigating a stage's details is not undone on the next 15 s refresh.
 - SLURM logs are now reliably captured: the generated submission creates the
   `logs/` directory before submitting (SLURM opens `--output`/`--error` at
   launch and does not create their parent, so a missing dir silently dropped
