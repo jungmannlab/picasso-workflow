@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Create results directory
         run: mkdir -p "$GITHUB_WORKSPACE/test-results"
@@ -138,7 +138,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Create results directory
         run: mkdir -p "$GITHUB_WORKSPACE/test-results"

@@ -7608,8 +7608,13 @@ class SlurmCommunicator:
         fit/CRLB kernels -- a debug switch to isolate a GPU-side crash from the
         CPU path.
         """
-        cluster_env = CONFIG.get("ClusterEnvironment", {}).get(host_cluster)
-        conda_env = cluster_env.get("conda_env", "picasso-workflow")
+        # A host with no ClusterEnvironment entry (e.g. an unconfigured
+        # cluster, or a minimal config with no bundled config.yaml) degrades
+        # gracefully: every lookup below is a .get() with a default, so no
+        # path/module exports are emitted rather than crashing.
+        cluster_env = (
+            CONFIG.get("ClusterEnvironment", {}).get(host_cluster) or {}
+        )
 
         commands = []
 

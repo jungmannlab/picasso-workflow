@@ -12,6 +12,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `gui.SlurmCommunicator.assemble_slurm_commands` raised
+  `AttributeError: 'NoneType' object has no attribute 'get'` when the target
+  host had no `ClusterEnvironment.<host>` entry (e.g. an unconfigured cluster,
+  or any environment where the bundled `config.yaml` is not loaded and only a
+  minimal config is present). The per-host lookup now defaults to an empty
+  mapping, so the job is assembled with the built-in defaults (no path/module
+  exports) instead of crashing. The `ClusterEnvironment.<host>` block is
+  therefore optional — but GPU fitting on a cluster still needs its `Modules`
+  entry (the CUDA module) plus a GPU `SlurmPartitions`/`SlurmDefault.partition`,
+  now documented in README "GPU-accelerated fitting" and the bundled
+  `config.yaml` comments.
 - `picasso_outpost.sort_picked_locs` (channel alignment "by picked") dropped
   every fiducial whenever several channels held fewer picks than the reference
   channel. It truncated the reference-channel distance array to the *current*

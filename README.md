@@ -168,6 +168,24 @@ default so the crash prints a Python→C traceback instead of dying silently.
 > To make shells predictable, either clear `~/.local/lib/pythonX.Y/site-packages`
 > or add `export PYTHONNOUSERSITE=1` to your shell profile.
 
+**Cluster config for GPU runs.** Installing `numba-cuda` is necessary but not
+sufficient when launching from the GUI's Run tab: the generated SLURM job also
+has to land on a GPU node and `module load` the CUDA toolkit. Set both in your
+`config.yaml`:
+
+- **`SlurmPartitions.<host>`** — include a GPU partition, and set
+  **`SlurmDefault.partition`** to it, so the job targets GPU nodes. Otherwise it
+  schedules on a CPU node and no GPU is ever visible.
+- **`ClusterEnvironment.<host>.Modules`** — list the CUDA module (e.g.
+  `cuda/13.0`); the job runs `module load` for each entry so libNVVM/`CUDA_HOME`
+  are present. Without it, `spline-mle-gpu` has no CUDA toolkit to compile
+  against.
+
+The `ClusterEnvironment.<host>` block is optional — a job assembles with
+defaults (no `module load`, no path exports) when it is absent — but GPU fitting
+needs the `Modules` entry, so define it for any host you run GPU fits on. See
+the bundled `picasso_workflow/config.yaml` for a worked `hpcl8XXX` example.
+
 ## Usage
 
 - see examples in the folder "examples".
