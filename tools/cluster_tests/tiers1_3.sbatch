@@ -54,6 +54,14 @@ module load anaconda/3/2023.03
 source ~/.bashrc
 conda activate picasso-workflow
 
+# Ignore the ~/.local user-site: a user-site package (e.g. a stray numba /
+# numba-cuda / nvidia-cuda-runtime) otherwise sits ahead of the conda env on
+# sys.path and silently shadows it, so the test tier stops reflecting the
+# conda env it is meant to validate. This is the same guard
+# assemble_slurm_commands already exports for the GUI-generated workflow
+# scripts; keep it here so the hand-written test jobs match.
+export PYTHONNOUSERSITE=1
+
 # Confluence (test) credentials live in a dedicated secrets file rather than
 # ~/.bashrc, whose non-interactive guard would `return` before reaching any
 # exports inside a batch job. The file has no such guard, so it always runs.

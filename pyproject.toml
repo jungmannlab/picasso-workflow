@@ -72,8 +72,21 @@ formats = [
 # native SIGSEGV rather than a clean error. ``numba-cuda`` pulls a matching
 # ``cuda-bindings`` automatically. Install on GPU nodes with:
 #   pip install -e ".[gpu]"
+#
+# ``nvidia-cuda-runtime-cu12`` is pinned alongside so this extra is
+# self-consistent: numba-cuda probes the CUDA runtime EAGERLY at import
+# (getLocalRuntimeVersion -> dlopen libcudart.so.13/.12), so without a
+# libcudart on the loader path, ``from numba import cuda`` -- and therefore
+# ``from picasso import g5m`` and any ``import picasso_workflow`` -- fails at
+# import on a node with no system CUDA runtime, even for a CPU-only run.
+# Shipping the runtime wheel guarantees libcudart.so.12 is present; the
+# CUDA-13 cluster driver runs it via backward compatibility, and actual GPU
+# use stays gated by the driver / CUDA_VISIBLE_DEVICES. It has Linux
+# x86_64/aarch64 wheels only (no macOS/Windows) -- which is exactly why the
+# whole CUDA stack stays in this optional extra rather than the base deps.
 gpu = [
     "numba-cuda",
+    "nvidia-cuda-runtime-cu12",
 ]
 
 [tool.setuptools]

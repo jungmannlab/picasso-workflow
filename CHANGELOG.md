@@ -12,6 +12,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- Cluster-test SLURM scripts (`tools/cluster_tests/tiers1_3.sbatch`,
+  `tier4.sbatch`, `summary.sbatch`) now `export PYTHONNOUSERSITE=1` after
+  activating conda, so a `~/.local` user-site install cannot shadow the conda
+  env on `sys.path`. Previously the test tier could silently validate a
+  different `numba` / `numba-cuda` / CUDA runtime than the conda env it was
+  meant to exercise; removing such a user-site install then surfaced as an
+  import-time `libcudart.so` failure in `numba-cuda` that aborted collection.
+  The GUI-generated workflow scripts already exported this via
+  `assemble_slurm_commands`; the hand-written test jobs now match.
 - Live monitor undercounted multi-rank aggregation runs (e.g. showed 40% for a
   fully finished 2-rank run). Both progress collectors —
   `progress.read_all_progress` (local) and `SlurmCommunicator.fetch_all_progress`
@@ -28,7 +37,15 @@ This file was started after v0.5.6; earlier history is in the git log.
   segfaults at CUDA-context creation on CUDA-13 drivers — so a GPU run died with
   a native SIGSEGV instead of a clean error. README documents the symptom, the
   fix, and the `~/.local` user-site shadowing trap (batch jobs are immune via
-  `PYTHONNOUSERSITE=1`; interactive shells and the local GUI are not).
+  `PYTHONNOUSERSITE=1`; interactive shells and the local GUI are not). The extra
+  now also pins `nvidia-cuda-runtime-cu12` so it is self-consistent: `numba-cuda`
+  probes the CUDA runtime *at import* (`getLocalRuntimeVersion` → `dlopen`
+  `libcudart.so.13/.12`), so on a node with no system CUDA runtime `from numba
+  import cuda` — and hence `import picasso_workflow` / pytest collection — used
+  to abort with `DynamicLibNotFoundError`, even for a CPU-only run. Shipping the
+  runtime wheel guarantees `libcudart` is on the loader path; the CUDA-13 driver
+  runs it via backward compatibility. Kept in the extra (not base deps) because
+  the CUDA wheels are Linux x86_64/aarch64 only.
 
 - `gaussian_mixture_cluster`: new `mode` option (`auto` / `astigmatism` /
   `spline`, GUI-selectable) forwarded to `g5m`. `auto` (default) infers the z

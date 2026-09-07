@@ -132,8 +132,22 @@ nothing in the base dependencies or `picassosr` pulls it in. Install it on GPU
 nodes with:
 
 ```bash
-pip install -e ".[gpu]"        # adds numba-cuda (+ a matching cuda-bindings)
+pip install -e ".[gpu]"        # numba-cuda (+ cuda-bindings) + nvidia-cuda-runtime-cu12
 ```
+
+The extra also pins `nvidia-cuda-runtime-cu12`. `numba-cuda` probes the CUDA
+runtime **at import time** (`getLocalRuntimeVersion` → `dlopen` of
+`libcudart.so.13`/`.12`), so on a node with no system CUDA runtime the bare
+`from numba import cuda` raises `DynamicLibNotFoundError` — which means `from
+picasso import g5m`, `import picasso_workflow`, and even pytest collection fail
+at import, *including on CPU-only nodes that never touch a GPU*. Shipping the
+runtime wheel guarantees `libcudart` is discoverable; the CUDA-13 cluster driver
+runs the cu12 runtime via backward compatibility, and whether a GPU is actually
+used still depends on the driver and `CUDA_VISIBLE_DEVICES`. (Note: the Run
+tab's CPU-only toggle sets `CUDA_VISIBLE_DEVICES=""`, which does **not** avoid
+this — the import-time probe loads `libcudart` regardless of visible devices.)
+The whole CUDA stack stays in this optional extra rather than the base deps
+because its wheels are Linux x86_64/aarch64 only (no macOS/Windows).
 
 **If you skip this, a GPU run does not error cleanly — it segfaults.** The
 bundled `numba.cuda` crashes at CUDA-context creation on modern (CUDA 13)
