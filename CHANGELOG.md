@@ -12,6 +12,23 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `picasso_outpost.sort_picked_locs` (channel alignment "by picked") dropped
+  every fiducial whenever several channels held fewer picks than the reference
+  channel. It truncated the reference-channel distance array to the *current*
+  channel's pick count (`dists[: len(chan_groups)]`) instead of the reference
+  channel's, so a channel could never match reference picks beyond its own pick
+  count; with several such channels every correspondence column ended up
+  incomplete and all fiducials were discarded (seen as
+  `# fiducials after match and sort: [0, 0, 0, 0, 0]` on a 5-channel 3D
+  multicolour aggregation, which then failed with "no localizations with finite
+  coordinates to render"). It now truncates to the reference channel's pick
+  count, keeping all corresponding fiducials.
+- `render.plot_scene` now logs at WARNING ("Skipping locs plot: ...") instead
+  of ERROR when a scene has no finite localizations to render. This is a
+  handled, non-fatal case (empty fiducial set, mask excluding all locs), and
+  the ERROR level caused the cluster-test summary — which flags any template
+  with loguru ERROR/CRITICAL lines — to mark an otherwise-successful run as
+  FAIL.
 - Cluster-test SLURM scripts (`tools/cluster_tests/tiers1_3.sbatch`,
   `tier4.sbatch`, `summary.sbatch`) now `export PYTHONNOUSERSITE=1` after
   activating conda, so a `~/.local` user-site install cannot shadow the conda

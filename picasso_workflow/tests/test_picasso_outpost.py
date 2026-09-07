@@ -923,3 +923,53 @@ def test_04e_nndistribution_from_csr_tolerates_empty_array():
         np.array([]), 2, 1e-3, min_dist=50.0, max_dist=300.0
     )
     assert out.size == 0
+
+
+def _make_pick_channel(coords):
+    """Build a one-loc-per-group picked-locs recarray from (N, 2) coords."""
+    n = len(coords)
+    arr = np.rec.array(
+        np.zeros(n, dtype=[("x", "f4"), ("y", "f4"), ("group", "i4")])
+    )
+    arr.x = coords[:, 0]
+    arr.y = coords[:, 1]
+    arr.group = np.arange(n)
+    return arr
+
+
+def test_05a_sort_picked_locs_keeps_common_fiducials_with_fewer_picks():
+    """Corresponding fiducials survive when a channel has fewer picks.
+
+    Regression for the ``dists[: len(chan_groups)]`` truncation, which
+    limited matching to the *current* channel's pick count instead of the
+    reference channel's, dropping every fiducial when several channels held
+    fewer picks than channel 0 (observed as ``[0, 0, 0, 0, 0]`` on the
+    cluster for a 5-channel 3D-multicolour aggregation).
+    """
+    rng = np.random.default_rng(0)
+    n_common = 11
+    common = rng.uniform(0, 500, size=(n_common, 2))
+    # Counts mirror the failing run: [21, 11, 16, 25, 30].
+    counts = [21, 11, 16, 25, 30]
+    channels = []
+    for c in counts:
+        n_extra = c - n_common
+        pts = np.vstack(
+            [
+                common + rng.normal(0, 0.3, common.shape),
+                rng.uniform(0, 500, size=(n_extra, 2)),
+            ]
+        )
+        # Shuffle so unique-group order is not aligned across channels.
+        pts = pts[rng.permutation(len(pts))]
+        channels.append(_make_pick_channel(pts))
+
+    out = picasso_outpost.sort_picked_locs(channels, max_shift=5.0)
+    kept = [len(np.unique(o["group"])) for o in out]
+    # All common fiducials are retained in every channel...
+    assert kept == [n_common] * len(counts)
+    # ...and every channel ends up with the same set of group labels, i.e.
+    # correspondence between channels was established.
+    ref_groups = set(np.unique(out[0]["group"]))
+    for o in out[1:]:
+        assert set(np.unique(o["group"])) == ref_groups
