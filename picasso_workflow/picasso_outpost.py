@@ -4532,11 +4532,19 @@ def sort_picked_locs(channel_picks, max_shift=None):
         logger.debug(f"channel {chan} groups: {str(chan_groups)}")
         if chan == 0:
             pick_group[chan, : len(chan_groups)] = chan_groups
+            n_ref_groups = len(chan_groups)
             continue
 
         for i, group in enumerate(chan_groups):
             dists = mean_distances(pick_means, chan, i, 0)
-            dists = dists[: len(chan_groups)]
+            # Match only against the reference channel's (channel 0) actual
+            # picks; the remaining pick_means rows are NaN placeholders.
+            # Truncating to the *current* channel's pick count (the previous
+            # behaviour) barred matches to reference picks beyond that index,
+            # so a channel with fewer picks than channel 0 could never match
+            # the later reference picks. With several such channels every
+            # column ended up incomplete and all fiducials were dropped.
+            dists = dists[:n_ref_groups]
             try:
                 mindist_i = np.nanargmin(dists).flatten()
                 mindist_i = mindist_i[0]

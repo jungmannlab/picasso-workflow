@@ -51,7 +51,7 @@ jobs:
       #     Write-Output $TEST_CONFLUENCE_URL
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
         run: |
@@ -70,7 +70,7 @@ jobs:
           dir c:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages
 
       # - name: Set up Python B
-      #   uses: actions/setup-python@v5
+      #   uses: actions/setup-python@v6
       #   with:
       #     python-version: '3.10'
 

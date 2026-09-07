@@ -173,3 +173,13 @@ workspace root is `/workspaces/DNA-PAINT-FullAutomation`.
 - `spinna_mle.py`, `spinna_mle_2.py`, and `nn_redistribution.py` are isolated
   experimental modules (not imported by the package) and are flake8-excluded;
   don't expect them to be linted.
+- **GPU fitting on the cluster** needs the `[gpu]` extra
+  (`pip install -e ".[gpu]"` → `numba-cuda` + `cuda-bindings`); nothing in the
+  base deps or `picassosr` pulls it, and without it numba's bundled `numba.cuda`
+  **segfaults** at CUDA-context creation on CUDA-13 drivers (a native SIGSEGV,
+  not a catchable error) while `nvidia-smi` looks fine. A recurring companion
+  trap across these repos: a `~/.local` user-site install shadows every conda
+  env on `sys.path`; batch jobs are immune (`assemble_slurm_commands` exports
+  `PYTHONNOUSERSITE=1`), interactive shells / the GUI are not. Verify real env
+  state with `PYTHONNOUSERSITE=1 python -c "import numba; print(numba.__file__)"`.
+  See README "GPU-accelerated fitting".

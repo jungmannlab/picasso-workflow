@@ -123,6 +123,69 @@ type "terminal" hit enter). Then, one after another execute the follwing command
 	- `pip install -e .`
 - Should be platform independent. Tested on MacOS Sonoma and  Windows Server.
 
+### GPU-accelerated fitting (optional)
+
+The GPU fit methods (`spline-mle-gpu`, and the GPU CRLB path used even by the
+CPU `spline-mle` fit) need the standalone **`numba-cuda`** backend. picasso's
+CUDA code runs on `numba-cuda`, **not** numba's bundled `numba.cuda`, and
+nothing in the base dependencies or `picassosr` pulls it in. Install it on GPU
+nodes with:
+
+```bash
+pip install -e ".[gpu]"        # numba-cuda (+ cuda-bindings) + nvidia-cuda-runtime-cu12
+```
+
+The extra also pins `nvidia-cuda-runtime-cu12`. `numba-cuda` probes the CUDA
+runtime **at import time** (`getLocalRuntimeVersion` → `dlopen` of
+`libcudart.so.13`/`.12`), so on a node with no system CUDA runtime the bare
+`from numba import cuda` raises `DynamicLibNotFoundError` — which means `from
+picasso import g5m`, `import picasso_workflow`, and even pytest collection fail
+at import, *including on CPU-only nodes that never touch a GPU*. Shipping the
+runtime wheel guarantees `libcudart` is discoverable; the CUDA-13 cluster driver
+runs the cu12 runtime via backward compatibility, and whether a GPU is actually
+used still depends on the driver and `CUDA_VISIBLE_DEVICES`. (Note: the Run
+tab's CPU-only toggle sets `CUDA_VISIBLE_DEVICES=""`, which does **not** avoid
+this — the import-time probe loads `libcudart` regardless of visible devices.)
+The whole CUDA stack stays in this optional extra rather than the base deps
+because its wheels are Linux x86_64/aarch64 only (no macOS/Windows).
+
+**If you skip this, a GPU run does not error cleanly — it segfaults.** The
+bundled `numba.cuda` crashes at CUDA-context creation on modern (CUDA 13)
+drivers, so the SLURM job dies with a bare `Segmentation fault` deep in
+`numba/cuda/.../safe_cuda_api_call` on the first `to_device`/fit, while
+`nvidia-smi` looks perfectly healthy. If you see that, `numba-cuda` is missing
+(or shadowed — see below). The Run tab exports `PYTHONFAULTHANDLER=1` by
+default so the crash prints a Python→C traceback instead of dying silently.
+
+> **`~/.local` shadowing.** A stray `pip install --user` (or a `pip install`
+> that fell back to `--user` because the target env was not writable) fills
+> `~/.local/lib/pythonX.Y/site-packages`, which sits on `sys.path` **ahead of
+> every conda environment** — so the wrong `numba` (or any package) can be
+> imported even with the right env active. SLURM job scripts export
+> `PYTHONNOUSERSITE=1` (which disables user-site) so runs are immune, but
+> interactive shells and the local GUI are not. Always confirm what an env
+> really resolves with `PYTHONNOUSERSITE=1 python -c "import numba; print(numba.__file__)"`.
+> To make shells predictable, either clear `~/.local/lib/pythonX.Y/site-packages`
+> or add `export PYTHONNOUSERSITE=1` to your shell profile.
+
+**Cluster config for GPU runs.** Installing `numba-cuda` is necessary but not
+sufficient when launching from the GUI's Run tab: the generated SLURM job also
+has to land on a GPU node and `module load` the CUDA toolkit. Set both in your
+`config.yaml`:
+
+- **`SlurmPartitions.<host>`** — include a GPU partition, and set
+  **`SlurmDefault.partition`** to it, so the job targets GPU nodes. Otherwise it
+  schedules on a CPU node and no GPU is ever visible.
+- **`ClusterEnvironment.<host>.Modules`** — list the CUDA module (e.g.
+  `cuda/13.0`); the job runs `module load` for each entry so libNVVM/`CUDA_HOME`
+  are present. Without it, `spline-mle-gpu` has no CUDA toolkit to compile
+  against.
+
+The `ClusterEnvironment.<host>` block is optional — a job assembles with
+defaults (no `module load`, no path exports) when it is absent — but GPU fitting
+needs the `Modules` entry, so define it for any host you run GPU fits on. See
+the bundled `picasso_workflow/config.yaml` for a worked `hpcl8XXX` example.
+
 ## Usage
 
 - see examples in the folder "examples".

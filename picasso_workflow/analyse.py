@@ -24,6 +24,7 @@ import os
 import pickle
 import platform
 import random
+import re
 import string
 import subprocess
 import sys
@@ -107,6 +108,7 @@ from picasso_workflow import (
 )
 from picasso_workflow import __version__ as picassoworkflowversion
 from picasso_workflow.outpost_modules import render
+from picasso_workflow.progress import PicassoProgressProxy
 from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
 # logger = logging.getLogger(__name__)
@@ -136,6 +138,57 @@ def generate_random_code(length):
 _GPU_BASE_FIT_METHODS = ("gausslq", "gaussmle", "spline")
 
 
+def _gpu_fitting_available():
+    """Whether picasso's numba-CUDA fitting backend can actually run.
+
+    picasso gates every ``-gpu`` fitting method on
+    ``numba.cuda.is_available()``, which needs both the CUDA driver and
+    libNVVM; without them the fit aborts deep inside picasso. Mirror that
+    gate so a misconfigured GPU request can be rejected up front. Any failure
+    to import or probe numba counts as "not available".
+
+    Returns
+    -------
+    bool
+        True if a usable CUDA GPU fitting backend is present.
+    """
+    try:
+        from numba import cuda
+
+        return bool(cuda.is_available())
+    except Exception:
+        return False
+
+
+def _positive_or_none(value, cast):
+    """Return ``cast(value)`` if it is strictly positive, else None.
+
+    Several picasso arguments (``eps``, ``max_it``, filter widths) accept
+    None to mean "use the default" but reject a non-positive value. The GUI
+    emits its spinbox minimum (0 / 0.0) or an empty string for an unset
+    optional field, so map those - and any non-positive number - to None.
+
+    Parameters
+    ----------
+    value : Any
+        The raw parameter value (may be None, "", or a number).
+    cast : callable
+        ``int`` or ``float`` - how to coerce a real value.
+
+    Returns
+    -------
+    int or float or None
+        The positive, coerced value, or None.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        value = cast(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _load_calibration(calibration, loader):
     """Resolve a picasso calibration given as a dict or a file path.
 
@@ -158,7 +211,9 @@ def _load_calibration(calibration, loader):
     dict or None
         The calibration dict, or None if ``calibration`` was None.
     """
-    if calibration is None or isinstance(calibration, dict):
+    if calibration is None or calibration == "":
+        return None
+    if isinstance(calibration, dict):
         return calibration
     return loader(calibration)
 
@@ -461,6 +516,39 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         self.results_folder = os.path.normpath(results_folder)
         self.analysis_config = analysis_config
+        # Intra-module progress / cooperative abort. The WorkflowRunner sets
+        # these before each module; left None they disable progress wiring so
+        # picasso is called exactly as before (and unit tests are unaffected).
+        self._progress_callback = None
+        self._abort_callback = None
+
+    def _make_progress_proxy(self, total=None, phase=None):
+        """Build a picasso progress proxy for the current module, or None.
+
+        Returns None unless a progress callback has been wired in by the
+        runner, so modules can pass the result straight to picasso without
+        changing behaviour when progress tracking is off.
+
+        Parameters
+        ----------
+        total : int, optional
+            Count corresponding to 100 % (e.g. number of frames/spots).
+        phase : str, optional
+            Short label forwarded as the progress message.
+
+        Returns
+        -------
+        PicassoProgressProxy or None
+        """
+        if self._progress_callback is None:
+            return None
+        return PicassoProgressProxy(
+            self._progress_callback, total=total, phase=phase
+        )
+
+    def _picasso_abort(self):
+        """The wired abort callback, or None (picasso treats None as no-op)."""
+        return self._abort_callback
 
     @property
     def info_mm_entry(self):
@@ -1001,6 +1089,107 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["filename_raw"] = filename_raw
         return parameters, results
 
+    def _movie_files_to_stage(self, filename):
+        """Every file that must travel with ``filename`` to load it locally.
+
+        A picasso movie can span several files -- a split OME-TIFF / MMStack
+        series is stored as ``<base>.ome.tif`` plus ``<base>_1.ome.tif``,
+        ``<base>_2.ome.tif`` ... -- or carry a sidecar (a ``.raw`` movie's
+        ``.yaml``). Return the movie file together with any such companions in
+        the same directory so staging copies a self-contained set.
+
+        Parameters
+        ----------
+        filename : str
+            Path to the movie file named in the workflow.
+
+        Returns
+        -------
+        list of str
+            Absolute paths to copy (always includes ``filename``).
+        """
+        files = [filename]
+        directory = os.path.dirname(filename) or "."
+        name = os.path.basename(filename)
+        lower = name.lower()
+        if lower.endswith(".ome.tif") or lower.endswith(".ome.tiff"):
+            # MMStack split parts: <stem>_<N>.ome.tif(f), matched like picasso
+            stem = re.sub(r"\.ome\.tiff?$", "", name, flags=re.IGNORECASE)
+            pattern = re.compile(
+                re.escape(stem) + r"_\d+\.ome\.tiff?$", re.IGNORECASE
+            )
+            try:
+                for entry in os.scandir(directory):
+                    if entry.is_file() and pattern.match(entry.name):
+                        files.append(entry.path)
+            except OSError:
+                pass
+        elif lower.endswith(".raw"):
+            sidecar = filename + ".yaml"
+            if os.path.exists(sidecar):
+                files.append(sidecar)
+        return sorted(set(files))
+
+    def _stage_movie_local(self, filename, i, results):
+        """Copy the movie (and companions) to node-local scratch; return the
+        local path.
+
+        On a slow / intermittent shared filesystem the tens of thousands of
+        per-frame reads that identify and localize make can crawl or hang. A
+        single bulk copy to local disk (``$TMPDIR`` / ``$SLURM_TMPDIR``, auto
+        -cleaned by SLURM at job end) turns every later read local. This is
+        best-effort: any failure logs a warning and returns the original
+        network path, so staging can never abort a run.
+
+        Parameters
+        ----------
+        filename : str
+            The movie path on the shared filesystem.
+        i : int
+            Module index (used to keep the scratch dir unique).
+        results : dict
+            Module results; the staging destination is recorded under
+            ``staged_movie_dir`` for provenance.
+
+        Returns
+        -------
+        str
+            The local movie path, or ``filename`` if staging failed.
+        """
+        import shutil
+
+        base = (
+            os.environ.get("SLURM_TMPDIR")
+            or os.environ.get("TMPDIR")
+            or os.path.join("/tmp", os.environ.get("USER", "pwf"))
+        )
+        stage_dir = os.path.join(base, f"pwf_movie_stage_{os.getpid()}_{i}")
+        try:
+            os.makedirs(stage_dir, exist_ok=True)
+            to_copy = self._movie_files_to_stage(filename)
+            total_bytes = 0
+            t0 = time.time()
+            for src in to_copy:
+                shutil.copy2(
+                    src, os.path.join(stage_dir, os.path.basename(src))
+                )
+                total_bytes += os.path.getsize(src)
+            dt = time.time() - t0
+            local = os.path.join(stage_dir, os.path.basename(filename))
+            logger.info(
+                f"load_dataset_movie: staged {len(to_copy)} file(s) "
+                f"({total_bytes / 1e9:.1f} GB) to {stage_dir} in {dt:.1f} s; "
+                "reading the movie from local scratch."
+            )
+            results["staged_movie_dir"] = stage_dir
+            return local
+        except Exception as exc:
+            logger.warning(
+                "load_dataset_movie: could not stage the movie to local "
+                f"scratch ({exc}); loading from the original path {filename}."
+            )
+            return filename
+
     #    @profile_resource_usage
     @module_decorator
     def load_dataset_movie(self, i, parameters, results):
@@ -1025,6 +1214,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Parameters for creating a subsampled movie.
             ``load_camera_info`` : bool
                 Whether to load camera configuration from ``picasso.CONFIG``.
+            ``stage_to_local`` : bool
+                Copy the movie (and any split-series/sidecar companions) to
+                node-local scratch (``$TMPDIR``) before loading, so the
+                per-frame reads of identify/localize are local rather than
+                over a slow/edgy shared filesystem. Best-effort: falls back to
+                the original path on any error. Default False.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
@@ -1039,7 +1234,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             width, height) and, if requested, ``sample_movie``.
         """
         results["picasso version"] = picassoversion
-        self.movie, self.info = io.load_movie(parameters["filename"])
+        filename = parameters["filename"]
+        # Optionally stage the movie onto node-local scratch first. On a slow
+        # or edgy shared filesystem the per-frame reads of identify/localize
+        # can crawl or hang; a single bulk copy to local disk makes every
+        # subsequent read local. Best-effort: falls back to the network path.
+        if parameters.get("stage_to_local"):
+            filename = self._stage_movie_local(filename, i, results)
+        self.movie, self.info = io.load_movie(filename)
         results["movie.shape"] = self.movie.shape
 
         if parameters.get("load_camera_info"):
@@ -1524,28 +1726,55 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # picasso 0.11 identification supports optional background-suppression
         # filters (temporal median, spatial Gaussian) and multiple ROIs /
-        # frame bounds via the threaded localize.identify entry point. Only
-        # forward the ones the workflow actually set so the picasso defaults
-        # (no filtering, whole movie) are preserved otherwise.
+        # frame bounds via the threaded localize.identify entry point. Forward
+        # only the ones the workflow genuinely set, so picasso's defaults (no
+        # filtering, whole movie) apply otherwise. The GUI leaves unset
+        # optional fields at their empty/minimum sentinel ('' for roi /
+        # frame_bounds, 0/1 for the numeric filters), and picasso would misread
+        # those: an empty-string roi/frame_bounds is not None, and *any* truthy
+        # temporal_median_window switches the filter on - a window of 1 is a
+        # no-op median that still forces the slower filtered read path.
         identify_kwargs = {}
-        for key in (
-            "roi",
-            "frame_bounds",
-            "temporal_median_window",
-            "temporal_median_stride",
-            "gaussian_filter_sigma",
-        ):
-            if (val := parameters.get(key)) is not None:
-                identify_kwargs[key] = val
+        # roi / frame_bounds: a real selection is a non-empty list/tuple.
+        for key in ("roi", "frame_bounds"):
+            if parameters.get(key):
+                identify_kwargs[key] = parameters[key]
+        # temporal-median background: a window needs >= 2 frames to do
+        # anything; the stride only matters alongside a window.
+        tmw = parameters.get("temporal_median_window")
+        if tmw is not None and int(tmw) >= 2:
+            identify_kwargs["temporal_median_window"] = int(tmw)
+            tms = parameters.get("temporal_median_stride")
+            if tms is not None and int(tms) >= 1:
+                identify_kwargs["temporal_median_stride"] = int(tms)
+        # spatial Gaussian pre-filter: a sigma of 0 (or less) means off.
+        gfs = parameters.get("gaussian_filter_sigma")
+        if gfs is not None and float(gfs) > 0:
+            identify_kwargs["gaussian_filter_sigma"] = float(gfs)
+
+        # forward intra-module progress / abort when the runner wired them in
+        proxy = self._make_progress_proxy(
+            total=len(self.movie), phase="identify"
+        )
+        if proxy is not None:
+            identify_kwargs["progress_callback"] = proxy
+            if (abort := self._picasso_abort()) is not None:
+                identify_kwargs["abort_callback"] = abort
 
         # identify returns (identifications, info); return_info defaults True.
-        self.identifications, _id_info = localize.identify(
+        _id_result = localize.identify(
             self.movie,
             parameters["min_gradient"],
             parameters["box_size"],
             threaded=bool(parameters.get("identify_parallel", True)),
             **identify_kwargs,
         )
+        if _id_result is None:
+            # picasso returns None when identification was aborted mid-run.
+            raise AutoPicassoError(
+                "picasso identify was aborted before completion."
+            )
+        self.identifications, _id_info = _id_result
         results["num_identifications"] = len(self.identifications)
 
         if (pars := parameters.get("ids_vs_frame")) is not None:
@@ -1574,8 +1803,18 @@ class AutoPicasso(util.AbstractModuleCollection):
             # "parameters": parameters,
         }
         # record every forwarded identify option (filters, ROIs, frame
-        # bounds) so the run is reproducible from the info list.
-        new_info.update(identify_kwargs)
+        # bounds) so the run is reproducible from the info list -- but NOT the
+        # progress/abort callbacks, which are live objects holding a
+        # threading.Lock (via the ProgressManager) that io.save_locs ->
+        # save_info -> yaml.dump cannot serialize ("cannot pickle
+        # '_thread.lock' object").
+        new_info.update(
+            {
+                k: v
+                for k, v in identify_kwargs.items()
+                if k not in ("progress_callback", "abort_callback")
+            }
+        )
         self.info = self.info + [new_info]
 
         return parameters, results
@@ -1673,11 +1912,29 @@ class AutoPicasso(util.AbstractModuleCollection):
         # already picked an explicit variant). Spline-PSF methods additionally
         # need a ``spline_calibration`` (dict or path), which yields z (3D).
         use_gpu = bool(self.analysis_config.get("gpufit_installed", False))
-        fitting_method = parameters.get("fitting_method")
+        # An empty ("" from the GUI) or missing fitting_method means "use the
+        # default", not the literal "" picasso would reject.
+        fitting_method = parameters.get("fitting_method") or None
         if fitting_method is None:
             fitting_method = "gausslq-gpu" if use_gpu else "gausslq"
         elif use_gpu and fitting_method in _GPU_BASE_FIT_METHODS:
             fitting_method = f"{fitting_method}-gpu"
+
+        # A ``-gpu`` method aborts deep inside picasso if the numba-CUDA
+        # backend is not usable (no driver, or - most commonly - a missing
+        # libNVVM / CUDA toolkit). Reject it up front with an actionable
+        # message rather than letting a long localize job fail late.
+        if fitting_method.endswith("-gpu") and not _gpu_fitting_available():
+            raise AutoPicassoError(
+                f"Fitting method {fitting_method!r} requires a GPU, but "
+                "numba.cuda.is_available() is False, so picasso would abort "
+                "the fit. Usually the CUDA driver is present but libNVVM (the "
+                "CUDA toolkit) is not: install a CUDA toolkit in this "
+                "environment, or on a module-based cluster `module load "
+                "cuda/<version>` (which also sets CUDA_HOME). To fit on the "
+                "CPU instead, choose a fitting_method without the '-gpu' "
+                "suffix."
+            )
         multiprocess = bool(parameters.get("fit_parallel", True))
 
         spline_calibration = _load_calibration(
@@ -1691,8 +1948,41 @@ class AutoPicasso(util.AbstractModuleCollection):
             io.load_camera_calibration,
         )
 
-        # eps / max_it default to None in localize.fit (= use picasso's
-        # defaults), so they can be forwarded unconditionally.
+        # Forward intra-module progress / abort when the runner wired them in.
+        # localize.fit has two long phases with separate callbacks: spot
+        # extraction from the movie (cut_progress_callback) and the fit itself
+        # (progress_callback). Wiring both means the whole module reports
+        # forward motion - the extraction phase is what silently dominates a
+        # big movie on a slow filesystem, so leaving it un-wired is what makes
+        # a slow run look hung.
+        n_spots = len(self.identifications)
+        fit_progress_kw = {}
+        proxy = self._make_progress_proxy(total=n_spots, phase="localize")
+        if proxy is not None:
+            fit_progress_kw["progress_callback"] = proxy
+            fit_progress_kw["cut_progress_callback"] = (
+                self._make_progress_proxy(
+                    total=n_spots, phase="localize (extract spots)"
+                )
+            )
+            if (abort := self._picasso_abort()) is not None:
+                fit_progress_kw["abort_callback"] = abort
+
+        # eps / max_it: None makes localize.fit pick picasso's per-method
+        # default. The GUI emits its spinbox minimum (0.0 / 0) for an unset
+        # field, and picasso requires strictly-positive values, so map any
+        # non-positive sentinel back to None (= use the default).
+        eps = _positive_or_none(parameters.get("eps"), float)
+        max_it = _positive_or_none(parameters.get("max_it"), int)
+        # Anchor lines in the (SLURM) log so a long fit is legible even when
+        # the throttled progress sink is quiet: what method, how many spots,
+        # and - at the end - how long it took and the resulting throughput.
+        logger.info(
+            f"localize: fitting {n_spots} spots with method "
+            f"{fitting_method!r} (multiprocess={multiprocess}, "
+            f"box={parameters['box_size']})."
+        )
+        t_fit_start = time.time()
         self.locs, _fit_info = localize.fit(
             self.movie,
             camera_info=self.camera_info,
@@ -1702,8 +1992,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             spline_calibration=spline_calibration,
             camera_calibration=camera_calibration,
             multiprocess=multiprocess,
-            eps=parameters.get("eps"),
-            max_it=parameters.get("max_it"),
+            eps=eps,
+            max_it=max_it,
+            **fit_progress_kw,
         )
         if self.locs is None:
             raise AutoPicassoError(
@@ -1711,6 +2002,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 f"(fitting_method={fitting_method!r}); the movie region may "
                 "be empty or fitting was aborted."
             )
+        t_fit = time.time() - t_fit_start
+        rate = n_spots / t_fit if t_fit > 0 else float("nan")
+        logger.info(
+            f"localize: fit {len(self.locs)} localizations in {t_fit:.1f} s "
+            f"({rate:.0f} spots/s) with method {fitting_method!r}."
+        )
 
         if pars := parameters.get("locs_vs_frame"):
             if "filename" in pars.keys():
@@ -1748,6 +2045,30 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fit_method"] = fitting_method
         return parameters, results
 
+    def _infer_zfit_fitting_method(self):
+        """Infer the zfit 2D fitter (gausslq/gaussmle) from the locs metadata.
+
+        The ``localize`` module records the fitting model under ``"Fit
+        method"`` in the info list. zfit only needs to know gausslq vs
+        gaussmle (to compute the axial localization precision), so map any
+        ``gaussmle`` variant to ``"gaussmle"`` and everything else to
+        ``"gausslq"``. This removes the need to set zfit's ``fitting_method``
+        to match the localize step by hand.
+
+        Returns
+        -------
+        str
+            ``"gaussmle"`` or ``"gausslq"``.
+        """
+        method = None
+        for entry in reversed(self.info or []):
+            if isinstance(entry, dict) and "Fit method" in entry:
+                method = entry["Fit method"]
+                break
+        if method is not None and "gaussmle" in str(method):
+            return "gaussmle"
+        return "gausslq"
+
     @module_decorator
     def zfit(self, i, parameters, results):
         """Fit z positions of the previously localized spots.
@@ -1767,6 +2088,17 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``fp_calibration`` : str
                 Filepath to the 3D calibration YAML file; if not given, it is
                 resolved from the picasso config via camera and wavelength.
+            ``fitting_method`` : str
+                2D fitter the localizations came from (``"gausslq"`` or
+                ``"gaussmle"``); used by picasso 0.11 to compute the axial
+                localization precision. Default ``"auto"`` infers it from the
+                ``"Fit method"`` the ``localize`` module recorded in the info,
+                so it need not be set to match by hand.
+            ``gpu`` : bool
+                Fit the z coordinates on a CUDA-capable GPU. Default False.
+            ``filter`` : int
+                picasso z-fit RMSD filter (0 = no filtering, the default here;
+                2 = picasso's own default).
             ``save_locs`` : dict
                 If saving localizations is requested (arguments of
                 ``save_locs``).
@@ -1819,15 +2151,49 @@ class AutoPicasso(util.AbstractModuleCollection):
         with open(path, "r") as f:
             z_calibration = yaml.full_load(f)
 
+        # picasso 0.11: ``fitting_method`` (gausslq/gaussmle) selects how the
+        # axial localization precision is computed. Default "auto": infer it
+        # from the "Fit method" the localize module recorded in the info, so
+        # it need not be set to match the localize step by hand. ``gpu`` runs
+        # the z fit on a CUDA device. ``filter`` defaults to 0 to keep the
+        # previous behaviour of not RMSD-filtering the z fits (picasso's own
+        # default is 2).
+        fitting_method = parameters.get("fitting_method", "auto")
+        if fitting_method in (None, "", "auto"):
+            fitting_method = self._infer_zfit_fitting_method()
+
+        # As in ``localize``: a GPU z-fit aborts deep inside picasso if the
+        # numba-CUDA backend is not usable (typically a missing libNVVM / CUDA
+        # toolkit). Reject it up front with an actionable message.
+        gpu = bool(parameters.get("gpu", False))
+        if gpu and not _gpu_fitting_available():
+            raise AutoPicassoError(
+                "zfit was asked to fit on the GPU (gpu=True), but "
+                "numba.cuda.is_available() is False, so picasso would abort "
+                "the fit. Usually the CUDA driver is present but libNVVM (the "
+                "CUDA toolkit) is not: install a CUDA toolkit in this "
+                "environment, or on a module-based cluster `module load "
+                "cuda/<version>` (which also sets CUDA_HOME). Set gpu=False to "
+                "fit on the CPU instead."
+            )
+
         self.locs, self.info = zfit.zfit(
             self.locs,
             self.info,
             calibration=z_calibration,
             magnification_factor=magnification_factor,
             pixelsize=pixelsize,
-            filter=0,
+            fitting_method=fitting_method,
+            filter=parameters.get("filter", 0),
             multiprocess=True,
+            gpu=gpu,
         )
+        if self.locs is None:
+            raise AutoPicassoError(
+                "picasso zfit.zfit produced no z-fitted localizations; "
+                "check the z calibration and that the localizations carry "
+                "astigmatic widths (sx, sy)."
+            )
 
         # generate a z coordinate histogram
         fig, ax = plt.subplots()
@@ -1843,6 +2209,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             "Generated by": "Picasso zfit",
             "Calibration filepath": results["fp_calibration"],
             "magnification factor": f"{magnification_factor}",
+            "Fit method (axial precision)": fitting_method,
             "Wrapped by": "picasso-workflow : zfit",
             # "parameters": parameters,
         }
@@ -1851,7 +2218,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     def _plot_locs_vs_frame(self, filename):
-        """Plot per-frame mean photons and PSF widths (sx, sy).
+        """Plot per-frame mean photons and a fitter-appropriate shape metric.
+
+        Different picasso fitters yield different localization columns:
+        Gaussian fits carry the PSF widths ``sx`` / ``sy``, while spline fits
+        carry the axial position ``z`` (3D) and no widths. The second panel
+        therefore shows ``sx`` / ``sy`` when present, else ``z``, else is
+        omitted, so the plot works for any fitting method.
 
         Parameters
         ----------
@@ -1865,51 +2238,51 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         results = {}
         frames = np.arange(len(self.movie))
-        # bins = np.arange(len(self.movie) + 1) - .5
 
         df_locs = pd.DataFrame(self.locs)
         gbframe = df_locs.groupby("frame")
-        # groupby only yields rows for frames that actually contain
-        # localizations. If some frames have none (e.g. the light switched
-        # on mid-acquisition), those frames are dropped and the aggregated
-        # series would be shorter than ``frames``, causing an x/y length
-        # mismatch in the plots below. Reindex onto the full frame range so
-        # empty frames become NaN (drawn as gaps) and x/y always align.
-        photons_mean = gbframe["photons"].mean().reindex(frames)
-        photons_std = gbframe["photons"].std().reindex(frames)
-        sx_mean = gbframe["sx"].mean().reindex(frames)
-        sx_std = gbframe["sx"].std().reindex(frames)
-        sy_mean = gbframe["sy"].mean().reindex(frames)
-        sy_std = gbframe["sy"].std().reindex(frames)
-
-        fig, ax = plt.subplots(nrows=2, sharex=True)
-        ax[0].plot(frames, photons_mean, color="b", label="mean photons")
+        cols = set(df_locs.columns)
         xhull = np.concatenate([frames, frames[::-1]])
-        yhull = np.concatenate(
-            [
-                photons_mean + photons_std,
-                photons_mean[::-1] - photons_std[::-1],
-            ]
-        )
-        ax[0].fill_between(
-            xhull, yhull, color="b", alpha=0.2, label="std photons"
-        )
-        ax[0].set_xlabel("frame")
-        ax[0].set_ylabel("photons")
-        ax[0].legend()
-        ax[1].plot(frames, sx_mean, color="c", label="mean sx")
-        yhull = np.concatenate(
-            [sx_mean + sx_std, sx_mean[::-1] - sx_std[::-1]]
-        )
-        ax[1].fill_between(xhull, yhull, color="c", alpha=0.2, label="std sx")
-        ax[1].plot(frames, sy_mean, color="m", label="mean sy")
-        yhull = np.concatenate(
-            [sy_mean + sy_std, sy_mean[::-1] - sy_std[::-1]]
-        )
-        ax[1].fill_between(xhull, yhull, color="m", alpha=0.2, label="std sy")
-        ax[1].set_xlabel("frame")
-        ax[1].set_ylabel("width")
-        ax[1].legend()
+
+        def per_frame(col):
+            # Per-frame mean/std, reindexed onto the full frame range: groupby
+            # only yields frames that contain localizations, so empty frames
+            # (e.g. the light switched on mid-acquisition) would otherwise
+            # shorten the series and misalign x/y. Reindexing makes them NaN
+            # (drawn as gaps) and keeps every series the length of ``frames``.
+            grp = gbframe[col]
+            return grp.mean().reindex(frames), grp.std().reindex(frames)
+
+        def band(ax, mean, std, color, label):
+            ax.plot(frames, mean, color=color, label=f"mean {label}")
+            yhull = np.concatenate([mean + std, mean[::-1] - std[::-1]])
+            ax.fill_between(
+                xhull, yhull, color=color, alpha=0.2, label=f"std {label}"
+            )
+
+        # Second panel: Gaussian widths if present, else the spline z, else
+        # nothing (a single photons panel).
+        has_widths = "sx" in cols and "sy" in cols
+        has_z = "z" in cols
+        n_panels = 2 if (has_widths or has_z) else 1
+        fig, axes = plt.subplots(nrows=n_panels, sharex=True, squeeze=False)
+        axes = axes[:, 0]
+
+        band(axes[0], *per_frame("photons"), "b", "photons")
+        axes[0].set_ylabel("photons")
+        axes[0].legend()
+
+        if has_widths:
+            band(axes[1], *per_frame("sx"), "c", "sx")
+            band(axes[1], *per_frame("sy"), "m", "sy")
+            axes[1].set_ylabel("width")
+            axes[1].legend()
+        elif has_z:
+            band(axes[1], *per_frame("z"), "c", "z")
+            axes[1].set_ylabel("z [nm]")
+            axes[1].legend()
+        axes[-1].set_xlabel("frame")
+
         results["filename"] = filename
         fig.savefig(results["filename"])
         plt.close(fig)
@@ -2416,6 +2789,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize = self.pixelsize
         progress = parameters.get("progress", None)
         # progress = lib.MockProgress().set_value,  # parameters.get("progress", None)
+        if progress is None:
+            # fall back to the runner's intra-module progress proxy, if wired
+            progress = self._make_progress_proxy(
+                total=parameters["segmentation"], phase="undrift (aim)"
+            )
 
         # dirty debug: picasso.aim.aim expects the existence of
         # info[1]["Pixelsize"]
@@ -2495,14 +2873,22 @@ class AutoPicasso(util.AbstractModuleCollection):
         for i in range(parameters.get("max_iter_segmentations", 3)):
             # if the segmentation is too low, the process raises an error
             # adaptively increase the value.
+            # forward the runner's progress proxy if wired, else a no-op.
+            seg_cb = (
+                self._make_progress_proxy(
+                    total=parameters["segmentation"], phase="undrift (rcc)"
+                )
+                or lib.MockProgress().set_value
+            )
+            rcc_cb = seg_cb
             try:
                 self.drift, self.locs = postprocess.undrift(
                     self.locs,
                     self.info,
                     segmentation=parameters["segmentation"],
                     display=False,
-                    segmentation_callback=lib.MockProgress().set_value,
-                    rcc_callback=lib.MockProgress().set_value,
+                    segmentation_callback=seg_cb,
+                    rcc_callback=rcc_cb,
                 )
                 results["success"] = True
                 break
@@ -7316,6 +7702,15 @@ class AutoPicasso(util.AbstractModuleCollection):
             # (or in clusters below min_locs) are dropped by the clusterer.
             n_locs_in = len(self.locs)
 
+            # intra-module progress: cluster() takes a ProgressDialog-like
+            # object; the proxy satisfies that interface.
+            if (
+                proxy := self._make_progress_proxy(
+                    total=len(self.locs), phase="cluster"
+                )
+            ) is not None:
+                kwargs["progress"] = proxy
+
             # label locs according to clusters
             # logger.debug(
             #     f"starting clusterer on self.locs with kwargs {kwargs}"
@@ -7376,6 +7771,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 if radius_z is not None:  # 3D
                     kwargs["radius_z"] = radius_z
 
+                if (
+                    proxy := self._make_progress_proxy(
+                        total=len(locs), phase=f"cluster {tag}"
+                    )
+                ) is not None:
+                    kwargs["progress"] = proxy
+
                 n_locs_in = len(locs)
 
                 # label locs according to clusters
@@ -7433,6 +7835,30 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    def _infer_gmm_mode(self):
+        """Infer g5m's z model from the localize fit method in the info.
+
+        A spline PSF fit yields ``z`` and ``lpz`` directly, so g5m should read
+        them (``"spline"``); a Gaussian fit needs the astigmatism calibration
+        to derive the axial precision (``"astigmatism"``). Scans the recorded
+        ``"Fit method"`` entries; defaults to ``"astigmatism"`` (g5m's own
+        default) when none indicates spline.
+
+        Returns
+        -------
+        str
+            ``"spline"`` or ``"astigmatism"``.
+        """
+        for infopart in self.info:
+            method = (
+                infopart.get("Fit method")
+                if isinstance(infopart, dict)
+                else None
+            )
+            if method is not None and "spline" in str(method):
+                return "spline"
+        return "astigmatism"
+
     @profile_resource_usage
     @module_decorator
     def gaussian_mixture_cluster(self, i, parameters, results):
@@ -7467,8 +7893,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                 bootstrapping; otherwise use the single-Gaussian SEM
                 approximation (default False).
             ``calibration`` : dict
-                Calibration with x/y coefficients, z step size and number of
-                frames. Required only for 3D data (default None).
+                Astigmatism z-calibration (x/y coefficients, magnification)
+                used only in ``mode="astigmatism"`` to derive the axial
+                precision when the locs lack ``lpz``. Not needed for spline
+                fits, which provide ``lpz`` directly (default None).
+            ``mode`` : {"auto", "astigmatism", "spline"}
+                g5m's z model. ``"spline"`` reads ``lpz`` straight from the
+                localizations (spline 3D fit); ``"astigmatism"`` derives it
+                from ``calibration`` + ``sx``/``sy`` (Gaussian fit). ``"auto"``
+                (the default) infers it from the recorded fit method, so
+                spline runs need no calibration and Gaussian runs are
+                unchanged.
             ``asynch`` : bool
                 If True, run the GMM search in parallel via multiprocessing
                 (default True).
@@ -7496,6 +7931,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
             ("bootstrap_check", False),
             ("calibration", None),
+            ("mode", "auto"),
             ("asynch", True),
             ("callback_parent", None),  # "silent"),
             ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
@@ -7520,6 +7956,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 setval == "silent" or setval == "None"
             ):
                 setval = None
+            elif oa == "mode" and setval in (None, "", "auto"):
+                # g5m's z model: 'spline' reads lpz straight from the locs
+                # (spline 3D fit), 'astigmatism' derives it from a calibration
+                # + sx/sy. Infer from the recorded fit method so spline runs
+                # need no calibration and Gaussian runs are unchanged.
+                setval = self._infer_gmm_mode()
             kwargs[oa] = setval
 
         print("G5M arguments")
@@ -12526,7 +12968,12 @@ class AutoPicasso(util.AbstractModuleCollection):
             logger.debug("""
                 Not engouh gold particles found. Skipping further undrifting
                 steps for this file" continue without gold undrifting""")
-            gold_locs = pd.DataFrame(columns=self.locs.columns)
+            # Empty gold set, but keep self.locs's column dtypes. An empty
+            # ``pd.DataFrame(columns=...)`` has object-dtype columns, which
+            # io.save_locs -> to_records -> HDF5 rejects ("Object dtype has no
+            # native HDF5 equivalent"). Slicing self.locs to zero rows keeps
+            # each column's numeric dtype so the empty file saves fine.
+            gold_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
             nongold_locs = self.locs
         else:
             # function needs to return the locs in a r radius around the gold
@@ -12692,28 +13139,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             logger.debug("""
                 Not many picks found in specified phase space.""")
-            try:
-                # dt_orig = self.locs.dtype
-                # if not isinstance(dt_orig, list) and len(dt_orig) == 2:
-                #     dt_orig = dt_orig[1]
-                # dtypes = self.locs.dtype + [("group", "<i4")]
-                column_names = [
-                    "frame",
-                    "x",
-                    "y",
-                    "photons",
-                    "sx",
-                    "sy",
-                    "bg",
-                    "lpx",
-                    "lpy",
-                    "ellipticity",
-                    "net_gradient",
-                    "group",
-                ]
-            except Exception as e:
-                raise e
-            picked_locs = pd.DataFrame(columns=column_names)
+            # Empty pick set, but keep self.locs's column dtypes (+ a group
+            # column), so io.save_locs -> to_records -> HDF5 does not choke on
+            # object-dtype columns. An empty pd.DataFrame(columns=[...]) has
+            # object dtypes, and a hardcoded Gaussian column list
+            # (sx/sy/ellipticity) does not match spline localizations.
+            picked_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
+            picked_locs["group"] = pd.Series(dtype="int32")
         results["n_picked_locs"] = len(picked_locs)
         results["n_locs"] = len(self.locs)
 
