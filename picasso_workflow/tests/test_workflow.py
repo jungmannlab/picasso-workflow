@@ -585,3 +585,40 @@ def test_claim_dataset_survives_fs_error(tmp_path):
     # not FileExistsError, so the dataset is run here rather than skipped
     missing = str(tmp_path / "does_not_exist")
     assert r._claim_dataset(missing, 0) is True
+
+
+def test_wait_returns_when_all_marked(tmp_path):
+    """The barrier returns immediately once every folder has a marker, and
+    never reclaims a dataset that already finished."""
+    r = _bare_runner(result_folder=str(tmp_path))
+    f0, f1 = str(tmp_path / "d0"), str(tmp_path / "d1")
+    r._write_single_marker(f0, True)
+    r._write_single_marker(f1, True)
+    reclaimed = []
+    r._wait_for_single_markers(
+        [f0, f1], reclaim=lambda i: reclaimed.append(i), poll=0
+    )
+    assert reclaimed == []
+
+
+def test_wait_reclaims_orphaned_dataset(tmp_path):
+    """A dataset with no marker and no advancing progress.json (its rank died)
+    is re-run on rank 0 instead of hanging the barrier until timeout."""
+    r = _bare_runner(result_folder=str(tmp_path))
+    f0, f1 = str(tmp_path / "d0"), str(tmp_path / "d1")
+    r._write_single_marker(f0, True)  # d0 already done
+    # d1 is orphaned: no marker, no progress.json
+    reclaimed = []
+
+    def reclaim(i):
+        reclaimed.append(i)
+        r._write_single_marker(
+            [f0, f1][i], True
+        )  # completing it ends the wait
+
+    # stale_grace=-1 makes an unchanged-progress dataset orphaned on the first
+    # poll, so the reclaim path is exercised deterministically (no sleep).
+    r._wait_for_single_markers(
+        [f0, f1], reclaim=reclaim, poll=0, stale_grace=-1
+    )
+    assert reclaimed == [1]

@@ -188,6 +188,28 @@ def test_scope_states_filters_by_job_id(win):
     assert win._scope_states_to_current_run(states, "372") == []
 
 
+def test_scope_states_prefers_recorded_job_id(win):
+    """A continued run re-adopts an earlier report_name whose ``_<id>`` token
+    was dropped, but its states carry the current ``job_id`` -- so scoping must
+    key on the recorded id, not the name, or a live resumed run shows nothing.
+    """
+    # continued run: report_name has no job-id token, but job_id is stamped
+    cont = {
+        "kind": "aggregation",
+        "report_name": "myrun_260902-1021",
+        "job_id": "5837262",
+        "state": "running",
+    }
+    # a sibling run's stage stamped with a different job id must be dropped
+    other = {
+        "kind": "single",
+        "report_name": "myrun_260901-1740",
+        "job_id": "5834387",
+        "state": "done",
+    }
+    assert win._scope_states_to_current_run([cont, other], "5837262") == [cont]
+
+
 @pytest.fixture(scope="module")
 def full_window():
     """A real Window (widgets constructed), for display-rendering tests."""

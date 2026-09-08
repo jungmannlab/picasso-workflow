@@ -186,6 +186,40 @@ def test_fetch_all_progress_collects_worker_rank_files():
     assert {s["rank"] for s in states} == {0, 1}
 
 
+def test_fetch_all_progress_is_space_safe():
+    """The remote poll passes each match to ``cat`` via ``find -exec`` rather
+    than ``for f in $(find ...)``, so a results path containing a space (common
+    on shared storage) is not word-split into unreadable fragments."""
+    comm = gui.SlurmCommunicator("host", "user")
+    captured = {}
+
+    def fake_ssh(cmd):
+        captured["cmd"] = cmd
+        return {"stdout": "", "success": True}
+
+    comm.execute_ssh_command = fake_ssh
+    comm.fetch_all_progress("/remote/My Runs/exp 1")
+    assert "-exec" in captured["cmd"]
+    assert "for f in $(" not in captured["cmd"]
+
+
+def test_write_abort_flag_is_space_safe():
+    """The abort flag is dropped via ``find -exec`` so folders whose path
+    contains a space still receive it (a ``for d in $(find ...)`` would miss
+    them, silently failing the graceful abort)."""
+    comm = gui.SlurmCommunicator("host", "user")
+    captured = {}
+
+    def fake_ssh(cmd):
+        captured["cmd"] = cmd
+        return {"success": True}
+
+    comm.execute_ssh_command = fake_ssh
+    comm.write_abort_flag("/remote/My Runs/exp 1")
+    assert "-exec" in captured["cmd"]
+    assert "for d in $(" not in captured["cmd"]
+
+
 def test_debug_toggles_present_with_defaults(window):
     """The Run tab exposes faulthandler (on) and CPU-only (off) toggles."""
     assert window.cluster_faulthandler_check.isChecked() is True

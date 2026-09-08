@@ -8086,10 +8086,13 @@ class SlurmCommunicator:
         # Rank 0 writes ``progress.json``; worker ranks write
         # ``progress.rankN.json`` (see progress.default_sinks). Match both, or a
         # multi-rank aggregation run reports only rank 0's share of the datasets.
+        # ``-exec`` passes each match as an argument, so paths containing spaces
+        # or newlines survive (a ``for f in $(find ...)`` word-splits them and
+        # loses the file, blanking the monitor for a genuinely running job).
         cmd = (
-            f"for f in $(find {folder} \\( -name progress.json -o "
-            f"-name 'progress.rank*.json' \\) 2>/dev/null); "
-            f'do echo "{sep}"; cat "$f"; done'
+            f"find {folder} \\( -name progress.json -o "
+            f"-name 'progress.rank*.json' \\) "
+            f'-exec sh -c \'echo "{sep}"; cat "$1"\' _ {{}} \\; 2>/dev/null'
         )
         res = self.execute_ssh_command(cmd)
         out = res.get("stdout") or ""
@@ -8122,11 +8125,14 @@ class SlurmCommunicator:
             The SSH command result.
         """
         folder = shlex.quote(remote_folder)
-        # place a flag next to every progress.json (single + aggregation runs)
+        # Place a flag next to every progress.json (single + aggregation runs).
+        # ``-exec`` with ``dirname "$1"`` handles paths with spaces/newlines; a
+        # ``for d in $(find ...)`` word-splits them, so a graceful abort would
+        # silently miss those folders and never reach the running workflow.
         cmd = (
-            f"for d in $(find {folder} -name progress.json "
-            "-printf '%h\\n' 2>/dev/null); do touch \"$d/abort.flag\"; done; "
-            f"touch {folder}/abort.flag"
+            f"find {folder} -name progress.json -exec sh -c "
+            '\'touch "$(dirname "$1")/abort.flag"\' _ {} \\; '
+            f"2>/dev/null; touch {folder}/abort.flag"
         )
         return self.execute_ssh_command(cmd)
 
@@ -14464,11 +14470,15 @@ class Window(QtWidgets.QMainWindow):
 
         The results folder accumulates one timestamped subfolder per run (each
         with its own progress.json files), so polling the tree returns every
-        past run too. The run token woven into every ``report_name`` is the
-        SLURM job id (see ``metaworkflow._run_token``), so when it is known
-        keep only the stages carrying it -- while a resubmission is still
-        PENDING this yields nothing rather than a previous run's progress. With
-        no job id (local monitoring) the states are returned unchanged.
+        past run too. Each state records the ``job_id`` of the submission that
+        wrote it (see ``progress.ProgressManager``), so keep only the stages
+        stamped with the current one -- while a resubmission is still PENDING
+        this yields nothing rather than a previous run's progress. A continued
+        run re-adopts an earlier ``report_name`` whose ``_<id>`` token was
+        dropped, so the recorded ``job_id`` (not the name) is what identifies
+        it. For progress files written before that field existed, fall back to
+        matching the job-id token in the ``report_name``. With no job id (local
+        monitoring) the states are returned unchanged.
 
         Parameters
         ----------
@@ -14484,10 +14494,19 @@ class Window(QtWidgets.QMainWindow):
         """
         if not states or not job_id:
             return states
+        job_id = str(job_id)
         # match the job id as a whole ``_<id>`` token (end of name or before
         # the next ``_``), so e.g. job 372 does not match run ...5837262.
-        token = re.compile(rf"_{re.escape(str(job_id))}(?:_|$)")
-        return [s for s in states if token.search(s.get("report_name") or "")]
+        token = re.compile(rf"_{re.escape(job_id)}(?:_|$)")
+
+        def _belongs(s):
+            recorded = s.get("job_id")
+            if recorded is not None:
+                return str(recorded) == job_id
+            # legacy file without a recorded job_id: match the name token
+            return bool(token.search(s.get("report_name") or ""))
+
+        return [s for s in states if _belongs(s)]
 
     # dataset-state precedence for merging per-rank aggregation views
     _DATASET_STATE_RANK = {
