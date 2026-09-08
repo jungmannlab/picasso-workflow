@@ -282,7 +282,7 @@ _SPECS = [
         provides=["identifications"],
         optional=["picasso_config"],
         relation=W,
-        picasso_symbol="picasso.localize.identify_async",
+        picasso_symbol="picasso.localize.identify",
         scopes=_SINGLE,
         summary="Identify localization sites in a loaded movie.",
     ),
@@ -292,7 +292,7 @@ _SPECS = [
         provides=["locs"],
         optional=["picasso_config"],
         relation=W,
-        picasso_symbol="picasso.gausslq.fit_spots_parallel",
+        picasso_symbol="picasso.localize.fit",
         scopes=_SINGLE,
         summary="Localize the spots previously identified.",
     ),
@@ -694,6 +694,18 @@ _SPECS = [
         relation=E,
         scopes=_AGG,
         summary="Align multiple channels to each other (aggregation workflow).",
+    ),
+    _s(
+        "register_channels",
+        requires=["channel_locs"],
+        provides=["channel_locs", "report_items"],
+        relation=E,
+        picasso_symbol=(
+            "picasso.registration.calibrate_channel_registration_from_beads"
+        ),
+        scopes=_AGG,
+        summary="Register channels via bead-based affine/projective/polynomial"
+        " transforms (aggregation workflow).",
     ),
     _s(
         "combine_channels",

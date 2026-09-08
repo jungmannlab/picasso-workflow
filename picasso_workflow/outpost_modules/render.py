@@ -412,7 +412,11 @@ def plot_scene(
             channel_locs, image_px_size, cam_px_size
         )
     except ValueError as e:
-        logger.error(f"Error plotting locs: {e}")
+        # Nothing renderable is a handled, non-fatal condition (e.g. an empty
+        # fiducial set after channel matching, or a mask excluding all locs):
+        # save an empty figure and carry on. Warn rather than error so a run
+        # is not flagged as failed for a legitimately empty scene.
+        logger.warning(f"Skipping locs plot: {e}")
         nlocs = [len(locs) for locs in channel_locs]
         ngroups = [
             len(np.unique(locs["group"])) if hasattr(locs, "group") else 0

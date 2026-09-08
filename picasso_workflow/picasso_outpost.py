@@ -24,7 +24,6 @@ from matplotlib.colors import LogNorm
 import yaml
 import os
 from datetime import datetime
-from aicsimageio import AICSImage
 
 from picasso import (
     io,
@@ -1905,27 +1904,25 @@ def convert_zeiss_file(filepath_czi, filepath_raw, info=None):
         are entered. Necessary keys: ``'Byte Order'``, ``'Camera'``,
         ``'Micro-Manager Metadata'``.
     """
-    img = AICSImage(filepath_czi)
-
-    with open(filepath_raw, "wb") as f:
-        img.get_image_data().squeeze().tofile(f)
+    # picasso reads Zeiss .czi natively: io.load_czi returns (movie, [info]),
+    # where the movie is array-like and reduces to a (frames, y, x) array.
+    movie, _czi_info = io.load_czi(filepath_czi)
+    data = movie[:].squeeze()
 
     if info is None:
         info = {"Byte Order": "<", "Camera": "FusionBT"}
         info["File"] = filepath_raw
-        info["Height"] = img.get_image_data().shape[-2]
-        info["Width"] = img.get_image_data().shape[-1]
-        info["Frames"] = img.get_image_data().shape[0]
-        info["Data Type"] = img.get_image_data().dtype.name
+        info["Height"] = data.shape[-2]
+        info["Width"] = data.shape[-1]
+        info["Frames"] = data.shape[0]
+        info["Data Type"] = data.dtype.name
         info["Micro-Manager Metadata"] = {
             "FusionBT-ReadoutMode": 1,
             "Filter": 561,
         }
 
-    filepath_info = os.path.splitext(filepath_raw)[0] + ".yaml"
-
-    with open(filepath_info, "w") as f:
-        yaml.dump(info, f)
+    # save_raw writes both the ``.raw`` movie and its ``.yaml`` sidecar.
+    io.save_raw(filepath_raw, data, [info])
 
 
 #############################################################################
@@ -4535,11 +4532,19 @@ def sort_picked_locs(channel_picks, max_shift=None):
         logger.debug(f"channel {chan} groups: {str(chan_groups)}")
         if chan == 0:
             pick_group[chan, : len(chan_groups)] = chan_groups
+            n_ref_groups = len(chan_groups)
             continue
 
         for i, group in enumerate(chan_groups):
             dists = mean_distances(pick_means, chan, i, 0)
-            dists = dists[: len(chan_groups)]
+            # Match only against the reference channel's (channel 0) actual
+            # picks; the remaining pick_means rows are NaN placeholders.
+            # Truncating to the *current* channel's pick count (the previous
+            # behaviour) barred matches to reference picks beyond that index,
+            # so a channel with fewer picks than channel 0 could never match
+            # the later reference picks. With several such channels every
+            # column ended up incomplete and all fiducials were dropped.
+            dists = dists[:n_ref_groups]
             try:
                 mindist_i = np.nanargmin(dists).flatten()
                 mindist_i = mindist_i[0]

@@ -43,6 +43,14 @@ from picasso_workflow.util import (
     ParameterTiler,
     DictSimpleTyper,
 )
+from picasso_workflow import progress as pwprogress
+from picasso_workflow.progress import (
+    ProgressManager,
+    RUNNING,
+    DONE,
+    FAILED,
+    ABORTED,
+)
 
 
 # For loading yaml files
@@ -436,73 +444,62 @@ class AggregationWorkflowRunner:
         sgl_dataset_success = [None] * n_sgl
         sgl_folders = [None] * n_sgl
 
+        # progress tracking at the aggregation level: one entry per single
+        # dataset. Rank 0 owns the shared progress.json; worker ranks write a
+        # per-rank file (see ProgressManager). Each single WorkflowRunner also
+        # writes its own progress.json in its subfolder.
+        self.progress = ProgressManager(
+            self.result_folder,
+            kind="aggregation",
+            rank=self.rank,
+            size=self.size,
+            report_name=report_name,
+        )
+        self.progress.datasets_init(tags)
+        self.progress.mark_running()
+
         # Multi-node parallelism: distribute the single-dataset workflows
-        # across the SLURM ranks (each rank runs i %% size == rank), writing
-        # results to the shared result folder and a completion marker. Rank 0
-        # then waits for every marker, loads the single results produced by
-        # other ranks from disk, and runs the aggregation. With a single
-        # task (off-cluster) this reduces to the previous sequential run.
+        # across the SLURM ranks by dynamic self-scheduling. Each rank walks
+        # the dataset list and races to claim the next one (an atomic mkdir on
+        # the shared filesystem); the winner runs it and only then advances.
+        # A rank that finishes a light dataset immediately claims the next
+        # unclaimed one, so both nodes stay busy even when the heavy
+        # (spot-rich) datasets happen to cluster - which a static i %% size
+        # split cannot avoid. Results and a completion marker go to the shared
+        # result folder; rank 0 then waits for every marker, loads the results
+        # produced by other ranks from disk, and runs the aggregation. With a
+        # single task (off-cluster) every dataset runs here.
+        claim_dir = self._claim_dir()
+        if self.size > 1:
+            os.makedirs(claim_dir, exist_ok=True)
         logger.debug(
-            f"Aggregation runner rank {self.rank}/{self.size} handling "
-            f"single datasets {list(range(self.rank, n_sgl, self.size))} "
-            f"of {n_sgl}."
+            f"Aggregation runner rank {self.rank}/{self.size} claiming "
+            f"single datasets dynamically ({n_sgl} total)."
         )
 
         for i, (parameter_set, tag) in enumerate(
             zip(individual_parametersets, tags)
         ):
-            sgl_name = report_name + f"_sgl_{i:02d}"
-            if tag:
-                sgl_name += f"_{tag}"
+            # Compute the folder for every dataset (even ones another rank
+            # claims) so rank 0 can find their markers/results afterwards.
             sgl_folders[i] = os.path.join(
-                self.result_folder, sgl_name + "_" + self.postfix
+                self.result_folder,
+                self._single_dataset_name(report_name, i, tag)
+                + "_"
+                + self.postfix,
             )
-            if i % self.size != self.rank:
-                continue  # handled by another rank
-
-            sgl_wkfl_reporter_config["report_name"] = sgl_name
-            sgl_wkfl_analysis_config["result_location"] = self.result_folder
-            if self.continue_workflow:
-                try:
-                    logger.debug(
-                        f"loading WorkflowRunner from {sgl_folders[i]}"
-                    )
-                    wr = WorkflowRunner.load(sgl_folders[i])
-                except Exception:
-                    logger.debug("loading did not work. creating from dict.")
-                    wr = WorkflowRunner.config_from_dicts(
-                        copy.deepcopy(sgl_wkfl_reporter_config),
-                        copy.deepcopy(sgl_wkfl_analysis_config),
-                        parameter_set,
-                        postfix=self.postfix,
-                    )
-            else:
-                logger.debug("not continuing workflow. starting new.")
-                wr = WorkflowRunner.config_from_dicts(
-                    copy.deepcopy(sgl_wkfl_reporter_config),
-                    copy.deepcopy(sgl_wkfl_analysis_config),
-                    parameter_set,
-                    postfix=self.postfix,
-                )
-            self.cpage_names.append(wr.reporter_config["report_name"])
-            # Never let an unhandled error escape before the completion
-            # marker is written - otherwise rank 0 would wait on the barrier
-            # until timeout. A failed single still marks the run as failed,
-            # which aborts the aggregation below.
-            try:
-                success = wr.run()
-            except Exception as e:
-                logger.error(f"Single dataset {i} ({tag}) failed: {e}")
-                logger.error(traceback.format_exc())
-                success = False
-            sgl_dataset_success[i] = success
-            self.all_results["single_dataset"][i] = getattr(
-                wr, "results", None
+            if self.size > 1 and not self._claim_dataset(claim_dir, i):
+                continue  # claimed by another rank
+            self._run_single_dataset(
+                i,
+                parameter_set,
+                tag,
+                report_name,
+                sgl_folders,
+                sgl_dataset_success,
+                sgl_wkfl_reporter_config,
+                sgl_wkfl_analysis_config,
             )
-            if self.rank == 0:
-                self.save(self.result_folder)
-            if self.size > 1:
-                self._write_single_marker(sgl_folders[i], success)
 
         # Worker ranks are done once their share is finished and marked;
         # the aggregation is performed by rank 0 only.
@@ -513,12 +510,28 @@ class AggregationWorkflowRunner:
                 f"({sum(bool(s) for s in owned)}/{len(owned)} ok); "
                 "leaving aggregation to rank 0."
             )
-            return all(owned) if owned else True
+            rank_ok = all(owned) if owned else True
+            self.progress.finish(DONE if rank_ok else FAILED)
+            return rank_ok
 
         # Rank 0 (or a single-task run): wait for the single datasets handled
-        # by other ranks and load their results from disk.
+        # by other ranks and load their results from disk. Re-run (here) any
+        # dataset whose owning rank died mid-run, so one lost worker cannot
+        # hang the barrier until timeout.
         if self.size > 1:
-            self._wait_for_single_markers(sgl_folders)
+            self._wait_for_single_markers(
+                sgl_folders,
+                reclaim=lambda i: self._run_single_dataset(
+                    i,
+                    individual_parametersets[i],
+                    tags[i],
+                    report_name,
+                    sgl_folders,
+                    sgl_dataset_success,
+                    sgl_wkfl_reporter_config,
+                    sgl_wkfl_analysis_config,
+                ),
+            )
             for i in range(n_sgl):
                 if sgl_dataset_success[i] is not None:
                     continue  # ran on this rank, already in memory
@@ -558,6 +571,7 @@ class AggregationWorkflowRunner:
                 f"aggregation analysis is started:\n{detail}"
             )
             logger.error(msg)
+            self.progress.finish(FAILED)
             self._report_aggregation_abort(failures, n_sgl)
             raise WorkflowError(msg)
 
@@ -614,9 +628,10 @@ class AggregationWorkflowRunner:
             )
         self.cpage_names.append(wr.reporter_config["report_name"])
         self._agg_report_folder = wr.result_folder
-        wr.run()
+        agg_success = wr.run()
         self.all_results["aggregation"] = wr.results
         self.save(self.result_folder)
+        self.progress.finish(DONE if agg_success else FAILED)
 
         # Refresh the HTML overview now that the aggregation report exists.
         self._write_html_overview(sgl_folders, self._agg_report_folder)
@@ -791,6 +806,116 @@ class AggregationWorkflowRunner:
         return failures
 
     @staticmethod
+    def _single_dataset_name(report_name: str, i: int, tag: str) -> str:
+        """Return single dataset ``i``'s report name (``..._sgl_NN[_tag]``).
+
+        Parameters
+        ----------
+        report_name : str
+            The aggregation run's report name.
+        i : int
+            Index of the single dataset.
+        tag : str
+            The dataset's tag (per-channel/condition label), possibly empty.
+
+        Returns
+        -------
+        str
+            The single-dataset report name.
+        """
+        sgl_name = report_name + f"_sgl_{i:02d}"
+        if tag:
+            sgl_name += f"_{tag}"
+        return sgl_name
+
+    def _run_single_dataset(
+        self,
+        i: int,
+        parameter_set: dict,
+        tag: str,
+        report_name: str,
+        sgl_folders: list,
+        sgl_dataset_success: list,
+        sgl_wkfl_reporter_config: dict,
+        sgl_wkfl_analysis_config: dict,
+    ) -> bool:
+        """Run one single-dataset workflow and record its result + marker.
+
+        Shared by the main self-scheduling loop and rank 0's recovery of a
+        dataset orphaned by a crashed worker (see
+        :meth:`_wait_for_single_markers`). Never lets an error escape before
+        the completion marker is written, so rank 0's barrier cannot hang on
+        it.
+
+        Parameters
+        ----------
+        i : int
+            Index of the single dataset.
+        parameter_set : dict
+            The tiled parameter set for this dataset.
+        tag : str
+            The dataset's tag (per-channel/condition label), possibly empty.
+        report_name : str
+            The aggregation run's report name (single names derive from it).
+        sgl_folders : list of str
+            Per-dataset result folders; ``sgl_folders[i]`` is read here.
+        sgl_dataset_success : list
+            Per-dataset success flags; ``sgl_dataset_success[i]`` is set here.
+        sgl_wkfl_reporter_config : dict
+            The single-workflow reporter config template (mutated per dataset).
+        sgl_wkfl_analysis_config : dict
+            The single-workflow analysis config template (mutated per dataset).
+
+        Returns
+        -------
+        bool
+            Whether the single-dataset workflow succeeded.
+        """
+        sgl_name = self._single_dataset_name(report_name, i, tag)
+        sgl_wkfl_reporter_config["report_name"] = sgl_name
+        sgl_wkfl_analysis_config["result_location"] = self.result_folder
+        if self.continue_workflow:
+            try:
+                logger.debug(f"loading WorkflowRunner from {sgl_folders[i]}")
+                wr = WorkflowRunner.load(sgl_folders[i])
+            except Exception:
+                logger.debug("loading did not work. creating from dict.")
+                wr = WorkflowRunner.config_from_dicts(
+                    copy.deepcopy(sgl_wkfl_reporter_config),
+                    copy.deepcopy(sgl_wkfl_analysis_config),
+                    parameter_set,
+                    postfix=self.postfix,
+                )
+        else:
+            logger.debug("not continuing workflow. starting new.")
+            wr = WorkflowRunner.config_from_dicts(
+                copy.deepcopy(sgl_wkfl_reporter_config),
+                copy.deepcopy(sgl_wkfl_analysis_config),
+                parameter_set,
+                postfix=self.postfix,
+            )
+        self.cpage_names.append(wr.reporter_config["report_name"])
+        self.progress.dataset_update(i, RUNNING)
+        # Never let an unhandled error escape before the completion marker is
+        # written - otherwise rank 0 would wait on the barrier until timeout. A
+        # failed single still marks the run as failed, which aborts the
+        # aggregation below.
+        try:
+            success = wr.run()
+        except Exception as e:
+            logger.error(f"Single dataset {i} ({tag}) failed: {e}")
+            logger.error(traceback.format_exc())
+            success = False
+        self.progress.dataset_update(i, DONE if success else FAILED)
+        sgl_dataset_success[i] = success
+        self.all_results["single_dataset"][i] = getattr(wr, "results", None)
+        if self.rank == 0:
+            self.save(self.result_folder)
+        if self.size > 1:
+            self._write_single_marker(sgl_folders[i], success)
+        return success
+
+    @staticmethod
     def _single_marker_path(folder: str) -> str:
         """Return the completion-marker path for a single-dataset folder."""
         return os.path.join(folder, "_pwf_single_done.txt")
@@ -839,27 +964,123 @@ class AggregationWorkflowRunner:
         except FileNotFoundError:
             return None
 
+    def _claim_dir(self) -> str:
+        """Per-launch directory of dataset claims for dynamic scheduling.
+
+        Scoped by SLURM job id so a claim means "a rank is running this
+        dataset in *this* launch". A stale claim left by a crashed earlier
+        attempt (same result folder, new job) then never blocks a rerun, while
+        the persistent per-folder completion marker records "finished" across
+        launches. Off-cluster (no SLURM_JOB_ID) it falls back to ``local``,
+        but claiming is skipped entirely for a single task anyway.
+
+        Returns
+        -------
+        str
+            The claim directory for this launch.
+        """
+        job = os.getenv("SLURM_JOB_ID") or "local"
+        return os.path.join(self.result_folder, "_pwf_claims", str(job))
+
+    def _claim_dataset(self, claim_dir: str, i: int) -> bool:
+        """Atomically claim single dataset ``i`` for this rank.
+
+        Creating a directory is atomic on a shared (NFS) filesystem - the
+        server serialises the MKDIR - so exactly one rank wins the race for
+        each dataset. This turns each rank's ordered pass into greedy
+        "next-available" self-scheduling: a rank advances to the next dataset
+        only after finishing its current one, so a free rank always grabs the
+        next unclaimed dataset and no rank idles while work remains.
+
+        Parameters
+        ----------
+        claim_dir : str
+            The per-launch claim directory (see :meth:`_claim_dir`).
+        i : int
+            Index of the single dataset to claim.
+
+        Returns
+        -------
+        bool
+            True if this rank claimed the dataset, False if another rank
+            already owns it. On an unexpected filesystem error it returns True
+            (run it here): a redundant run only wastes time and the last marker
+            and results win, whereas skipping could drop the dataset and hang
+            rank 0's barrier.
+        """
+        try:
+            os.mkdir(os.path.join(claim_dir, f"{i:04d}"))
+            return True
+        except FileExistsError:
+            return False
+        except Exception as e:
+            logger.warning(
+                f"Claim for single dataset {i} could not be created ({e}); "
+                f"running it on rank {self.rank} to be safe."
+            )
+            return True
+
+    @staticmethod
+    def _single_progress_mtime(folder: str) -> float | None:
+        """Return the mtime of a single dataset's ``progress.json``, or None.
+
+        A dataset actively running keeps rewriting its ``progress.json``, so a
+        stalled (or missing) mtime is a liveness signal that the owning rank
+        died. See :meth:`_wait_for_single_markers`.
+
+        Parameters
+        ----------
+        folder : str
+            The single-dataset result folder.
+
+        Returns
+        -------
+        float or None
+            The modification time, or None if the file is absent/unreadable.
+        """
+        try:
+            return os.path.getmtime(os.path.join(folder, "progress.json"))
+        except OSError:
+            return None
+
     def _wait_for_single_markers(
         self,
         folders: list[str],
+        reclaim=None,
         timeout: float = 7 * 24 * 3600,
         poll: float = 15,
+        stale_grace: float = 1800,
     ) -> None:
         """Block until every single-dataset folder has a completion marker.
 
         Used by rank 0 before aggregating, to gather the datasets handled by
-        other ranks via the shared filesystem. SLURM enforces the real wall
-        time; the timeout here is only a safety net against an unrecoverable
-        hang (e.g. a worker that died without writing a marker).
+        other ranks via the shared filesystem.
+
+        A worker that dies after claiming a dataset leaves its claim dir behind
+        (so no other rank retries it) and never writes a marker, which would
+        otherwise hang this barrier until ``timeout``. To recover, a dataset
+        whose marker is absent *and* whose ``progress.json`` has not advanced
+        for ``stale_grace`` seconds is treated as orphaned and re-run here via
+        ``reclaim(i)``. Re-running a merely-slow (still-live) dataset is safe -
+        the last marker/results win - so a false positive only wastes compute.
+        SLURM still enforces the real wall time; ``timeout`` is a final safety
+        net (e.g. if ``reclaim`` is not provided).
 
         Parameters
         ----------
         folders : list of str
             The single-dataset result folders to wait on.
+        reclaim : callable, optional
+            ``reclaim(i)`` re-runs orphaned dataset ``i`` on this rank and
+            writes its marker. If None, orphans are only waited on (legacy
+            pure-wait behaviour) until ``timeout``.
         timeout : float, optional
             Maximum seconds to wait before raising. Default is one week.
         poll : float, optional
             Seconds between polls of the shared filesystem. Default is 15.
+        stale_grace : float, optional
+            Seconds a pending dataset's ``progress.json`` may stay unchanged
+            before it is considered orphaned and reclaimed. Default is 1800.
 
         Raises
         ------
@@ -867,16 +1088,42 @@ class AggregationWorkflowRunner:
             If the timeout elapses before all markers appear.
         """
         start = time.time()
-        pending = set(range(len(folders)))
-        while pending:
-            pending = {
+        last_mtime: dict[int, float | None] = {}
+        stall_since: dict[int, float] = {}
+        while True:
+            pending = [
                 i
-                for i in pending
+                for i in range(len(folders))
                 if self._read_single_marker(folders[i]) is None
-            }
+            ]
             if not pending:
-                break
-            if time.time() - start > timeout:
+                return
+            now = time.time()
+            # Refresh each pending dataset's liveness: reset its stall timer
+            # whenever its progress.json advances.
+            for i in pending:
+                mtime = self._single_progress_mtime(folders[i])
+                if i not in last_mtime or mtime != last_mtime[i]:
+                    last_mtime[i] = mtime
+                    stall_since[i] = now
+            if reclaim is not None:
+                orphaned = [
+                    i
+                    for i in pending
+                    if now - stall_since.get(i, now) > stale_grace
+                ]
+                for i in orphaned:
+                    logger.warning(
+                        f"Single dataset {i} ({folders[i]}) has no completion "
+                        f"marker and no progress for {stale_grace:.0f}s; "
+                        "assuming its rank died and re-running it on rank 0."
+                    )
+                    reclaim(i)  # runs the dataset and writes its marker
+                    stall_since.pop(i, None)
+                    last_mtime.pop(i, None)
+                if orphaned:
+                    continue  # re-poll immediately after reclaiming
+            if now - start > timeout:
                 raise WorkflowError(
                     "Timed out waiting for single-dataset workflows on "
                     f"other ranks: {[folders[i] for i in sorted(pending)]}"
@@ -995,6 +1242,11 @@ class WorkflowRunner:
 
         self.parameter_command_executor = ParameterCommandExecutor(self)
         self.results = {}
+        # Progress tracking. ``progress`` is built lazily in run() (needs the
+        # result folder and module list); ``_abort_requested`` supports a
+        # cooperative in-process stop, complementing the on-disk abort flag.
+        self.progress = None
+        self._abort_requested = False
 
     @classmethod
     def config_from_dicts(
@@ -1199,6 +1451,10 @@ class WorkflowRunner:
                     f"Requested module {module_name} not implemented."
                 )
 
+        # progress tracking: build the emitter and announce the module list
+        progress = self._ensure_progress()
+        progress.start([name for name, _ in self.workflow_modules])
+
         # now, run the modules
         all_previously_succeeded = True
         # Bind up front: a module raising on the very first iteration used
@@ -1225,32 +1481,100 @@ class WorkflowRunner:
                 # will be re-analyzed.
                 logger.debug(f"""Module {i}, {module_name} has been previously
                     analyzed. Skipping.""")
+                progress.module_skipped(i)
                 continue
             else:
                 all_previously_succeeded = False
+
+            # cooperative abort: stop cleanly at the next module boundary if
+            # an abort was requested (in-process or via the on-disk flag).
+            if self._abort_callback():
+                logger.warning(
+                    f"Abort requested; stopping before module {i} "
+                    f"({module_name})."
+                )
+                success = False
+                progress.finish(ABORTED)
+                return success
             # all modules are called with iteration and parameter dict
             # as arguments
-            module_parameters = self.parameter_command_executor.run(
-                module_parameters, curr_rootidx=i
-            )
+            progress.module_start(i)
             try:
+                # Resolve the $-commands (e.g. $get_prior_result) inside the
+                # try: a failure here -- such as referencing a module that
+                # does not exist in this workflow -- must be recorded as a
+                # module failure and finalize the run's progress, rather than
+                # escaping with the progress state stuck at RUNNING (which
+                # leaves the live monitor showing the dataset as still running
+                # long after the rank has moved on).
+                module_parameters = self.parameter_command_executor.run(
+                    module_parameters, curr_rootidx=i
+                )
                 success = self.call_module(module_name, i, module_parameters)
             except AutoPicassoError:
                 success = False
+                progress.module_end(i, FAILED)
             except Exception:
                 # Any other exception used to escape before save(), so the
                 # failing module never reached WorkflowRunner.yaml. Record
                 # it, then let it propagate as before.
                 success = False
+                progress.module_end(i, FAILED)
+                progress.finish(FAILED)
                 self.save(self.result_folder)
                 raise
+            else:
+                progress.module_end(i, DONE if success else FAILED)
 
             self.save(self.result_folder)
             if not success:
                 break
         else:
             success = True
+
+        if progress.state["state"] == RUNNING:
+            progress.finish(DONE if success else FAILED)
         return success
+
+    def _ensure_progress(self) -> ProgressManager:
+        """Return the run's :class:`ProgressManager`, building it if needed.
+
+        Built lazily because it needs both the result folder (set at
+        initialization) and, conceptually, the module list (only meaningful
+        at ``run`` time). May be pre-set by a coordinator to inject sinks.
+
+        Returns
+        -------
+        ProgressManager
+        """
+        if self.progress is None:
+            self.progress = ProgressManager(
+                self.result_folder,
+                kind="single",
+                report_name=getattr(self, "report_name", None),
+            )
+        # Wire the analysis worker so long picasso calls can report
+        # intra-module progress and honour aborts.
+        if getattr(self, "autopicasso", None) is not None:
+            self.autopicasso._abort_callback = self._abort_callback
+        return self.progress
+
+    def _abort_callback(self) -> bool:
+        """Whether the run should abort (in-process flag or on-disk flag).
+
+        Passed to picasso's long-running calls and checked between modules,
+        so a GUI/operator can stop a run gracefully at the next checkpoint.
+
+        Returns
+        -------
+        bool
+        """
+        if self._abort_requested:
+            return True
+        try:
+            return pwprogress.abort_requested(self.result_folder)
+        except Exception:
+            return False
 
     ##########################################################################
     # UTIL FUNCTIONS
@@ -1472,6 +1796,17 @@ class WorkflowRunner:
         """
         key = f"{i:02d}_{fun_name}"
         logger.debug(f"Working on {key}")
+
+        # Wire intra-module progress: long picasso calls forward their frame/
+        # spot/segment counts through this callback, which the analysis worker
+        # converts to a 0..1 fraction for module ``i``.
+        if self.progress is not None:
+            self.autopicasso._progress_callback = (
+                lambda fraction, msg=None, _i=i: self.progress.module_progress(
+                    _i, fraction, msg
+                )
+            )
+            self.autopicasso._abort_callback = self._abort_callback
 
         # For conditional_branch module, inject the parameter_command_executor
         # so it can resolve sub-module parameters

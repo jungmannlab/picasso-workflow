@@ -1161,6 +1161,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
+        <li>Fit method: {results.get('fit_method', 'gausslq')}</li>
         <li>Locs Column names: {results['locs_columns']}</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -2857,6 +2858,42 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Combine map: {results["combine_map"]}</li>
         </ul>"""
         text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        if postpone_report:
+            return text
+        else:
+            self.ci.update_page_content(
+                self.report_page_name, self.report_page_id, text
+            )
+
+    def register_channels(self, i, parameters, results, postpone_report=False):
+        """Report the ``register_channels`` module to Confluence.
+
+        Documents the fitted transform model and per-channel registration
+        residuals.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
+        """
+        logger.debug("Reporting register_channels.")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Register Channels</strong></p>
+        <ul><li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        <li>Transform model: {results.get('registration_model')}</li>
+        <li>Per-channel RMS (px): {results.get('registration_rms')}</li>
+        </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         if postpone_report:

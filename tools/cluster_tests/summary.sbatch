@@ -34,6 +34,10 @@ module load anaconda/3/2023.03 2>/dev/null || true
 source ~/.bashrc 2>/dev/null || true
 conda activate picasso-workflow 2>/dev/null || true
 
+# Ignore the ~/.local user-site so a stray user install cannot shadow the
+# conda env on sys.path (see tiers1_3.sbatch for the full rationale).
+export PYTHONNOUSERSITE=1
+
 # summarize.py writes SUMMARY.txt + summary.json and echoes the report here.
 # Its exit code (0 = overall PASS, 1 = FAIL) becomes this job's exit code.
 python3 tools/cluster_tests/summarize.py "$RUN_DIR"
