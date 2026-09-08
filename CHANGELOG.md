@@ -57,6 +57,14 @@ This file was started after v0.5.6; earlier history is in the git log.
   share of the datasets. They now also collect `progress.rank*.json`, so the
   merged view (and overall %) reflects all ranks.
 
+### Security
+
+- Bumped two vulnerable pinned dependencies flagged by advisory data
+  (Dependabot / pip-audit): `python-dotenv` 1.0.1 → 1.2.3 (PYSEC-2026-2270)
+  and `pytest` 8.1.1 → 9.0.3 (PYSEC-2026-1845). Both verified against the full
+  unit suite (green on the new pins). GitHub Actions were likewise moved to
+  Node 24 majors (`actions/checkout@v5`, `actions/setup-python@v6`).
+
 ### Added
 
 - `[gpu]` optional-dependencies extra (`pip install -e ".[gpu]"`) that installs
