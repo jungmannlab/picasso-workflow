@@ -12,6 +12,28 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- Multi-rank aggregation no longer stalls (up to the one-week barrier timeout)
+  when a worker dies after claiming a single dataset but before writing its
+  completion marker. Rank 0's wait now treats a dataset with no marker whose
+  `progress.json` has not advanced for a grace period as orphaned and re-runs
+  it itself (`AggregationWorkflowRunner._wait_for_single_markers` gained a
+  `reclaim` path; the single-dataset run body was extracted to
+  `_run_single_dataset` so both the scheduling loop and recovery share it). A
+  redundant re-run of a merely-slow dataset is safe — the last marker/results
+  win.
+- The live-monitor's remote progress poll and graceful-abort
+  (`gui.SlurmCommunicator.fetch_all_progress` / `write_abort_flag`) now pass
+  each match to `cat` / `touch` via `find -exec` instead of
+  `for f in $(find ...)`. The old form word-split paths on whitespace, so a
+  results folder containing a space (common on shared storage) blanked the
+  monitor for a running job and silently dropped the abort flag.
+- The live monitor no longer shows a continued/resumed cluster run as
+  perpetually PENDING/0%. Progress states now record the `job_id` of the
+  submission that wrote them (`progress.ProgressManager`), and
+  `gui.Window._scope_states_to_current_run` scopes on that recorded id — a
+  continued run re-adopts an earlier `report_name` whose `_<id>` token was
+  dropped, so the previous name-token match found nothing. Older progress
+  files without the field fall back to the name-token match.
 - `gui.SlurmCommunicator.assemble_slurm_commands` raised
   `AttributeError: 'NoneType' object has no attribute 'get'` when the target
   host had no `ClusterEnvironment.<host>` entry (e.g. an unconfigured cluster,

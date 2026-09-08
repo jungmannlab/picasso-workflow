@@ -20,6 +20,7 @@ importing this package. Its shape::
     {
         "kind": "single" | "aggregation",
         "report_name": str | None,
+        "job_id": str | None,          # SLURM job id that wrote this state
         "state": "pending" | "running" | "done" | "failed" | "aborted",
         "rank": int, "size": int,
         "started": iso8601 | None, "updated": iso8601 | None,
@@ -187,6 +188,12 @@ class ProgressManager:
         self._state = {
             "kind": kind,
             "report_name": report_name,
+            # Identity of the submission that wrote this state. A continued run
+            # re-adopts an earlier report_name (whose ``_<id>`` token is
+            # deliberately dropped, see metaworkflow), so the monitor cannot
+            # rely on the name alone to tell the live run apart from stale
+            # sibling runs in the same result folder -- it scopes on this.
+            "job_id": os.getenv("SLURM_JOB_ID") or None,
             "state": PENDING,
             "rank": rank,
             "size": size,
