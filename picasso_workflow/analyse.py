@@ -778,6 +778,229 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    #    @profile_resource_usage
+    @module_decorator
+    def branch(self, i, parameters, results):
+        """Fan out into per-branch sub-workflows, then optionally re-join.
+
+        See :meth:`picasso_workflow.util.AbstractModuleCollection.branch` for
+        the full parameter contract. Supports two ``branch_type``s:
+        ``"runtime"`` (one branch per connected component of a prior mask) and
+        ``"screen"`` (one branch per row of a config-time parameter grid).
+        """
+        pce = parameters.get("parameter_command_executor", None)
+        branch_type = parameters["branch_type"]
+        branch_modules = parameters["branch_modules"]
+        join_modules = parameters.get("join_modules") or []
+
+        # 1. Determine the branches: a list of (label, tile_map, branch_state).
+        #    tile_map is the per-branch $$map dict for screens (else None);
+        #    branch_state is the per-branch analyzer state for runtime splits
+        #    (else None).
+        if branch_type == "screen":
+            splits = self._make_screen_branches(parameters)
+        elif branch_type == "runtime":
+            splits = self._make_runtime_branches(i, parameters, pce)
+        else:
+            raise ValueError(
+                f"Unknown branch_type '{branch_type}'. "
+                "Expected 'runtime' or 'screen'."
+            )
+
+        labels = [branch_label for branch_label, _, _ in splits]
+        results["branch_type"] = branch_type
+        results["labels"] = labels
+        if not splits:
+            logger.warning(
+                f"branch (module {i:02d}): no branches produced "
+                f"(branch_type={branch_type}). Nothing to run."
+            )
+
+        # 2. Snapshot the shared-prefix state once, then run each branch on a
+        #    fresh restore of it.
+        prefix_snapshot = util.BranchStateManager.snapshot(self)
+
+        branch_results = []
+        topology_branches = []
+        for branch_label, tile_map, branch_state in splits:
+            util.BranchStateManager.restore(self, prefix_snapshot)
+            if branch_state is not None:
+                for attr, value in branch_state.items():
+                    setattr(self, attr, value)
+
+            branch_dir = os.path.join(results["folder"], branch_label)
+            os.makedirs(branch_dir, exist_ok=True)
+
+            one_branch = {"label": branch_label}
+            executed = []
+            for sub_idx, (module_name, module_parameters) in enumerate(
+                branch_modules
+            ):
+                sub_params = self._resolve_branch_submodule_params(
+                    module_parameters, pce, i, tile_map
+                )
+                sub_results = self._run_branch_submodule(
+                    module_name, sub_idx, sub_params, branch_dir
+                )
+                one_branch[f"{sub_idx:02d}_{module_name}"] = sub_results
+                executed.append(f"{sub_idx:02d}_{module_name}")
+            branch_results.append(one_branch)
+            topology_branches.append(
+                {"label": branch_label, "modules": executed}
+            )
+
+        results["branches"] = branch_results
+
+        # 3. Restore the prefix state, then run the join/fan-in modules with
+        #    the per-branch results pooled back together.
+        util.BranchStateManager.restore(self, prefix_snapshot)
+
+        join_results = {}
+        if join_modules:
+            # Expose the in-progress branch results under this module's key so
+            # join modules can pool them via
+            # "results, NN_branch, branches, $all, ...".
+            if pce is not None and hasattr(pce.parent_object, "results"):
+                pce.parent_object.results[f"{i:02d}_branch"] = results
+            join_dir = os.path.join(results["folder"], "join")
+            os.makedirs(join_dir, exist_ok=True)
+            for sub_idx, (module_name, module_parameters) in enumerate(
+                join_modules
+            ):
+                sub_params = self._resolve_branch_submodule_params(
+                    module_parameters, pce, i, None
+                )
+                sub_results = self._run_branch_submodule(
+                    module_name, sub_idx, sub_params, join_dir
+                )
+                join_results[f"{sub_idx:02d}_{module_name}"] = sub_results
+        results["join"] = join_results
+
+        # 4. Record the executed module-path topology for reporting.
+        results["topology"] = {
+            "type": branch_type,
+            "prefix_index": i,
+            "labels": labels,
+            "branch_modules": [name for name, _ in branch_modules],
+            "join_modules": [name for name, _ in join_modules],
+            "branches": topology_branches,
+        }
+
+        logger.info(
+            f"branch (module {i:02d}) completed: {len(branch_results)} "
+            f"{branch_type} branches, {len(join_results)} join module(s)."
+        )
+        return parameters, results
+
+    def _make_screen_branches(self, parameters):
+        """Build config-time screen branches from a parameter grid.
+
+        Returns a list of ``(label, tile_map, None)``; ``tile_map`` is the
+        per-branch ``$$map`` lookup dict (one row of the grid).
+        """
+        screen = parameters["screen"]
+        tags = screen.get("#tags")
+        columns = [v for k, v in screen.items()]
+        if not columns:
+            return []
+        ntiles = len(columns[0])
+        splits = []
+        for j in range(ntiles):
+            tile_map = {k: v[j] for k, v in screen.items()}
+            branch_label = (
+                str(tags[j]) if tags is not None else f"screen{j:02d}"
+            )
+            splits.append((branch_label, tile_map, None))
+        return splits
+
+    def _make_runtime_branches(self, i, parameters, pce):
+        """Build runtime branches by splitting a prior mask into components.
+
+        Returns a list of ``(label, None, branch_state)``; ``branch_state``
+        injects the per-cell ``channel_locs`` (prefix locs filtered to the
+        component).
+        """
+        split = parameters["split"]
+        method = split.get("method", "mask_components")
+        if method != "mask_components":
+            raise NotImplementedError(
+                f"branch split method '{method}' is not supported "
+                "(only 'mask_components')."
+            )
+
+        fp_mask = split["mask"]
+        if pce is not None and isinstance(fp_mask, (tuple, list)):
+            fp_mask = pce.run(
+                {"mask": copy.deepcopy(fp_mask)}, curr_rootidx=i
+            )["mask"]
+
+        cell_mask = outpost_modules.mask.CellMask.load(fp_mask)
+        components = cell_mask.component_masks(
+            min_area_um2=split.get("min_area_um2", 0.0)
+        )
+        if (max_branches := split.get("max_branches")) is not None:
+            components = components[:max_branches]
+
+        label_template = split.get("label_template", "cell{n:02d}")
+        prefix_channel_locs = self.channel_locs
+        if prefix_channel_locs is None:
+            raise AutoPicassoError(
+                "branch runtime split requires channel_locs; run "
+                "aggregation/mask modules before branching."
+            )
+
+        splits = []
+        for n, component_mask in enumerate(components):
+            branch_label = label_template.format(n=n)
+            branch_channel_locs = [
+                component_mask.apply_to_locs(locs)
+                for locs in prefix_channel_locs
+            ]
+            branch_state = {"channel_locs": branch_channel_locs}
+            splits.append((branch_label, None, branch_state))
+        return splits
+
+    def _resolve_branch_submodule_params(
+        self, module_parameters, pce, i, tile_map
+    ):
+        """Resolve a branch sub-module's parameters.
+
+        For screens, first resolve ``$$map`` commands from the branch's row of
+        the grid (``tile_map``); then resolve ordinary ``$`` prior-result
+        commands against the runner results (mirrors
+        :meth:`conditional_branch`).
+        """
+        params = copy.deepcopy(module_parameters)
+        if tile_map is not None:
+            parent = pce.parent_object if pce is not None else None
+            tiler_pce = util.ParameterCommandExecutor(
+                parent, dict(tile_map), command_sign="$$"
+            )
+            params = tiler_pce.run(params)
+        if pce is not None:
+            original_rootidx = getattr(pce, "curr_rootidx", None)
+            pce.curr_rootidx = i
+            params = pce.run(params, curr_rootidx=i)
+            pce.curr_rootidx = original_rootidx
+        return params
+
+    def _run_branch_submodule(
+        self, module_name, sub_idx, sub_params, calling_module_dir
+    ):
+        """Run one branch/join sub-module into a nested result folder."""
+        if not hasattr(self, module_name):
+            raise AttributeError(
+                f"Module '{module_name}' not found in AutoPicasso"
+            )
+        module_method = getattr(self, module_name)
+        _, sub_results = module_method(
+            sub_idx,
+            sub_params,
+            calling_module_dir=calling_module_dir,
+            suffix="",
+        )
+        return sub_results
+
     ##########################################################################
     # Single dataset modules
     ##########################################################################

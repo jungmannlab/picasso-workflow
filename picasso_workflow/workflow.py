@@ -1230,9 +1230,17 @@ class WorkflowRunner:
                 all_previously_succeeded = False
             # all modules are called with iteration and parameter dict
             # as arguments
-            module_parameters = self.parameter_command_executor.run(
-                module_parameters, curr_rootidx=i
-            )
+            if module_name == "branch":
+                # The branch module owns resolution of its sub-workflow payload:
+                # branch_modules/join_modules reference branch-local and tiled
+                # ($$map) results that do not exist yet at this point, so a
+                # generic top-level scan would choke. Pass the config through
+                # raw; branch() resolves each piece at the right time.
+                pass
+            else:
+                module_parameters = self.parameter_command_executor.run(
+                    module_parameters, curr_rootidx=i
+                )
             try:
                 success = self.call_module(module_name, i, module_parameters)
             except AutoPicassoError:
@@ -1473,12 +1481,15 @@ class WorkflowRunner:
         key = f"{i:02d}_{fun_name}"
         logger.debug(f"Working on {key}")
 
-        # For conditional_branch module, inject the parameter_command_executor
-        # so it can resolve sub-module parameters
-        if fun_name == "conditional_branch":
-            parameters["parameter_command_executor"] = (
-                self.parameter_command_executor
-            )
+        # For the conditional_branch and branch modules, inject the
+        # parameter_command_executor so they can resolve sub-module parameters.
+        # Inject into a shallow copy so the live executor is never persisted
+        # into workflow_modules/results by the following save().
+        if fun_name in ("conditional_branch", "branch"):
+            parameters = {
+                **parameters,
+                "parameter_command_executor": self.parameter_command_executor,
+            }
 
         fun_ap = getattr(self.autopicasso, fun_name)
         analyse_error = None

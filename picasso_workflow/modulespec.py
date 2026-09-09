@@ -82,6 +82,8 @@ CAPABILITIES: frozenset[str] = frozenset(
         "dataset_summary",  # per-dataset summary statistics
         "report_items",  # items appended to the report (side-effect output)
         "saved_dataset",  # persisted result on disk
+        # --- control flow ---
+        "branches",  # per-branch results produced by the branch module
         # --- aggregation / multi-channel data flow ---
         "dataset_collection",  # set of single-dataset results gathered to aggregate
         "pooled_locs",  # localizations pooled across datasets
@@ -219,6 +221,13 @@ _SPECS = [
         relation=N,
         scopes=_BOTH,
         summary="Execute different sub-module sequences based on a condition.",
+    ),
+    _s(
+        "branch",
+        provides=["branches"],
+        relation=N,
+        scopes=_BOTH,
+        summary="Fan out into per-branch sub-workflows, then optionally re-join.",
     ),
     _s(
         "manual",
@@ -738,6 +747,19 @@ def _step_name(step):
     return step[0]
 
 
+def _step_params(step):
+    """Return the parameters dict from a workflow step (``{}`` if none)."""
+    if isinstance(step, dict):
+        return step.get("parameters") or step.get("params") or {}
+    if (
+        isinstance(step, (tuple, list))
+        and len(step) > 1
+        and isinstance(step[1], dict)
+    ):
+        return step[1]
+    return {}
+
+
 def _initial_available(scope):
     """Capabilities available before any step runs, per scope.
 
@@ -748,7 +770,7 @@ def _initial_available(scope):
     return set()
 
 
-def validate_workflow(steps, scope, registry=None):
+def validate_workflow(steps, scope, registry=None, available=None):
     """Check an ordered workflow against the module registry.
 
     A pre-flight, execution-free check intended to run before a workflow is
@@ -781,7 +803,10 @@ def validate_workflow(steps, scope, registry=None):
     if isinstance(scope, str):
         scope = Scope(scope)
 
-    available = _initial_available(scope)
+    if available is None:
+        available = _initial_available(scope)
+    else:
+        available = set(available)
     prior_names: list[str] = []
     errors: list[str] = []
     for i, step in enumerate(steps):
@@ -808,6 +833,48 @@ def validate_workflow(steps, scope, registry=None):
                     f"[{i}] {spec.name} must come after "
                     f"'{required_predecessor}'"
                 )
+        if name == "branch":
+            errors.extend(
+                _validate_branch_step(
+                    i, _step_params(step), scope, registry, available
+                )
+            )
         available |= spec.provides
         prior_names.append(name)
+    return errors
+
+
+def _validate_branch_step(i, params, scope, registry, available):
+    """Validate a ``branch`` step's sub-workflows.
+
+    ``branch_modules`` are validated starting from the trunk's current
+    capabilities (so they can see the shared prefix); their ``provides`` are
+    kept branch-local and do not leak back to the trunk. ``join_modules`` are
+    then validated with ``branches`` added. A runtime (mask-component) split
+    requires a ``mask`` capability from an earlier module.
+    """
+    errors = []
+
+    if params.get("branch_type") == "runtime" and "mask" not in available:
+        errors.append(
+            f"[{i}.branch] runtime split requires a 'mask' from an earlier "
+            "module (e.g. create_mask2)"
+        )
+
+    # branch_modules see the shared-prefix capabilities (available); their
+    # provides stay branch-local and do not leak back to the trunk.
+    branch_modules = params.get("branch_modules") or []
+    sub_errors = validate_workflow(
+        branch_modules, scope, registry, available=available
+    )
+    errors.extend(e.replace("[", f"[{i}.branch.", 1) for e in sub_errors)
+
+    # join_modules run after the branches on the restored prefix state and may
+    # pool per-branch results (the "branches" token).
+    join_modules = params.get("join_modules") or []
+    join_errors = validate_workflow(
+        join_modules, scope, registry, available=available | {"branches"}
+    )
+    errors.extend(e.replace("[", f"[{i}.join.", 1) for e in join_errors)
+
     return errors

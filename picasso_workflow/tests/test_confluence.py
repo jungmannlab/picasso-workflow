@@ -1271,6 +1271,43 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    def branch(self):
+        parameters = {
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [("dummy_module", {})],
+        }
+        sub = {"start time": "now", "duration": 1.0, "success": True}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "branch_type": "screen",
+            "labels": ["a", "b"],
+            "branches": [
+                {"label": "a", "00_dummy_module": dict(sub)},
+                {"label": "b", "00_dummy_module": dict(sub)},
+            ],
+            "join": {"00_dummy_module": dict(sub)},
+            "topology": {
+                "type": "screen",
+                "prefix_index": 0,
+                "labels": ["a", "b"],
+                "branch_modules": ["dummy_module"],
+                "join_modules": ["dummy_module"],
+                "branches": [
+                    {"label": "a", "modules": ["00_dummy_module"]},
+                    {"label": "b", "modules": ["00_dummy_module"]},
+                ],
+            },
+        }
+        self.cr.branch(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
     # @unittest.skip("")
     def resolution_analysis(self):
         parameters = {}

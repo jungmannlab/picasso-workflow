@@ -137,6 +137,55 @@ class AbstractModuleCollection(abc.ABC):
             results).
         """
 
+    @abc.abstractmethod
+    def branch(self, i, parameters, results):
+        """Fan out into per-branch sub-workflows, then optionally re-join.
+
+        Generalizes :meth:`conditional_branch` from a two-way condition to an
+        N-way fan-out. The shared prefix (all modules before this one) is run
+        once; this module then runs ``branch_modules`` once per branch on a
+        snapshot of the prefix state, and finally runs ``join_modules`` once
+        with the per-branch results pooled back together. Two branch types:
+
+        - ``"runtime"``: the number of branches is discovered at run time by
+          splitting a prior mask into its connected components (one branch per
+          cell). Each branch's ``channel_locs`` are the prefix localizations
+          filtered to that component.
+        - ``"screen"``: the number of branches is fixed at config time by a
+          parameter grid; each branch resolves ``$$map`` commands from its row
+          of the grid (reusing :class:`ParameterTiler` semantics).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys: ``branch_type`` (``"runtime"`` or ``"screen"``) and
+            ``branch_modules`` (list of ``(module_name, module_parameters)``
+            tuples run once per branch). For ``"runtime"``, a ``split`` dict
+            (``method`` -- only ``"mask_components"`` --, ``mask`` filepath or
+            command, optional ``min_area_um2``, ``max_branches``,
+            ``label_template``). For ``"screen"``, a ``screen`` dict of
+            equal-length lists keyed by the ``$$map`` names used in
+            ``branch_modules`` (optional ``"#tags"`` gives branch labels).
+            Optional ``join_modules`` (run once after all branches, may pool
+            per-branch results via ``("$get_prior_result", "results,
+            NN_branch, branches, $all, MM_module, key")``) and
+            ``parameter_command_executor`` (injected by the runner).
+        results : dict
+            Module results (see class docstring).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``branch_type`` (str), ``labels`` (list),
+            ``branches`` (list of per-branch result dicts, each keyed
+            ``MM_module``), ``join`` (dict of join-module results) and
+            ``topology`` (the executed module-path tree).
+        """
+
     ##########################################################################
     # Single-dataset workflow modules
     ##########################################################################
@@ -2685,6 +2734,60 @@ class ParameterTiler:
             tags = [""] * len(result_parameters)
 
         return result_parameters, tags
+
+
+class BranchStateManager:
+    """Snapshot and restore the per-branch analysis state of an analyzer.
+
+    Used by the ``branch`` module (see
+    :meth:`AbstractModuleCollection.branch`) to give each branch a private
+    copy of the localization-level state while sharing the heavy, read-only
+    arrays (the raw ``movie``, the ``results_folder`` and ``analysis_config``)
+    by reference. This is what makes branching *after* the mask cheap: the
+    per-branch cost is O(localizations in that branch), not O(movie).
+
+    Only the attributes in :attr:`PER_BRANCH` are snapshotted. A shallow copy
+    of list containers is taken so that a branch reassigning an element (e.g.
+    ``self.channel_locs[k] = ...``) cannot leak into a sibling branch; the
+    underlying record arrays stay shared until a module replaces them (modules
+    reassign rather than mutate in place).
+    """
+
+    # attributes that diverge per branch -> snapshot/restore
+    PER_BRANCH = (
+        "locs",
+        "info",
+        "identifications",
+        "drift",
+        "channel_locs",
+        "channel_info",
+        "channel_tags",
+    )
+    # attributes shared read-only across branches -> never touched:
+    #   movie, results_folder, analysis_config
+
+    @staticmethod
+    def snapshot(analyzer) -> dict:
+        """Return a shallow snapshot of the analyzer's per-branch state."""
+        snap = {}
+        for attr in BranchStateManager.PER_BRANCH:
+            value = getattr(analyzer, attr, None)
+            snap[attr] = list(value) if isinstance(value, list) else value
+        return snap
+
+    @staticmethod
+    def restore(analyzer, snapshot: dict) -> None:
+        """Restore analyzer state from a :meth:`snapshot`.
+
+        A fresh shallow copy of list containers is installed on each restore
+        so repeated restores from the same snapshot stay independent.
+        """
+        for attr, value in snapshot.items():
+            setattr(
+                analyzer,
+                attr,
+                list(value) if isinstance(value, list) else value,
+            )
 
 
 def correct_path_separators(file_path: str) -> str:

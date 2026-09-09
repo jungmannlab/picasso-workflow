@@ -847,6 +847,178 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    @staticmethod
+    def _branch_topology_text(results):
+        """Render the executed module-path topology as an indented tree.
+
+        Kept legible for nested branches by drawing a plain-text tree in a
+        ``<pre>`` block (storage-format-safe).
+        """
+        topology = results.get("topology", {})
+        branch_type = topology.get("type", results.get("branch_type", "?"))
+        prefix_index = topology.get("prefix_index")
+        join_modules = topology.get("join_modules", [])
+        branches = topology.get("branches", [])
+
+        lines = []
+        if prefix_index is not None:
+            lines.append(
+                f"prefix (modules 00..{max(prefix_index - 1, 0):02d})"
+            )
+        lines.append(f"└─ branch [{branch_type}] → {len(branches)} branch(es)")
+        for b_idx, branch in enumerate(branches):
+            last_branch = b_idx == len(branches) - 1 and not join_modules
+            connector = "└─" if last_branch else "├─"
+            path = " → ".join(
+                m.split("_", 1)[-1] for m in branch.get("modules", [])
+            )
+            label = branch.get("label", f"branch{b_idx}")
+            lines.append(f"   {connector} {label}: {path or '(no modules)'}")
+        if join_modules:
+            join_path = " → ".join(join_modules)
+            lines.append(f"   └─ join: {join_path}")
+        tree = html.escape("\n".join(lines))
+        return (
+            "<p><strong>Executed module-path topology</strong></p>"
+            f'<pre style="line-height:1.4;">{tree}</pre>'
+        )
+
+    @module_decorator
+    def branch(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Report the ``branch`` module: topology, per-branch and join results.
+
+        Renders a compact summary (branch type, labels, executed-path
+        topology tree) followed by a collapsible full sub-report for each
+        branch and for the join modules.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, build the report text but defer posting it. Default False.
+        """
+        logger.debug(f"Reporting branch module {i:02d}")
+
+        branch_type = results.get("branch_type", "?")
+        labels = results.get("labels", [])
+        branch_results = results.get("branches", [])
+        join_results = results.get("join", {})
+        branch_modules = parameters.get("branch_modules", [])
+        join_modules = parameters.get("join_modules", []) or []
+
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Branch ({html.escape(str(branch_type))})</strong></p>
+        <ul>
+        <li><strong>Branches:</strong> {len(labels)} ({html.escape(', '.join(map(str, labels)) or 'none')})</li>
+        <li><strong>Join modules:</strong> {html.escape(', '.join(m for m, _ in join_modules) if join_modules else 'None')}</li>
+        <li><strong>Start Time:</strong> {html.escape(str(results.get('start time', 'N/A')))}</li>
+        <li><strong>Total Duration:</strong> {results.get("duration", 0) // 60:.0f} min {(results.get("duration", 0) % 60):.02f} s</li>
+        </ul>
+        {self._branch_topology_text(results)}
+        {parameter_text}
+        """
+
+        # Per-branch full sub-reports (collapsible).
+        for branch in branch_results:
+            label = branch.get("label", "branch")
+            text += f"""
+            <ac:structured-macro ac:name="expand" ac:schema-version="1">
+            <ac:parameter ac:name="title">Branch: {html.escape(str(label))}</ac:parameter>
+            <ac:rich-text-body>
+            """
+            text += self._report_branch_submodules(branch, branch_modules)
+            text += """
+            </ac:rich-text-body>
+            </ac:structured-macro>
+            """
+
+        # Join / fan-in sub-reports (collapsible).
+        if join_results:
+            text += """
+            <ac:structured-macro ac:name="expand" ac:schema-version="1">
+            <ac:parameter ac:name="title">Join (fan-in)</ac:parameter>
+            <ac:rich-text-body>
+            """
+            join_branch = {"label": "join", **join_results}
+            text += self._report_branch_submodules(join_branch, join_modules)
+            text += """
+            </ac:rich-text-body>
+            </ac:structured-macro>
+            """
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+
+        if postpone_report:
+            return text
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+
+    def _report_branch_submodules(self, branch, module_defs):
+        """Render the sub-module reports of one branch (or the join step).
+
+        Reuses each sub-module's own reporter (like
+        :meth:`conditional_branch`), falling back to a plain result list when
+        no specific reporter exists.
+        """
+        text = ""
+        for sub_key in sorted(k for k in branch if k != "label"):
+            sub_results = branch[sub_key]
+            if not isinstance(sub_results, dict):
+                continue
+            module_name = sub_key.split("_", 1)[-1]
+            text += (
+                '<div style="margin-left: 20px; border-left: 3px solid '
+                '#4a90e2; padding-left: 10px; margin-bottom: 15px;">'
+                f"<h5>{html.escape(sub_key)}</h5>"
+            )
+            if not sub_results.get("success", True):
+                text += "<p>(sub-module did not succeed)</p></div>"
+                continue
+            reporter_method = getattr(self, module_name, None)
+            if reporter_method is not None:
+                try:
+                    sub_idx = int(sub_key.split("_")[0])
+                    sub_params = {}
+                    for idx, (mod_name, mod_params) in enumerate(module_defs):
+                        if idx == sub_idx and mod_name == module_name:
+                            sub_params = mod_params
+                            break
+                    text += reporter_method(
+                        sub_idx, sub_params, sub_results, postpone_report=True
+                    )
+                except Exception as e:
+                    logger.error(f"Error reporting sub-module {sub_key}: {e}")
+                    text += (
+                        '<p style="color:#f0ad4e;">Could not render report: '
+                        f"{html.escape(str(e))}</p>"
+                    )
+            else:
+                text += "<ul>"
+                for k, v in sub_results.items():
+                    if k not in ("folder", "start time", "end time"):
+                        text += f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+                text += "</ul>"
+            text += "</div>"
+        return text
+
     def analysis_documentation(
         self, i, parameters, results, postpone_report=False
     ):
