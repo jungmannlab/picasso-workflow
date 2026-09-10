@@ -102,6 +102,15 @@ This repo already matches the aligned target — no S0A-2 migration pending here
   snapshotted template references it, re-run `python tools/snapshot_templates.py`
   (see README "Adding a new workflow module").
 
+## Working defaults (how to behave in a session)
+
+In-session habits that complement the gates: the STOP-GATE and PR gates govern *when* and *where* to build; these govern *how*.
+
+- **Think before coding.** State your assumptions; if the brief is ambiguous or a simpler approach exists, say so and ask — don't pick silently.
+- **Minimal, necessary change.** No speculative abstraction, configurability, or error-handling for cases that can't occur. Every changed line should trace to the work order.
+- **Surgical diffs.** Match surrounding style; don't refactor or reformat untouched code, and don't delete pre-existing dead code — mention it instead. Remove only the orphans (imports/vars) your own change creates.
+- **Goal-driven.** Turn the brief's ACCEPTANCE into a check you can actually run, and verify it before opening the PR (hosted CI lint + unit is the required merge gate).
+
 ## Architecture (short)
 
 `workflow.py` holds the orchestrators (`WorkflowRunner`,
