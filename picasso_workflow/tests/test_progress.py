@@ -55,6 +55,43 @@ class TestProgressManager(unittest.TestCase):
         self.assertEqual(pm.state["modules"][0]["status"], p.SKIPPED)
         self.assertEqual(pm.state["modules"][0]["fraction"], 1.0)
 
+    def test_branch_nested_lifecycle(self):
+        pm = p.ProgressManager(self.folder, sinks=[])
+        pm.start(["branch"])
+        pm.branch_init(
+            0,
+            [
+                ("cell0", "branch", ["create_mask2", "nneighbor"]),
+                ("cell1", "branch", ["create_mask2", "nneighbor"]),
+                ("join", "join", ["summarize_branches"]),
+            ],
+        )
+        sub = pm.state["modules"][0]["subgroups"]
+        self.assertEqual(len(sub), 3)
+        self.assertEqual(sub[2]["kind"], "join")
+        self.assertEqual(sub[0]["status"], p.PENDING)
+
+        # run cell0's two modules
+        pm.branch_submodule_start(0, 0, 0)
+        self.assertEqual(sub[0]["status"], p.RUNNING)
+        self.assertEqual(sub[0]["modules"][0]["status"], p.RUNNING)
+        pm.branch_submodule_end(0, 0, 0, p.DONE)
+        pm.branch_submodule_start(0, 0, 1)
+        pm.branch_submodule_end(0, 0, 1, p.DONE)
+        # group rolls up to done once all its modules are done
+        self.assertEqual(sub[0]["status"], p.DONE)
+        self.assertEqual(sub[0]["modules"][0]["fraction"], 1.0)
+        self.assertIsInstance(sub[0]["modules"][1]["elapsed"], float)
+
+        # a failing sub-module marks itself and its group failed
+        pm.branch_submodule_start(0, 1, 0)
+        pm.branch_submodule_end(0, 1, 0, p.FAILED)
+        self.assertEqual(sub[1]["modules"][0]["status"], p.FAILED)
+        self.assertEqual(sub[1]["status"], p.FAILED)
+
+        # the whole state stays JSON-serialisable (it is written to disk)
+        json.dumps(pm.state)
+
     def test_progress_clamped(self):
         pm = p.ProgressManager(self.folder, sinks=[])
         pm.start(["a"])

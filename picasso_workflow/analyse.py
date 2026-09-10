@@ -942,33 +942,69 @@ class AutoPicasso(util.AbstractModuleCollection):
         #    fresh restore of it.
         prefix_snapshot = util.BranchStateManager.snapshot(self)
 
-        # Intra-module progress: the branch runs many sub-modules, so report
-        # overall progress (which branch / sub-module) instead of sitting at
-        # 0% for the whole step. Each sub-module's own progress, if any, is
-        # mapped into its slice of the overall bar.
+        # Progress: the branch runs many sub-modules, so (a) advance the
+        # module's overall bar with a "<branch>: <module>" message instead of
+        # sitting at 0%, and (b) drive a nested progress tree (one group per
+        # branch + a join group, each with its sub-module rows) that the
+        # monitor expands under the branch module.
         overall_cb = getattr(self, "_progress_callback", None)
+        progress_mgr = getattr(self, "_progress_manager", None)
+        module_index = getattr(self, "_module_index", None)
+        nested = progress_mgr is not None and module_index is not None
         total_units = len(splits) * len(branch_modules) + len(join_modules)
         done_units = [0]
 
-        def _branch_step(label, name):
-            """Point the intra-module callback at this sub-module's slice."""
-            if overall_cb is None or total_units <= 0:
+        if nested:
+            groups = [
+                (label, "branch", [name for name, _ in branch_modules])
+                for label, _, _ in splits
+            ]
+            if join_modules:
+                groups.append(
+                    ("join", "join", [name for name, _ in join_modules])
+                )
+            progress_mgr.branch_init(module_index, groups)
+
+        def _branch_step(g, s, label, name):
+            """Start sub-module (g, s) and wire its intra-progress."""
+            if nested:
+                progress_mgr.branch_submodule_start(module_index, g, s)
+            if overall_cb is None and not nested:
                 return
-            base = done_units[0] / total_units
-            span = 1.0 / total_units
+            base = done_units[0] / total_units if total_units else 0.0
+            span = (1.0 / total_units) if total_units else 0.0
             default_msg = f"{label}: {name}"
 
             def wrapped(
-                fraction=None, msg=None, _b=base, _s=span, _m=default_msg
+                fraction=None,
+                msg=None,
+                _b=base,
+                _s=span,
+                _m=default_msg,
+                _g=g,
+                _sub=s,
             ):
                 try:
                     frac = float(fraction) if fraction is not None else 0.0
                 except (TypeError, ValueError):
                     frac = 0.0
-                overall_cb(_b + _s * max(0.0, min(1.0, frac)), msg or _m)
+                frac = max(0.0, min(1.0, frac))
+                if overall_cb is not None:
+                    overall_cb(_b + _s * frac, msg or _m)
+                if nested:
+                    progress_mgr.branch_submodule_progress(
+                        module_index, _g, _sub, frac, msg
+                    )
 
             self._progress_callback = wrapped
-            overall_cb(base, default_msg)
+            if overall_cb is not None:
+                overall_cb(base, default_msg)
+
+        def _branch_step_end(g, s, status):
+            """Mark sub-module (g, s) finished and advance the overall count."""
+            if nested:
+                progress_mgr.branch_submodule_end(module_index, g, s, status)
+            done_units[0] += 1
 
         branch_results = []
         topology_branches = []
@@ -992,7 +1028,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             for sub_idx, (module_name, module_parameters) in enumerate(
                 branch_modules
             ):
-                _branch_step(branch_label, module_name)
+                _branch_step(branch_id, sub_idx, branch_label, module_name)
                 sub_params = self._resolve_branch_submodule_params(
                     module_parameters,
                     pce,
@@ -1001,14 +1037,18 @@ class AutoPicasso(util.AbstractModuleCollection):
                     branch_local,
                     branch_id,
                 )
-                sub_results = self._run_branch_submodule(
-                    module_name, sub_idx, sub_params, branch_dir
-                )
+                try:
+                    sub_results = self._run_branch_submodule(
+                        module_name, sub_idx, sub_params, branch_dir
+                    )
+                except BaseException:
+                    _branch_step_end(branch_id, sub_idx, "failed")
+                    raise
                 key = f"{sub_idx:02d}_{module_name}"
                 one_branch[key] = sub_results
                 branch_local[key] = sub_results
                 executed.append(key)
-                done_units[0] += 1
+                _branch_step_end(branch_id, sub_idx, "done")
             branch_results.append(one_branch)
             topology_branches.append(
                 {"label": branch_label, "modules": executed}
@@ -1029,10 +1069,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                 pce.parent_object.results[f"{i:02d}_branch"] = results
             join_dir = os.path.join(results["folder"], "join")
             os.makedirs(join_dir, exist_ok=True)
+            join_group = len(splits)
             for sub_idx, (module_name, module_parameters) in enumerate(
                 join_modules
             ):
-                _branch_step("join", module_name)
+                _branch_step(join_group, sub_idx, "join", module_name)
                 # Join modules run at trunk level (prefix state restored) and
                 # pool the per-branch results, so they resolve against the
                 # trunk runner's results (which now include this branch step).
@@ -1042,11 +1083,15 @@ class AutoPicasso(util.AbstractModuleCollection):
                     pce.curr_rootidx = i
                     jp = pce.run(jp, curr_rootidx=i)
                     pce.curr_rootidx = original_rootidx
-                sub_results = self._run_branch_submodule(
-                    module_name, sub_idx, jp, join_dir
-                )
+                try:
+                    sub_results = self._run_branch_submodule(
+                        module_name, sub_idx, jp, join_dir
+                    )
+                except BaseException:
+                    _branch_step_end(join_group, sub_idx, "failed")
+                    raise
                 join_results[f"{sub_idx:02d}_{module_name}"] = sub_results
-                done_units[0] += 1
+                _branch_step_end(join_group, sub_idx, "done")
         results["join"] = join_results
 
         # Restore the plain intra-module callback for module i (the wrapped

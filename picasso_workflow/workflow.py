@@ -1812,6 +1812,10 @@ class WorkflowRunner:
                 )
             )
             self.autopicasso._abort_callback = self._abort_callback
+        # Expose the progress manager + this module's index so a module that
+        # runs sub-modules (e.g. branch) can report a nested progress tree.
+        self.autopicasso._progress_manager = self.progress
+        self.autopicasso._module_index = i
 
         # For the conditional_branch and branch modules, inject the
         # parameter_command_executor so they can resolve sub-module parameters.

@@ -15681,12 +15681,17 @@ class Window(QtWidgets.QMainWindow):
             walk(self.module_tree.topLevelItem(k))
 
     def _build_module_item(self, m):
-        """A leaf tree item for a single module."""
+        """A tree item for a module.
+
+        A plain module is a leaf; a branch module (whose state carries
+        ``subgroups``) expands into one collapsible group per branch plus a
+        join group, each with its sub-module rows.
+        """
         frac = m.get("fraction")
         pct = f"{frac * 100:.0f}" if isinstance(frac, (int, float)) else "-"
         elapsed = m.get("elapsed")
         el = f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "-"
-        return QtWidgets.QTreeWidgetItem(
+        item = QtWidgets.QTreeWidgetItem(
             [
                 str(m.get("i", "")),
                 str(m.get("name", "")),
@@ -15695,6 +15700,53 @@ class Window(QtWidgets.QMainWindow):
                 el,
             ]
         )
+        subgroups = m.get("subgroups")
+        if subgroups:
+            for g in subgroups:
+                item.addChild(self._build_branch_group_item(m, g))
+            item.setData(
+                0,
+                QtCore.Qt.ItemDataRole.UserRole,
+                f"branch:{m.get('i')}",
+            )
+            item.setExpanded(m.get("status") == "running")
+        return item
+
+    def _build_branch_group_item(self, m, g):
+        """A collapsible item for one branch (or the join) of a branch module."""
+        mods = g.get("modules") or []
+        if mods:
+            gfrac = sum(
+                (
+                    1.0
+                    if x.get("status") in ("done", "skipped")
+                    else (x.get("fraction") or 0.0)
+                )
+                for x in mods
+            ) / len(mods)
+        else:
+            gfrac = 0.0
+        kind = g.get("kind", "branch")
+        label = g.get("label", "")
+        disp = "[join]" if kind == "join" else f"[branch] {label}"
+        group_item = QtWidgets.QTreeWidgetItem(
+            [
+                "",
+                disp,
+                str(g.get("status", "")),
+                f"{gfrac * 100:.0f}",
+                "",
+            ]
+        )
+        for x in mods:
+            group_item.addChild(self._build_module_item(x))
+        group_item.setData(
+            0,
+            QtCore.Qt.ItemDataRole.UserRole,
+            f"branch:{m.get('i')}:{kind}:{label}",
+        )
+        group_item.setExpanded(g.get("status") == "running")
+        return group_item
 
     def _stage_label(self, state):
         """A readable label for a stage, e.g. '[single 02] cell2'."""
