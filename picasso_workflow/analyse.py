@@ -942,6 +942,34 @@ class AutoPicasso(util.AbstractModuleCollection):
         #    fresh restore of it.
         prefix_snapshot = util.BranchStateManager.snapshot(self)
 
+        # Intra-module progress: the branch runs many sub-modules, so report
+        # overall progress (which branch / sub-module) instead of sitting at
+        # 0% for the whole step. Each sub-module's own progress, if any, is
+        # mapped into its slice of the overall bar.
+        overall_cb = getattr(self, "_progress_callback", None)
+        total_units = len(splits) * len(branch_modules) + len(join_modules)
+        done_units = [0]
+
+        def _branch_step(label, name):
+            """Point the intra-module callback at this sub-module's slice."""
+            if overall_cb is None or total_units <= 0:
+                return
+            base = done_units[0] / total_units
+            span = 1.0 / total_units
+            default_msg = f"{label}: {name}"
+
+            def wrapped(
+                fraction=None, msg=None, _b=base, _s=span, _m=default_msg
+            ):
+                try:
+                    frac = float(fraction) if fraction is not None else 0.0
+                except (TypeError, ValueError):
+                    frac = 0.0
+                overall_cb(_b + _s * max(0.0, min(1.0, frac)), msg or _m)
+
+            self._progress_callback = wrapped
+            overall_cb(base, default_msg)
+
         branch_results = []
         topology_branches = []
         for branch_id, (branch_label, tile_map, branch_state) in enumerate(
@@ -964,6 +992,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             for sub_idx, (module_name, module_parameters) in enumerate(
                 branch_modules
             ):
+                _branch_step(branch_label, module_name)
                 sub_params = self._resolve_branch_submodule_params(
                     module_parameters,
                     pce,
@@ -979,6 +1008,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 one_branch[key] = sub_results
                 branch_local[key] = sub_results
                 executed.append(key)
+                done_units[0] += 1
             branch_results.append(one_branch)
             topology_branches.append(
                 {"label": branch_label, "modules": executed}
@@ -1002,6 +1032,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             for sub_idx, (module_name, module_parameters) in enumerate(
                 join_modules
             ):
+                _branch_step("join", module_name)
                 # Join modules run at trunk level (prefix state restored) and
                 # pool the per-branch results, so they resolve against the
                 # trunk runner's results (which now include this branch step).
@@ -1015,7 +1046,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                     module_name, sub_idx, jp, join_dir
                 )
                 join_results[f"{sub_idx:02d}_{module_name}"] = sub_results
+                done_units[0] += 1
         results["join"] = join_results
+
+        # Restore the plain intra-module callback for module i (the wrapped
+        # per-step callbacks captured the branch's sub-module slices).
+        if overall_cb is not None:
+            self._progress_callback = overall_cb
 
         # 4. Record the executed module-path topology for reporting.
         results["topology"] = {

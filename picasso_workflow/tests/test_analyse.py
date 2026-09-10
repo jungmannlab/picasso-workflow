@@ -2482,12 +2482,25 @@ class TestAnalyseModules(unittest.TestCase):
             "n_branches": 3,
             "branch_labels": ["a", "b", "c"],
             "branch_modules": [("dummy_module", {})],
+            "join_modules": [("dummy_module", {})],
         }
+        # capture intra-module progress reported across the sub-modules
+        progress = []
+        self.ap._progress_callback = lambda frac, msg=None: progress.append(
+            (frac, msg)
+        )
         parameters, results = self.ap.branch(2, parameters)
+        del self.ap._progress_callback
         assert results["branch_type"] == "explicit"
         assert results["labels"] == ["a", "b", "c"]
         assert len(results["branches"]) == 3
         assert results["topology"]["type"] == "explicit"
+        # progress advanced with per-branch messages (3 branches + 1 join)
+        assert len(progress) == 4
+        fracs = [f for f, _ in progress]
+        assert fracs == sorted(fracs)
+        assert any("a:" in (m or "") for _, m in progress)
+        assert any("join:" in (m or "") for _, m in progress)
         shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
 
         # $branch overrides resolve to the branch id's value
