@@ -10147,6 +10147,27 @@ class Window(QtWidgets.QMainWindow):
         _branch_id_layout.addStretch()
         self.branch_id_container.setVisible(False)
         current_layout.addWidget(self.branch_id_container)
+
+        # "Join module" toggle: shown when a branch sub-module is selected.
+        # Checking it moves the sub-module into the branch's join section (a
+        # fan-in module that runs once after all branches); unchecking moves it
+        # back to the per-branch section.
+        self.join_module_container = QtWidgets.QWidget()
+        _join_layout = QtWidgets.QHBoxLayout(self.join_module_container)
+        _join_layout.setContentsMargins(0, 0, 0, 0)
+        self.join_module_checkbox = QtWidgets.QCheckBox(
+            "Join module (fan-in; runs once after all branches)"
+        )
+        self.join_module_checkbox.setToolTip(
+            "Move this sub-module into the branch's join section (or back). "
+            "Join modules run once after every branch and pool per-branch "
+            "results via the $all wildcard."
+        )
+        self.join_module_checkbox.toggled.connect(self._on_join_module_toggled)
+        _join_layout.addWidget(self.join_module_checkbox)
+        _join_layout.addStretch()
+        self.join_module_container.setVisible(False)
+        current_layout.addWidget(self.join_module_container)
         # label describing the module selected. Rendered as word-wrapped
         # rich text inside its own scroll area so long descriptions stay
         # readable and the divider below can resize the region.
@@ -13264,40 +13285,161 @@ class Window(QtWidgets.QMainWindow):
             return 0
 
     def _setup_branch_context(self, modules, node, top_index):
-        """Configure the branch-id selector for the current selection.
+        """Configure the branch-id selector and join toggle for the selection.
 
-        Shows the selector (and sets ``editing_branch_context``) when a branch
-        sub-module is selected; hides it otherwise.
+        The join toggle is shown for any branch sub-module. Per-branch controls
+        (branch-id selector + overrides) are shown only for a *branch-section*
+        sub-module; join modules run once, so they have no per-branch values.
         """
         self._branch_override_params = {}
         is_sub = node is not None and node.get("kind") == "sub"
-        if is_sub and 0 <= top_index < len(modules):
-            branch_params = modules[top_index][1]
-            n = (
-                self._branch_count(branch_params)
-                if isinstance(branch_params, dict)
-                else 0
-            )
-            if n > 0:
-                labels = branch_params.get("branch_labels")
-                prev = (self.editing_branch_context or {}).get("branch_id", 0)
-                branch_id = prev if 0 <= prev < n else 0
-                self.editing_branch_context = {
-                    "n_branches": n,
-                    "labels": labels,
-                    "branch_id": branch_id,
-                }
-                self._populate_branch_id_combobox(n, labels, branch_id)
-                self.branch_id_container.setVisible(True)
-                return
-        self._clear_branch_context()
+        if not (is_sub and 0 <= top_index < len(modules)):
+            self._clear_branch_context()
+            return
+        branch_params = modules[top_index][1]
+        if not isinstance(branch_params, dict):
+            self._clear_branch_context()
+            return
+
+        section = node.get("section")
+        # The "join module" toggle is available for any branch sub-module.
+        self._set_join_checkbox(checked=(section == "join"), visible=True)
+
+        if section == "join":
+            # Join modules are not per branch: no branch-id / overrides.
+            self.editing_branch_context = None
+            self.branch_id_container.setVisible(False)
+            return
+
+        n = self._branch_count(branch_params)
+        if n > 0:
+            labels = branch_params.get("branch_labels")
+            prev = (self.editing_branch_context or {}).get("branch_id", 0)
+            branch_id = prev if 0 <= prev < n else 0
+            self.editing_branch_context = {
+                "n_branches": n,
+                "labels": labels,
+                "branch_id": branch_id,
+            }
+            self._populate_branch_id_combobox(n, labels, branch_id)
+            self.branch_id_container.setVisible(True)
+        else:
+            self.editing_branch_context = None
+            self.branch_id_container.setVisible(False)
+
+    def _set_join_checkbox(self, checked, visible):
+        """Set the 'join module' checkbox state without firing its signal."""
+        if not hasattr(self, "join_module_container"):
+            return
+        self.join_module_checkbox.blockSignals(True)
+        self.join_module_checkbox.setChecked(checked)
+        self.join_module_checkbox.blockSignals(False)
+        self.join_module_container.setVisible(visible)
 
     def _clear_branch_context(self):
-        """Hide the branch-id selector and drop any branch editing context."""
+        """Hide the branch-id selector / join toggle and drop the context."""
         self.editing_branch_context = None
         self._branch_override_params = {}
         if hasattr(self, "branch_id_container"):
             self.branch_id_container.setVisible(False)
+        if hasattr(self, "join_module_container"):
+            self.join_module_container.setVisible(False)
+
+    @staticmethod
+    def _strip_branch_overrides(params, branch_id=0):
+        """Replace ("$branch", [...]) values with one concrete value.
+
+        Used when a per-branch sub-module becomes a join module: join modules
+        run once, so any per-branch override collapses to a single value.
+        """
+
+        def walk(value):
+            if isinstance(value, dict):
+                return {k: walk(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                if (
+                    isinstance(value, tuple)
+                    and len(value) >= 2
+                    and str(value[0]) == "$branch"
+                    and isinstance(value[1], (list, tuple))
+                ):
+                    lst = value[1]
+                    if not lst:
+                        return None
+                    return lst[branch_id] if branch_id < len(lst) else lst[-1]
+                seq = [walk(v) for v in value]
+                return tuple(seq) if isinstance(value, tuple) else seq
+            return value
+
+        return walk(params)
+
+    def _on_join_module_toggled(self, checked):
+        """Move the current branch sub-module between branch and join sections."""
+        subnode = self.editing_workflow_subnode
+        if subnode is None:
+            return
+        tab = self.editing_workflow_tab
+        if tab == 0:
+            modules = self.single_workflow_modules
+            list_widget = self.single_workflow_list
+            tabname = "single"
+        elif tab == 1:
+            modules = self.aggregation_workflow_modules
+            list_widget = self.aggregation_workflow_list
+            tabname = "aggregation"
+        else:
+            return
+        top = self.editing_workflow_index
+        if not (0 <= top < len(modules)) or modules[top][0] != "branch":
+            return
+        branch_params = modules[top][1]
+        cur_section = subnode["section"]
+        target_section = "join" if checked else "branch"
+        if cur_section == target_section:
+            return
+
+        # Persist pending edits into the current section first.
+        self._update_editing_workflow_item()
+
+        src_key = (
+            "branch_modules" if cur_section == "branch" else "join_modules"
+        )
+        dst_key = (
+            "join_modules" if target_section == "join" else "branch_modules"
+        )
+        src = branch_params.setdefault(src_key, [])
+        dst = branch_params.setdefault(dst_key, [])
+        j = subnode["sub"]
+        if not (0 <= j < len(src)):
+            return
+        name, params = src[j]
+        if target_section == "join":
+            # collapse any per-branch overrides -- join runs once
+            bid = (self.editing_branch_context or {}).get("branch_id", 0)
+            params = self._strip_branch_overrides(params, bid)
+        del src[j]
+        dst.append((name, params))
+        new_sub = len(dst) - 1
+
+        # Reselect the moved sub-module in its new section.
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
+        self._refresh_workflow_list(list_widget, modules)
+        row = self._locate_row(
+            list_widget, ("sub", top, target_section, new_sub)
+        )
+        if row >= 0:
+            list_widget.setCurrentRow(row)
+        self._refresh_module_palette()
+        self._log_workflow_config_event(
+            "modules.branch_sub_section_changed",
+            tab=tabname,
+            index=top,
+            to_section=target_section,
+            module=name,
+        )
 
     def _populate_branch_id_combobox(self, n, labels, branch_id):
         """Fill the branch-id combobox with ``n`` entries (labelled)."""

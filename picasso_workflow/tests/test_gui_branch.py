@@ -270,6 +270,49 @@ def test_move_join_sub_out_and_crossings(window):
     assert secs() == (["create_mask2", "nneighbor"], ["dummy_module"])
 
 
+def test_join_module_toggle(window):
+    # a branch with no join modules; make a sub a join module and back
+    modules = [
+        ("align_channels", {}),
+        (
+            "branch",
+            {
+                "branch_type": "explicit",
+                "n_branches": 2,
+                "branch_modules": [
+                    (
+                        "create_mask2",
+                        {"nth_largest_cell": ("$branch", [1, 2])},
+                    ),
+                    ("nneighbor", {}),
+                ],
+                "join_modules": [],
+            },
+        ),
+    ]
+    _, lw = _seed(window, modules)
+
+    def secs():
+        b = modules[1][1]
+        return (
+            [s[0] for s in b.get("branch_modules", [])],
+            [s[0] for s in b.get("join_modules", [])],
+        )
+
+    _select(window, lw, 1, "branch", 0)  # create_mask2 (has $branch override)
+    window.join_module_checkbox.setChecked(True)
+    assert secs() == (["nneighbor"], ["create_mask2"])
+    # per-branch override collapsed to a concrete value in the join module
+    assert modules[1][1]["join_modules"][0][1]["nth_largest_cell"] == 1
+    # selecting the join sub: toggle checked, branch-id selector hidden
+    _select(window, lw, 1, "join", 0)
+    assert window.join_module_checkbox.isChecked()
+    assert window.editing_branch_context is None
+    # move it back to the branch section
+    window.join_module_checkbox.setChecked(False)
+    assert secs() == (["nneighbor", "create_mask2"], [])
+
+
 def test_remove_within_branch(window):
     modules, lw = _seed(window)
     _select(window, lw, 1, "branch", 1)  # nneighbor
