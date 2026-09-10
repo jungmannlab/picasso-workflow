@@ -1233,16 +1233,49 @@ class AutoPicasso(util.AbstractModuleCollection):
         per-branch argument (``"screen"`` mode), and records summary stats.
         """
         raw_values = parameters["values"]
+
+        def _num_list(seq):
+            """Coerce a sequence to floats, skipping non-numeric entries.
+
+            A summary/plot module must not crash the whole workflow because a
+            referenced result is not a plain number; non-numeric entries (e.g.
+            a dict, when a scalar result key was expected) are dropped with a
+            warning.
+            """
+            out = []
+            for v in seq or []:
+                try:
+                    out.append(float(v))
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "summarize_branches: skipping non-numeric value "
+                        f"{v!r} (reference a scalar result key)."
+                    )
+            return out
+
         if isinstance(raw_values, dict):
             series = {
-                str(name): [float(v) for v in vals]
-                for name, vals in raw_values.items()
+                str(name): _num_list(vals) for name, vals in raw_values.items()
+            }
+        elif (
+            isinstance(raw_values, (list, tuple))
+            and raw_values
+            and all(isinstance(v, dict) for v in raw_values)
+        ):
+            # One dict per branch (e.g. labeling_efficiency is
+            # {target: .., reference: ..}) -> pivot into one series per key.
+            keys = []
+            for per_branch in raw_values:
+                for key in per_branch:
+                    if key not in keys:
+                        keys.append(key)
+            series = {
+                str(key): _num_list([pb.get(key) for pb in raw_values])
+                for key in keys
             }
         else:
             series = {
-                str(parameters.get("ylabel", "value")): [
-                    float(v) for v in raw_values
-                ]
+                str(parameters.get("ylabel", "value")): _num_list(raw_values)
             }
         labels = parameters.get("labels")
         x_values = parameters.get("x")

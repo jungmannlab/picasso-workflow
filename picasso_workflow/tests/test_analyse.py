@@ -2528,6 +2528,33 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "01_summarize_branches")
         )
 
+        # one dict per branch (e.g. labeling_efficiency = {target, reference})
+        # pivots into one series per key -- must not crash on float(dict).
+        parameters = {
+            "values": [
+                {"tgt": 0.4, "ref": 0.6},
+                {"tgt": 0.5, "ref": 0.7},
+                {"tgt": 0.3, "ref": 0.9},
+            ],
+            "labels": ["c0", "c1", "c2"],
+        }
+        parameters, results = self.ap.summarize_branches(2, parameters)
+        assert set(results["stats"]) == {"tgt", "ref"}
+        assert abs(results["stats"]["tgt"]["mean"] - 0.4) < 1e-9
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "02_summarize_branches")
+        )
+
+        # robustness: a stray non-numeric value is skipped, not fatal
+        parameters, results = self.ap.summarize_branches(
+            3, {"values": [1.0, {"x": 1}, 3.0], "ylabel": "m"}
+        )
+        assert results["stats"]["m"]["n"] == 2
+        shutil.rmtree(
+            os.path.join(self.results_folder, "03_summarize_branches")
+        )
+
     def resolution_frc_spatial(self):
         """Is tested separately in tests/outpost_modules/test_resolution_frc.py"""
 
