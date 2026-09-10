@@ -230,6 +230,13 @@ _SPECS = [
         summary="Fan out into per-branch sub-workflows, then optionally re-join.",
     ),
     _s(
+        "summarize_branches",
+        provides=["report_items"],
+        relation=N,
+        scopes=_BOTH,
+        summary="Summarize per-branch results as a figure (box/strip or vs arg).",
+    ),
+    _s(
         "manual",
         relation=N,
         scopes=_BOTH,

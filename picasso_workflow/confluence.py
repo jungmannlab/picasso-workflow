@@ -1353,6 +1353,68 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
 
     @module_decorator
+    def summarize_branches(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Report the ``summarize_branches`` module: stats + summary figure.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default
+            False.
+        """
+        logger.debug(f"Reporting summarize_branches module {i:02d}")
+        stats = results.get("stats", {})
+        rows = ""
+        for name, stat in stats.items():
+            if stat.get("n"):
+                rows += (
+                    f"<li><strong>{html.escape(str(name))}</strong>: "
+                    f"n={stat['n']}, mean={stat['mean']:.4g}, "
+                    f"std={stat['std']:.4g}, min={stat['min']:.4g}, "
+                    f"max={stat['max']:.4g}</li>"
+                )
+            else:
+                rows += (
+                    f"<li><strong>{html.escape(str(name))}</strong>: "
+                    "no data</li>"
+                )
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Branch summary ({html.escape(str(results.get('mode', '')))})</strong></p>
+        <ul>{rows}</ul>
+        {parameter_text}
+        {result_text}
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        if postpone_report:
+            return text
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+        if fp := results.get("fp_fig"):
+            self.ci.upload_attachment(self.report_page_id, fp)
+            self.ci.update_page_content_with_image_attachment(
+                self.report_page_name,
+                self.report_page_id,
+                os.path.split(fp)[1],
+            )
+
+    @module_decorator
     def zfit(
         self,
         i,
