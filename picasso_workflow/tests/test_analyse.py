@@ -1915,6 +1915,58 @@ class TestAnalyseModules(unittest.TestCase):
         os.remove(fp_mask)
         shutil.rmtree(os.path.join(self.results_folder, "01_branch"))
 
+        # --- explicit type: fixed n_branches with a per-branch override -----
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 3,
+            "branch_labels": ["a", "b", "c"],
+            "branch_modules": [("dummy_module", {})],
+        }
+        parameters, results = self.ap.branch(2, parameters)
+        assert results["branch_type"] == "explicit"
+        assert results["labels"] == ["a", "b", "c"]
+        assert len(results["branches"]) == 3
+        assert results["topology"]["type"] == "explicit"
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+        # $branch overrides resolve to the branch id's value
+        resolved = analyse.AutoPicasso._resolve_branch_overrides(
+            {"k": ("$branch", [10, 20, 30]), "s": 1}, 1
+        )
+        assert resolved == {"k": 20, "s": 1}
+
+    def summarize_branches(self):
+        """Test the summarize_branches plotting module."""
+        # replicates mode: a metric across branches
+        parameters = {
+            "values": [0.4, 0.6, 0.8],
+            "labels": ["a", "b", "c"],
+            "ylabel": "labeling efficiency",
+        }
+        parameters, results = self.ap.summarize_branches(0, parameters)
+        assert results["mode"] == "replicates"
+        assert os.path.isfile(results["fp_fig"])
+        assert results["stats"]["labeling efficiency"]["n"] == 3
+        assert (
+            abs(results["stats"]["labeling efficiency"]["mean"] - 0.6) < 1e-9
+        )
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_summarize_branches")
+        )
+
+        # screen mode: metric vs a per-branch argument
+        parameters = {
+            "values": {"nn": [1.0, 2.0, 3.0]},
+            "x": [10, 20, 30],
+            "mode": "auto",
+        }
+        parameters, results = self.ap.summarize_branches(1, parameters)
+        assert results["mode"] == "screen"
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "01_summarize_branches")
+        )
+
     def resolution_frc_spatial(self):
         """Is tested separately in tests/outpost_modules/test_resolution_frc.py"""
 

@@ -1308,6 +1308,31 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    def summarize_branches(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "mode": "replicates",
+            "stats": {
+                "labeling efficiency": {
+                    "n": 3,
+                    "mean": 0.6,
+                    "std": 0.16,
+                    "min": 0.4,
+                    "max": 0.8,
+                }
+            },
+        }
+        self.cr.summarize_branches(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
     # @unittest.skip("")
     def resolution_analysis(self):
         parameters = {}

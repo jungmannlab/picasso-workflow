@@ -300,6 +300,86 @@ class Test_A_PicassoIntegration(unittest.TestCase):
         assert "00_dummy_module" in branch_results["join"]
         assert branch_results["topology"]["type"] == "screen"
 
+    def test_05_branch_explicit(self):
+        """load → identify → localize → branch(explicit) on the bundled stack.
+
+        An explicit branch with n_branches=2 re-runs identify with a
+        per-branch ("$branch", [...]) override on min_gradient, on the shared
+        movie. Exercises the explicit branch type and the $branch override
+        resolution end-to-end through the real WorkflowRunner.
+        """
+        filepath = os.path.join(
+            _DATA_DIR,
+            "3C_30px_1kframes_1",
+            "3C_30px_1kframes_MMStack_Pos0.ome.tif",
+        )
+        workflow_modules = [
+            ("load_dataset_movie", {"filename": filepath}),
+            ("identify", {"min_gradient": 400, "box_size": 7}),
+            (
+                "localize",
+                {"fit_method": "lsq", "box_size": 7, "fit_parallel": False},
+            ),
+            (
+                "branch",
+                {
+                    "branch_type": "explicit",
+                    "n_branches": 2,
+                    "branch_labels": ["lowthr", "highthr"],
+                    "branch_modules": [
+                        (
+                            "identify",
+                            {
+                                # per-branch override: 400 for branch 0,
+                                # 800 for branch 1
+                                "min_gradient": ("$branch", [400, 800]),
+                                "box_size": 7,
+                            },
+                        ),
+                        (
+                            "localize",
+                            {
+                                "fit_method": "lsq",
+                                "box_size": 7,
+                                "fit_parallel": False,
+                            },
+                        ),
+                    ],
+                },
+            ),
+        ]
+
+        import warnings
+
+        with patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock):
+            wr = WorkflowRunner.config_from_dicts(
+                _dummy_reporter_config("test_a05_branch_explicit"),
+                _analysis_config(_RESULTS_DIR),
+                workflow_modules,
+            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                wr.run()
+
+        branch_results = wr.results["03_branch"]
+        assert branch_results["success"] is True
+        assert branch_results["labels"] == ["lowthr", "highthr"]
+        assert len(branch_results["branches"]) == 2
+        for tag in ("lowthr", "highthr"):
+            assert os.path.isdir(
+                os.path.join(branch_results["folder"], tag, "00_identify")
+            )
+        # the per-branch min_gradient override took effect: the higher
+        # threshold (branch 1) yields no more identifications than branch 0
+        n0 = branch_results["branches"][0]["00_identify"][
+            "num_identifications"
+        ]
+        n1 = branch_results["branches"][1]["00_identify"][
+            "num_identifications"
+        ]
+        assert n1 <= n0
+        assert branch_results["topology"]["type"] == "explicit"
+
 
 @pytest.mark.integration
 def test_03_undrift_rcc(synthetic_movie_2500, tmp_path):
