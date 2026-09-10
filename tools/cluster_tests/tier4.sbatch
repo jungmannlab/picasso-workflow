@@ -46,6 +46,10 @@ module load anaconda/3/2023.03
 source ~/.bashrc
 conda activate picasso-workflow
 
+# Ignore the ~/.local user-site so a stray user install cannot shadow the
+# conda env on sys.path (see tiers1_3.sbatch for the full rationale).
+export PYTHONNOUSERSITE=1
+
 # Confluence (test) credentials live in a dedicated secrets file rather than
 # ~/.bashrc, whose non-interactive guard would `return` before reaching any
 # exports inside a batch job. The file has no such guard, so it always runs.

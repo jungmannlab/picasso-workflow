@@ -33,6 +33,15 @@ Added
 Changed
 ~~~~~~~
 
+- The Zeiss ``.czi`` reader (``aicsimageio`` + ``aicspylibczi`` + ``fsspec``)
+  moved from the base dependencies to an optional ``formats`` extra
+  (``pip install "picasso_workflow[formats]"``). aicspylibczi has no
+  aarch64 wheels and source-builds via a C++/cmake toolchain, and
+  aicsimageio dragged an old imagecodecs that failed to build on the
+  py3.10 arm64 container, so a bare ``pip install -e .`` now resolves
+  entirely from wheels. The ``convert_zeiss_movie`` module raises a clear
+  ImportError pointing at the extra when the reader is absent; no other
+  workflow is affected.
 - ``estimate_density_from_neighbordists`` now validates the
   ``[min_dist, max_dist]`` window per neighbour order and fails with a
   message naming the parameter and the surviving counts, e.g.
@@ -47,10 +56,21 @@ Changed
 - Tracebacks are posted inside a Confluence code macro, so their line
   structure is preserved. They were previously HTML-escaped without a
   wrapper and reflowed into a single unreadable paragraph.
+- CI now runs a ``black --check`` + ``flake8`` lint job on a GitHub-hosted
+  runner (``.github/workflows/lint.yml``), so style regressions are caught
+  in CI and not only by the local pre-commit hook. Linter versions are
+  pinned to match ``.pre-commit-config.yaml``.
 
 Fixed
 ~~~~~
 
+- ``_plot_locs_vs_frame`` grouped localizations per frame but plotted the
+  aggregates against the full acquired-frame range, so any acquisition
+  with frames that contain no localizations (e.g. the illumination
+  switching on mid-acquisition) produced shorter y arrays than x and
+  crashed with "x and y must have same first dimension". The per-frame
+  aggregates are now reindexed onto the full frame range, leaving empty
+  frames as NaN gaps.
 - An exception other than ``AutoPicassoError`` escaped
   ``WorkflowRunner.run()`` before ``save()``, so the failing module left
   no trace in ``WorkflowRunner.yaml``.
