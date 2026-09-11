@@ -30,9 +30,7 @@ workflow — this file is the short standing context, not a duplicate of it.
 
 ## Current branch
 
-`feature-FullAutoS0A` — PRs target `master`. (Upstream also maintains a
-`develop` branch; the release workflow merges `develop` → `master` and tags on
-`master` — see README "Releasing".)
+Dev branch is `develop`; release path is `develop` → `master` (tag on `master` — see README "Releasing"). Work each task on its own feature branch and PR per the **Branch map** in `../../planning/DNA-PAINT_Work-Order-Briefs.md`. Don't pin the current branch here — check the tracker's branch-state note or `git`; a pinned branch is what goes stale.
 
 ## Commands
 
