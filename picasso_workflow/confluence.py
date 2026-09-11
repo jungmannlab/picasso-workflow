@@ -1075,6 +1075,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:structured-macro>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -1216,6 +1218,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -1789,6 +1793,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -2041,6 +2047,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -2304,6 +2312,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         <b>TODO: show plots for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -2375,6 +2385,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
 
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -2451,6 +2463,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
 
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -2602,6 +2616,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -3085,6 +3101,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -3762,6 +3780,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -4046,6 +4066,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -4138,6 +4160,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -4521,6 +4545,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -4649,6 +4675,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -4772,6 +4800,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -5017,6 +5047,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )

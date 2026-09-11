@@ -1832,6 +1832,51 @@ def test_branch_submodules_nest_without_layout():
     assert "dummy_module" in out
 
 
+def test_fixed_reporters_honor_postpone_report():
+    """A reporter embedded as a branch sub-module must *return* its text and
+    not post to the page. Reporters that ignored ``postpone_report`` posted a
+    stray top-level section (duplicating the copy nested in the branch's
+    collapsible) -- the "does not fit correctly" report layout bug."""
+    cases = [
+        (
+            "create_mask2",
+            {"area": 5.0, "duration": 12.0, "success": True},
+            "Create Density Mask",
+        ),
+        (
+            "refine_mask_by_density",
+            {"area_um^2": 4.0, "duration": 7.0, "success": True},
+            "Refine Mask by Density",
+        ),
+    ]
+    for name, results, title in cases:
+        cr = _reporter()
+        text = getattr(cr, name)(0, {}, results, postpone_report=True)
+        assert text and title in text, name
+        assert (
+            not cr.ci.update_page_content.called
+        ), f"{name} posted to the page despite postpone_report=True"
+        # sanity: with postpone_report=False it still posts exactly once
+        cr2 = _reporter()
+        getattr(cr2, name)(0, {}, results)
+        assert cr2.ci.update_page_content.call_count == 1, name
+
+
+def test_branch_submodules_do_not_leak_to_top_level():
+    """Embedding a real fixed-reporter sub-module (create_mask2) nests its
+    content inside the branch collapsible without posting a stray top-level
+    section."""
+    cr = _reporter()
+    branch = {
+        "label": "cell0",
+        "00_create_mask2": {"area": 5.0, "duration": 12.0, "success": True},
+    }
+    out = cr._report_branch_submodules(branch, [("create_mask2", {})])
+    assert "Create Density Mask" in out
+    assert "ac:layout" not in out
+    assert not cr.ci.update_page_content.called
+
+
 def test_report_error_names_module_index_type_and_parameters():
     cr = _reporter()
     try:
