@@ -1797,6 +1797,41 @@ def _posted_body(cr):
     return cr.ci.update_page_content.call_args[0][2]
 
 
+def test_strip_layout_wrappers_removes_only_layout_tags():
+    cr = confluence.ConfluenceReporter
+    sample = (
+        '<ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>'
+        "<p>hi</p>"
+        '<ac:image><ri:attachment ri:filename="m.png"/></ac:image>'
+        '<ac:structured-macro ac:name="expand"><ac:rich-text-body>x'
+        "</ac:rich-text-body></ac:structured-macro>"
+        "</ac:layout-cell></ac:layout-section></ac:layout>"
+    )
+    out = cr._strip_layout_wrappers(sample)
+    assert "ac:layout" not in out
+    # inner content (text, image, expand macro) is preserved
+    assert "<p>hi</p>" in out
+    assert "ri:attachment" in out
+    assert "ac:structured-macro" in out
+
+
+def test_branch_submodules_nest_without_layout():
+    """Embedded sub-reports carry no <ac:layout> (which Confluence hoists out
+    of the branch's collapsible expand macro)."""
+    cr = _reporter()
+    branch = {
+        "label": "cell0",
+        "00_dummy_module": {
+            "start time": "now",
+            "duration": 1.0,
+            "success": True,
+        },
+    }
+    out = cr._report_branch_submodules(branch, [("dummy_module", {})])
+    assert "ac:layout" not in out
+    assert "dummy_module" in out
+
+
 def test_report_error_names_module_index_type_and_parameters():
     cr = _reporter()
     try:

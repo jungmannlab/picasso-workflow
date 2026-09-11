@@ -14,6 +14,7 @@ Initial date: March 7, 2024
 from __future__ import annotations
 
 import html
+import re
 
 # import logging
 from loguru import logger
@@ -971,12 +972,27 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    # ``<ac:layout>`` (and its section/cell children) may only appear at the
+    # top level of a Confluence page; nesting one inside an expand macro's
+    # rich-text-body makes Confluence hoist it back out to the top level. The
+    # per-module reporters each wrap their output in a full layout, so those
+    # wrappers are stripped before the output is embedded in the branch
+    # module's collapsible sections (the inner content nests fine).
+    _LAYOUT_TAG_RE = re.compile(r"</?ac:layout(?:-section|-cell)?\b[^>]*>")
+
+    @classmethod
+    def _strip_layout_wrappers(cls, text):
+        """Remove ``ac:layout*`` structural tags so text can nest in a macro."""
+        return cls._LAYOUT_TAG_RE.sub("", text)
+
     def _report_branch_submodules(self, branch, module_defs):
         """Render the sub-module reports of one branch (or the join step).
 
         Reuses each sub-module's own reporter (like
         :meth:`conditional_branch`), falling back to a plain result list when
-        no specific reporter exists.
+        no specific reporter exists. The per-module reporters' ``<ac:layout>``
+        wrappers are stripped so their content nests inside the branch's
+        collapsible expand macro instead of being hoisted to the top level.
         """
         text = ""
         for sub_key in sorted(k for k in branch if k != "label"):
@@ -1001,8 +1017,13 @@ class ConfluenceReporter(AbstractModuleCollection):
                         if idx == sub_idx and mod_name == module_name:
                             sub_params = mod_params
                             break
-                    text += reporter_method(
-                        sub_idx, sub_params, sub_results, postpone_report=True
+                    text += self._strip_layout_wrappers(
+                        reporter_method(
+                            sub_idx,
+                            sub_params,
+                            sub_results,
+                            postpone_report=True,
+                        )
                     )
                 except Exception as e:
                     logger.error(f"Error reporting sub-module {sub_key}: {e}")
