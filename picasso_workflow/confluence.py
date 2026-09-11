@@ -934,19 +934,11 @@ class ConfluenceReporter(AbstractModuleCollection):
         {parameter_text}
         """
 
-        # Per-branch full sub-reports (collapsible).
-        for branch in branch_results:
-            label = branch.get("label", "branch")
-            text += f"""
-            <ac:structured-macro ac:name="expand" ac:schema-version="1">
-            <ac:parameter ac:name="title">Branch: {html.escape(str(label))}</ac:parameter>
-            <ac:rich-text-body>
-            """
-            text += self._report_branch_submodules(branch, branch_modules)
-            text += """
-            </ac:rich-text-body>
-            </ac:structured-macro>
-            """
+        # Per-branch full sub-reports. On Confluence each branch becomes its
+        # own child page under the run page (keeping the main page compact);
+        # the local HTML reporter keeps them as inline collapsibles. Both
+        # return the markup to splice into the main page here.
+        text += self._render_branch_details(branch_results, branch_modules)
 
         # Join / fan-in sub-reports (collapsible).
         if join_results:
@@ -1039,6 +1031,117 @@ class ConfluenceReporter(AbstractModuleCollection):
                 text += "</ul>"
             text += "</div>"
         return text
+
+    def _branch_child_page_title(self, label):
+        """Title of the child page holding one branch's full sub-report."""
+        return f"{self.report_page_name} - {label}"
+
+    def _render_branch_details(self, branch_results, branch_modules):
+        """Render each branch as its own child page; link them on the run page.
+
+        For Confluence, a branch's full per-sub-module report is posted to a
+        dedicated child page nested under the run page, so the main report
+        stays compact. Returns a bullet list of links to those child pages,
+        to be spliced into the branch module's section on the main page.
+        (:class:`~picasso_workflow.html_reporter.HTMLReporter` overrides this
+        to keep the single-file inline-collapsible layout.)
+        """
+        if not branch_results:
+            return ""
+        items = []
+        for branch in branch_results:
+            label = str(branch.get("label", "branch"))
+            title = self._branch_child_page_title(label)
+            try:
+                child_id = self.ci.create_page(
+                    title, body_text="", parent_id=self.report_page_id
+                )
+            except ConfluenceInterfaceError:
+                # a resumed run reuses the existing child page
+                child_id, _ = self.ci.get_page_properties(title)
+            self._post_branch_submodules_to_page(
+                branch, branch_modules, title, child_id
+            )
+            items.append((label, title))
+        links = "".join(
+            f"<li>{self._page_link(title, label)}</li>"
+            for label, title in items
+        )
+        return (
+            "<p><strong>Per-branch reports</strong> "
+            "(each branch on its own child page):</p>"
+            f"<ul>{links}</ul>"
+        )
+
+    @staticmethod
+    def _page_link(page_title, link_text):
+        """A Confluence storage-format link to another page by title."""
+        return (
+            "<ac:link>"
+            f'<ri:page ri:content-title="{html.escape(page_title)}" />'
+            "<ac:plain-text-link-body>"
+            f"<![CDATA[{link_text}]]>"
+            "</ac:plain-text-link-body></ac:link>"
+        )
+
+    def _post_branch_submodules_to_page(
+        self, branch, module_defs, page_title, page_id
+    ):
+        """Post one branch's full sub-module reports to its child page.
+
+        Temporarily retargets the reporter at the child page so each
+        sub-module's own reporter posts its normal section (and uploads its
+        attachments) there, exactly as it would on a top-level report.
+        """
+        saved_name, saved_id = self.report_page_name, self.report_page_id
+        self.report_page_name, self.report_page_id = page_title, page_id
+        try:
+            for sub_key in sorted(k for k in branch if k != "label"):
+                sub_results = branch[sub_key]
+                if not isinstance(sub_results, dict):
+                    continue
+                module_name = sub_key.split("_", 1)[-1]
+                if not sub_results.get("success", True):
+                    self.ci.update_page_content(
+                        page_title,
+                        page_id,
+                        f"<p><strong>{html.escape(sub_key)}</strong>: "
+                        "sub-module did not succeed</p>",
+                    )
+                    continue
+                reporter_method = getattr(self, module_name, None)
+                if reporter_method is None:
+                    rows = "".join(
+                        f"<li>{html.escape(str(k))}: {html.escape(str(v))}"
+                        "</li>"
+                        for k, v in sub_results.items()
+                        if k not in ("folder", "start time", "end time")
+                    )
+                    self.ci.update_page_content(
+                        page_title,
+                        page_id,
+                        f"<p><strong>{html.escape(sub_key)}</strong></p>"
+                        f"<ul>{rows}</ul>",
+                    )
+                    continue
+                sub_idx = int(sub_key.split("_")[0])
+                sub_params = {}
+                for idx, (mod_name, mod_params) in enumerate(module_defs):
+                    if idx == sub_idx and mod_name == module_name:
+                        sub_params = mod_params
+                        break
+                try:
+                    reporter_method(sub_idx, sub_params, sub_results)
+                except Exception as e:
+                    logger.error(f"Error reporting sub-module {sub_key}: {e}")
+                    self.ci.update_page_content(
+                        page_title,
+                        page_id,
+                        '<p style="color:#f0ad4e;">Could not render '
+                        f"report: {html.escape(str(e))}</p>",
+                    )
+        finally:
+            self.report_page_name, self.report_page_id = saved_name, saved_id
 
     def analysis_documentation(
         self, i, parameters, results, postpone_report=False

@@ -152,6 +152,50 @@ def test_html_reporter_persists_sections_across_reopen(tmp_path):
     assert content.count('class="cl-block"') == 2
 
 
+def test_html_reporter_branch_stays_inline_collapsible(tmp_path):
+    """Unlike Confluence (child page per branch), the single-file HTML report
+    keeps each branch as an inline collapsible; no child report files."""
+    report_dir = str(tmp_path / "rep")
+    reporter = HTMLReporter(report_dir, "Run")
+    sub = {
+        "start time": "t0",
+        "end time": "t1",
+        "duration": 1.0,
+        "success": True,
+    }
+    parameters = {
+        "branch_modules": [("dummy_module", {})],
+        "join_modules": [],
+    }
+    results = {
+        "start time": "t0",
+        "duration": 2.0,
+        "success": True,
+        "branch_type": "explicit",
+        "labels": ["cell0"],
+        "branches": [{"label": "cell0", "00_dummy_module": dict(sub)}],
+        "join": {},
+        "topology": {
+            "type": "explicit",
+            "prefix_index": 0,
+            "labels": ["cell0"],
+            "branch_modules": ["dummy_module"],
+            "join_modules": [],
+            "branches": [{"label": "cell0", "modules": ["00_dummy_module"]}],
+        },
+    }
+    reporter.branch(4, parameters, results)
+
+    content = open(
+        os.path.join(report_dir, "report.html"), encoding="utf-8"
+    ).read()
+    # inline collapsible kept (rendered as a <details><summary>)
+    assert "Branch: cell0" in content
+    # single report file -- no per-branch child html pages spawned
+    html_files = [f for f in os.listdir(report_dir) if f.endswith(".html")]
+    assert html_files == ["report.html"]
+
+
 @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
 @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
 def test_workflowrunner_with_html_reporter_only(tmp_path):

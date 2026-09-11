@@ -1907,6 +1907,68 @@ def test_summarize_branches_embeds_figure_when_deferred():
     assert "ac:image" in cr._strip_layout_wrappers(text)
 
 
+def test_branch_creates_child_page_per_branch():
+    """Each branch is posted to its own child page nested under the run page;
+    the main page carries links to them, not inline per-branch collapsibles."""
+    cr = _reporter()  # report_page_name="page", report_page_id="1"
+    cr.ci.create_page.side_effect = ["c0", "c1"]
+    parameters = {
+        "branch_modules": [("create_mask2", {})],
+        "join_modules": [],
+    }
+    sub = {"area": 5.0, "duration": 1.0, "success": True}
+    results = {
+        "start time": "now",
+        "duration": 4.0,
+        "success": True,
+        "branch_type": "explicit",
+        "labels": ["cell0", "cell1"],
+        "branches": [
+            {"label": "cell0", "00_create_mask2": dict(sub)},
+            {"label": "cell1", "00_create_mask2": dict(sub)},
+        ],
+        "join": {},
+        "topology": {
+            "type": "explicit",
+            "prefix_index": 0,
+            "labels": ["cell0", "cell1"],
+            "branch_modules": ["create_mask2"],
+            "join_modules": [],
+            "branches": [
+                {"label": "cell0", "modules": ["00_create_mask2"]},
+                {"label": "cell1", "modules": ["00_create_mask2"]},
+            ],
+        },
+    }
+    cr.branch(4, parameters, results)
+
+    # one child page per branch, each nested under the run page ("1")
+    create_calls = cr.ci.create_page.call_args_list
+    assert [c.args[0] for c in create_calls] == [
+        "page - cell0",
+        "page - cell1",
+    ]
+    assert all(c.kwargs.get("parent_id") == "1" for c in create_calls)
+
+    # the create_mask2 sub-report is posted onto each child page (c0/c1)
+    posted_ids = {c.args[1] for c in cr.ci.update_page_content.call_args_list}
+    assert {"c0", "c1"} <= posted_ids
+
+    # the run page gets exactly one section: links to the child pages, and
+    # no inline "Branch: <label>" expand collapsible
+    main_bodies = [
+        c.args[2]
+        for c in cr.ci.update_page_content.call_args_list
+        if c.args[1] == "1"
+    ]
+    assert len(main_bodies) == 1
+    main = main_bodies[0]
+    assert 'ri:content-title="page - cell0"' in main
+    assert 'ri:content-title="page - cell1"' in main
+    assert "Per-branch reports" in main
+    assert "Branch: cell0" not in main
+
+
 def test_report_error_names_module_index_type_and_parameters():
     cr = _reporter()
     try:

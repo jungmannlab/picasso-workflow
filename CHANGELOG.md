@@ -12,6 +12,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `branch` sub-reports no longer leak duplicated sections onto the report page.
+  Sixteen module reporters accepted a `postpone_report` argument but ignored it
+  and always posted, so when a branch embedded one (e.g. `create_mask2`,
+  `refine_mask_by_density`) it produced a stray top-level section *and* an empty
+  nested copy — the cell-branch report showed the mask modules repeating once
+  per branch ahead of the Branch section. Each reporter now honours
+  `postpone_report` (returns its text instead of posting).
+- `summarize_branches` now shows its summary figure in the branch join report.
+  As a join module it is rendered deferred (`postpone_report=True`), and the old
+  reporter returned before ever uploading/embedding the figure — so the graph
+  was dropped. The figure is now embedded inline and uploaded on both paths.
+
 - Multi-rank aggregation no longer stalls (up to the one-week barrier timeout)
   when a worker dies after claiming a single dataset but before writing its
   completion marker. Rank 0's wait now treats a dataset with no marker whose
@@ -88,6 +100,17 @@ This file was started after v0.5.6; earlier history is in the git log.
   Node 24 majors (`actions/checkout@v5`, `actions/setup-python@v6`).
 
 ### Added
+
+- `branch` Confluence reporting now posts each branch's full sub-module report
+  to its own **child page** nested under the run page, and links to them from
+  the branch section on the main page — keeping the run page compact instead of
+  inlining every branch as a collapsible. The local HTML reporter keeps the
+  single-file inline-collapsible layout (`ConfluenceReporter._render_branch_details`,
+  overridden in `HTMLReporter`). The join/fan-in summary stays on the main page.
+- `summarize_branches`: new `plot_type` option (`box` default, or `violin`) for
+  the `replicates` mode; both overlay the individual per-branch points. Violin
+  falls back to a box plot when a category has too few points / no spread for a
+  KDE, so a single-replicate FOV never crashes the summary.
 
 - `[gpu]` optional-dependencies extra (`pip install -e ".[gpu]"`) that installs
   `numba-cuda` (+ a matching `cuda-bindings`), the backend picasso's CUDA fits
