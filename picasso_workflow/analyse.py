@@ -898,6 +898,614 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
+    #    @profile_resource_usage
+    @module_decorator
+    def branch(self, i, parameters, results):
+        """Fan out into per-branch sub-workflows, then optionally re-join.
+
+        See :meth:`picasso_workflow.util.AbstractModuleCollection.branch` for
+        the full parameter contract. Supports two ``branch_type``s:
+        ``"runtime"`` (one branch per connected component of a prior mask) and
+        ``"screen"`` (one branch per row of a config-time parameter grid).
+        """
+        pce = parameters.get("parameter_command_executor", None)
+        branch_type = parameters["branch_type"]
+        branch_modules = parameters["branch_modules"]
+        join_modules = parameters.get("join_modules") or []
+
+        # 1. Determine the branches: a list of (label, tile_map, branch_state).
+        #    tile_map is the per-branch $$map dict for screens (else None);
+        #    branch_state is the per-branch analyzer state for runtime splits
+        #    (else None).
+        if branch_type == "explicit":
+            splits = self._make_explicit_branches(parameters)
+        elif branch_type == "screen":
+            splits = self._make_screen_branches(parameters)
+        elif branch_type == "runtime":
+            splits = self._make_runtime_branches(i, parameters, pce)
+        else:
+            raise ValueError(
+                f"Unknown branch_type '{branch_type}'. "
+                "Expected 'explicit', 'runtime' or 'screen'."
+            )
+
+        labels = [branch_label for branch_label, _, _ in splits]
+        results["branch_type"] = branch_type
+        results["labels"] = labels
+        if not splits:
+            logger.warning(
+                f"branch (module {i:02d}): no branches produced "
+                f"(branch_type={branch_type}). Nothing to run."
+            )
+
+        # 2. Snapshot the shared-prefix state once, then run each branch on a
+        #    fresh restore of it.
+        prefix_snapshot = util.BranchStateManager.snapshot(self)
+
+        # Progress: the branch runs many sub-modules, so (a) advance the
+        # module's overall bar with a "<branch>: <module>" message instead of
+        # sitting at 0%, and (b) drive a nested progress tree (one group per
+        # branch + a join group, each with its sub-module rows) that the
+        # monitor expands under the branch module.
+        overall_cb = getattr(self, "_progress_callback", None)
+        progress_mgr = getattr(self, "_progress_manager", None)
+        module_index = getattr(self, "_module_index", None)
+        nested = progress_mgr is not None and module_index is not None
+        total_units = len(splits) * len(branch_modules) + len(join_modules)
+        done_units = [0]
+
+        if nested:
+            groups = [
+                (label, "branch", [name for name, _ in branch_modules])
+                for label, _, _ in splits
+            ]
+            if join_modules:
+                groups.append(
+                    ("join", "join", [name for name, _ in join_modules])
+                )
+            progress_mgr.branch_init(module_index, groups)
+
+        def _branch_step(g, s, label, name):
+            """Start sub-module (g, s) and wire its intra-progress."""
+            if nested:
+                progress_mgr.branch_submodule_start(module_index, g, s)
+            if overall_cb is None and not nested:
+                return
+            base = done_units[0] / total_units if total_units else 0.0
+            span = (1.0 / total_units) if total_units else 0.0
+            default_msg = f"{label}: {name}"
+
+            def wrapped(
+                fraction=None,
+                msg=None,
+                _b=base,
+                _s=span,
+                _m=default_msg,
+                _g=g,
+                _sub=s,
+            ):
+                try:
+                    frac = float(fraction) if fraction is not None else 0.0
+                except (TypeError, ValueError):
+                    frac = 0.0
+                frac = max(0.0, min(1.0, frac))
+                if overall_cb is not None:
+                    overall_cb(_b + _s * frac, msg or _m)
+                if nested:
+                    progress_mgr.branch_submodule_progress(
+                        module_index, _g, _sub, frac, msg
+                    )
+
+            self._progress_callback = wrapped
+            if overall_cb is not None:
+                overall_cb(base, default_msg)
+
+        def _branch_step_end(g, s, status):
+            """Mark sub-module (g, s) finished and advance the overall count."""
+            if nested:
+                progress_mgr.branch_submodule_end(module_index, g, s, status)
+            done_units[0] += 1
+
+        # Live reporting: a reporter that supports per-branch child pages (the
+        # ConfluenceReporter) can be handed each sub-module as it finishes, so
+        # a branch's child page populates during execution instead of only
+        # after the whole branch step completes. Reporters without the hook
+        # (e.g. the single-file HTML reporter) report the branch in one batch
+        # afterwards, unchanged.
+        live_reporters = [
+            rep
+            for rep in (getattr(self, "_branch_live_reporters", None) or [])
+            if hasattr(rep, "open_branch_page")
+            and hasattr(rep, "report_branch_submodule")
+        ]
+
+        branch_results = []
+        topology_branches = []
+        for branch_id, (branch_label, tile_map, branch_state) in enumerate(
+            splits
+        ):
+            util.BranchStateManager.restore(self, prefix_snapshot)
+            if branch_state is not None:
+                for attr, value in branch_state.items():
+                    setattr(self, attr, value)
+
+            branch_dir = os.path.join(results["folder"], branch_label)
+            os.makedirs(branch_dir, exist_ok=True)
+
+            # Open this branch's live child page(s) up front.
+            live_handles = []
+            for rep in live_reporters:
+                try:
+                    live_handles.append(
+                        (rep, rep.open_branch_page(branch_label))
+                    )
+                except Exception as e:  # reporting must never abort analysis
+                    logger.warning(
+                        f"live branch report: could not open page for "
+                        f"'{branch_label}': {e}"
+                    )
+
+            one_branch = {"label": branch_label}
+            # branch-local results, keyed "NN_name", so a sub-module can
+            # reference an earlier sub-module of the same branch via
+            # $get_previous_module_result / $get_prior_result.
+            branch_local = {}
+            executed = []
+            for sub_idx, (module_name, module_parameters) in enumerate(
+                branch_modules
+            ):
+                _branch_step(branch_id, sub_idx, branch_label, module_name)
+                sub_params = self._resolve_branch_submodule_params(
+                    module_parameters,
+                    pce,
+                    sub_idx,
+                    tile_map,
+                    branch_local,
+                    branch_id,
+                )
+                try:
+                    sub_results = self._run_branch_submodule(
+                        module_name, sub_idx, sub_params, branch_dir
+                    )
+                except BaseException:
+                    _branch_step_end(branch_id, sub_idx, "failed")
+                    raise
+                key = f"{sub_idx:02d}_{module_name}"
+                one_branch[key] = sub_results
+                branch_local[key] = sub_results
+                executed.append(key)
+                # Stream this finished sub-module to its live child page.
+                for rep, handle in live_handles:
+                    try:
+                        rep.report_branch_submodule(
+                            handle,
+                            sub_idx,
+                            module_name,
+                            sub_params,
+                            sub_results,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"live branch report: {key} failed: {e}"
+                        )
+                _branch_step_end(branch_id, sub_idx, "done")
+            branch_results.append(one_branch)
+            topology_branches.append(
+                {"label": branch_label, "modules": executed}
+            )
+
+        results["branches"] = branch_results
+
+        # 3. Restore the prefix state, then run the join/fan-in modules with
+        #    the per-branch results pooled back together.
+        util.BranchStateManager.restore(self, prefix_snapshot)
+
+        join_results = {}
+        if join_modules:
+            # Expose the in-progress branch results under this module's key so
+            # join modules can pool them via
+            # "results, NN_branch, branches, $all, ...".
+            if pce is not None and hasattr(pce.parent_object, "results"):
+                pce.parent_object.results[f"{i:02d}_branch"] = results
+            join_dir = os.path.join(results["folder"], "join")
+            os.makedirs(join_dir, exist_ok=True)
+            join_group = len(splits)
+            for sub_idx, (module_name, module_parameters) in enumerate(
+                join_modules
+            ):
+                _branch_step(join_group, sub_idx, "join", module_name)
+                # Join modules run at trunk level (prefix state restored) and
+                # pool the per-branch results, so they resolve against the
+                # trunk runner's results (which now include this branch step).
+                jp = copy.deepcopy(module_parameters)
+                if pce is not None:
+                    original_rootidx = getattr(pce, "curr_rootidx", None)
+                    pce.curr_rootidx = i
+                    jp = pce.run(jp, curr_rootidx=i)
+                    pce.curr_rootidx = original_rootidx
+                try:
+                    sub_results = self._run_branch_submodule(
+                        module_name, sub_idx, jp, join_dir
+                    )
+                except BaseException:
+                    _branch_step_end(join_group, sub_idx, "failed")
+                    raise
+                join_results[f"{sub_idx:02d}_{module_name}"] = sub_results
+                _branch_step_end(join_group, sub_idx, "done")
+        results["join"] = join_results
+
+        # Restore the plain intra-module callback for module i (the wrapped
+        # per-step callbacks captured the branch's sub-module slices).
+        if overall_cb is not None:
+            self._progress_callback = overall_cb
+
+        # 4. Record the executed module-path topology for reporting.
+        results["topology"] = {
+            "type": branch_type,
+            "prefix_index": i,
+            "labels": labels,
+            "branch_modules": [name for name, _ in branch_modules],
+            "join_modules": [name for name, _ in join_modules],
+            "branches": topology_branches,
+        }
+
+        logger.info(
+            f"branch (module {i:02d}) completed: {len(branch_results)} "
+            f"{branch_type} branches, {len(join_results)} join module(s)."
+        )
+        return parameters, results
+
+    def _make_screen_branches(self, parameters):
+        """Build config-time screen branches from a parameter grid.
+
+        Returns a list of ``(label, tile_map, None)``; ``tile_map`` is the
+        per-branch ``$$map`` lookup dict (one row of the grid).
+        """
+        screen = parameters["screen"]
+        tags = screen.get("#tags")
+        columns = [v for k, v in screen.items()]
+        if not columns:
+            return []
+        ntiles = len(columns[0])
+        splits = []
+        for j in range(ntiles):
+            tile_map = {k: v[j] for k, v in screen.items()}
+            branch_label = (
+                str(tags[j]) if tags is not None else f"screen{j:02d}"
+            )
+            splits.append((branch_label, tile_map, None))
+        return splits
+
+    def _make_runtime_branches(self, i, parameters, pce):
+        """Build runtime branches by splitting a prior mask into components.
+
+        Returns a list of ``(label, None, branch_state)``; ``branch_state``
+        injects the per-cell ``channel_locs`` (prefix locs filtered to the
+        component).
+        """
+        split = parameters["split"]
+        method = split.get("method", "mask_components")
+        if method != "mask_components":
+            raise NotImplementedError(
+                f"branch split method '{method}' is not supported "
+                "(only 'mask_components')."
+            )
+
+        fp_mask = split["mask"]
+        if pce is not None and isinstance(fp_mask, (tuple, list)):
+            fp_mask = pce.run(
+                {"mask": copy.deepcopy(fp_mask)}, curr_rootidx=i
+            )["mask"]
+
+        cell_mask = outpost_modules.mask.CellMask.load(fp_mask)
+        components = cell_mask.component_masks(
+            min_area_um2=split.get("min_area_um2", 0.0)
+        )
+        if (max_branches := split.get("max_branches")) is not None:
+            components = components[:max_branches]
+
+        label_template = split.get("label_template", "cell{n:02d}")
+        prefix_channel_locs = self.channel_locs
+        if prefix_channel_locs is None:
+            raise AutoPicassoError(
+                "branch runtime split requires channel_locs; run "
+                "aggregation/mask modules before branching."
+            )
+
+        splits = []
+        for n, component_mask in enumerate(components):
+            branch_label = label_template.format(n=n)
+            branch_channel_locs = [
+                component_mask.apply_to_locs(locs)
+                for locs in prefix_channel_locs
+            ]
+            branch_state = {"channel_locs": branch_channel_locs}
+            splits.append((branch_label, None, branch_state))
+        return splits
+
+    def _make_explicit_branches(self, parameters):
+        """Build a fixed number of branches with per-branch parameters.
+
+        The count comes from ``n_branches`` (or the length of
+        ``branch_labels``); each branch runs the same modules and differs only
+        through ``("$branch", [v0, v1, ...])`` per-branch parameter overrides
+        (e.g. ``create_mask2`` selecting the ``branch_id``-th largest cell).
+        Returns a list of ``(label, None, None)`` -- each branch starts from
+        the shared-prefix state.
+        """
+        labels = parameters.get("branch_labels")
+        n = parameters.get("n_branches")
+        if n is None:
+            if labels is None:
+                raise AutoPicassoError(
+                    "branch_type 'explicit' needs 'n_branches' or "
+                    "'branch_labels'."
+                )
+            n = len(labels)
+        n = int(n)
+        splits = []
+        for j in range(n):
+            label = (
+                str(labels[j])
+                if labels is not None and j < len(labels)
+                else f"cell{j:02d}"
+            )
+            splits.append((label, None, None))
+        return splits
+
+    @staticmethod
+    def _resolve_branch_overrides(obj, branch_id):
+        """Replace ``("$branch", [v0, v1, ...])`` with ``values[branch_id]``.
+
+        Walks a (possibly nested) parameter structure and resolves per-branch
+        override markers to this branch's value. If the branch index is past
+        the end of the list, the last value is reused. Runs *before* the ``$``
+        command resolution so the resolved value is a plain value (or a further
+        ``$``/``$$`` command to resolve next).
+        """
+        if isinstance(obj, dict):
+            return {
+                k: AutoPicasso._resolve_branch_overrides(v, branch_id)
+                for k, v in obj.items()
+            }
+        if isinstance(obj, (tuple, list)):
+            if (
+                isinstance(obj, tuple)
+                and len(obj) >= 2
+                and obj[0] == "$branch"
+            ):
+                values = obj[1]
+                if not isinstance(values, (list, tuple)) or not values:
+                    return values
+                idx = branch_id if branch_id < len(values) else -1
+                return values[idx]
+            resolved = [
+                AutoPicasso._resolve_branch_overrides(v, branch_id)
+                for v in obj
+            ]
+            return tuple(resolved) if isinstance(obj, tuple) else resolved
+        return obj
+
+    def _resolve_branch_submodule_params(
+        self,
+        module_parameters,
+        pce,
+        sub_idx,
+        tile_map,
+        branch_local,
+        branch_id,
+    ):
+        """Resolve a branch sub-module's parameters.
+
+        Resolution happens in up to three passes:
+
+        1. Per-branch overrides: ``("$branch", [...])`` -> this branch's value
+           (see :meth:`_resolve_branch_overrides`). Run first so the result is
+           a plain value or a further command.
+        2. For screens, resolve ``$$map`` commands from the branch's row of the
+           grid (``tile_map``). (In aggregation workflows the ``$$`` commands
+           are already resolved one level up, so ``tile_map`` is ``None``.)
+        3. Resolve ordinary ``$`` commands against a *branch-local* results
+           view: ``branch_local`` (this branch's completed sub-modules, keyed
+           ``NN_name``) shadowing the trunk runner's results. ``curr_rootidx``
+           is the sub-module index, so ``$get_previous_module_result`` refers
+           to the previous sub-module of this branch, while explicit
+           ``$get_prior_result`` keys can still reach shared-prefix modules.
+        """
+        params = copy.deepcopy(module_parameters)
+        params = self._resolve_branch_overrides(params, branch_id)
+        if tile_map is not None:
+            parent = pce.parent_object if pce is not None else None
+            tiler_pce = util.ParameterCommandExecutor(
+                parent, dict(tile_map), command_sign="$$"
+            )
+            params = tiler_pce.run(params)
+        if pce is not None:
+            trunk_results = getattr(pce.parent_object, "results", {})
+            proxy = util.ResultsProxy.merged(branch_local, trunk_results)
+            local_pce = util.ParameterCommandExecutor(proxy, command_sign="$")
+            params = local_pce.run(params, curr_rootidx=sub_idx)
+        return params
+
+    def _run_branch_submodule(
+        self, module_name, sub_idx, sub_params, calling_module_dir
+    ):
+        """Run one branch/join sub-module into a nested result folder."""
+        if not hasattr(self, module_name):
+            raise AttributeError(
+                f"Module '{module_name}' not found in AutoPicasso"
+            )
+        module_method = getattr(self, module_name)
+        _, sub_results = module_method(
+            sub_idx,
+            sub_params,
+            calling_module_dir=calling_module_dir,
+            suffix="",
+        )
+        return sub_results
+
+    #    @profile_resource_usage
+    @module_decorator
+    def summarize_branches(self, i, parameters, results):
+        """Summarize per-branch results as a figure.
+
+        See :meth:`picasso_workflow.util.AbstractModuleCollection\
+.summarize_branches` for the parameter contract. Draws a box/strip plot of a
+        metric across branches (``"replicates"`` mode) or the metric against a
+        per-branch argument (``"screen"`` mode), and records summary stats.
+        """
+        raw_values = parameters["values"]
+
+        def _num_list(seq):
+            """Coerce a sequence to floats, skipping non-numeric entries.
+
+            A summary/plot module must not crash the whole workflow because a
+            referenced result is not a plain number; non-numeric entries (e.g.
+            a dict, when a scalar result key was expected) are dropped with a
+            warning.
+            """
+            out = []
+            for v in seq or []:
+                try:
+                    out.append(float(v))
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "summarize_branches: skipping non-numeric value "
+                        f"{v!r} (reference a scalar result key)."
+                    )
+            return out
+
+        if isinstance(raw_values, dict):
+            series = {
+                str(name): _num_list(vals) for name, vals in raw_values.items()
+            }
+        elif (
+            isinstance(raw_values, (list, tuple))
+            and raw_values
+            and all(isinstance(v, dict) for v in raw_values)
+        ):
+            # One dict per branch (e.g. labeling_efficiency is
+            # {target: .., reference: ..}) -> pivot into one series per key.
+            keys = []
+            for per_branch in raw_values:
+                for key in per_branch:
+                    if key not in keys:
+                        keys.append(key)
+            series = {
+                str(key): _num_list([pb.get(key) for pb in raw_values])
+                for key in keys
+            }
+        else:
+            series = {
+                str(parameters.get("ylabel", "value")): _num_list(raw_values)
+            }
+        labels = parameters.get("labels")
+        x_values = parameters.get("x")
+        mode = parameters.get("mode", "auto")
+        if mode == "auto":
+            mode = "screen" if x_values is not None else "replicates"
+        ylabel = parameters.get("ylabel", "value")
+        title = parameters.get("title", "branch summary")
+
+        fig, ax = plt.subplots()
+        has_data = any(len(v) for v in series.values())
+        if not has_data:
+            ax.text(
+                0.5,
+                0.5,
+                "no branch results to summarize",
+                ha="center",
+                va="center",
+            )
+            ax.set_axis_off()
+        elif mode == "screen" and x_values is not None:
+            xv = [float(x) for x in x_values]
+            for name, vals in series.items():
+                n = min(len(xv), len(vals))
+                ax.plot(xv[:n], vals[:n], marker="o", label=name)
+            ax.set_xlabel(parameters.get("xlabel", "argument"))
+            if len(series) > 1:
+                ax.legend()
+        else:  # replicates: distribution of the metric across branches
+            names = list(series.keys())
+            data = [series[name] for name in names]
+            plot_type = parameters.get("plot_type", "box")
+            nonempty = [(k, d) for k, d in enumerate(data) if d]
+            positions = [k for k, _ in nonempty]
+            datasets = [d for _, d in nonempty]
+            drawn = False
+            if datasets and plot_type == "violin":
+                # gaussian_kde needs >= 2 points with non-zero spread per
+                # category; fall back to a boxplot if any category can't
+                # support a KDE (e.g. a single replicate or identical values).
+                try:
+                    parts = ax.violinplot(
+                        datasets,
+                        positions=positions,
+                        widths=0.6,
+                        showmeans=True,
+                        showextrema=True,
+                    )
+                    for body in parts["bodies"]:
+                        body.set_alpha(0.4)
+                    drawn = True
+                except (ValueError, np.linalg.LinAlgError):
+                    logger.warning(
+                        "summarize_branches: violin plot failed (too few "
+                        "points / no spread); falling back to a boxplot."
+                    )
+            if datasets and not drawn:
+                ax.boxplot(datasets, positions=positions, widths=0.5)
+            for pos, vals in enumerate(data):
+                if not vals:
+                    continue
+                jitter = (np.random.rand(len(vals)) - 0.5) * 0.15
+                ax.scatter(
+                    np.full(len(vals), pos) + jitter,
+                    vals,
+                    color="k",
+                    alpha=0.7,
+                    zorder=3,
+                )
+            ax.set_xticks(range(len(names)))
+            ax.set_xticklabels(names, rotation=30, ha="right")
+            ax.set_xlabel(parameters.get("xlabel", "branch"))
+            if len(names) == 1 and labels is not None:
+                for k, val in enumerate(data[0]):
+                    lbl = str(labels[k]) if k < len(labels) else str(k)
+                    ax.annotate(
+                        lbl,
+                        (0, val),
+                        textcoords="offset points",
+                        xytext=(6, 0),
+                        fontsize=8,
+                    )
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        fig.tight_layout()
+        results["fp_fig"] = os.path.join(
+            results["folder"], parameters.get("filename", "branch_summary.png")
+        )
+        fig.savefig(results["fp_fig"])
+        plt.close(fig)
+
+        results["mode"] = mode
+        stats = {}
+        for name, vals in series.items():
+            if vals:
+                arr = np.asarray(vals, dtype=float)
+                stats[name] = {
+                    "n": int(arr.size),
+                    "mean": float(np.mean(arr)),
+                    "std": float(np.std(arr)),
+                    "min": float(np.min(arr)),
+                    "max": float(np.max(arr)),
+                }
+            else:
+                stats[name] = {"n": 0}
+        results["stats"] = stats
+        return parameters, results
+
     ##########################################################################
     # Single dataset modules
     ##########################################################################

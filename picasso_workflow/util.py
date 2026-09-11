@@ -137,6 +137,118 @@ class AbstractModuleCollection(abc.ABC):
             results).
         """
 
+    @abc.abstractmethod
+    def branch(self, i, parameters, results):
+        """Fan out into per-branch sub-workflows, then optionally re-join.
+
+        Generalizes :meth:`conditional_branch` from a two-way condition to an
+        N-way fan-out. The shared prefix (all modules before this one) is run
+        once; this module then runs ``branch_modules`` once per branch on a
+        snapshot of the prefix state, and finally runs ``join_modules`` once
+        with the per-branch results pooled back together. Three branch types:
+
+        - ``"explicit"``: a fixed number of branches (``n_branches`` or
+          ``branch_labels``). All branches run the same modules and differ only
+          through per-branch parameter overrides written as
+          ``("$branch", [v0, v1, ...])``, resolved to ``values[branch_id]``
+          (e.g. ``create_mask2`` with ``nth_largest_cell=("$branch",[1,2,3])``
+          to select a different cell per branch).
+        - ``"runtime"``: the number of branches is discovered at run time by
+          splitting a prior mask into its connected components (one branch per
+          cell). Each branch's ``channel_locs`` are the prefix localizations
+          filtered to that component.
+        - ``"screen"``: the number of branches is fixed at config time by a
+          parameter grid; each branch resolves ``$$map`` commands from its row
+          of the grid (reusing :class:`ParameterTiler` semantics).
+
+        In all types, ``("$branch", [...])`` per-branch overrides are resolved
+        first, so any branch type can vary a parameter by branch id.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys: ``branch_type`` (``"runtime"`` or ``"screen"``) and
+            ``branch_modules`` (list of ``(module_name, module_parameters)``
+            tuples run once per branch). For ``"runtime"``, a ``split`` dict
+            (``method`` -- only ``"mask_components"`` --, ``mask`` filepath or
+            command, optional ``min_area_um2``, ``max_branches``,
+            ``label_template``). For ``"screen"``, a ``screen`` dict of
+            equal-length lists keyed by the ``$$map`` names used in
+            ``branch_modules`` (optional ``"#tags"`` gives branch labels).
+            Optional ``join_modules`` (run once after all branches, may pool
+            per-branch results via ``("$get_prior_result", "results,
+            NN_branch, branches, $all, MM_module, key")``) and
+            ``parameter_command_executor`` (injected by the runner).
+        results : dict
+            Module results (see class docstring).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``branch_type`` (str), ``labels`` (list),
+            ``branches`` (list of per-branch result dicts, each keyed
+            ``MM_module``), ``join`` (dict of join-module results) and
+            ``topology`` (the executed module-path tree).
+        """
+
+    @abc.abstractmethod
+    def summarize_branches(self, i, parameters, results):
+        """Summarize per-branch results as a figure.
+
+        A general-purpose plotting/summary module, typically used as a
+        ``branch`` join module: it renders a scalar result collected across
+        branches (via ``("$get_prior_result", "results, NN_branch, branches,
+        $all, MM_module, key")``) into a single figure. Two display modes:
+
+        - ``"replicates"``: branches are repeats of the same analysis (e.g.
+          different cells) -- draw a box/strip plot of the metric across
+          branches.
+        - ``"screen"``: branches vary a parameter -- plot the metric against
+          the per-branch argument values (``x``).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``values`` : list or dict
+                One numeric value per branch (a list), or a dict mapping series
+                names to such lists (several metrics on one figure).
+
+            Optional keys:
+
+            ``labels`` : list
+                Per-branch labels for the x ticks / point annotations.
+            ``x`` : list
+                Per-branch numeric argument values; enables ``"screen"`` mode.
+            ``mode`` : {"auto", "replicates", "screen"}
+                Display mode; ``"auto"`` picks ``"screen"`` when ``x`` is
+                given, else ``"replicates"``.
+            ``plot_type`` : {"box", "violin"}
+                In ``"replicates"`` mode, whether to draw a box plot
+                (default) or a violin plot; both overlay the individual
+                per-branch points. Violin falls back to a box plot when a
+                category has too few points / no spread for a KDE.
+            ``xlabel``, ``ylabel``, ``title``, ``filename`` : str
+                Figure labels and output filename.
+        results : dict
+            Module results (see class docstring).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``fp_fig`` (the figure path), ``mode`` and
+            ``stats`` (per-series ``n``/``mean``/``std``/``min``/``max``).
+        """
+
     ##########################################################################
     # Single-dataset workflow modules
     ##########################################################################
@@ -2335,6 +2447,27 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 logger.debug(f"max of {components}.")
                 res = self.max(components)
                 logger.debug(f"Max result is {res}.")
+            elif cmd == f"{self.command_sign}mean":
+                logger.debug(f"mean of {t[1:]}.")
+                components = []
+                for arg in t[1:]:
+                    if isinstance(arg, dict) and "parsed" in arg.keys():
+                        components.append(arg["parsed"])
+                    elif (
+                        isinstance(arg, (tuple, list))
+                        and len(arg) > 1
+                        and isinstance(arg[0], str)
+                        and arg[0][: len(self.command_sign)]
+                        == self.command_sign
+                    ):
+                        sub_res = self.scan_tuple(arg)
+                        components.append(sub_res["parsed"])
+                        originals.append(sub_res["original"])
+                    else:
+                        components.append(arg)
+                logger.debug(f"mean of {components}.")
+                res = self.mean(components)
+                logger.debug(f"Mean result is {res}.")
             else:
                 msg = (
                     "Found undefined command for current command "
@@ -2542,6 +2675,19 @@ class ParameterCommandExecutor(DictSimpleTyper):
             else:
                 components.append(arg)
         return np.min(components)
+
+    def mean(self, *args):
+        """Take the mean of components that may be given as iterables,
+        or separate arguments.
+        """
+        components = []
+        for arg in args:
+            if isinstance(arg, (list, tuple)):
+                for ar in arg:
+                    components.append(ar)
+            else:
+                components.append(arg)
+        return np.mean(components)
 
 
 def is_valid_expression(expression: str) -> bool:
@@ -2760,6 +2906,90 @@ class ParameterTiler:
             tags = [""] * len(result_parameters)
 
         return result_parameters, tags
+
+
+class BranchStateManager:
+    """Snapshot and restore the per-branch analysis state of an analyzer.
+
+    Used by the ``branch`` module (see
+    :meth:`AbstractModuleCollection.branch`) to give each branch a private
+    copy of the localization-level state while sharing the heavy, read-only
+    arrays (the raw ``movie``, the ``results_folder`` and ``analysis_config``)
+    by reference. This is what makes branching *after* the mask cheap: the
+    per-branch cost is O(localizations in that branch), not O(movie).
+
+    Only the attributes in :attr:`PER_BRANCH` are snapshotted. A shallow copy
+    of list containers is taken so that a branch reassigning an element (e.g.
+    ``self.channel_locs[k] = ...``) cannot leak into a sibling branch; the
+    underlying record arrays stay shared until a module replaces them (modules
+    reassign rather than mutate in place).
+    """
+
+    # attributes that diverge per branch -> snapshot/restore
+    PER_BRANCH = (
+        "locs",
+        "info",
+        "identifications",
+        "drift",
+        "channel_locs",
+        "channel_info",
+        "channel_tags",
+    )
+    # attributes shared read-only across branches -> never touched:
+    #   movie, results_folder, analysis_config
+
+    @staticmethod
+    def snapshot(analyzer) -> dict:
+        """Return a shallow snapshot of the analyzer's per-branch state."""
+        snap = {}
+        for attr in BranchStateManager.PER_BRANCH:
+            value = getattr(analyzer, attr, None)
+            snap[attr] = list(value) if isinstance(value, list) else value
+        return snap
+
+    @staticmethod
+    def restore(analyzer, snapshot: dict) -> None:
+        """Restore analyzer state from a :meth:`snapshot`.
+
+        A fresh shallow copy of list containers is installed on each restore
+        so repeated restores from the same snapshot stay independent.
+        """
+        for attr, value in snapshot.items():
+            setattr(
+                analyzer,
+                attr,
+                list(value) if isinstance(value, list) else value,
+            )
+
+
+class ResultsProxy:
+    """Minimal ``parent_object`` for a :class:`ParameterCommandExecutor`.
+
+    Exposes a plain ``results`` dict so that a branch sub-module's ``$``
+    commands (``$get_prior_result`` / ``$get_previous_module_result``) resolve
+    against a *branch-local* results view rather than the trunk runner. The
+    view is built branch-local-first so an index-prefixed previous-module
+    lookup prefers the branch's own preceding sub-module, while explicit
+    ``$get_prior_result`` keys can still reach the shared-prefix (trunk)
+    modules merged in as a fallback.
+    """
+
+    def __init__(self, results: dict):
+        self.results = results
+
+    @staticmethod
+    def merged(branch_local: dict, trunk: dict) -> "ResultsProxy":
+        """Build a proxy whose results are ``branch_local`` over ``trunk``.
+
+        Branch-local keys come first (and win on any collision) so the
+        index-prefix scan in
+        :meth:`ParameterCommandExecutor.get_previous_module_result` resolves
+        to the branch's own preceding sub-module.
+        """
+        view = dict(branch_local)
+        for key, value in (trunk or {}).items():
+            view.setdefault(key, value)
+        return ResultsProxy(view)
 
 
 def correct_path_separators(file_path: str) -> str:

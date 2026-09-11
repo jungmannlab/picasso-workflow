@@ -1288,6 +1288,68 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    def branch(self):
+        parameters = {
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [("dummy_module", {})],
+        }
+        sub = {"start time": "now", "duration": 1.0, "success": True}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "branch_type": "screen",
+            "labels": ["a", "b"],
+            "branches": [
+                {"label": "a", "00_dummy_module": dict(sub)},
+                {"label": "b", "00_dummy_module": dict(sub)},
+            ],
+            "join": {"00_dummy_module": dict(sub)},
+            "topology": {
+                "type": "screen",
+                "prefix_index": 0,
+                "labels": ["a", "b"],
+                "branch_modules": ["dummy_module"],
+                "join_modules": ["dummy_module"],
+                "branches": [
+                    {"label": "a", "modules": ["00_dummy_module"]},
+                    {"label": "b", "modules": ["00_dummy_module"]},
+                ],
+            },
+        }
+        self.cr.branch(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def summarize_branches(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "mode": "replicates",
+            "stats": {
+                "labeling efficiency": {
+                    "n": 3,
+                    "mean": 0.6,
+                    "std": 0.16,
+                    "min": 0.4,
+                    "max": 0.8,
+                }
+            },
+        }
+        self.cr.summarize_branches(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
     # @unittest.skip("")
     def resolution_analysis(self):
         parameters = {}
@@ -1733,6 +1795,248 @@ def _raise_value_error():
 
 def _posted_body(cr):
     return cr.ci.update_page_content.call_args[0][2]
+
+
+def test_strip_layout_wrappers_removes_only_layout_tags():
+    cr = confluence.ConfluenceReporter
+    sample = (
+        '<ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>'
+        "<p>hi</p>"
+        '<ac:image><ri:attachment ri:filename="m.png"/></ac:image>'
+        '<ac:structured-macro ac:name="expand"><ac:rich-text-body>x'
+        "</ac:rich-text-body></ac:structured-macro>"
+        "</ac:layout-cell></ac:layout-section></ac:layout>"
+    )
+    out = cr._strip_layout_wrappers(sample)
+    assert "ac:layout" not in out
+    # inner content (text, image, expand macro) is preserved
+    assert "<p>hi</p>" in out
+    assert "ri:attachment" in out
+    assert "ac:structured-macro" in out
+
+
+def test_branch_submodules_nest_without_layout():
+    """Embedded sub-reports carry no <ac:layout> (which Confluence hoists out
+    of the branch's collapsible expand macro)."""
+    cr = _reporter()
+    branch = {
+        "label": "cell0",
+        "00_dummy_module": {
+            "start time": "now",
+            "duration": 1.0,
+            "success": True,
+        },
+    }
+    out = cr._report_branch_submodules(branch, [("dummy_module", {})])
+    assert "ac:layout" not in out
+    assert "dummy_module" in out
+
+
+def test_fixed_reporters_honor_postpone_report():
+    """A reporter embedded as a branch sub-module must *return* its text and
+    not post to the page. Reporters that ignored ``postpone_report`` posted a
+    stray top-level section (duplicating the copy nested in the branch's
+    collapsible) -- the "does not fit correctly" report layout bug."""
+    cases = [
+        (
+            "create_mask2",
+            {"area": 5.0, "duration": 12.0, "success": True},
+            "Create Density Mask",
+        ),
+        (
+            "refine_mask_by_density",
+            {"area_um^2": 4.0, "duration": 7.0, "success": True},
+            "Refine Mask by Density",
+        ),
+    ]
+    for name, results, title in cases:
+        cr = _reporter()
+        text = getattr(cr, name)(0, {}, results, postpone_report=True)
+        assert text and title in text, name
+        assert (
+            not cr.ci.update_page_content.called
+        ), f"{name} posted to the page despite postpone_report=True"
+        # sanity: with postpone_report=False it still posts exactly once
+        cr2 = _reporter()
+        getattr(cr2, name)(0, {}, results)
+        assert cr2.ci.update_page_content.call_count == 1, name
+
+
+def test_branch_submodules_do_not_leak_to_top_level():
+    """Embedding a real fixed-reporter sub-module (create_mask2) nests its
+    content inside the branch collapsible without posting a stray top-level
+    section."""
+    cr = _reporter()
+    branch = {
+        "label": "cell0",
+        "00_create_mask2": {"area": 5.0, "duration": 12.0, "success": True},
+    }
+    out = cr._report_branch_submodules(branch, [("create_mask2", {})])
+    assert "Create Density Mask" in out
+    assert "ac:layout" not in out
+    assert not cr.ci.update_page_content.called
+
+
+def test_summarize_branches_embeds_figure_when_deferred():
+    """As a branch join module, summarize_branches is rendered deferred
+    (postpone_report=True). Its summary figure must be uploaded and embedded
+    inline in the returned text -- otherwise the graph is dropped from the
+    branch collapsible (the earlier post-then-append-image path was skipped
+    when deferred)."""
+    cr = _reporter()
+    results = {
+        "start time": "now",
+        "duration": 4.12,
+        "success": True,
+        "mode": "replicates",
+        "fp_fig": "/some/dir/branch_summary.png",
+        "stats": {
+            "le": {"n": 3, "mean": 0.6, "std": 0.1, "min": 0.4, "max": 0.8}
+        },
+    }
+    text = cr.summarize_branches(0, {}, results, postpone_report=True)
+    # figure attachment uploaded and referenced inline (survives nesting)
+    cr.ci.upload_attachment.assert_called_once_with(
+        cr.report_page_id, "/some/dir/branch_summary.png"
+    )
+    assert '<ri:attachment ri:filename="branch_summary.png" />' in text
+    assert "ac:image" in text
+    # deferred: does not post to the page itself
+    assert not cr.ci.update_page_content.called
+    # embedded copy carries no layout wrapper to be hoisted out of the macro
+    assert "ac:image" in cr._strip_layout_wrappers(text)
+
+
+def test_branch_creates_child_page_per_branch():
+    """Each branch is posted to its own child page nested under the run page;
+    the main page carries links to them, not inline per-branch collapsibles."""
+    cr = _reporter()  # report_page_name="page", report_page_id="1"
+    cr.ci.create_page.side_effect = ["c0", "c1"]
+    parameters = {
+        "branch_modules": [("create_mask2", {})],
+        "join_modules": [],
+    }
+    sub = {"area": 5.0, "duration": 1.0, "success": True}
+    results = {
+        "start time": "now",
+        "duration": 4.0,
+        "success": True,
+        "branch_type": "explicit",
+        "labels": ["cell0", "cell1"],
+        "branches": [
+            {"label": "cell0", "00_create_mask2": dict(sub)},
+            {"label": "cell1", "00_create_mask2": dict(sub)},
+        ],
+        "join": {},
+        "topology": {
+            "type": "explicit",
+            "prefix_index": 0,
+            "labels": ["cell0", "cell1"],
+            "branch_modules": ["create_mask2"],
+            "join_modules": [],
+            "branches": [
+                {"label": "cell0", "modules": ["00_create_mask2"]},
+                {"label": "cell1", "modules": ["00_create_mask2"]},
+            ],
+        },
+    }
+    cr.branch(4, parameters, results)
+
+    # one child page per branch, each nested under the run page ("1")
+    create_calls = cr.ci.create_page.call_args_list
+    assert [c.args[0] for c in create_calls] == [
+        "page - cell0",
+        "page - cell1",
+    ]
+    assert all(c.kwargs.get("parent_id") == "1" for c in create_calls)
+
+    # the create_mask2 sub-report is posted onto each child page (c0/c1)
+    posted_ids = {c.args[1] for c in cr.ci.update_page_content.call_args_list}
+    assert {"c0", "c1"} <= posted_ids
+
+    # the run page gets exactly one section: links to the child pages, and
+    # no inline "Branch: <label>" expand collapsible
+    main_bodies = [
+        c.args[2]
+        for c in cr.ci.update_page_content.call_args_list
+        if c.args[1] == "1"
+    ]
+    assert len(main_bodies) == 1
+    main = main_bodies[0]
+    assert 'ri:content-title="page - cell0"' in main
+    assert 'ri:content-title="page - cell1"' in main
+    assert "Per-branch reports" in main
+    assert "Branch: cell0" not in main
+
+
+def test_branch_streams_to_child_page_then_links_without_reposting():
+    """open_branch_page + report_branch_submodule populate a branch child page
+    live; the final branch() report then only links to it (does not re-create
+    the page or re-post its sub-modules)."""
+    cr = _reporter()  # report_page_name="page", report_page_id="1"
+    cr.ci.create_page.return_value = "cX"
+
+    # live streaming: open the page, then hand it one finished sub-module
+    handle = cr.open_branch_page("cell0")
+    assert handle == ("page - cell0", "cX")
+    cr.ci.create_page.assert_called_once()
+    assert cr.ci.create_page.call_args.kwargs.get("parent_id") == "1"
+    cr.report_branch_submodule(
+        handle,
+        0,
+        "create_mask2",
+        {},
+        {"area": 5.0, "duration": 1.0, "success": True},
+    )
+    # the sub-report landed on the child page (id cX), not the run page
+    posted_ids = {c.args[1] for c in cr.ci.update_page_content.call_args_list}
+    assert "cX" in posted_ids
+
+    # now the module's final report: the streamed branch is only linked
+    cr.ci.create_page.reset_mock()
+    cr.ci.update_page_content.reset_mock()
+    results = {
+        "start time": "now",
+        "duration": 4.0,
+        "success": True,
+        "branch_type": "explicit",
+        "labels": ["cell0"],
+        "branches": [
+            {
+                "label": "cell0",
+                "00_create_mask2": {
+                    "area": 5.0,
+                    "duration": 1.0,
+                    "success": True,
+                },
+            }
+        ],
+        "join": {},
+        "topology": {
+            "type": "explicit",
+            "prefix_index": 0,
+            "labels": ["cell0"],
+            "branch_modules": ["create_mask2"],
+            "join_modules": [],
+            "branches": [{"label": "cell0", "modules": ["00_create_mask2"]}],
+        },
+    }
+    cr.branch(
+        4,
+        {"branch_modules": [("create_mask2", {})], "join_modules": []},
+        results,
+    )
+
+    # no new child page created (already streamed), no sub-report re-posted
+    cr.ci.create_page.assert_not_called()
+    posted_ids = {c.args[1] for c in cr.ci.update_page_content.call_args_list}
+    assert posted_ids == {"1"}  # only the run page got written
+    main = [
+        c.args[2]
+        for c in cr.ci.update_page_content.call_args_list
+        if c.args[1] == "1"
+    ][-1]
+    assert 'ri:content-title="page - cell0"' in main
 
 
 def test_report_error_names_module_index_type_and_parameters():

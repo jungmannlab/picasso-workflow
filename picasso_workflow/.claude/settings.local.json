@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(python:*)",
+      "Bash(pytest:*)",
+      "Bash(rg:*)"
+    ],
+    "deny": []
+  }
+}

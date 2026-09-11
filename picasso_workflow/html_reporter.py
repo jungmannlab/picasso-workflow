@@ -597,6 +597,27 @@ class HTMLReporter(ConfluenceReporter):
         self.report_page_id = self.ci.create_page(report_name, body_text="")
         self.report_dir = report_dir
 
+    def _render_branch_details(self, branch_results, branch_modules):
+        """Keep branches as inline collapsibles in the single HTML file.
+
+        The child-page model of :class:`ConfluenceReporter` does not map onto
+        the local single-file HTML report, so each branch stays an inline
+        expand macro (its sub-reports nested via ``_report_branch_submodules``).
+        """
+        text = ""
+        for branch in branch_results:
+            label = branch.get("label", "branch")
+            text += (
+                '<ac:structured-macro ac:name="expand" '
+                'ac:schema-version="1">'
+                '<ac:parameter ac:name="title">'
+                f"Branch: {html.escape(str(label))}</ac:parameter>"
+                "<ac:rich-text-body>"
+            )
+            text += self._report_branch_submodules(branch, branch_modules)
+            text += "</ac:rich-text-body></ac:structured-macro>"
+        return text
+
 
 # ---------------------------------------------------------------------------
 # Regenerate reports from a saved result folder (no analysis re-run)

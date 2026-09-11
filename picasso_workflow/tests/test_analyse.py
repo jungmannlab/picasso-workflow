@@ -2400,6 +2400,252 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_conditional_branch")
         )
 
+    def branch(self):
+        """Test the branch module (screen and runtime types)."""
+        from picasso_workflow.outpost_modules import mask as maskmod
+
+        # --- screen type: two branches over a parameter grid ----------------
+        parameters = {
+            "branch_type": "screen",
+            "screen": {"val": [1, 2, 3], "#tags": ["a", "b", "c"]},
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [("dummy_module", {})],
+        }
+        parameters, results = self.ap.branch(0, parameters)
+        assert results["branch_type"] == "screen"
+        assert results["labels"] == ["a", "b", "c"]
+        assert len(results["branches"]) == 3
+        assert results["branches"][0]["label"] == "a"
+        assert "00_dummy_module" in results["branches"][0]
+        assert "00_dummy_module" in results["join"]
+        assert results["topology"]["type"] == "screen"
+        assert len(results["topology"]["branches"]) == 3
+        # per-branch and join folders exist
+        assert os.path.isdir(
+            os.path.join(
+                self.results_folder, "00_branch", "a", "00_dummy_module"
+            )
+        )
+        assert os.path.isdir(
+            os.path.join(self.results_folder, "00_branch", "join")
+        )
+        shutil.rmtree(os.path.join(self.results_folder, "00_branch"))
+
+        # --- runtime type: one branch per mask component --------------------
+        # Build a trivial single-component CellMask and save it.
+        cell_mask = maskmod.CellMask()
+        cell_mask._pixelsize = 1
+        cell_mask._binsize = 1
+        cell_mask._upsample = 1
+        cell_mask._offset = (0.0, 0.0)
+        cell_mask._blursize = 1
+        cell_mask._threshold = 1 / 3
+        binary = np.ones((20, 20), dtype=bool)
+        cell_mask._initial_density = binary.astype(float)
+        cell_mask._binary_mask = binary
+        cell_mask._recalc_density_mask_from_binary()
+        fp_mask = os.path.join(self.results_folder, "test_mask.pkl")
+        cell_mask.save(fp_mask)
+
+        locs = np.rec.array(
+            [(0, 3.0, 3.0), (1, 5.0, 5.0), (2, 2.0, 8.0)],
+            dtype=[("frame", "u4"), ("x", "f4"), ("y", "f4")],
+        )
+        self.ap.channel_locs = [locs]
+        self.ap.channel_info = [[{"Pixelsize": 1}]]
+        self.ap.channel_tags = ["ch0"]
+
+        parameters = {
+            "branch_type": "runtime",
+            "split": {
+                "method": "mask_components",
+                "mask": fp_mask,
+                "label_template": "cell{n:02d}",
+            },
+            "branch_modules": [("dummy_module", {})],
+        }
+        parameters, results = self.ap.branch(1, parameters)
+        assert results["branch_type"] == "runtime"
+        assert results["labels"] == ["cell00"]
+        assert len(results["branches"]) == 1
+        assert "00_dummy_module" in results["branches"][0]
+        assert results["join"] == {}
+        # prefix channel_locs restored (not left as a branch subset)
+        assert len(self.ap.channel_locs[0]) == 3
+
+        os.remove(fp_mask)
+        shutil.rmtree(os.path.join(self.results_folder, "01_branch"))
+
+        # --- explicit type: fixed n_branches with a per-branch override -----
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 3,
+            "branch_labels": ["a", "b", "c"],
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [("dummy_module", {})],
+        }
+        # capture intra-module progress reported across the sub-modules
+        progress = []
+        self.ap._progress_callback = lambda frac, msg=None: progress.append(
+            (frac, msg)
+        )
+        parameters, results = self.ap.branch(2, parameters)
+        # restore the default (None) rather than deleting the attribute:
+        # test_modules reuses one self.ap across every module test, so a
+        # deleted _progress_callback would break later modules (e.g. identify).
+        self.ap._progress_callback = None
+        assert results["branch_type"] == "explicit"
+        assert results["labels"] == ["a", "b", "c"]
+        assert len(results["branches"]) == 3
+        assert results["topology"]["type"] == "explicit"
+        # progress advanced with per-branch messages (3 branches + 1 join)
+        assert len(progress) == 4
+        fracs = [f for f, _ in progress]
+        assert fracs == sorted(fracs)
+        assert any("a:" in (m or "") for _, m in progress)
+        assert any("join:" in (m or "") for _, m in progress)
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+        # $branch overrides resolve to the branch id's value
+        resolved = analyse.AutoPicasso._resolve_branch_overrides(
+            {"k": ("$branch", [10, 20, 30]), "s": 1}, 1
+        )
+        assert resolved == {"k": 20, "s": 1}
+
+    def test_branch_streams_submodules_live(self):
+        """A reporter with the live hooks gets one open_branch_page per branch
+        and each sub-module handed to it as it finishes (in order), so a child
+        page fills in during execution rather than only at the end."""
+        calls = []
+
+        class FakeLiveReporter:
+            def open_branch_page(self, label):
+                calls.append(("open", label))
+                return ("title-" + label, "id-" + label)
+
+            def report_branch_submodule(
+                self, handle, sub_idx, name, params, results
+            ):
+                calls.append(("sub", handle[0], sub_idx, name))
+
+        self.ap._branch_live_reporters = [FakeLiveReporter()]
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 2,
+            "branch_labels": ["a", "b"],
+            "branch_modules": [("dummy_module", {}), ("dummy_module", {})],
+            "join_modules": [],
+        }
+        self.ap.branch(2, parameters)
+
+        # one page opened per branch
+        assert [c[1] for c in calls if c[0] == "open"] == ["a", "b"]
+        # each branch streamed its two sub-modules, in execution order
+        for label in ("a", "b"):
+            subs = [
+                c for c in calls if c[0] == "sub" and c[1] == f"title-{label}"
+            ]
+            assert [c[2] for c in subs] == [0, 1]
+        # a branch's page is opened before any of its sub-modules stream
+        assert calls[0] == ("open", "a")
+        assert calls[1][:2] == ("sub", "title-a")
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def summarize_branches(self):
+        """Test the summarize_branches plotting module."""
+        # replicates mode: a metric across branches
+        parameters = {
+            "values": [0.4, 0.6, 0.8],
+            "labels": ["a", "b", "c"],
+            "ylabel": "labeling efficiency",
+        }
+        parameters, results = self.ap.summarize_branches(0, parameters)
+        assert results["mode"] == "replicates"
+        assert os.path.isfile(results["fp_fig"])
+        assert results["stats"]["labeling efficiency"]["n"] == 3
+        assert (
+            abs(results["stats"]["labeling efficiency"]["mean"] - 0.6) < 1e-9
+        )
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_summarize_branches")
+        )
+
+        # screen mode: metric vs a per-branch argument
+        parameters = {
+            "values": {"nn": [1.0, 2.0, 3.0]},
+            "x": [10, 20, 30],
+            "mode": "auto",
+        }
+        parameters, results = self.ap.summarize_branches(1, parameters)
+        assert results["mode"] == "screen"
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "01_summarize_branches")
+        )
+
+        # one dict per branch (e.g. labeling_efficiency = {target, reference})
+        # pivots into one series per key -- must not crash on float(dict).
+        parameters = {
+            "values": [
+                {"tgt": 0.4, "ref": 0.6},
+                {"tgt": 0.5, "ref": 0.7},
+                {"tgt": 0.3, "ref": 0.9},
+            ],
+            "labels": ["c0", "c1", "c2"],
+        }
+        parameters, results = self.ap.summarize_branches(2, parameters)
+        assert set(results["stats"]) == {"tgt", "ref"}
+        assert abs(results["stats"]["tgt"]["mean"] - 0.4) < 1e-9
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "02_summarize_branches")
+        )
+
+        # robustness: a stray non-numeric value is skipped, not fatal
+        parameters, results = self.ap.summarize_branches(
+            3, {"values": [1.0, {"x": 1}, 3.0], "ylabel": "m"}
+        )
+        assert results["stats"]["m"]["n"] == 2
+        shutil.rmtree(
+            os.path.join(self.results_folder, "03_summarize_branches")
+        )
+
+        # violin plot_type: two categories (target/reference), several
+        # replicate cells each -- must render without error.
+        parameters, results = self.ap.summarize_branches(
+            4,
+            {
+                "values": [
+                    {"NCR3-batch4": 0.42, "GFPNb": 0.61},
+                    {"NCR3-batch4": 0.55, "GFPNb": 0.70},
+                    {"NCR3-batch4": 0.33, "GFPNb": 0.88},
+                ],
+                "plot_type": "violin",
+                "ylabel": "labeling efficiency",
+            },
+        )
+        assert results["mode"] == "replicates"
+        assert set(results["stats"]) == {"NCR3-batch4", "GFPNb"}
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "04_summarize_branches")
+        )
+
+        # violin degenerate case (single replicate) falls back to a box
+        # plot instead of crashing on the KDE.
+        parameters, results = self.ap.summarize_branches(
+            5,
+            {
+                "values": [{"a": 0.4, "b": 0.6}],
+                "plot_type": "violin",
+                "ylabel": "m",
+            },
+        )
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "05_summarize_branches")
+        )
+
     def resolution_frc_spatial(self):
         """Is tested separately in tests/outpost_modules/test_resolution_frc.py"""
 

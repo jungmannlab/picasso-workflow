@@ -1507,9 +1507,14 @@ class WorkflowRunner:
                 # escaping with the progress state stuck at RUNNING (which
                 # leaves the live monitor showing the dataset as still running
                 # long after the rank has moved on).
-                module_parameters = self.parameter_command_executor.run(
-                    module_parameters, curr_rootidx=i
-                )
+                # The branch module owns resolution of its sub-workflow payload
+                # (branch_modules/join_modules reference branch-local and $$map
+                # results that do not exist yet at this point), so pass its
+                # config through raw; branch() resolves each piece itself.
+                if module_name != "branch":
+                    module_parameters = self.parameter_command_executor.run(
+                        module_parameters, curr_rootidx=i
+                    )
                 success = self.call_module(module_name, i, module_parameters)
             except AutoPicassoError:
                 success = False
@@ -1807,13 +1812,24 @@ class WorkflowRunner:
                 )
             )
             self.autopicasso._abort_callback = self._abort_callback
+        # Expose the progress manager + this module's index so a module that
+        # runs sub-modules (e.g. branch) can report a nested progress tree.
+        self.autopicasso._progress_manager = self.progress
+        self.autopicasso._module_index = i
+        # Expose the reporters so the branch module can stream each branch's
+        # sub-module reports to a live child page as they finish (reporters
+        # without the hook, e.g. HTML, are ignored and report in one batch).
+        self.autopicasso._branch_live_reporters = self.reporters
 
-        # For conditional_branch module, inject the parameter_command_executor
-        # so it can resolve sub-module parameters
-        if fun_name == "conditional_branch":
-            parameters["parameter_command_executor"] = (
-                self.parameter_command_executor
-            )
+        # For the conditional_branch and branch modules, inject the
+        # parameter_command_executor so they can resolve sub-module parameters.
+        # Inject into a shallow copy so the live executor is never persisted
+        # into workflow_modules/results by the following save().
+        if fun_name in ("conditional_branch", "branch"):
+            parameters = {
+                **parameters,
+                "parameter_command_executor": self.parameter_command_executor,
+            }
 
         fun_ap = getattr(self.autopicasso, fun_name)
         analyse_error = None
