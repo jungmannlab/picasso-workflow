@@ -2490,7 +2490,10 @@ class TestAnalyseModules(unittest.TestCase):
             (frac, msg)
         )
         parameters, results = self.ap.branch(2, parameters)
-        del self.ap._progress_callback
+        # restore the default (None) rather than deleting the attribute:
+        # test_modules reuses one self.ap across every module test, so a
+        # deleted _progress_callback would break later modules (e.g. identify).
+        self.ap._progress_callback = None
         assert results["branch_type"] == "explicit"
         assert results["labels"] == ["a", "b", "c"]
         assert len(results["branches"]) == 3
