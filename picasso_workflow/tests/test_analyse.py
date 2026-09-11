@@ -2512,6 +2512,45 @@ class TestAnalyseModules(unittest.TestCase):
         )
         assert resolved == {"k": 20, "s": 1}
 
+    def test_branch_streams_submodules_live(self):
+        """A reporter with the live hooks gets one open_branch_page per branch
+        and each sub-module handed to it as it finishes (in order), so a child
+        page fills in during execution rather than only at the end."""
+        calls = []
+
+        class FakeLiveReporter:
+            def open_branch_page(self, label):
+                calls.append(("open", label))
+                return ("title-" + label, "id-" + label)
+
+            def report_branch_submodule(
+                self, handle, sub_idx, name, params, results
+            ):
+                calls.append(("sub", handle[0], sub_idx, name))
+
+        self.ap._branch_live_reporters = [FakeLiveReporter()]
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 2,
+            "branch_labels": ["a", "b"],
+            "branch_modules": [("dummy_module", {}), ("dummy_module", {})],
+            "join_modules": [],
+        }
+        self.ap.branch(2, parameters)
+
+        # one page opened per branch
+        assert [c[1] for c in calls if c[0] == "open"] == ["a", "b"]
+        # each branch streamed its two sub-modules, in execution order
+        for label in ("a", "b"):
+            subs = [
+                c for c in calls if c[0] == "sub" and c[1] == f"title-{label}"
+            ]
+            assert [c[2] for c in subs] == [0, 1]
+        # a branch's page is opened before any of its sub-modules stream
+        assert calls[0] == ("open", "a")
+        assert calls[1][:2] == ("sub", "title-a")
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
     def summarize_branches(self):
         """Test the summarize_branches plotting module."""
         # replicates mode: a metric across branches

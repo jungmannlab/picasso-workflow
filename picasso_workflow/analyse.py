@@ -1006,6 +1006,19 @@ class AutoPicasso(util.AbstractModuleCollection):
                 progress_mgr.branch_submodule_end(module_index, g, s, status)
             done_units[0] += 1
 
+        # Live reporting: a reporter that supports per-branch child pages (the
+        # ConfluenceReporter) can be handed each sub-module as it finishes, so
+        # a branch's child page populates during execution instead of only
+        # after the whole branch step completes. Reporters without the hook
+        # (e.g. the single-file HTML reporter) report the branch in one batch
+        # afterwards, unchanged.
+        live_reporters = [
+            rep
+            for rep in (getattr(self, "_branch_live_reporters", None) or [])
+            if hasattr(rep, "open_branch_page")
+            and hasattr(rep, "report_branch_submodule")
+        ]
+
         branch_results = []
         topology_branches = []
         for branch_id, (branch_label, tile_map, branch_state) in enumerate(
@@ -1018,6 +1031,19 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             branch_dir = os.path.join(results["folder"], branch_label)
             os.makedirs(branch_dir, exist_ok=True)
+
+            # Open this branch's live child page(s) up front.
+            live_handles = []
+            for rep in live_reporters:
+                try:
+                    live_handles.append(
+                        (rep, rep.open_branch_page(branch_label))
+                    )
+                except Exception as e:  # reporting must never abort analysis
+                    logger.warning(
+                        f"live branch report: could not open page for "
+                        f"'{branch_label}': {e}"
+                    )
 
             one_branch = {"label": branch_label}
             # branch-local results, keyed "NN_name", so a sub-module can
@@ -1048,6 +1074,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                 one_branch[key] = sub_results
                 branch_local[key] = sub_results
                 executed.append(key)
+                # Stream this finished sub-module to its live child page.
+                for rep, handle in live_handles:
+                    try:
+                        rep.report_branch_submodule(
+                            handle,
+                            sub_idx,
+                            module_name,
+                            sub_params,
+                            sub_results,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"live branch report: {key} failed: {e}"
+                        )
                 _branch_step_end(branch_id, sub_idx, "done")
             branch_results.append(one_branch)
             topology_branches.append(

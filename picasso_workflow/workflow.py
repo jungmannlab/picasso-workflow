@@ -1816,6 +1816,10 @@ class WorkflowRunner:
         # runs sub-modules (e.g. branch) can report a nested progress tree.
         self.autopicasso._progress_manager = self.progress
         self.autopicasso._module_index = i
+        # Expose the reporters so the branch module can stream each branch's
+        # sub-module reports to a live child page as they finish (reporters
+        # without the hook, e.g. HTML, are ignored and report in one batch).
+        self.autopicasso._branch_live_reporters = self.reporters
 
         # For the conditional_branch and branch modules, inject the
         # parameter_command_executor so they can resolve sub-module parameters.

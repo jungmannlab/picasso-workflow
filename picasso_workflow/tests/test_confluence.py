@@ -1969,6 +1969,76 @@ def test_branch_creates_child_page_per_branch():
     assert "Branch: cell0" not in main
 
 
+def test_branch_streams_to_child_page_then_links_without_reposting():
+    """open_branch_page + report_branch_submodule populate a branch child page
+    live; the final branch() report then only links to it (does not re-create
+    the page or re-post its sub-modules)."""
+    cr = _reporter()  # report_page_name="page", report_page_id="1"
+    cr.ci.create_page.return_value = "cX"
+
+    # live streaming: open the page, then hand it one finished sub-module
+    handle = cr.open_branch_page("cell0")
+    assert handle == ("page - cell0", "cX")
+    cr.ci.create_page.assert_called_once()
+    assert cr.ci.create_page.call_args.kwargs.get("parent_id") == "1"
+    cr.report_branch_submodule(
+        handle,
+        0,
+        "create_mask2",
+        {},
+        {"area": 5.0, "duration": 1.0, "success": True},
+    )
+    # the sub-report landed on the child page (id cX), not the run page
+    posted_ids = {c.args[1] for c in cr.ci.update_page_content.call_args_list}
+    assert "cX" in posted_ids
+
+    # now the module's final report: the streamed branch is only linked
+    cr.ci.create_page.reset_mock()
+    cr.ci.update_page_content.reset_mock()
+    results = {
+        "start time": "now",
+        "duration": 4.0,
+        "success": True,
+        "branch_type": "explicit",
+        "labels": ["cell0"],
+        "branches": [
+            {
+                "label": "cell0",
+                "00_create_mask2": {
+                    "area": 5.0,
+                    "duration": 1.0,
+                    "success": True,
+                },
+            }
+        ],
+        "join": {},
+        "topology": {
+            "type": "explicit",
+            "prefix_index": 0,
+            "labels": ["cell0"],
+            "branch_modules": ["create_mask2"],
+            "join_modules": [],
+            "branches": [{"label": "cell0", "modules": ["00_create_mask2"]}],
+        },
+    }
+    cr.branch(
+        4,
+        {"branch_modules": [("create_mask2", {})], "join_modules": []},
+        results,
+    )
+
+    # no new child page created (already streamed), no sub-report re-posted
+    cr.ci.create_page.assert_not_called()
+    posted_ids = {c.args[1] for c in cr.ci.update_page_content.call_args_list}
+    assert posted_ids == {"1"}  # only the run page got written
+    main = [
+        c.args[2]
+        for c in cr.ci.update_page_content.call_args_list
+        if c.args[1] == "1"
+    ][-1]
+    assert 'ri:content-title="page - cell0"' in main
+
+
 def test_report_error_names_module_index_type_and_parameters():
     cr = _reporter()
     try:

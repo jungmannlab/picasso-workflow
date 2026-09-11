@@ -107,6 +107,14 @@ This file was started after v0.5.6; earlier history is in the git log.
   inlining every branch as a collapsible. The local HTML reporter keeps the
   single-file inline-collapsible layout (`ConfluenceReporter._render_branch_details`,
   overridden in `HTMLReporter`). The join/fan-in summary stays on the main page.
+- Branch child pages now populate **live**: each sub-module's report is posted
+  to its branch's child page the moment it finishes, so a running branch fills
+  in during execution instead of only after the whole step completes. The
+  `branch` module hands each finished sub-module to any reporter exposing
+  `open_branch_page`/`report_branch_submodule` (the ConfluenceReporter; the
+  workflow injects `autopicasso._branch_live_reporters`); the final `branch`
+  report then just links the already-populated pages. Reporters without the
+  hook (HTML) are unaffected and still report in one batch.
 - `summarize_branches`: new `plot_type` option (`box` default, or `violin`) for
   the `replicates` mode; both overlay the individual per-branch points. Violin
   falls back to a box plot when a category has too few points / no spread for a
