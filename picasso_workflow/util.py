@@ -230,6 +230,11 @@ class AbstractModuleCollection(abc.ABC):
             ``mode`` : {"auto", "replicates", "screen"}
                 Display mode; ``"auto"`` picks ``"screen"`` when ``x`` is
                 given, else ``"replicates"``.
+            ``plot_type`` : {"box", "violin"}
+                In ``"replicates"`` mode, whether to draw a box plot
+                (default) or a violin plot; both overlay the individual
+                per-branch points. Violin falls back to a box plot when a
+                category has too few points / no spread for a KDE.
             ``xlabel``, ``ylabel``, ``title``, ``filename`` : str
                 Figure labels and output filename.
         results : dict

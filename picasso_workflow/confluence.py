@@ -1425,6 +1425,23 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul>{rows}</ul>
         {parameter_text}
         {result_text}
+        """
+        # Embed the summary figure inline and upload it here, so it renders
+        # both as a top-level module and when this reporter is deferred
+        # (postpone_report=True) as a branch/join sub-report nested in the
+        # branch's collapsible -- the earlier "append image after posting"
+        # path was skipped on the deferred branch, dropping the graph.
+        if fp := results.get("fp_fig"):
+            fn = os.path.split(fp)[1]
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp)
+            except ConfluenceInterfaceError:
+                pass
+            text += (
+                '<ac:image ac:height="400">'
+                f'<ri:attachment ri:filename="{fn}" /></ac:image>'
+            )
+        text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
         if postpone_report:
@@ -1432,13 +1449,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
-        if fp := results.get("fp_fig"):
-            self.ci.upload_attachment(self.report_page_id, fp)
-            self.ci.update_page_content_with_image_attachment(
-                self.report_page_name,
-                self.report_page_id,
-                os.path.split(fp)[1],
-            )
 
     @module_decorator
     def zfit(

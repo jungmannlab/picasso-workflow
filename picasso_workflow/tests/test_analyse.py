@@ -2571,6 +2571,42 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "03_summarize_branches")
         )
 
+        # violin plot_type: two categories (target/reference), several
+        # replicate cells each -- must render without error.
+        parameters, results = self.ap.summarize_branches(
+            4,
+            {
+                "values": [
+                    {"NCR3-batch4": 0.42, "GFPNb": 0.61},
+                    {"NCR3-batch4": 0.55, "GFPNb": 0.70},
+                    {"NCR3-batch4": 0.33, "GFPNb": 0.88},
+                ],
+                "plot_type": "violin",
+                "ylabel": "labeling efficiency",
+            },
+        )
+        assert results["mode"] == "replicates"
+        assert set(results["stats"]) == {"NCR3-batch4", "GFPNb"}
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "04_summarize_branches")
+        )
+
+        # violin degenerate case (single replicate) falls back to a box
+        # plot instead of crashing on the KDE.
+        parameters, results = self.ap.summarize_branches(
+            5,
+            {
+                "values": [{"a": 0.4, "b": 0.6}],
+                "plot_type": "violin",
+                "ylabel": "m",
+            },
+        )
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "05_summarize_branches")
+        )
+
     def resolution_frc_spatial(self):
         """Is tested separately in tests/outpost_modules/test_resolution_frc.py"""
 

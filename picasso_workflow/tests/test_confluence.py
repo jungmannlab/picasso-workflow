@@ -1877,6 +1877,36 @@ def test_branch_submodules_do_not_leak_to_top_level():
     assert not cr.ci.update_page_content.called
 
 
+def test_summarize_branches_embeds_figure_when_deferred():
+    """As a branch join module, summarize_branches is rendered deferred
+    (postpone_report=True). Its summary figure must be uploaded and embedded
+    inline in the returned text -- otherwise the graph is dropped from the
+    branch collapsible (the earlier post-then-append-image path was skipped
+    when deferred)."""
+    cr = _reporter()
+    results = {
+        "start time": "now",
+        "duration": 4.12,
+        "success": True,
+        "mode": "replicates",
+        "fp_fig": "/some/dir/branch_summary.png",
+        "stats": {
+            "le": {"n": 3, "mean": 0.6, "std": 0.1, "min": 0.4, "max": 0.8}
+        },
+    }
+    text = cr.summarize_branches(0, {}, results, postpone_report=True)
+    # figure attachment uploaded and referenced inline (survives nesting)
+    cr.ci.upload_attachment.assert_called_once_with(
+        cr.report_page_id, "/some/dir/branch_summary.png"
+    )
+    assert '<ri:attachment ri:filename="branch_summary.png" />' in text
+    assert "ac:image" in text
+    # deferred: does not post to the page itself
+    assert not cr.ci.update_page_content.called
+    # embedded copy carries no layout wrapper to be hoisted out of the macro
+    assert "ac:image" in cr._strip_layout_wrappers(text)
+
+
 def test_report_error_names_module_index_type_and_parameters():
     cr = _reporter()
     try:

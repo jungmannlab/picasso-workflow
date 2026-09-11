@@ -1389,11 +1389,33 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:  # replicates: distribution of the metric across branches
             names = list(series.keys())
             data = [series[name] for name in names]
-            ax.boxplot(
-                [d for d in data if d] or [[0]],
-                positions=[k for k, d in enumerate(data) if d],
-                widths=0.5,
-            )
+            plot_type = parameters.get("plot_type", "box")
+            nonempty = [(k, d) for k, d in enumerate(data) if d]
+            positions = [k for k, _ in nonempty]
+            datasets = [d for _, d in nonempty]
+            drawn = False
+            if datasets and plot_type == "violin":
+                # gaussian_kde needs >= 2 points with non-zero spread per
+                # category; fall back to a boxplot if any category can't
+                # support a KDE (e.g. a single replicate or identical values).
+                try:
+                    parts = ax.violinplot(
+                        datasets,
+                        positions=positions,
+                        widths=0.6,
+                        showmeans=True,
+                        showextrema=True,
+                    )
+                    for body in parts["bodies"]:
+                        body.set_alpha(0.4)
+                    drawn = True
+                except (ValueError, np.linalg.LinAlgError):
+                    logger.warning(
+                        "summarize_branches: violin plot failed (too few "
+                        "points / no spread); falling back to a boxplot."
+                    )
+            if datasets and not drawn:
+                ax.boxplot(datasets, positions=positions, widths=0.5)
             for pos, vals in enumerate(data):
                 if not vals:
                     continue
