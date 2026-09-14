@@ -12,6 +12,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- `undrift_from_picked` now accepts a picasso **pick-region `.yaml`**
+  (`Centers` + `Diameter`) in addition to an hdf5 of grouped picked locs: given
+  a yaml it applies the pick regions to the current `self.locs` to build the
+  grouped picks, then undrifts. This lets `pick_origami`'s pick outputs
+  (`fp_picks_origami` / `fp_picks_dockingsites`) feed straight into
+  `undrift_from_picked` (its grouped-hdf5 outputs `fp_picked_locs` /
+  `fp_docking_site_locs` continue to work as before). A clear error is raised
+  if the yaml has no pick centers.
+
 - New single-dataset workflow module `pick_origami`: design-aware picking of
   DNA-origami structures. Given the designed geometry — a picasso design
   `.yaml`, a regular grid (`{n_rows, n_cols, spacing_nm, angle}`), or an

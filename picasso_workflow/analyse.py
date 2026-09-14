@@ -14337,23 +14337,60 @@ class AutoPicasso(util.AbstractModuleCollection):
             Required keys:
 
             ``fp_picked_locs`` : str
-                Filepath to the picked locs to undrift from (an hdf5 file of
-                locs with a ``'group'`` column describing the picks).
+                Filepath to the picks to undrift from. Either an hdf5 file of
+                locs with a ``'group'`` column describing the picks (e.g.
+                ``pick_origami``'s ``fp_picked_locs`` /
+                ``fp_docking_site_locs``), or a picasso pick-region ``.yaml``
+                (``Centers`` + ``Diameter``, e.g. ``pick_origami``'s
+                ``fp_picks_origami`` / ``fp_picks_dockingsites``) which is
+                applied to ``self.locs`` to build the grouped picks.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         pixelsize = self.pixelsize
-        picked_locs, info = io.load_locs(parameters["fp_picked_locs"])
-        # with open(parameters["fp_picked_locs"], "rb") as f:
-        #     result = pickle.load(f)
+        fp_picked = parameters["fp_picked_locs"]
 
-        if not isinstance(picked_locs, list):
-            # picked locs are saved as one recarray, with the 'group' the pick
-            groups = np.unique(picked_locs["group"])
+        if str(fp_picked).lower().endswith((".yaml", ".yml")):
+            # A picasso pick-region file (Centers + Diameter). Apply it to the
+            # current locs to build grouped picked locs (one group per pick).
+            with open(fp_picked, "r") as f:
+                regions = yaml.safe_load(f)
+            centers = regions["Centers"]
+            if not centers:
+                raise ValueError(
+                    f"{fp_picked}: no pick centers to undrift from (the "
+                    "upstream picker accepted no structures)."
+                )
+            if "Diameter (nm)" in regions:
+                pick_diameter = regions["Diameter (nm)"] / pixelsize
+            elif "Diameter" in regions:
+                pick_diameter = regions["Diameter"]  # already in camera px
+            else:
+                raise ValueError(
+                    f"{fp_picked}: pick-region yaml needs a 'Diameter (nm)' "
+                    "or 'Diameter' entry"
+                )
+            picked_df = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                centers,
+                pick_diameter=pick_diameter,
+                add_group=True,
+            )
+            groups = np.unique(picked_df["group"])
             picked_locs = [
-                picked_locs[picked_locs["group"] == group] for group in groups
+                picked_df[picked_df["group"] == group] for group in groups
             ]
+        else:
+            picked_locs, info = io.load_locs(fp_picked)
+            if not isinstance(picked_locs, list):
+                # saved as one recarray, with 'group' identifying the pick
+                groups = np.unique(picked_locs["group"])
+                picked_locs = [
+                    picked_locs[picked_locs["group"] == group]
+                    for group in groups
+                ]
         # print(result)
         # picked_locs, picked_info = io.load_locs(parameters["fp_picked_locs"])
         self.locs, self.info, drift = picasso_outpost._undrift_from_picked(

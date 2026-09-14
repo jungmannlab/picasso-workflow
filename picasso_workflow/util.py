@@ -1946,8 +1946,10 @@ class AbstractModuleCollection(abc.ABC):
             Required keys:
 
             ``fp_picked_locs`` : str
-                Filepath to the picked locs to undrift from (an hdf5 file of
-                locs with a ``'group'`` column describing the picks).
+                Filepath to the picks to undrift from. Either an hdf5 file of
+                locs with a ``'group'`` column describing the picks, or a
+                picasso pick-region ``.yaml`` (``Centers`` + ``Diameter``),
+                which is applied to ``self.locs`` to build the grouped picks.
         results : dict
             Module results (see class docstring).
         """

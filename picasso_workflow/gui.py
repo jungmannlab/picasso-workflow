@@ -6155,8 +6155,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "fp_picked_locs": {
                 "type": ["numpy.ndarray", "str"],
-                "description": "Picked localization coordinates or file path",
-                "extensions": [".hdf5", ".txt"],
+                "description": (
+                    "Picks to undrift from: an hdf5 of grouped picked locs, "
+                    "or a picasso pick-region .yaml (Centers + Diameter) "
+                    "applied to the current locs"
+                ),
+                "extensions": [".hdf5", ".yaml", ".txt"],
                 "required": True,
             },
             "interpolation_method": {

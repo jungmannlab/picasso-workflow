@@ -2341,26 +2341,86 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_find_gold"))
 
+    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
     @patch("picasso_workflow.analyse.picasso_outpost._undrift_from_picked")
     @patch("picasso_workflow.analyse.io.save_locs")
     @patch("picasso_workflow.analyse.io.load_locs")
     def undrift_from_picked(
-        self, mock_load_locs, mock_save_locs, mock_undrift
+        self,
+        mock_load_locs,
+        mock_save_locs,
+        mock_undrift,
+        mock_picked_locs,
     ):
-        # parameters = {"fp_picked_locs": "fp"}
-        # mock_undrift.return_value = (
-        #     "locs",
-        #     [{"name": "info"}],
-        #     ([2, 4, 3], [3, 2, 1]),
-        # )
-        # mock_save_locs.return_value = None
-        # mock_load_locs.return_value = "locs", [{"name": "info"}]
-        # parameters, results = self.ap.undrift_from_picked(0, parameters)
+        """A pick-region .yaml is applied to self.locs (not opened as hdf5)."""
+        import yaml as _yaml
 
-        # shutil.rmtree(
-        #     os.path.join(self.results_folder, "00_undrift_from_picked")
-        # )
-        pass
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (i, 10.0, 10.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, i)
+                    for i in range(6)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        self.ap.info = [
+            {"Width": 64, "Height": 64, "Frames": 6, "Pixelsize": 130}
+        ]
+
+        # picked_locs (mocked) returns grouped locs: 2 picks (groups 0, 1)
+        grouped = pd.DataFrame(
+            np.rec.array(
+                [
+                    (0, 10.0, 10.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, 1, 0),
+                    (1, 20.0, 20.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, 1, 1),
+                ],
+                dtype=self.locs_dtype + [("group", "<i4")],
+            )
+        )
+        mock_picked_locs.return_value = grouped
+        mock_undrift.return_value = (
+            self.ap.locs,
+            self.ap.info,
+            ([0.0, 0.1], [0.0, 0.2]),
+        )
+        self.ap._plot_drift = MagicMock()
+
+        # write a picasso pick-region yaml (Centers + Diameter)
+        fp_yaml = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            "..",
+            "temp",
+            "picks_undrift.yaml",
+        )
+        os.makedirs(os.path.dirname(fp_yaml), exist_ok=True)
+        with open(fp_yaml, "w") as f:
+            _yaml.dump(
+                {
+                    "Centers": [[10.0, 10.0], [20.0, 20.0]],
+                    "Diameter (nm)": 91.0,
+                    "Shape": "Circle",
+                },
+                f,
+            )
+
+        parameters = {"fp_picked_locs": fp_yaml}
+        parameters, results = self.ap.undrift_from_picked(0, parameters)
+
+        # yaml path: picked_locs applied to self.locs; io.load_locs NOT used
+        assert mock_picked_locs.called
+        assert not mock_load_locs.called
+        # centers forwarded, diameter converted nm -> camera px (91/130)
+        call = mock_picked_locs.call_args
+        assert call[0][2] == [[10.0, 10.0], [20.0, 20.0]]
+        assert abs(call[1]["pick_diameter"] - 91.0 / 130) < 1e-6
+        assert mock_undrift.called
+
+        os.remove(fp_yaml)
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_undrift_from_picked")
+        )
 
     @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
     def filter_locs(self):
