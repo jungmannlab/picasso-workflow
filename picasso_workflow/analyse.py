@@ -14094,6 +14094,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["n_candidates"] = pick_result["n_candidates"]
         results["n_registered"] = pick_result.get("n_registered")
         results["n_accepted"] = pick_result["n_accepted"]
+        results["funnel"] = pick_result.get("funnel")
         results["geometry_table"] = geometry_table
 
         rcode = generate_random_code(6)
@@ -14197,11 +14198,24 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_geometry_table"] = fp_geometry_table
 
         # --- 5. phase-space diagnostic figure --------------------------
+        # Candidate cloud (black) with accepted structures overlaid (red),
+        # so one can see where the accepted picks sit in nlocs/rmsd space.
         nlocs = np.asarray(pick_result["candidate_nlocs"])
         rmsds = np.asarray(pick_result["candidate_rmsds"])
+        acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+        acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
         fig, ax = plt.subplots()
         if len(nlocs) and len(nlocs) == len(rmsds):
             ax.scatter(nlocs, rmsds, color="k", alpha=0.2, label="candidates")
+        if len(acc_nlocs) and len(acc_nlocs) == len(acc_rmsds):
+            ax.scatter(
+                acc_nlocs,
+                acc_rmsds,
+                color="r",
+                edgecolors="k",
+                s=60,
+                label="accepted",
+            )
         ax.set_xlabel("# localizations in footprint")
         ax.set_ylabel("root mean square distance in footprint")
         ax.set_title(

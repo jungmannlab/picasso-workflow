@@ -4852,6 +4852,29 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.2f} s</li>
         </ul>
+        """
+
+        # rejection funnel: how many candidates each stage removed
+        funnel = results.get("funnel")
+        if funnel:
+            text += f"""
+        Rejection funnel:
+        <ul>
+        <li>Candidates: {funnel.get("n_candidates", "?")}</li>
+        <li>Rejected - no localizations: {funnel.get("no_locs", "?")}</li>
+        <li>Rejected - too few resolved sites (pre-registration):
+        {funnel.get("too_few_sites", "?")}</li>
+        <li>Rejected - missing sites (post-registration):
+        {funnel.get("rejected_missing_sites", "?")}</li>
+        <li>Rejected - RMSE-vs-design too high:
+        {funnel.get("rejected_rmse", "?")}</li>
+        <li>Rejected - spacing off design:
+        {funnel.get("rejected_spacing", "?")}</li>
+        <li><strong>Accepted: {funnel.get("accepted", "?")}</strong></li>
+        </ul>
+        """
+
+        text += f"""
         {parameter_text}
         {result_text}
         """

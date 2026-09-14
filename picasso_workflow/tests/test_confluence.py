@@ -864,9 +864,19 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "duration": 4.12,
             "success": True,
             "n_candidates": 5,
+            "n_registered": 3,
             "n_accepted": 2,
             "n_sites_expected": 12,
             "grid_spacing_nm": 20.0,
+            "funnel": {
+                "n_candidates": 5,
+                "no_locs": 0,
+                "too_few_sites": 1,
+                "rejected_missing_sites": 1,
+                "rejected_rmse": 1,
+                "rejected_spacing": 0,
+                "accepted": 2,
+            },
             "geometry_table": [
                 {
                     "center_x_px": 10.0,

@@ -5516,7 +5516,7 @@ def _icp_refine(src, template, rot, trans, gate, iters=5):
     return rot, trans, rows, cols, rmse
 
 
-def accept_candidate(
+def classify_candidate(
     reg,
     n_sites_expected,
     missing_sites_allowed=2,
@@ -5524,7 +5524,10 @@ def accept_candidate(
     grid_spacing_nm=None,
     max_rmse_nm=None,
 ):
-    """Decide whether a registered candidate is an accepted origami.
+    """Classify a registered candidate as accepted or by rejection reason.
+
+    Applies the acceptance criteria in order and returns the first one that
+    fails, so the caller can build a rejection funnel.
 
     Parameters
     ----------
@@ -5544,20 +5547,51 @@ def accept_candidate(
 
     Returns
     -------
-    bool
-        Whether the candidate is accepted.
+    str
+        ``"accepted"``, or one of ``"missing_sites"`` / ``"rmse"`` /
+        ``"spacing"`` naming the first criterion that rejected it.
     """
     if reg["n_resolved"] < n_sites_expected - missing_sites_allowed:
-        return False
+        return "missing_sites"
     if max_rmse_nm is not None and reg["rmse_nm"] > max_rmse_nm:
-        return False
+        return "rmse"
     if grid_spacing_nm is not None and grid_spacing_nm > 0:
         spacing = reg["mean_spacing_nm"]
         if spacing > 0:
             rel = abs(spacing - grid_spacing_nm) / grid_spacing_nm
             if rel > spacing_tol:
-                return False
-    return True
+                return "spacing"
+    return "accepted"
+
+
+def accept_candidate(
+    reg,
+    n_sites_expected,
+    missing_sites_allowed=2,
+    spacing_tol=0.3,
+    grid_spacing_nm=None,
+    max_rmse_nm=None,
+):
+    """Decide whether a registered candidate is an accepted origami.
+
+    Thin wrapper over :func:`classify_candidate` (see it for the criteria).
+
+    Returns
+    -------
+    bool
+        Whether the candidate is accepted.
+    """
+    return (
+        classify_candidate(
+            reg,
+            n_sites_expected,
+            missing_sites_allowed=missing_sites_allowed,
+            spacing_tol=spacing_tol,
+            grid_spacing_nm=grid_spacing_nm,
+            max_rmse_nm=max_rmse_nm,
+        )
+        == "accepted"
+    )
 
 
 def _candidate_centers_footprint(
@@ -5722,6 +5756,19 @@ def pick_origami(
             "(expected 'footprint' or 'cluster_of_clusters')"
         )
 
+    # Per-candidate phase-space coordinates (nlocs, rmsd), aligned to
+    # ``candidates``, so accepted structures can be overlaid on the
+    # candidate cloud. In footprint mode the selected picks are exactly
+    # ``labels == 0`` in candidate order; cluster-of-clusters has no such
+    # per-candidate mapping, so those coordinates are left as NaN.
+    cand_point_nlocs = np.full(len(candidates), np.nan)
+    cand_point_rmsds = np.full(len(candidates), np.nan)
+    if candidate_method == "footprint":
+        sel = np.asarray(labels) == 0
+        if int(np.count_nonzero(sel)) == len(candidates):
+            cand_point_nlocs = np.asarray(nlocs)[sel]
+            cand_point_rmsds = np.asarray(rmsds)[sel]
+
     # A candidate can only be accepted if it resolves at least this many
     # sites; registration can match at most len(site_centers) of them. So
     # skip the expensive rotation-sweep registration (~360 seeds/candidate)
@@ -5736,7 +5783,20 @@ def pick_origami(
         f">= {min_required_sites} resolved sites."
     )
 
+    # Rejection funnel: how many candidates each stage removes.
+    funnel = {
+        "n_candidates": len(candidates),
+        "no_locs": 0,  # footprint contained no localizations
+        "too_few_sites": 0,  # sub-clustered below min_required_sites
+        "rejected_missing_sites": 0,  # registered but too few matched
+        "rejected_rmse": 0,  # RMSE-vs-design too high
+        "rejected_spacing": 0,  # resolved spacing off design
+        "accepted": 0,
+    }
+
     accepted_centers_px = []
+    accepted_nlocs = []
+    accepted_rmsds = []
     docking_site_centers_px = []
     geometry_table = []
     n_registered = 0
@@ -5749,9 +5809,12 @@ def pick_origami(
             "n_candidates": 0,
             "n_registered": 0,
             "n_accepted": 0,
+            "funnel": funnel,
             "candidate_nlocs": nlocs,
             "candidate_rmsds": rmsds,
             "candidate_labels": labels,
+            "accepted_nlocs": np.empty(0),
+            "accepted_rmsds": np.empty(0),
         }
 
     # Pick all candidate footprints in one pass: picked_locs builds the
@@ -5770,6 +5833,7 @@ def pick_origami(
     for cand_idx, (cx, cy) in enumerate(candidates):
         foot_locs = foot_groups.get(cand_idx)
         if foot_locs is None or len(foot_locs) == 0:
+            funnel["no_locs"] += 1
             continue
         xy_nm = (
             np.column_stack(
@@ -5783,6 +5847,7 @@ def pick_origami(
         # cheap pre-filter: too few resolved sites -> cannot be accepted,
         # so don't pay for the full registration sweep.
         if len(site_centers_nm) < min_required_sites:
+            funnel["too_few_sites"] += 1
             continue
         n_registered += 1
         reg = register_to_template(
@@ -5791,7 +5856,7 @@ def pick_origami(
             allow_mirror=allow_mirror,
             match_gate_nm=match_gate_nm,
         )
-        accepted = accept_candidate(
+        verdict = classify_candidate(
             reg,
             template.n_sites_expected,
             missing_sites_allowed=missing_sites_allowed,
@@ -5799,6 +5864,15 @@ def pick_origami(
             grid_spacing_nm=spacing_nm,
             max_rmse_nm=max_rmse_nm,
         )
+        accepted = verdict == "accepted"
+        funnel[
+            {
+                "accepted": "accepted",
+                "missing_sites": "rejected_missing_sites",
+                "rmse": "rejected_rmse",
+                "spacing": "rejected_spacing",
+            }[verdict]
+        ] += 1
         geometry_table.append(
             {
                 "center_x_px": float(cx),
@@ -5811,18 +5885,25 @@ def pick_origami(
                 "rmse_nm": float(reg["rmse_nm"]),
                 "orientation_deg": float(reg["orientation_deg"]),
                 "mirror": bool(reg["mirror"]),
+                "nlocs": float(cand_point_nlocs[cand_idx]),
+                "rejection_reason": "" if accepted else verdict,
                 "accepted": bool(accepted),
             }
         )
         if accepted:
             accepted_centers_px.append((float(cx), float(cy)))
+            accepted_nlocs.append(cand_point_nlocs[cand_idx])
+            accepted_rmsds.append(cand_point_rmsds[cand_idx])
             matched_obs_nm = site_centers_nm[reg["matched_observed_indices"]]
             for px in matched_obs_nm / pixelsize:
                 docking_site_centers_px.append((float(px[0]), float(px[1])))
 
     logger.debug(
-        f"pick_origami: {n_registered} candidates registered, "
-        f"{len(accepted_centers_px)} accepted."
+        f"pick_origami rejection funnel: {funnel['n_candidates']} candidates "
+        f"-> {funnel['no_locs']} empty, {funnel['too_few_sites']} too few "
+        f"sites, {funnel['rejected_missing_sites']} missing-sites, "
+        f"{funnel['rejected_rmse']} rmse, {funnel['rejected_spacing']} "
+        f"spacing -> {funnel['accepted']} accepted."
     )
     return {
         "accepted_centers_px": accepted_centers_px,
@@ -5831,9 +5912,12 @@ def pick_origami(
         "n_candidates": len(candidates),
         "n_registered": n_registered,
         "n_accepted": len(accepted_centers_px),
+        "funnel": funnel,
         "candidate_nlocs": nlocs,
         "candidate_rmsds": rmsds,
         "candidate_labels": labels,
+        "accepted_nlocs": np.asarray(accepted_nlocs),
+        "accepted_rmsds": np.asarray(accepted_rmsds),
     }
 
 

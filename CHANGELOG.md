@@ -57,6 +57,17 @@ This file was started after v0.5.6; earlier history is in the git log.
   accepted). Candidate/registration counts are logged, and the result now
   reports `n_registered` alongside `n_candidates` / `n_accepted`.
 
+- `pick_origami` now reports a rejection **funnel** so it is clear which filter
+  removed how many candidates: counts for no-localizations, too-few-sites
+  (pre-registration prefilter), and post-registration rejections split by
+  missing-sites / RMSE / spacing, down to accepted (the buckets sum to the
+  candidate count). Exposed as `results["funnel"]`, logged, and rendered in the
+  Confluence/HTML report. The nlocs/rmsd phase-space diagnostic figure now
+  overlays the accepted structures (red) on the candidate cloud, and the
+  geometry table gains per-structure `nlocs` and `rejection_reason` columns. A
+  new `classify_candidate` helper returns the first failing criterion;
+  `accept_candidate` is now a thin boolean wrapper over it.
+
 ### Changed
 
 - Every Confluence module reporter now routes its final output through a single

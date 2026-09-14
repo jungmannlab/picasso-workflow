@@ -1134,6 +1134,53 @@ def test_geometry_recovery_from_simulated_locs_is_idempotent():
     assert reg1["rmse_nm"] == reg2["rmse_nm"]
 
 
+def test_classify_candidate_reasons_and_ordering():
+    """classify_candidate names the first failing criterion, in order
+    missing_sites -> rmse -> spacing, and accept_candidate mirrors it."""
+
+    def reg(n, rmse, spacing):
+        return {
+            "n_resolved": n,
+            "rmse_nm": rmse,
+            "mean_spacing_nm": spacing,
+        }
+
+    kw = dict(
+        missing_sites_allowed=2,
+        spacing_tol=0.3,
+        grid_spacing_nm=20.0,
+        max_rmse_nm=3.0,
+    )
+    assert (
+        picasso_outpost.classify_candidate(reg(12, 1.0, 20.0), 12, **kw)
+        == "accepted"
+    )
+    assert (
+        picasso_outpost.classify_candidate(reg(9, 0.1, 20.0), 12, **kw)
+        == "missing_sites"
+    )
+    assert (
+        picasso_outpost.classify_candidate(reg(12, 5.0, 20.0), 12, **kw)
+        == "rmse"
+    )
+    assert (
+        picasso_outpost.classify_candidate(reg(12, 1.0, 30.0), 12, **kw)
+        == "spacing"
+    )
+    # ordering: missing sites beats rmse beats spacing
+    assert (
+        picasso_outpost.classify_candidate(reg(5, 99.0, 99.0), 12, **kw)
+        == "missing_sites"
+    )
+    assert (
+        picasso_outpost.classify_candidate(reg(12, 5.0, 30.0), 12, **kw)
+        == "rmse"
+    )
+    # accept_candidate is the boolean projection of classify_candidate
+    assert picasso_outpost.accept_candidate(reg(12, 1.0, 20.0), 12, **kw)
+    assert not picasso_outpost.accept_candidate(reg(9, 0.1, 20.0), 12, **kw)
+
+
 def test_kinetics_window_brackets_matched_simulation():
     """The kinetics nlocs window brackets the quantile window of a
     matched simulation."""
