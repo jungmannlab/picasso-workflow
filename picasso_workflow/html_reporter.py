@@ -588,6 +588,12 @@ class HTMLReporter(ConfluenceReporter):
         Start from an empty report (used when regenerating). Default is False.
     """
 
+    # A single-file report has no child pages: opt out of live branch
+    # streaming so the branch module reports it in one batch (inline
+    # collapsibles) via the _render_branch_details override below, instead of
+    # both streaming into and batch-rendering the same report.html.
+    supports_live_branch_pages = False
+
     def __init__(
         self, report_dir: str, report_name: str, fresh=False, **kwargs
     ):

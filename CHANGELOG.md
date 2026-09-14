@@ -12,6 +12,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- The single-file HTML reporter is no longer mistaken for a live branch
+  reporter. `HTMLReporter` subclasses `ConfluenceReporter` and so *inherits*
+  the `open_branch_page`/`report_branch_submodule` hooks; the branch loop's
+  `hasattr` check therefore streamed each branch sub-report into `report.html`
+  *and* re-rendered it in the batch inline-collapsible pass (duplicated
+  sections), while `create_page` overwrote the report title with the last
+  branch's label. Reporters now advertise a `supports_live_branch_pages` class
+  flag (True on `ConfluenceReporter`, False on `HTMLReporter`) and the branch
+  loop filters on it.
 - `branch` sub-reports no longer leak duplicated sections onto the report page.
   Sixteen module reporters accepted a `postpone_report` argument but ignored it
   and always posted, so when a branch embedded one (e.g. `create_mask2`,

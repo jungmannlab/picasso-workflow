@@ -1899,7 +1899,7 @@ def test_summarize_branches_embeds_figure_when_deferred():
     cr.ci.upload_attachment.assert_called_once_with(
         cr.report_page_id, "/some/dir/branch_summary.png"
     )
-    assert '<ri:attachment ri:filename="branch_summary.png" />' in text
+    assert 'ri:filename="branch_summary.png"' in text
     assert "ac:image" in text
     # deferred: does not post to the page itself
     assert not cr.ci.update_page_content.called

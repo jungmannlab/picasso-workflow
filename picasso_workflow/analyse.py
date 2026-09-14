@@ -1009,14 +1009,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         # Live reporting: a reporter that supports per-branch child pages (the
         # ConfluenceReporter) can be handed each sub-module as it finishes, so
         # a branch's child page populates during execution instead of only
-        # after the whole branch step completes. Reporters without the hook
-        # (e.g. the single-file HTML reporter) report the branch in one batch
-        # afterwards, unchanged.
+        # after the whole branch step completes. Reporters that opt out (the
+        # single-file HTML reporter, which *inherits* the hook methods but
+        # cannot host child pages) report the branch in one batch afterwards.
         live_reporters = [
             rep
             for rep in (getattr(self, "_branch_live_reporters", None) or [])
-            if hasattr(rep, "open_branch_page")
-            and hasattr(rep, "report_branch_submodule")
+            if getattr(rep, "supports_live_branch_pages", False)
         ]
 
         branch_results = []

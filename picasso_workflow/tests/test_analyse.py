@@ -2519,6 +2519,8 @@ class TestAnalyseModules(unittest.TestCase):
         calls = []
 
         class FakeLiveReporter:
+            supports_live_branch_pages = True
+
             def open_branch_page(self, label):
                 calls.append(("open", label))
                 return ("title-" + label, "id-" + label)
@@ -2549,6 +2551,37 @@ class TestAnalyseModules(unittest.TestCase):
         # a branch's page is opened before any of its sub-modules stream
         assert calls[0] == ("open", "a")
         assert calls[1][:2] == ("sub", "title-a")
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_branch_skips_reporter_opting_out_of_live_pages(self):
+        """A reporter that has the hook methods but sets
+        ``supports_live_branch_pages = False`` must NOT be streamed to. The
+        single-file HTMLReporter is exactly this case -- it *inherits*
+        open_branch_page / report_branch_submodule from ConfluenceReporter, so
+        a plain hasattr() check would wrongly stream branch sub-reports into
+        its one report file (and re-render them in batch)."""
+        calls = []
+
+        class OptedOutReporter:
+            supports_live_branch_pages = False
+
+            def open_branch_page(self, label):
+                calls.append(("open", label))
+                return ("t", "id")
+
+            def report_branch_submodule(self, *a):
+                calls.append(("sub",))
+
+        self.ap._branch_live_reporters = [OptedOutReporter()]
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 1,
+            "branch_labels": ["a"],
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [],
+        }
+        self.ap.branch(2, parameters)
+        assert calls == []  # opted-out reporter never streamed to
         shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
 
     def summarize_branches(self):

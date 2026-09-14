@@ -157,6 +157,11 @@ def test_html_reporter_branch_stays_inline_collapsible(tmp_path):
     keeps each branch as an inline collapsible; no child report files."""
     report_dir = str(tmp_path / "rep")
     reporter = HTMLReporter(report_dir, "Run")
+    # It inherits the live-streaming hooks from ConfluenceReporter, so it must
+    # opt out via the capability flag or the branch loop would stream into
+    # (and corrupt) the single report file.
+    assert hasattr(reporter, "open_branch_page")
+    assert reporter.supports_live_branch_pages is False
     sub = {
         "start time": "t0",
         "end time": "t1",

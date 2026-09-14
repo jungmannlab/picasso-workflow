@@ -441,6 +441,13 @@ class ConfluenceReporter(AbstractModuleCollection):
     module's parameters and results on the report's Confluence page.
     """
 
+    # Whether the branch module may stream each sub-module to a live child
+    # page via open_branch_page / report_branch_submodule. True here; the
+    # single-file HTMLReporter (a subclass, so it *inherits* those methods)
+    # sets this False so it is not mistaken for a live reporter and does not
+    # both stream into and batch-render the one report file.
+    supports_live_branch_pages = True
+
     def __init__(
         self,
         base_url: str,
@@ -1098,28 +1105,28 @@ class ConfluenceReporter(AbstractModuleCollection):
         )
 
     def _create_branch_child_page(self, label):
-        """Create (or reuse) a branch's child page and post its header.
+        """Create (or reuse) a branch's child page with its header.
 
         Returns ``(title, page_id)``. The page nests under the run page and
-        opens with a heading linking back to it.
+        opens with a heading linking back to it. The header is passed as the
+        create body so no extra round-trip is needed; on a resumed run the
+        page already exists and is reused as-is.
         """
         title = self._branch_child_page_title(label)
-        try:
-            page_id = self.ci.create_page(
-                title, body_text="", parent_id=self.report_page_id
-            )
-        except ConfluenceInterfaceError:
-            # a resumed run reuses the existing child page
-            page_id, _ = self.ci.get_page_properties(title)
-        self.ci.update_page_content(
-            title,
-            page_id,
+        header = (
             '<ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>'
             f"<p><strong>Branch: {html.escape(str(label))}</strong> &mdash; "
             "part of "
             f"{self._page_link(self.report_page_name, self.report_page_name)}"
-            "</p></ac:layout-cell></ac:layout-section></ac:layout>",
+            "</p></ac:layout-cell></ac:layout-section></ac:layout>"
         )
+        try:
+            page_id = self.ci.create_page(
+                title, body_text=header, parent_id=self.report_page_id
+            )
+        except ConfluenceInterfaceError:
+            # a resumed run reuses the existing child page
+            page_id, _ = self.ci.get_page_properties(title)
         return title, page_id
 
     def open_branch_page(self, label):
@@ -1622,15 +1629,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         # branch's collapsible -- the earlier "append image after posting"
         # path was skipped on the deferred branch, dropping the graph.
         if fp := results.get("fp_fig"):
-            fn = os.path.split(fp)[1]
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp)
-            except ConfluenceInterfaceError:
-                pass
-            text += (
-                '<ac:image ac:height="400">'
-                f'<ri:attachment ri:filename="{fn}" /></ac:image>'
-            )
+            text += self.insert_image(fp, height=400)
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -5288,14 +5287,15 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_name, self.report_page_id, text
             )
 
-    def insert_image(self, fp_fig, postpone_report=False):
+    def insert_image(self, fp_fig, postpone_report=False, height=None):
         try:
             self.ci.upload_attachment(self.report_page_id, fp_fig)
         except ConfluenceInterfaceError:
             pass
         _, fn_fig = os.path.split(fp_fig)
+        size = f'ac:height="{height}"' if height else 'ac:width="500"'
         text = f"""
-            <ac:image ac:width="500"><ri:attachment
+            <ac:image {size}><ri:attachment
             ri:filename="{fn_fig}" />
             </ac:image>"""
         return text
