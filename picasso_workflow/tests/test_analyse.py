@@ -2199,27 +2199,30 @@ class TestAnalyseModules(unittest.TestCase):
         assert abs(results["grid_spacing_nm"] - 20.0) < 1e-6
         assert results["n_candidates"] == 5
         assert results["n_accepted"] == 2
-        assert len(results["geometry_table"]) == 1
+        # the full per-structure table is on disk, not carried in results;
+        # results holds only an aggregate overview of accepted structures
+        assert "geometry_table" not in results
+        assert results["accepted_overview"]["n_accepted"] == 1
 
         # picasso-compatible outputs + geometry table were written
         for key in (
-            "fp_picks_yaml",
-            "fp_docking_yaml",
+            "fp_picks_origami",
+            "fp_picks_dockingsites",
             "fp_picked_locs",
             "fp_docking_site_locs",
             "fp_geometry_table",
             "fp_phasespace",
         ):
             assert key in results, f"missing result key {key}"
-        assert os.path.exists(results["fp_picks_yaml"])
-        assert os.path.exists(results["fp_docking_yaml"])
+        assert os.path.exists(results["fp_picks_origami"])
+        assert os.path.exists(results["fp_picks_dockingsites"])
         assert os.path.exists(results["fp_geometry_table"])
         assert os.path.exists(results["fp_phasespace"])
 
         # the picks yaml is in picasso pick format (Centers + Diameter)
         import yaml as _yaml
 
-        with open(results["fp_picks_yaml"]) as f:
+        with open(results["fp_picks_origami"]) as f:
             picks = _yaml.safe_load(f)
         assert len(picks["Centers"]) == 2
         assert "Diameter (nm)" in picks

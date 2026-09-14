@@ -4883,37 +4883,28 @@ class ConfluenceReporter(AbstractModuleCollection):
         # only (the full per-structure table is saved to geometry_table.csv in
         # the module results folder - a per-row dump here would swamp the
         # report once filters are relaxed).
-        accepted_rows = [
-            row
-            for row in (results.get("geometry_table") or [])
-            if row.get("accepted")
-        ]
-        if accepted_rows:
+        overview = results.get("accepted_overview")
+        if overview and overview.get("n_accepted"):
 
             def _stat(key):
-                vals = np.asarray(
-                    [row.get(key, np.nan) for row in accepted_rows],
-                    dtype=float,
-                )
-                vals = vals[np.isfinite(vals)]
-                if len(vals) == 0:
+                s = overview.get(key)
+                if not s:
                     return "n/a"
                 return (
-                    f"{np.mean(vals):.2f} &plusmn; {np.std(vals):.2f} "
-                    f"(min {np.min(vals):.2f}, max {np.max(vals):.2f})"
+                    f"{s['mean']:.2f} &plusmn; {s['std']:.2f} "
+                    f"(min {s['min']:.2f}, max {s['max']:.2f})"
                 )
 
-            n_mirror = sum(1 for row in accepted_rows if row.get("mirror"))
+            n_acc = overview["n_accepted"]
             text += f"""
-        Accepted structures overview ({len(accepted_rows)} structures;
+        Accepted structures overview ({n_acc} structures;
         full per-structure table in <code>geometry_table.csv</code>):
         <ul>
         <li>Resolved sites: {_stat("n_resolved_sites")}</li>
-        <li>Missing sites: {_stat("n_missing_sites")}</li>
         <li>Spacing (nm): {_stat("mean_spacing_nm")}</li>
         <li>RMSE-vs-design (nm): {_stat("rmse_nm")}</li>
         <li>Orientation (deg): {_stat("orientation_deg")}</li>
-        <li>Mirrored: {n_mirror} / {len(accepted_rows)}</li>
+        <li>Mirrored: {overview.get("n_mirrored", 0)} / {n_acc}</li>
         </ul>
         """
 

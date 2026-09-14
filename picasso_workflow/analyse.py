@@ -132,6 +132,52 @@ def generate_random_code(length):
     return random_code
 
 
+def _summarize_accepted_structures(geometry_table):
+    """Aggregate per-structure geometry over the accepted structures.
+
+    Reduces the (potentially large) per-candidate geometry table to a small,
+    serialisable overview for the report; the full table is kept only on disk
+    (``geometry_table.csv``).
+
+    Parameters
+    ----------
+    geometry_table : list of dict
+        Per-structure geometry rows (see ``picasso_outpost.pick_origami``).
+
+    Returns
+    -------
+    dict
+        ``n_accepted``, ``n_mirrored``, and ``mean``/``std``/``min``/``max``
+        for ``n_resolved_sites``, ``mean_spacing_nm``, ``rmse_nm`` and
+        ``orientation_deg`` over the accepted structures.
+    """
+    accepted = [row for row in (geometry_table or []) if row.get("accepted")]
+    overview = {
+        "n_accepted": len(accepted),
+        "n_mirrored": sum(1 for row in accepted if row.get("mirror")),
+    }
+    for key in (
+        "n_resolved_sites",
+        "mean_spacing_nm",
+        "rmse_nm",
+        "orientation_deg",
+    ):
+        vals = np.asarray(
+            [row.get(key, np.nan) for row in accepted], dtype=float
+        )
+        vals = vals[np.isfinite(vals)]
+        if len(vals):
+            overview[key] = {
+                "mean": float(np.mean(vals)),
+                "std": float(np.std(vals)),
+                "min": float(np.min(vals)),
+                "max": float(np.max(vals)),
+            }
+        else:
+            overview[key] = None
+    return overview
+
+
 # picasso 0.11 fitting methods whose base name has a plain ``-gpu`` variant.
 # GPU is orthogonal to the model choice, so when a GPU fitter is configured
 # these bases are routed to their ``-gpu`` counterpart (see ``localize``).
@@ -14095,7 +14141,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["n_registered"] = pick_result.get("n_registered")
         results["n_accepted"] = pick_result["n_accepted"]
         results["funnel"] = pick_result.get("funnel")
-        results["geometry_table"] = geometry_table
+        # Aggregate overview over the accepted structures (for the report).
+        # The full per-structure table is only written to disk (see
+        # fp_geometry_table below), not carried in results.
+        results["accepted_overview"] = _summarize_accepted_structures(
+            geometry_table
+        )
 
         rcode = generate_random_code(6)
 
@@ -14111,8 +14162,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         # --- 4a. origami-footprint picks (Centers + Diameter yaml) -----
-        fp_picks_yaml = os.path.join(results["folder"], "pick_origami.yaml")
-        with open(fp_picks_yaml, "w") as f:
+        fp_picks_origami = os.path.join(results["folder"], "pick_origami.yaml")
+        with open(fp_picks_origami, "w") as f:
             yaml.dump(
                 {
                     "Centers": [
@@ -14123,11 +14174,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 },
                 f,
             )
-        results["fp_picks_yaml"] = fp_picks_yaml
+        results["fp_picks_origami"] = fp_picks_origami
 
         # secondary: picasso picks for all resolved single docking sites
-        fp_docking_yaml = os.path.join(results["folder"], "docking_sites.yaml")
-        with open(fp_docking_yaml, "w") as f:
+        fp_picks_dockingsites = os.path.join(
+            results["folder"], "docking_sites.yaml"
+        )
+        with open(fp_picks_dockingsites, "w") as f:
             yaml.dump(
                 {
                     "Centers": [
@@ -14138,7 +14191,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 },
                 f,
             )
-        results["fp_docking_yaml"] = fp_docking_yaml
+        results["fp_picks_dockingsites"] = fp_picks_dockingsites
 
         # --- 4b. grouped picked locs (one group per accepted origami) --
         if len(accepted_centers) > 0:

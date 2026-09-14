@@ -877,19 +877,34 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
                 "rejected_spacing": 0,
                 "accepted": 2,
             },
-            "geometry_table": [
-                {
-                    "center_x_px": 10.0,
-                    "center_y_px": 10.0,
-                    "n_resolved_sites": 12,
-                    "n_missing_sites": 0,
-                    "mean_spacing_nm": 20.0,
-                    "rmse_nm": 1.2,
-                    "orientation_deg": 35.0,
-                    "mirror": False,
-                    "accepted": True,
-                }
-            ],
+            "accepted_overview": {
+                "n_accepted": 2,
+                "n_mirrored": 0,
+                "n_resolved_sites": {
+                    "mean": 12.0,
+                    "std": 0.0,
+                    "min": 12.0,
+                    "max": 12.0,
+                },
+                "mean_spacing_nm": {
+                    "mean": 20.0,
+                    "std": 0.1,
+                    "min": 19.9,
+                    "max": 20.1,
+                },
+                "rmse_nm": {
+                    "mean": 1.2,
+                    "std": 0.2,
+                    "min": 1.0,
+                    "max": 1.4,
+                },
+                "orientation_deg": {
+                    "mean": 35.0,
+                    "std": 1.0,
+                    "min": 34.0,
+                    "max": 36.0,
+                },
+            },
         }
         self.cr.pick_origami(0, parameters, results)
 

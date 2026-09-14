@@ -75,6 +75,14 @@ This file was started after v0.5.6; earlier history is in the git log.
   and the mirrored count); the full per-structure table remains available as
   `geometry_table.csv` in the module results folder.
 
+- `pick_origami` result keys tidied: the full per-structure `geometry_table` is
+  no longer carried in the module results (it lives only in
+  `geometry_table.csv`); results now expose a compact `accepted_overview`
+  instead. The pick-region yaml result keys were renamed for clarity and to be
+  referenced by downstream modules: `fp_picks_yaml` &rarr; `fp_picks_origami`
+  (accepted origami footprints) and `fp_docking_yaml` &rarr;
+  `fp_picks_dockingsites` (all resolved single docking sites).
+
 ### Changed
 
 - Every Confluence module reporter now routes its final output through a single
