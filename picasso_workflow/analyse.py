@@ -14253,9 +14253,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         # --- 5. phase-space diagnostic figure --------------------------
         # Candidate cloud (black) with accepted structures overlaid (red),
         # so one can see where the accepted picks sit in nlocs/rmsd space.
-        nlocs = np.asarray(pick_result["candidate_nlocs"])
+        # Show localizations *per frame* so the x-axis matches the
+        # min/max_n_locs_per_frame parameters (pick_similar uses
+        # nlocs_per_frame = total_nlocs / n_frames).
+        n_frames = self.info[0]["Frames"]
+        nlocs = np.asarray(pick_result["candidate_nlocs"]) / n_frames
         rmsds = np.asarray(pick_result["candidate_rmsds"])
         acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+        if len(acc_nlocs):
+            acc_nlocs = acc_nlocs / n_frames
         acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
         fig, ax = plt.subplots()
         if len(nlocs) and len(nlocs) == len(rmsds):
@@ -14269,7 +14275,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 s=60,
                 label="accepted",
             )
-        ax.set_xlabel("# localizations in footprint")
+        ax.set_xlabel("# localizations per frame in footprint")
         ax.set_ylabel("root mean square distance in footprint")
         ax.set_title(
             f"Origami candidates: {results['n_accepted']}"

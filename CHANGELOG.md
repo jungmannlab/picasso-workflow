@@ -93,6 +93,10 @@ This file was started after v0.5.6; earlier history is in the git log.
   off-centre coarse `pick_similar` seed, so origamis sit centred in their picks
   (the reported `center_x_px` / `center_y_px` and the saved pick centres).
 
+- The `pick_origami` nlocs/rmsd phase-space figure now plots localizations
+  **per frame** (total nlocs / `n_frames`) so its x-axis matches the
+  `min/max_n_locs_per_frame` parameters (previously it showed total nlocs).
+
 - `pick_origami` now reports a rejection **funnel** so it is clear which filter
   removed how many candidates: counts for no-localizations, too-few-sites
   (pre-registration prefilter), and post-registration rejections split by
