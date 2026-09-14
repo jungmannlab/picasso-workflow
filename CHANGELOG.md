@@ -29,6 +29,18 @@ This file was started after v0.5.6; earlier history is in the git log.
   (reused by the HTML reporter), `gui`, and the `modulespec` registry. Registry
   logging is intentionally deferred to WP-DYE-QC (single logging path).
 
+### Fixed
+
+- `pick_origami` now rejects an unusable `geometry` with a clear message and
+  tolerates the GUI's placeholder sentinels. `load_origami_template` raises a
+  descriptive `TypeError`/`ValueError` (naming the accepted forms) instead of a
+  cryptic `float() ... not 'set'` when handed a Python set literal like
+  `{0, 3, 4, 20}`, and the `pick_origami` module treats the GUI-generated
+  "unset" placeholders (`""` for strings, `0.0`/`0` for `max_rmsd`,
+  `max_rmse_nm`, `footprint_diameter`, `grid_spacing_nm`) as not-provided so
+  they fall back to real defaults instead of, e.g., `max_rmsd=0` picking
+  nothing.
+
 ### Changed
 
 - Every Confluence module reporter now routes its final output through a single

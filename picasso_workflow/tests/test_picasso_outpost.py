@@ -1011,6 +1011,29 @@ def test_load_origami_template_dispatch():
     assert sites.n_sites_expected == 3
 
 
+def test_load_origami_template_rejects_bad_specs():
+    """A geometry that is neither a design file, spec dict, nor ordered
+    coordinate list is rejected with a clear error (not a cryptic numpy
+    TypeError). Regression for the GUI emitting ``{0, 3, 4, 20}`` (a set)."""
+    with pytest.raises(TypeError) as excinfo:
+        picasso_outpost.load_origami_template({0, 3, 4, 20})
+    assert "set" in str(excinfo.value)
+    assert "n_rows" in str(excinfo.value)  # points at the right form
+
+    with pytest.raises(ValueError) as excinfo2:
+        picasso_outpost.load_origami_template({"foo": 1, "bar": 2})
+    assert "unrecognised" in str(excinfo2.value)
+
+    # the corrected grid form works
+    tmpl = picasso_outpost.load_origami_template(
+        {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0}
+    )
+    assert tmpl.n_sites_expected == 12
+    # an ordered list of coordinate pairs works
+    tmpl2 = picasso_outpost.load_origami_template([[0, 0], [20, 0], [0, 20]])
+    assert tmpl2.n_sites_expected == 3
+
+
 def test_design_file_roundtrip(tmp_path):
     """A picasso design .yaml round-trips n_sites and (anchored) spacing."""
     # 3x4 grid in arbitrary native units (spacing 0.5)

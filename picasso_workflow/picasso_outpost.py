@@ -5217,9 +5217,23 @@ def load_origami_template(spec, grid_spacing_nm=None):
             return origami_template_from_sites(
                 spec.get("sites_nm", spec.get("sites"))
             )
-        raise ValueError(f"unrecognised origami template spec: {spec}")
-    # assume array-like of coordinates
-    return origami_template_from_sites(spec)
+        raise ValueError(
+            "unrecognised origami geometry dict "
+            f"{sorted(spec)}: expected a grid "
+            "{'n_rows', 'n_cols', 'spacing_nm'[, 'angle']}, a design file "
+            "{'design_file'[, 'grid_spacing_nm']}, or explicit sites "
+            "{'sites_nm': [[x, y], ...]}"
+        )
+    if isinstance(spec, (list, tuple, np.ndarray)):
+        # assume an ordered array-like of (x, y) coordinate pairs
+        return origami_template_from_sites(spec)
+    raise TypeError(
+        f"origami geometry must be a design-file path (str), a spec dict, "
+        f"or an ordered list of [x, y] site coordinates, not "
+        f"{type(spec).__name__} ({spec!r}). Note: a Python set literal like "
+        "{0, 3, 4, 20} is NOT a valid geometry - use a dict, e.g. "
+        "{'n_rows': 3, 'n_cols': 4, 'spacing_nm': 20.0}."
+    )
 
 
 def predict_locs_per_site(k_on, tau_b, concentration, n_frames, exposure):

@@ -14015,20 +14015,34 @@ class AutoPicasso(util.AbstractModuleCollection):
         logger.debug(f"# locs: {len(self.locs)}")
         pixelsize = self.pixelsize
 
+        # The GUI-generated template emits unset optional parameters as
+        # placeholder sentinels ("" for strings, 0.0/0 for numbers). Treat
+        # those as "not provided" so they fall back to real defaults instead
+        # of being taken literally (e.g. max_rmsd=0 would pick nothing).
+        def _opt(key, default=None, zero_is_unset=False):
+            val = parameters.get(key, default)
+            if val == "" or val is None:
+                return default
+            if zero_is_unset and isinstance(val, (int, float)) and val == 0:
+                return default
+            return val
+
+        grid_spacing_nm = _opt("grid_spacing_nm", zero_is_unset=True)
+
         # --- 1. load the design template (expected geometry) -----------
-        if parameters.get("design_file"):
+        if _opt("design_file"):
             template_spec = {
                 "design_file": parameters["design_file"],
-                "grid_spacing_nm": parameters.get("grid_spacing_nm"),
+                "grid_spacing_nm": grid_spacing_nm,
             }
-        elif parameters.get("geometry") is not None:
+        elif _opt("geometry") is not None:
             template_spec = parameters["geometry"]
         else:
             raise ValueError(
                 "pick_origami needs a 'design_file' or a 'geometry' spec"
             )
         template = picasso_outpost.load_origami_template(
-            template_spec, grid_spacing_nm=parameters.get("grid_spacing_nm")
+            template_spec, grid_spacing_nm=grid_spacing_nm
         )
         results["n_sites_expected"] = template.n_sites_expected
         results["grid_spacing_nm"] = template.grid_spacing_nm
@@ -14053,12 +14067,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             max_n_locs_per_frame = max_n / n_frames
             results["kinetics_nlocs_window"] = [float(min_n), float(max_n)]
         else:
-            min_n_locs_per_frame = parameters.get(
-                "min_n_locs_per_frame", "q0.25"
-            )
-            max_n_locs_per_frame = parameters.get(
-                "max_n_locs_per_frame", "q0.98"
-            )
+            min_n_locs_per_frame = _opt("min_n_locs_per_frame", "q0.25")
+            max_n_locs_per_frame = _opt("max_n_locs_per_frame", "q0.98")
 
         # --- 3. run the design-aware picker ----------------------------
         pick_result = picasso_outpost.pick_origami(
@@ -14066,16 +14076,16 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.info,
             template,
             pixelsize,
-            candidate_method=parameters.get("candidate_method", "footprint"),
-            footprint_diameter=parameters.get("footprint_diameter"),
+            candidate_method=_opt("candidate_method", "footprint"),
+            footprint_diameter=_opt("footprint_diameter", zero_is_unset=True),
             min_n_locs_per_frame=min_n_locs_per_frame,
             max_n_locs_per_frame=max_n_locs_per_frame,
-            min_rmsd=parameters.get("min_rmsd", 0.0),
-            max_rmsd=parameters.get("max_rmsd", np.inf),
+            min_rmsd=_opt("min_rmsd", 0.0),
+            max_rmsd=_opt("max_rmsd", np.inf, zero_is_unset=True),
             missing_sites_allowed=missing_sites_allowed,
-            spacing_tol=parameters.get("spacing_tol", 0.3),
-            max_rmse_nm=parameters.get("max_rmse_nm"),
-            subcluster_min_samples=parameters.get("subcluster_min_samples", 3),
+            spacing_tol=_opt("spacing_tol", 0.3),
+            max_rmse_nm=_opt("max_rmse_nm", zero_is_unset=True),
+            subcluster_min_samples=_opt("subcluster_min_samples", 3),
             allow_mirror=parameters.get("allow_mirror", True),
         )
         accepted_centers = pick_result["accepted_centers_px"]
@@ -14088,7 +14098,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         rcode = generate_random_code(6)
 
         # footprint diameter actually used (for pick yaml + hdf5 picking)
-        footprint_diameter = parameters.get("footprint_diameter")
+        footprint_diameter = _opt("footprint_diameter", zero_is_unset=True)
         if footprint_diameter is None:
             footprint_diameter = (
                 template.extent_nm + template.grid_spacing_nm
