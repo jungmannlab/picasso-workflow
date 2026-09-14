@@ -6122,6 +6122,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "int",
                 "description": "Number of candidate origami footprints found",
             },
+            "n_registered": {
+                "type": "int",
+                "description": (
+                    "Candidates that passed the site-count prefilter and were "
+                    "registered against the design template"
+                ),
+            },
             "n_accepted": {
                 "type": "int",
                 "description": "Number of accepted origami structures",
@@ -6129,6 +6136,58 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "n_sites_expected": {
                 "type": "int",
                 "description": "Expected docking sites per origami",
+            },
+            "grid_spacing_nm": {
+                "type": "float",
+                "description": "Design inter-site spacing used (nm)",
+            },
+            "n_picked_locs": {
+                "type": "int",
+                "description": "Number of localizations in accepted origamis",
+            },
+            "fp_picks_origami": {
+                "type": "str",
+                "description": (
+                    "filepath to the picasso pick-region .yaml for accepted "
+                    "origami footprints (Centers + Diameter)"
+                ),
+            },
+            "fp_picks_dockingsites": {
+                "type": "str",
+                "description": (
+                    "filepath to the picasso pick-region .yaml for all "
+                    "resolved single docking sites (Centers + Diameter)"
+                ),
+            },
+            "fp_picked_locs_origami": {
+                "type": "str",
+                "description": (
+                    "filepath to the .hdf5 of picked localizations grouped "
+                    "per accepted origami (one 'group' per origami)"
+                ),
+            },
+            "fp_picked_locs_dockingsites": {
+                "type": "str",
+                "description": (
+                    "filepath to the .hdf5 of picked localizations grouped "
+                    "per resolved docking site (one 'group' per site)"
+                ),
+            },
+            "fp_geometry_table": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-structure geometry table (.csv)"
+                ),
+            },
+            "fp_phasespace": {
+                "type": "str",
+                "description": (
+                    "filepath to the nlocs/rmsd candidate phase-space figure"
+                ),
+            },
+            "fp_renderings": {
+                "type": "list",
+                "description": "filepaths to representative structure renders",
             },
         }
 

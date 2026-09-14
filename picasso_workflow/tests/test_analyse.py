@@ -2208,8 +2208,8 @@ class TestAnalyseModules(unittest.TestCase):
         for key in (
             "fp_picks_origami",
             "fp_picks_dockingsites",
-            "fp_picked_locs",
-            "fp_docking_site_locs",
+            "fp_picked_locs_origami",
+            "fp_picked_locs_dockingsites",
             "fp_geometry_table",
             "fp_phasespace",
         ):

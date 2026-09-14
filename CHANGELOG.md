@@ -90,7 +90,19 @@ This file was started after v0.5.6; earlier history is in the git log.
   instead. The pick-region yaml result keys were renamed for clarity and to be
   referenced by downstream modules: `fp_picks_yaml` &rarr; `fp_picks_origami`
   (accepted origami footprints) and `fp_docking_yaml` &rarr;
-  `fp_picks_dockingsites` (all resolved single docking sites).
+  `fp_picks_dockingsites` (all resolved single docking sites). The grouped
+  picked-locs hdf5 keys were renamed to match:
+  `fp_picked_locs` &rarr; `fp_picked_locs_origami` and
+  `fp_docking_site_locs` &rarr; `fp_picked_locs_dockingsites` (so the scheme is
+  `fp_picks_*` for pick-region yamls and `fp_picked_locs_*` for the hdf5s).
+
+- The GUI `pick_origami` results spec now lists every result the module
+  produces (`n_registered`, `grid_spacing_nm`, `n_picked_locs`, and all
+  `fp_picks_*` / `fp_picked_locs_*` / `fp_geometry_table` / `fp_phasespace` /
+  `fp_renderings` file paths), so they are selectable as
+  `$get_previous_module_result` targets in the workflow-builder command box.
+  (The `modulespec.py` `ModuleSpec` is unchanged - it declares capability
+  tokens, not result keys.)
 
 ### Changed
 

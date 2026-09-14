@@ -14219,7 +14219,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             docking_site_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
             docking_site_locs["group"] = pd.Series(dtype="int32")
 
-        fp_picked_locs = os.path.join(
+        fp_picked_locs_origami = os.path.join(
             results["folder"], "picked_origami_locs.hdf5"
         )
         origami_info = self.info + [
@@ -14228,10 +14228,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 "data": "picked origami structures",
             }
         ]
-        io.save_locs(fp_picked_locs, picked_origami_locs, origami_info)
-        results["fp_picked_locs"] = fp_picked_locs
+        io.save_locs(fp_picked_locs_origami, picked_origami_locs, origami_info)
+        results["fp_picked_locs_origami"] = fp_picked_locs_origami
 
-        fp_docking_locs = os.path.join(
+        fp_picked_locs_dockingsites = os.path.join(
             results["folder"], "docking_site_locs.hdf5"
         )
         docking_info = self.info + [
@@ -14240,8 +14240,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 "data": "resolved docking sites",
             }
         ]
-        io.save_locs(fp_docking_locs, docking_site_locs, docking_info)
-        results["fp_docking_site_locs"] = fp_docking_locs
+        io.save_locs(
+            fp_picked_locs_dockingsites, docking_site_locs, docking_info
+        )
+        results["fp_picked_locs_dockingsites"] = fp_picked_locs_dockingsites
 
         # --- 4c. per-structure geometry table --------------------------
         fp_geometry_table = os.path.join(
@@ -14339,8 +14341,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``fp_picked_locs`` : str
                 Filepath to the picks to undrift from. Either an hdf5 file of
                 locs with a ``'group'`` column describing the picks (e.g.
-                ``pick_origami``'s ``fp_picked_locs`` /
-                ``fp_docking_site_locs``), or a picasso pick-region ``.yaml``
+                ``pick_origami``'s ``fp_picked_locs_origami`` /
+                ``fp_picked_locs_dockingsites``), or a picasso pick-region
+                ``.yaml``
                 (``Centers`` + ``Diameter``, e.g. ``pick_origami``'s
                 ``fp_picks_origami`` / ``fp_picks_dockingsites``) which is
                 applied to ``self.locs`` to build the grouped picks.
