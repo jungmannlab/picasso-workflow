@@ -2114,10 +2114,14 @@ class TestAnalyseModules(unittest.TestCase):
                 }
             ],
             "n_candidates": 5,
+            "n_registered": 2,
             "n_accepted": 2,
             "candidate_nlocs": np.array([50, 75, 100, 40, 90]),
             "candidate_rmsds": np.array([1.5, 2.0, 2.5, 1.0, 2.2]),
             "candidate_labels": np.array([0, 0, -1, -1, 0]),
+            "accepted_nlocs": np.array([50, 90]),
+            "accepted_rmsds": np.array([1.5, 2.2]),
+            "footprint_diameter": 0.7,
         }
         test_locs = pd.DataFrame(
             np.rec.array(
