@@ -68,6 +68,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   new `classify_candidate` helper returns the first failing criterion;
   `accept_candidate` is now a thin boolean wrapper over it.
 
+- The `pick_origami` Confluence/HTML report no longer dumps a per-structure row
+  for every candidate (which swamped the report once filters were relaxed). It
+  now shows an aggregate overview over the accepted structures only
+  (mean&plusmn;std / min / max of resolved sites, spacing, RMSE, orientation,
+  and the mirrored count); the full per-structure table remains available as
+  `geometry_table.csv` in the module results folder.
+
 ### Changed
 
 - Every Confluence module reporter now routes its final output through a single

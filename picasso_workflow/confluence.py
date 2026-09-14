@@ -4879,33 +4879,43 @@ class ConfluenceReporter(AbstractModuleCollection):
         {result_text}
         """
 
-        # per-structure geometry table
-        geometry_table = results.get("geometry_table") or []
-        if geometry_table:
-            columns = [
-                ("center_x_px", "x (px)"),
-                ("center_y_px", "y (px)"),
-                ("n_resolved_sites", "resolved"),
-                ("n_missing_sites", "missing"),
-                ("mean_spacing_nm", "spacing (nm)"),
-                ("rmse_nm", "RMSE (nm)"),
-                ("orientation_deg", "angle (deg)"),
-                ("mirror", "mirror"),
-                ("accepted", "accepted"),
-            ]
-            text += "<table><tr>"
-            for _, title in columns:
-                text += f"<th>{title}</th>"
-            text += "</tr>"
-            for row in geometry_table:
-                text += "<tr>"
-                for key, _ in columns:
-                    value = row.get(key, "")
-                    if isinstance(value, float):
-                        value = f"{value:.2f}"
-                    text += f"<td>{value}</td>"
-                text += "</tr>"
-            text += "</table>"
+        # Geometry overview: aggregate stats over the ACCEPTED structures
+        # only (the full per-structure table is saved to geometry_table.csv in
+        # the module results folder - a per-row dump here would swamp the
+        # report once filters are relaxed).
+        accepted_rows = [
+            row
+            for row in (results.get("geometry_table") or [])
+            if row.get("accepted")
+        ]
+        if accepted_rows:
+
+            def _stat(key):
+                vals = np.asarray(
+                    [row.get(key, np.nan) for row in accepted_rows],
+                    dtype=float,
+                )
+                vals = vals[np.isfinite(vals)]
+                if len(vals) == 0:
+                    return "n/a"
+                return (
+                    f"{np.mean(vals):.2f} &plusmn; {np.std(vals):.2f} "
+                    f"(min {np.min(vals):.2f}, max {np.max(vals):.2f})"
+                )
+
+            n_mirror = sum(1 for row in accepted_rows if row.get("mirror"))
+            text += f"""
+        Accepted structures overview ({len(accepted_rows)} structures;
+        full per-structure table in <code>geometry_table.csv</code>):
+        <ul>
+        <li>Resolved sites: {_stat("n_resolved_sites")}</li>
+        <li>Missing sites: {_stat("n_missing_sites")}</li>
+        <li>Spacing (nm): {_stat("mean_spacing_nm")}</li>
+        <li>RMSE-vs-design (nm): {_stat("rmse_nm")}</li>
+        <li>Orientation (deg): {_stat("orientation_deg")}</li>
+        <li>Mirrored: {n_mirror} / {len(accepted_rows)}</li>
+        </ul>
+        """
 
         # phase-space figure
         if fp_fig := results.get("fp_phasespace"):
