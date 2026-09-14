@@ -10,7 +10,24 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+
+- Every Confluence module reporter now routes its final output through a single
+  `ConfluenceReporter._emit(text, postpone_report)` helper instead of repeating
+  the `if postpone_report: return text` / `update_page_content(...)` guard in
+  each method (59 call sites collapsed). This centralises the post-vs-return
+  decision so it can no longer diverge per reporter — the class of bug where a
+  reporter ignored `postpone_report` and leaked a section. (Two reporters that
+  append figures *after* posting, `localize` and `undrift_rcc`, keep their
+  bespoke tail.)
+
 ### Fixed
+
+- Branch child-page titles now include the branch module's index
+  (`"<run> - NN <label>"`). Confluence page titles must be unique within a
+  space, so two `branch` modules in one workflow that reused a label (e.g. both
+  produced `cell0`) previously collided on a single child page and merged their
+  content; the index disambiguates them.
 
 - The single-file HTML reporter is no longer mistaken for a live branch
   reporter. `HTMLReporter` subclasses `ConfluenceReporter` and so *inherits*

@@ -1797,6 +1797,27 @@ def _posted_body(cr):
     return cr.ci.update_page_content.call_args[0][2]
 
 
+def test_emit_posts_or_returns():
+    """_emit is the single post-vs-return choke point: deferred -> return the
+    text and don't post; otherwise post to the run page and return None."""
+    cr = _reporter()  # report_page_name="page", report_page_id="1"
+    assert cr._emit("<p>x</p>", True) == "<p>x</p>"
+    assert not cr.ci.update_page_content.called
+    assert cr._emit("<p>y</p>", False) is None
+    cr.ci.update_page_content.assert_called_once_with("page", "1", "<p>y</p>")
+
+
+def test_branch_child_page_title_is_unique_per_branch_module():
+    """Two branch modules that reuse a label get distinct child-page titles
+    (the module index disambiguates), so their content cannot merge onto one
+    Confluence page."""
+    cr = _reporter()
+    assert cr._branch_child_page_title("cell0", 4) == "page - 04 cell0"
+    assert cr._branch_child_page_title("cell0", 7) == "page - 07 cell0"
+    # no index -> bare form (direct/legacy calls)
+    assert cr._branch_child_page_title("cell0") == "page - cell0"
+
+
 def test_strip_layout_wrappers_removes_only_layout_tags():
     cr = confluence.ConfluenceReporter
     sample = (
@@ -1942,11 +1963,13 @@ def test_branch_creates_child_page_per_branch():
     }
     cr.branch(4, parameters, results)
 
-    # one child page per branch, each nested under the run page ("1")
+    # one child page per branch, each nested under the run page ("1"); the
+    # title carries the branch module index (4) so two branch modules can't
+    # collide on a shared label
     create_calls = cr.ci.create_page.call_args_list
     assert [c.args[0] for c in create_calls] == [
-        "page - cell0",
-        "page - cell1",
+        "page - 04 cell0",
+        "page - 04 cell1",
     ]
     assert all(c.kwargs.get("parent_id") == "1" for c in create_calls)
 
@@ -1963,8 +1986,8 @@ def test_branch_creates_child_page_per_branch():
     ]
     assert len(main_bodies) == 1
     main = main_bodies[0]
-    assert 'ri:content-title="page - cell0"' in main
-    assert 'ri:content-title="page - cell1"' in main
+    assert 'ri:content-title="page - 04 cell0"' in main
+    assert 'ri:content-title="page - 04 cell1"' in main
     assert "Per-branch reports" in main
     assert "Branch: cell0" not in main
 
@@ -1976,9 +1999,10 @@ def test_branch_streams_to_child_page_then_links_without_reposting():
     cr = _reporter()  # report_page_name="page", report_page_id="1"
     cr.ci.create_page.return_value = "cX"
 
-    # live streaming: open the page, then hand it one finished sub-module
-    handle = cr.open_branch_page("cell0")
-    assert handle == ("page - cell0", "cX")
+    # live streaming: open the page (with this branch module's index, 4),
+    # then hand it one finished sub-module
+    handle = cr.open_branch_page("cell0", 4)
+    assert handle == ("page - 04 cell0", "cX")
     cr.ci.create_page.assert_called_once()
     assert cr.ci.create_page.call_args.kwargs.get("parent_id") == "1"
     cr.report_branch_submodule(
@@ -2036,7 +2060,7 @@ def test_branch_streams_to_child_page_then_links_without_reposting():
         for c in cr.ci.update_page_content.call_args_list
         if c.args[1] == "1"
     ][-1]
-    assert 'ri:content-title="page - cell0"' in main
+    assert 'ri:content-title="page - 04 cell0"' in main
 
 
 def test_report_error_names_module_index_type_and_parameters():

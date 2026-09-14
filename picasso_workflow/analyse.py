@@ -1031,12 +1031,15 @@ class AutoPicasso(util.AbstractModuleCollection):
             branch_dir = os.path.join(results["folder"], branch_label)
             os.makedirs(branch_dir, exist_ok=True)
 
-            # Open this branch's live child page(s) up front.
+            # Open this branch's live child page(s) up front. Pass this branch
+            # module's index (i) so the streamed page title matches the one
+            # the final branch report links to (and stays unique across branch
+            # modules that reuse a label).
             live_handles = []
             for rep in live_reporters:
                 try:
                     live_handles.append(
-                        (rep, rep.open_branch_page(branch_label))
+                        (rep, rep.open_branch_page(branch_label, i))
                     )
                 except Exception as e:  # reporting must never abort analysis
                     logger.warning(

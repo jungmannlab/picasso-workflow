@@ -2521,8 +2521,8 @@ class TestAnalyseModules(unittest.TestCase):
         class FakeLiveReporter:
             supports_live_branch_pages = True
 
-            def open_branch_page(self, label):
-                calls.append(("open", label))
+            def open_branch_page(self, label, module_index=None):
+                calls.append(("open", label, module_index))
                 return ("title-" + label, "id-" + label)
 
             def report_branch_submodule(
@@ -2548,8 +2548,9 @@ class TestAnalyseModules(unittest.TestCase):
                 c for c in calls if c[0] == "sub" and c[1] == f"title-{label}"
             ]
             assert [c[2] for c in subs] == [0, 1]
-        # a branch's page is opened before any of its sub-modules stream
-        assert calls[0] == ("open", "a")
+        # a branch's page is opened (with this branch module's index) before
+        # any of its sub-modules stream
+        assert calls[0] == ("open", "a", 2)
         assert calls[1][:2] == ("sub", "title-a")
         shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
 
@@ -2565,7 +2566,7 @@ class TestAnalyseModules(unittest.TestCase):
         class OptedOutReporter:
             supports_live_branch_pages = False
 
-            def open_branch_page(self, label):
+            def open_branch_page(self, label, module_index=None):
                 calls.append(("open", label))
                 return ("t", "id")
 

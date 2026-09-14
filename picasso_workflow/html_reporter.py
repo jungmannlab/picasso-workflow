@@ -603,12 +603,15 @@ class HTMLReporter(ConfluenceReporter):
         self.report_page_id = self.ci.create_page(report_name, body_text="")
         self.report_dir = report_dir
 
-    def _render_branch_details(self, branch_results, branch_modules):
+    def _render_branch_details(
+        self, branch_results, branch_modules, module_index=None
+    ):
         """Keep branches as inline collapsibles in the single HTML file.
 
         The child-page model of :class:`ConfluenceReporter` does not map onto
         the local single-file HTML report, so each branch stays an inline
         expand macro (its sub-reports nested via ``_report_branch_submodules``).
+        ``module_index`` is accepted for signature parity and ignored.
         """
         text = ""
         for branch in branch_results:
