@@ -6871,6 +6871,295 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def branch(self):
+        """Fan out into per-branch sub-workflows, then optionally re-join.
+
+        Runs a shared prefix once, then runs ``branch_modules`` once per
+        branch and finally ``join_modules`` once with the per-branch results
+        pooled back together. ``branch_type="runtime"`` makes one branch per
+        connected component of a prior mask (one cell each); ``"screen"``
+        makes one branch per row of a config-time parameter grid.
+
+        Parameters
+        ----------
+        i : int
+            the index of the module
+        parameters : dict
+            with required keys:
+                branch_type : str
+                    "runtime" (split a prior mask into cells) or "screen"
+                    (one branch per parameter-grid row).
+                branch_modules : list of tuples
+                    (module_name, module_parameters) run once per branch.
+            with keys required by branch_type:
+                split : dict
+                    for "runtime": {"method": "mask_components", "mask": <fp
+                    or command>, "min_area_um2": float, "max_branches": int,
+                    "label_template": str}
+                screen : dict
+                    for "screen": equal-length lists keyed by the $$map names
+                    used in branch_modules; optional "#tags" gives labels.
+            with optional keys:
+                join_modules : list of tuples
+                    (module_name, module_parameters) run once after all
+                    branches; may pool per-branch results via
+                    ("$get_prior_result", "results, NN_branch, branches,
+                    $all, MM_module, key").
+                parameter_command_executor : ParameterCommandExecutor
+                    injected by the runner to resolve sub-module commands.
+        results : dict
+            the results this function generates
+
+        Returns
+        -------
+        parameters : dict
+            as input, potentially changed values, for consistency
+        results : dict
+            the analysis results including:
+                - branch_type : str
+                - labels : list of branch labels
+                - branches : list of per-branch result dicts
+                - join : dict of join-module results
+                - topology : the executed module-path tree
+        """
+        parameters_spec = {
+            "branch_type": {
+                "type": "str",
+                "description": (
+                    'Either "explicit" (fixed n_branches with per-branch '
+                    '("$branch",[...]) overrides), "runtime" (one branch per '
+                    'mask component) or "screen" (one branch per grid row).'
+                ),
+                "required": True,
+            },
+            "n_branches": {
+                "type": "int",
+                "description": (
+                    'Number of branches (branch_type="explicit"). Each branch '
+                    "runs the same modules; per-branch differences come from "
+                    '("$branch", [v0, v1, ...]) parameter overrides.'
+                ),
+                "required": False,
+                "min": 1,
+            },
+            "branch_labels": {
+                "type": "list",
+                "description": (
+                    "Optional names for the branches (branch_type="
+                    '"explicit"), e.g. ["cell0", "cell1", "cell2"].'
+                ),
+                "required": False,
+            },
+            "branch_modules": {
+                "type": "list",
+                "description": (
+                    "List of (module_name, module_parameters) tuples run "
+                    "once per branch."
+                ),
+                "required": True,
+            },
+            "split": {
+                "type": "dict",
+                "description": (
+                    'Runtime split spec (branch_type="runtime"): method '
+                    '("mask_components"), mask (filepath or command), '
+                    "min_area_um2, max_branches, label_template."
+                ),
+                "required": False,
+            },
+            "screen": {
+                "type": "dict",
+                "description": (
+                    'Parameter grid (branch_type="screen"): equal-length '
+                    "lists keyed by the $$map names used in branch_modules; "
+                    'optional "#tags" provides the branch labels.'
+                ),
+                "required": False,
+            },
+            "join_modules": {
+                "type": "list",
+                "description": (
+                    "Optional (module_name, module_parameters) tuples run "
+                    "once after all branches to pool per-branch results."
+                ),
+                "required": False,
+            },
+            "parameter_command_executor": {
+                "type": "ParameterCommandExecutor",
+                "description": (
+                    "Injected by the runner to resolve sub-module commands."
+                ),
+                "required": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "branch_type": {
+                "type": "str",
+                "description": 'The branch type ("runtime" or "screen").',
+            },
+            "labels": {
+                "type": "list",
+                "description": "The branch labels.",
+            },
+            "branches": {
+                "type": "list",
+                "description": (
+                    "Per-branch result dicts, each keyed by NN_module."
+                ),
+            },
+            "join": {
+                "type": "dict",
+                "description": "The join-module results.",
+            },
+            "topology": {
+                "type": "dict",
+                "description": "The executed module-path tree.",
+            },
+        }
+
+        return parameters_spec, results_spec
+
+    def summarize_branches(self):
+        """Summarize per-branch results as a figure.
+
+        A general-purpose plotting/summary module, typically used as a
+        ``branch`` join module: it renders a scalar result collected across
+        branches (via ``$all``) as a box/strip plot ("replicates" mode) or
+        against a per-branch argument ("screen" mode).
+
+        Parameters
+        ----------
+        i : int
+            the index of the module
+        parameters : dict
+            with required keys:
+                values : list or dict
+                    one numeric value per branch (list), or a dict of
+                    series-name -> list for several metrics on one figure.
+                    Usually a ("$get_prior_result", "results, NN_branch,
+                    branches, $all, MM_module, key") command.
+            with optional keys:
+                labels : list
+                    per-branch labels for x ticks / annotations
+                x : list
+                    per-branch argument values; enables "screen" mode
+                mode : one of "auto", "replicates", "screen"
+                xlabel, ylabel, title, filename : str
+        results : dict
+            the results this function generates
+
+        Returns
+        -------
+        parameters : dict
+            as input, potentially changed values, for consistency
+        results : dict
+            the analysis results including fp_fig, mode and stats
+        """
+        parameters_spec = {
+            "values": {
+                "type": "str",
+                "description": (
+                    "One numeric value per branch (a list), or a dict of "
+                    "series-name -> list. Usually a $get_prior_result over "
+                    '"results, NN_branch, branches, $all, MM_module, key".'
+                ),
+                "required": True,
+            },
+            "labels": {
+                "type": "str",
+                "description": "Per-branch labels for the x axis.",
+                "required": False,
+            },
+            "x": {
+                "type": "str",
+                "description": (
+                    'Per-branch argument values; enables "screen" mode '
+                    "(metric vs argument)."
+                ),
+                "required": False,
+            },
+            "mode": {
+                "type": "options",
+                "options": ["auto", "replicates", "screen"],
+                "description": (
+                    '"replicates" (box/strip over branches) or "screen" '
+                    '(metric vs argument); "auto" chooses by whether x is set.'
+                ),
+                "default": "auto",
+                "required": False,
+            },
+            "xlabel": {
+                "type": "str",
+                "description": "X-axis label.",
+                "required": False,
+            },
+            "ylabel": {
+                "type": "str",
+                "description": "Y-axis label.",
+                "required": False,
+            },
+            "title": {
+                "type": "str",
+                "description": "Figure title.",
+                "required": False,
+            },
+            "filename": {
+                "type": "str",
+                "description": "Output figure filename.",
+                "required": False,
+            },
+        }
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "fp_fig": {
+                "type": "str",
+                "description": "Path to the generated summary figure.",
+            },
+            "mode": {
+                "type": "str",
+                "description": 'The display mode used ("replicates"/"screen").',
+            },
+            "stats": {
+                "type": "dict",
+                "description": "Per-series n/mean/std/min/max.",
+            },
+        }
+        return parameters_spec, results_spec
+
     def resolution_analysis(self):
         """Perform resolution analysis using point pattern autocorrelation
 
@@ -8595,6 +8884,7 @@ class ParameterWidgetInfo:
         sub_parameters=None,
         toggle_function=None,
         summary_label=None,
+        per_branch_checkbox=None,
     ):
         """Initialize parameter widget info.
 
@@ -8616,6 +8906,9 @@ class ParameterWidgetInfo:
         self.metadata = metadata
         self.original_type = original_type
         self.summary_label = summary_label
+        # Checkbox to mark a parameter branch-specific; only shown while a
+        # branch sub-module is being edited (set by _create_parameter_row).
+        self.per_branch_checkbox = per_branch_checkbox
         self.sub_parameters = (
             sub_parameters or {}
         )  # For nested dict parameters
@@ -9730,6 +10023,16 @@ class Window(QtWidgets.QMainWindow):
             -1
         )  # -1 means not editing an existing item
         self.editing_workflow_tab = -1  # 0 = single, 1 = aggregation
+        # When editing a branch sub-module, this holds
+        # {"section": "branch"|"join", "sub": int}; None for a top-level module.
+        self.editing_workflow_subnode = None
+        # Branch context while editing a branch sub-module:
+        # {"n_branches": int, "labels": list|None, "branch_id": int}. None
+        # otherwise. _branch_override_params maps a parameter name to its full
+        # per-branch value list for the sub-module currently shown, so edits
+        # to the displayed branch id write back into ("$branch", [...]).
+        self.editing_branch_context = None
+        self._branch_override_params = {}
 
         layout = QtWidgets.QGridLayout()
         central_widget = QtWidgets.QWidget()
@@ -10386,6 +10689,47 @@ class Window(QtWidgets.QMainWindow):
         )
         self.module_combobox.currentTextChanged.connect(self.on_module_changed)
         current_layout.addWidget(self.module_combobox)
+
+        # Branch-id selector: shown only when a branch sub-module is selected,
+        # to choose which branch's per-branch ("$branch", [...]) parameter
+        # values are displayed/edited.
+        self.branch_id_container = QtWidgets.QWidget()
+        _branch_id_layout = QtWidgets.QHBoxLayout(self.branch_id_container)
+        _branch_id_layout.setContentsMargins(0, 0, 0, 0)
+        _branch_id_layout.addWidget(QtWidgets.QLabel("Branch id:"))
+        self.branch_id_combobox = QtWidgets.QComboBox()
+        self.branch_id_combobox.setToolTip(
+            "Which branch's per-branch parameter values to show/edit. "
+            "Branch-specific parameters are highlighted."
+        )
+        self.branch_id_combobox.currentIndexChanged.connect(
+            self._on_branch_id_changed
+        )
+        _branch_id_layout.addWidget(self.branch_id_combobox)
+        _branch_id_layout.addStretch()
+        self.branch_id_container.setVisible(False)
+        current_layout.addWidget(self.branch_id_container)
+
+        # "Join module" toggle: shown when a branch sub-module is selected.
+        # Checking it moves the sub-module into the branch's join section (a
+        # fan-in module that runs once after all branches); unchecking moves it
+        # back to the per-branch section.
+        self.join_module_container = QtWidgets.QWidget()
+        _join_layout = QtWidgets.QHBoxLayout(self.join_module_container)
+        _join_layout.setContentsMargins(0, 0, 0, 0)
+        self.join_module_checkbox = QtWidgets.QCheckBox(
+            "Join module (fan-in; runs once after all branches)"
+        )
+        self.join_module_checkbox.setToolTip(
+            "Move this sub-module into the branch's join section (or back). "
+            "Join modules run once after every branch and pool per-branch "
+            "results via the $all wildcard."
+        )
+        self.join_module_checkbox.toggled.connect(self._on_join_module_toggled)
+        _join_layout.addWidget(self.join_module_checkbox)
+        _join_layout.addStretch()
+        self.join_module_container.setVisible(False)
+        current_layout.addWidget(self.join_module_container)
         # label describing the module selected. Rendered as word-wrapped
         # rich text inside its own scroll area so long descriptions stay
         # readable and the divider below can resize the region.
@@ -12910,8 +13254,8 @@ class Window(QtWidgets.QMainWindow):
             # Store parameters in actionable format (no conversion)
             # Tuples remain tuples, dicts remain dicts, etc.
             workflow_list.append((module_name, params))
-            index = len(workflow_list) - 1
-            list_widget.addItem(f"{index:02d}: {module_name}")
+        # Render the list (indenting any branch sub-modules).
+        self._refresh_workflow_list(list_widget, workflow_list)
 
         # Per-list audit event. Both _load_workflow_definition and the
         # alt loader funnel through here, so this also covers the early
@@ -13093,10 +13437,21 @@ class Window(QtWidgets.QMainWindow):
         else:  # e.g. Investigation tab -- no module list to add to
             return
 
-        # Insert after the current selection (append when nothing selected).
-        current_row = list_widget.currentRow()
+        # If a branch sub-row is selected, add the new module into that
+        # branch's section (after the selected sub-module) instead of at the
+        # top level.
+        sel_node = self._selected_node(list_widget)
+        if sel_node is not None and sel_node.get("kind") == "sub":
+            self._add_into_branch(
+                list_widget, modules, sel_node, module_name, param_values, tab
+            )
+            return
+
+        # Insert after the selected top-level module (a selected branch
+        # sub-row resolves to its owning branch). Append when nothing selected.
+        sel_module = self._selected_module_index(list_widget)
         old_len = len(modules)
-        insert_idx = current_row + 1 if current_row >= 0 else len(modules)
+        insert_idx = sel_module + 1 if sel_module >= 0 else len(modules)
         modules.insert(insert_idx, (module_name, param_values))
 
         # Inserting renumbers later modules, so shift any back-references that
@@ -13110,14 +13465,17 @@ class Window(QtWidgets.QMainWindow):
         if ref_changes:
             self._populate_stored_parameters(modules[insert_idx][1])
 
-        # Mutate the list widget with signals blocked, then point the editing
-        # state at the new row and select it (without a stale save/reload).
+        # Rebuild the list (indented subs) with signals blocked, then point the
+        # editing state at the new module and select its row.
         list_widget.blockSignals(True)
-        list_widget.insertItem(insert_idx, f"{insert_idx:02d}: {module_name}")
-        self._renumber_workflow_items(list_widget, modules)
+        self._refresh_workflow_list(list_widget, modules)
         self.editing_workflow_index = insert_idx
         self.editing_workflow_tab = current_tab_index
-        list_widget.setCurrentRow(insert_idx)
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
+        list_widget.setCurrentRow(
+            self._module_item_row(list_widget, insert_idx)
+        )
         list_widget.blockSignals(False)
 
         self._log_workflow_config_event(
@@ -13239,13 +13597,125 @@ class Window(QtWidgets.QMainWindow):
         # item tracked by editing_workflow_index/_tab.
         self._update_editing_workflow_item()
 
+    # ------------------------------------------------------------------
+    # Workflow list rendering with inline branch sub-modules
+    # ------------------------------------------------------------------
+    # A "branch" module carries nested sub-workflows in its parameters
+    # (branch_modules / join_modules). Instead of showing those as raw
+    # argument text, the workflow list renders them as indented rows right
+    # under the branch. Each QListWidget item carries a node descriptor in
+    # its UserRole data so selection / add / remove / reorder resolve to the
+    # owning top-level module regardless of the extra indented rows:
+    #   {"kind": "module", "top": i, "section": None, "sub": None}
+    #   {"kind": "sub",    "top": i, "section": "branch"|"join", "sub": j}
+
+    _WF_NODE_ROLE = Qt.ItemDataRole.UserRole
+
+    def _refresh_workflow_list(self, list_widget, modules):
+        """Rebuild ``list_widget`` from ``modules``, indenting branch subs.
+
+        Signals are blocked during the rebuild; callers restore the desired
+        selection afterwards.
+        """
+        role = self._WF_NODE_ROLE
+        was_blocked = list_widget.signalsBlocked()
+        list_widget.blockSignals(True)
+        list_widget.clear()
+        for idx, entry in enumerate(modules):
+            name = entry[0]
+            params = entry[1] if len(entry) > 1 else {}
+            item = QtWidgets.QListWidgetItem(f"{idx:02d}: {name}")
+            item.setData(
+                role,
+                {"kind": "module", "top": idx, "section": None, "sub": None},
+            )
+            list_widget.addItem(item)
+            if name == "branch" and isinstance(params, dict):
+                for section, key, tag in (
+                    ("branch", "branch_modules", ""),
+                    ("join", "join_modules", "J"),
+                ):
+                    submods = params.get(key) or []
+                    for j, sub in enumerate(submods):
+                        if isinstance(sub, (tuple, list)) and sub:
+                            subname = sub[0]
+                        else:
+                            subname = str(sub)
+                        label = f"        {idx:02d}.{tag}{j:02d}  {subname}"
+                        sitem = QtWidgets.QListWidgetItem(label)
+                        sitem.setData(
+                            role,
+                            {
+                                "kind": "sub",
+                                "top": idx,
+                                "section": section,
+                                "sub": j,
+                            },
+                        )
+                        list_widget.addItem(sitem)
+        list_widget.blockSignals(was_blocked)
+
+    def _row_node(self, list_widget, row):
+        """Return the node descriptor for a list row (or None)."""
+        if list_widget is None or row < 0:
+            return None
+        item = list_widget.item(row)
+        if item is None:
+            return None
+        return item.data(self._WF_NODE_ROLE)
+
+    def _selected_module_index(self, list_widget):
+        """Top-level module index of the current selection (-1 if none).
+
+        A selected branch sub-row resolves to its owning branch module.
+        """
+        row = list_widget.currentRow()
+        node = self._row_node(list_widget, row)
+        if node is None:
+            return row  # legacy 1:1 fallback (no node data)
+        return node["top"]
+
+    def _module_item_row(self, list_widget, top_idx):
+        """Row of the top-level module item with index ``top_idx`` (-1)."""
+        for row in range(list_widget.count()):
+            node = self._row_node(list_widget, row)
+            if (
+                node is not None
+                and node.get("kind") == "module"
+                and node.get("top") == top_idx
+            ):
+                return row
+        return -1
+
+    def _selected_node(self, list_widget):
+        """Full node descriptor for the current selection (or None)."""
+        return self._row_node(list_widget, list_widget.currentRow())
+
+    def _locate_row(self, list_widget, selector):
+        """Row matching a selector tuple after a rebuild.
+
+        selector is ``("module", top)`` or ``("sub", top, section, sub)``.
+        """
+        for row in range(list_widget.count()):
+            node = self._row_node(list_widget, row)
+            if node is None:
+                continue
+            if selector[0] == "module":
+                if node["kind"] == "module" and node["top"] == selector[1]:
+                    return row
+            elif selector[0] == "sub":
+                if (
+                    node["kind"] == "sub"
+                    and node["top"] == selector[1]
+                    and node["section"] == selector[2]
+                    and node["sub"] == selector[3]
+                ):
+                    return row
+        return -1
+
     def _renumber_workflow_items(self, list_widget, modules):
-        """Update QListWidget items with correct numbering after reordering."""
-        for i in range(len(modules)):
-            module_name = modules[i][
-                0
-            ]  # Extract name from (name, params) tuple
-            list_widget.item(i).setText(f"{i:02d}: {module_name}")
+        """Rebuild the workflow list (indented branch subs, correct numbers)."""
+        self._refresh_workflow_list(list_widget, modules)
 
     def _on_workflow_selection_changed(self, current_row):
         """Handle selection change in workflow list - display module in Current Module section."""
@@ -13253,6 +13723,8 @@ class Window(QtWidgets.QMainWindow):
             # Clear editing state when nothing is selected
             self.editing_workflow_index = -1
             self.editing_workflow_tab = -1
+            self.editing_workflow_subnode = None
+            self._clear_branch_context()
             # Back to "Add" mode and append-at-end availability.
             self._refresh_module_palette()
             return
@@ -13262,54 +13734,368 @@ class Window(QtWidgets.QMainWindow):
 
         # Get the current tab to determine which workflow list to use
         current_tab_index = self.workflow_tabs.currentIndex()
+        list_widget = None
+        if current_tab_index == 0:
+            list_widget = self.single_workflow_list
+        elif current_tab_index == 1:
+            list_widget = self.aggregation_workflow_list
+
+        # Resolve the selected row to a top-level module index and, if it is a
+        # branch sub-row, to that sub-module within the branch.
+        node = self._row_node(list_widget, current_row)
+        top_index = node["top"] if node is not None else current_row
+
+        modules = None
+        if current_tab_index == 0:
+            modules = self.single_workflow_modules
+        elif current_tab_index == 1:
+            modules = self.aggregation_workflow_modules
 
         # Track which workflow item is being edited
-        self.editing_workflow_index = current_row
+        self.editing_workflow_index = top_index
         self.editing_workflow_tab = current_tab_index
+        self.editing_workflow_subnode = None
 
-        if current_tab_index == 0:  # Single Dataset Workflow
-            if current_row < len(self.single_workflow_modules):
-                module_name, param_values = self.single_workflow_modules[
-                    current_row
-                ]
-                # Update module combobox to show this module
-                index = self.module_combobox.findText(module_name)
-                if index >= 0:
-                    # Block signals to prevent on_module_changed from firing
-                    self.module_combobox.blockSignals(True)
-                    try:
-                        self.module_combobox.setCurrentIndex(index)
-                        # Manually trigger widget update since signal is blocked
-                        self.on_module_changed(module_name)
-                        # Populate parameters with stored values
-                        self._populate_stored_parameters(param_values)
-                        self._validate_parameters()  # Clear red borders from filled fields
-                    finally:
-                        # Always unblock signals, even if exception occurs
-                        self.module_combobox.blockSignals(False)
-        elif current_tab_index == 1:  # Aggregation Workflow
-            if current_row < len(self.aggregation_workflow_modules):
-                module_name, param_values = self.aggregation_workflow_modules[
-                    current_row
-                ]
-                # Update module combobox to show this module
-                index = self.module_combobox.findText(module_name)
-                if index >= 0:
-                    # Block signals to prevent on_module_changed from firing
-                    self.module_combobox.blockSignals(True)
-                    try:
-                        self.module_combobox.setCurrentIndex(index)
-                        # Manually trigger widget update since signal is blocked
-                        self.on_module_changed(module_name)
-                        # Populate parameters with stored values
-                        self._populate_stored_parameters(param_values)
-                        self._validate_parameters()  # Clear red borders from filled fields
-                    finally:
-                        # Always unblock signals, even if exception occurs
-                        self.module_combobox.blockSignals(False)
+        if modules is None or not (0 <= top_index < len(modules)):
+            self._refresh_module_palette()
+            return
+
+        # Load the branch sub-module's own parameters when a sub-row is
+        # selected; otherwise the top-level module's parameters.
+        to_load = self._branch_submodule_at(modules, node)
+        if to_load is not None:
+            module_name, param_values, self.editing_workflow_subnode = to_load
+        else:
+            module_name, param_values = modules[top_index]
+
+        # Show / configure the branch-id selector for a branch sub-module,
+        # before the parameters are populated (they resolve per-branch values).
+        self._setup_branch_context(modules, node, top_index)
+
+        # Update module combobox to show this module
+        index = self.module_combobox.findText(module_name)
+        if index >= 0:
+            # Block signals to prevent on_module_changed from firing
+            self.module_combobox.blockSignals(True)
+            try:
+                self.module_combobox.setCurrentIndex(index)
+                # Manually trigger widget update since signal is blocked
+                self.on_module_changed(module_name)
+                # Populate parameters with stored values
+                self._populate_stored_parameters(param_values)
+                self._validate_parameters()  # Clear red borders
+            finally:
+                # Always unblock signals, even if exception occurs
+                self.module_combobox.blockSignals(False)
 
         # Reflect what is addable after the newly selected insertion point.
         self._refresh_module_palette()
+
+    def _branch_submodule_at(self, modules, node):
+        """Return ``(name, params, subnode)`` for a selected branch sub-row.
+
+        ``subnode`` is ``{"section", "sub"}`` for use as
+        ``editing_workflow_subnode``. Returns ``None`` when ``node`` is not a
+        (valid) branch sub-row, so the caller falls back to the top-level
+        module.
+        """
+        if node is None or node.get("kind") != "sub":
+            return None
+        top = node["top"]
+        if not (0 <= top < len(modules)):
+            return None
+        branch_params = modules[top][1]
+        if not isinstance(branch_params, dict):
+            return None
+        key = (
+            "branch_modules"
+            if node.get("section") == "branch"
+            else "join_modules"
+        )
+        submods = branch_params.get(key) or []
+        j = node.get("sub")
+        if not (isinstance(j, int) and 0 <= j < len(submods)):
+            return None
+        sub = submods[j]
+        if not (isinstance(sub, (tuple, list)) and sub):
+            return None
+        sub_name = sub[0]
+        sub_params = (
+            sub[1] if len(sub) > 1 and isinstance(sub[1], dict) else {}
+        )
+        return sub_name, sub_params, {"section": node["section"], "sub": j}
+
+    @staticmethod
+    def _is_branch_override(value):
+        """Whether a stored value is a ``("$branch", [v0, v1, ...])`` marker."""
+        return (
+            isinstance(value, (tuple, list))
+            and len(value) >= 2
+            and str(value[0]) == "$branch"
+            and isinstance(value[1], (list, tuple))
+        )
+
+    def _branch_count(self, branch_params):
+        """Number of branches declared by a branch module's parameters."""
+        n = branch_params.get("n_branches")
+        labels = branch_params.get("branch_labels")
+        if n is None and labels is not None:
+            n = len(labels)
+        try:
+            return int(n)
+        except (TypeError, ValueError):
+            return 0
+
+    def _setup_branch_context(self, modules, node, top_index):
+        """Configure the branch-id selector and join toggle for the selection.
+
+        The join toggle is shown for any branch sub-module. Per-branch controls
+        (branch-id selector + overrides) are shown only for a *branch-section*
+        sub-module; join modules run once, so they have no per-branch values.
+        """
+        self._branch_override_params = {}
+        is_sub = node is not None and node.get("kind") == "sub"
+        if not (is_sub and 0 <= top_index < len(modules)):
+            self._clear_branch_context()
+            return
+        branch_params = modules[top_index][1]
+        if not isinstance(branch_params, dict):
+            self._clear_branch_context()
+            return
+
+        section = node.get("section")
+        # The "join module" toggle is available for any branch sub-module.
+        self._set_join_checkbox(checked=(section == "join"), visible=True)
+
+        if section == "join":
+            # Join modules are not per branch: no branch-id / overrides.
+            self.editing_branch_context = None
+            self.branch_id_container.setVisible(False)
+            return
+
+        n = self._branch_count(branch_params)
+        if n > 0:
+            labels = branch_params.get("branch_labels")
+            prev = (self.editing_branch_context or {}).get("branch_id", 0)
+            branch_id = prev if 0 <= prev < n else 0
+            self.editing_branch_context = {
+                "n_branches": n,
+                "labels": labels,
+                "branch_id": branch_id,
+            }
+            self._populate_branch_id_combobox(n, labels, branch_id)
+            self.branch_id_container.setVisible(True)
+        else:
+            self.editing_branch_context = None
+            self.branch_id_container.setVisible(False)
+
+    def _set_join_checkbox(self, checked, visible):
+        """Set the 'join module' checkbox state without firing its signal."""
+        if not hasattr(self, "join_module_container"):
+            return
+        self.join_module_checkbox.blockSignals(True)
+        self.join_module_checkbox.setChecked(checked)
+        self.join_module_checkbox.blockSignals(False)
+        self.join_module_container.setVisible(visible)
+
+    def _clear_branch_context(self):
+        """Hide the branch-id selector / join toggle and drop the context."""
+        self.editing_branch_context = None
+        self._branch_override_params = {}
+        if hasattr(self, "branch_id_container"):
+            self.branch_id_container.setVisible(False)
+        if hasattr(self, "join_module_container"):
+            self.join_module_container.setVisible(False)
+
+    @staticmethod
+    def _strip_branch_overrides(params, branch_id=0):
+        """Replace ("$branch", [...]) values with one concrete value.
+
+        Used when a per-branch sub-module becomes a join module: join modules
+        run once, so any per-branch override collapses to a single value.
+        """
+
+        def walk(value):
+            if isinstance(value, dict):
+                return {k: walk(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                if (
+                    isinstance(value, tuple)
+                    and len(value) >= 2
+                    and str(value[0]) == "$branch"
+                    and isinstance(value[1], (list, tuple))
+                ):
+                    lst = value[1]
+                    if not lst:
+                        return None
+                    return lst[branch_id] if branch_id < len(lst) else lst[-1]
+                seq = [walk(v) for v in value]
+                return tuple(seq) if isinstance(value, tuple) else seq
+            return value
+
+        return walk(params)
+
+    def _on_join_module_toggled(self, checked):
+        """Move the current branch sub-module between branch and join sections."""
+        subnode = self.editing_workflow_subnode
+        if subnode is None:
+            return
+        tab = self.editing_workflow_tab
+        if tab == 0:
+            modules = self.single_workflow_modules
+            list_widget = self.single_workflow_list
+            tabname = "single"
+        elif tab == 1:
+            modules = self.aggregation_workflow_modules
+            list_widget = self.aggregation_workflow_list
+            tabname = "aggregation"
+        else:
+            return
+        top = self.editing_workflow_index
+        if not (0 <= top < len(modules)) or modules[top][0] != "branch":
+            return
+        branch_params = modules[top][1]
+        cur_section = subnode["section"]
+        target_section = "join" if checked else "branch"
+        if cur_section == target_section:
+            return
+
+        # Persist pending edits into the current section first.
+        self._update_editing_workflow_item()
+
+        src_key = (
+            "branch_modules" if cur_section == "branch" else "join_modules"
+        )
+        dst_key = (
+            "join_modules" if target_section == "join" else "branch_modules"
+        )
+        src = branch_params.setdefault(src_key, [])
+        dst = branch_params.setdefault(dst_key, [])
+        j = subnode["sub"]
+        if not (0 <= j < len(src)):
+            return
+        name, params = src[j]
+        if target_section == "join":
+            # collapse any per-branch overrides -- join runs once
+            bid = (self.editing_branch_context or {}).get("branch_id", 0)
+            params = self._strip_branch_overrides(params, bid)
+        del src[j]
+        dst.append((name, params))
+        new_sub = len(dst) - 1
+
+        # Reselect the moved sub-module in its new section.
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
+        self._refresh_workflow_list(list_widget, modules)
+        row = self._locate_row(
+            list_widget, ("sub", top, target_section, new_sub)
+        )
+        if row >= 0:
+            list_widget.setCurrentRow(row)
+        self._refresh_module_palette()
+        self._log_workflow_config_event(
+            "modules.branch_sub_section_changed",
+            tab=tabname,
+            index=top,
+            to_section=target_section,
+            module=name,
+        )
+
+    def _populate_branch_id_combobox(self, n, labels, branch_id):
+        """Fill the branch-id combobox with ``n`` entries (labelled)."""
+        self.branch_id_combobox.blockSignals(True)
+        self.branch_id_combobox.clear()
+        for k in range(n):
+            if labels is not None and k < len(labels):
+                self.branch_id_combobox.addItem(f"{k}: {labels[k]}")
+            else:
+                self.branch_id_combobox.addItem(str(k))
+        self.branch_id_combobox.setCurrentIndex(branch_id)
+        self.branch_id_combobox.blockSignals(False)
+
+    def _on_branch_id_changed(self, idx):
+        """Reload the sub-module's parameters for the newly selected branch."""
+        if self.editing_branch_context is None or idx < 0:
+            return
+        # Flush edits for the previously shown branch id, then switch.
+        self._update_editing_workflow_item()
+        self.editing_branch_context["branch_id"] = idx
+
+        subnode = self.editing_workflow_subnode
+        if subnode is None:
+            return
+        modules = (
+            self.single_workflow_modules
+            if self.editing_workflow_tab == 0
+            else self.aggregation_workflow_modules
+        )
+        top = self.editing_workflow_index
+        if not (0 <= top < len(modules)):
+            return
+        branch_params = modules[top][1]
+        key = (
+            "branch_modules"
+            if subnode["section"] == "branch"
+            else "join_modules"
+        )
+        submods = branch_params.get(key) or []
+        j = subnode["sub"]
+        if 0 <= j < len(submods) and isinstance(submods[j], (tuple, list)):
+            sub = submods[j]
+            sub_params = (
+                sub[1] if len(sub) > 1 and isinstance(sub[1], dict) else {}
+            )
+            self._populate_stored_parameters(sub_params)
+            self._validate_parameters()
+
+    def _highlight_override_row(self, widget_info, on):
+        """Highlight (or clear) a parameter row shown as branch-specific."""
+        row = getattr(widget_info, "row_widget", None)
+        if row is None:
+            return
+        row.setStyleSheet("background-color: #fff3cd;" if on else "")
+
+    def _sync_per_branch_controls(self):
+        """Show/populate the per-branch checkboxes for the current form.
+
+        Checkboxes are visible only while editing a branch sub-module, and
+        checked for parameters currently carrying a ``("$branch", [...])``
+        override.
+        """
+        active = self.editing_branch_context is not None
+        for pname, wi in self.parameter_widgets.items():
+            checkbox = getattr(wi, "per_branch_checkbox", None)
+            if checkbox is None:
+                continue
+            checkbox.setVisible(active and wi.original_type != "dict")
+            checkbox.blockSignals(True)
+            checkbox.setChecked(
+                active and pname in self._branch_override_params
+            )
+            checkbox.blockSignals(False)
+
+    def _on_per_branch_toggled(self, param_name, checked):
+        """Convert a parameter to/from a per-branch ("$branch", [...]) value."""
+        if self.editing_branch_context is None:
+            return
+        widget_info = self.parameter_widgets.get(param_name)
+        if widget_info is None:
+            return
+        n = self.editing_branch_context["n_branches"]
+        if checked:
+            # Seed every branch with the current scalar value.
+            value = self._get_widget_value(
+                widget_info.widget, widget_info.original_type, widget_info
+            )
+            self._branch_override_params[param_name] = [value] * max(n, 1)
+            self._highlight_override_row(widget_info, True)
+        else:
+            self._branch_override_params.pop(param_name, None)
+            self._highlight_override_row(widget_info, False)
+        # Persist the shared<->branch-specific change to the sub-module.
+        self._update_editing_workflow_item()
 
     def _populate_stored_parameters(self, param_values):
         """Populate parameter widgets with stored values from a workflow module.
@@ -13321,6 +14107,28 @@ class Window(QtWidgets.QMainWindow):
         for param_name, widget_info in self.parameter_widgets.items():
             if param_name in param_values:
                 value_data = param_values[param_name]
+
+                # Per-branch override ("$branch", [...]) shown in a normal
+                # widget for the selected branch id, highlighted. Only when a
+                # branch sub-module is being edited (branch context active).
+                if self.editing_branch_context is not None and (
+                    self._is_branch_override(value_data)
+                ):
+                    per_branch = list(value_data[1])
+                    self._branch_override_params[param_name] = per_branch
+                    bid = self.editing_branch_context["branch_id"]
+                    if bid < len(per_branch):
+                        per_value = per_branch[bid]
+                    else:
+                        per_value = per_branch[-1] if per_branch else None
+                    self._set_widget_value(
+                        widget_info.widget,
+                        per_value,
+                        widget_info.original_type,
+                        widget_info,
+                    )
+                    self._highlight_override_row(widget_info, True)
+                    continue
 
                 # Check if value is a command tuple (starts with $ or $$)
                 if self._is_command_value(value_data):
@@ -13337,6 +14145,10 @@ class Window(QtWidgets.QMainWindow):
                     widget_info.original_type,
                     widget_info,
                 )
+                self._highlight_override_row(widget_info, False)
+
+        # Show/refresh the per-branch checkboxes for the current context.
+        self._sync_per_branch_controls()
 
     def _on_workflow_tab_changed(self, tab_index):
         """Handle workflow tab change - display selected module if any."""
@@ -13348,13 +14160,16 @@ class Window(QtWidgets.QMainWindow):
         self._refresh_module_palette()
 
         if tab_index == 0:  # Single Dataset Workflow
-            current_row = self.single_workflow_list.currentRow()
+            current_row = self._selected_module_index(
+                self.single_workflow_list
+            )
             if current_row >= 0 and current_row < len(
                 self.single_workflow_modules
             ):
                 # Update editing state to new tab/row
                 self.editing_workflow_tab = tab_index
                 self.editing_workflow_index = current_row
+                self.editing_workflow_subnode = None
 
                 module_name, param_values = self.single_workflow_modules[
                     current_row
@@ -13374,13 +14189,16 @@ class Window(QtWidgets.QMainWindow):
                         # Always unblock signals, even if exception occurs
                         self.module_combobox.blockSignals(False)
         elif tab_index == 1:  # Aggregation Workflow
-            current_row = self.aggregation_workflow_list.currentRow()
+            current_row = self._selected_module_index(
+                self.aggregation_workflow_list
+            )
             if current_row >= 0 and current_row < len(
                 self.aggregation_workflow_modules
             ):
                 # Update editing state to new tab/row
                 self.editing_workflow_tab = tab_index
                 self.editing_workflow_index = current_row
+                self.editing_workflow_subnode = None
 
                 module_name, param_values = self.aggregation_workflow_modules[
                     current_row
@@ -13478,39 +14296,102 @@ class Window(QtWidgets.QMainWindow):
     #             "Are you very sure?")
 
     def remove_selected(self):
-        """Remove the selected module from the workflow."""
+        """Remove the selected module (or branch sub-module) from the workflow."""
         current_tab_index = self.workflow_tabs.currentIndex()
+        if current_tab_index == 0:
+            list_widget = self.single_workflow_list
+            modules = self.single_workflow_modules
+            tabname = "single"
+        elif current_tab_index == 1:
+            list_widget = self.aggregation_workflow_list
+            modules = self.aggregation_workflow_modules
+            tabname = "aggregation"
+        else:
+            return
 
-        if current_tab_index == 0:  # Single Dataset Workflow
-            current_row = self.single_workflow_list.currentRow()
-            if current_row >= 0:
-                removed = self.single_workflow_modules[current_row][0]
-                self._remove_module(
-                    self.single_workflow_list,
-                    self.single_workflow_modules,
-                    current_row,
-                )
-                self._log_workflow_config_event(
-                    "modules.remove",
-                    tab="single",
-                    index=current_row,
-                    module=removed,
-                )
-        elif current_tab_index == 1:  # Aggregation Workflow
-            current_row = self.aggregation_workflow_list.currentRow()
-            if current_row >= 0:
-                removed = self.aggregation_workflow_modules[current_row][0]
-                self._remove_module(
-                    self.aggregation_workflow_list,
-                    self.aggregation_workflow_modules,
-                    current_row,
-                )
-                self._log_workflow_config_event(
-                    "modules.remove",
-                    tab="aggregation",
-                    index=current_row,
-                    module=removed,
-                )
+        node = self._selected_node(list_widget)
+        # Remove a branch sub-module from its section.
+        if node is not None and node.get("kind") == "sub":
+            self._remove_from_branch(list_widget, modules, node, tabname)
+            return
+
+        top = self._selected_module_index(list_widget)
+        if 0 <= top < len(modules):
+            removed = modules[top][0]
+            self._remove_module(list_widget, modules, top)
+            self._log_workflow_config_event(
+                "modules.remove", tab=tabname, index=top, module=removed
+            )
+
+    def _add_into_branch(
+        self, list_widget, modules, node, module_name, param_values, tabname
+    ):
+        """Insert a new module into a branch's section after the selected sub."""
+        top = node["top"]
+        section = node["section"]
+        key = "branch_modules" if section == "branch" else "join_modules"
+        branch_params = modules[top][1]
+        if not isinstance(branch_params, dict):
+            return
+        submods = branch_params.setdefault(key, [])
+        at = node["sub"] + 1
+        submods.insert(at, (module_name, param_values))
+        # No top-level index change -> no reference remap (branch-local
+        # references are not auto-remapped).
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
+        self._refresh_workflow_list(list_widget, modules)
+        row = self._locate_row(list_widget, ("sub", top, section, at))
+        if row >= 0:
+            list_widget.setCurrentRow(row)
+        self._refresh_module_palette()
+        self._log_workflow_config_event(
+            "modules.branch_sub_add",
+            tab=tabname,
+            index=top,
+            section=section,
+            sub=at,
+            module=module_name,
+            params=param_values,
+        )
+
+    def _remove_from_branch(self, list_widget, modules, node, tabname):
+        """Remove a branch sub-module from its section."""
+        top = node["top"]
+        section = node["section"]
+        j = node["sub"]
+        key = "branch_modules" if section == "branch" else "join_modules"
+        branch_params = modules[top][1]
+        submods = branch_params.get(key)
+        if not (isinstance(submods, list) and 0 <= j < len(submods)):
+            return
+        entry = submods[j]
+        removed = (
+            entry[0]
+            if isinstance(entry, (tuple, list)) and entry
+            else str(entry)
+        )
+        del submods[j]
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
+        self._refresh_workflow_list(list_widget, modules)
+        # Reselect the branch header so the editor lands somewhere sensible.
+        row = self._module_item_row(list_widget, top)
+        if row >= 0:
+            list_widget.setCurrentRow(row)
+        self._refresh_module_palette()
+        self._log_workflow_config_event(
+            "modules.branch_sub_remove",
+            tab=tabname,
+            index=top,
+            section=section,
+            sub=j,
+            module=removed,
+        )
 
     def _reorder_module(
         self, list_widget, modules, tab_index, from_row, to_row
@@ -13541,16 +14422,18 @@ class Window(QtWidgets.QMainWindow):
             scope, {from_row: to_row, to_row: from_row}
         )
 
-        # Refresh the displayed numbering/labels.
+        # Refresh the displayed numbering/labels (indenting branch subs).
         self._renumber_workflow_items(list_widget, modules)
 
         # The editor widgets still show the moved module; point the editing
-        # state at its new row and move the selection without triggering a
-        # stale save/reload through currentRowChanged.
+        # state at its new index and move the selection to its row without
+        # triggering a stale save/reload through currentRowChanged.
         self.editing_workflow_index = to_row
         self.editing_workflow_tab = tab_index
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
         list_widget.blockSignals(True)
-        list_widget.setCurrentRow(to_row)
+        list_widget.setCurrentRow(self._module_item_row(list_widget, to_row))
         list_widget.blockSignals(False)
         # If the moved module's own references were renumbered, refresh the
         # editor so a later flush cannot write back the stale locators.
@@ -13559,26 +14442,24 @@ class Window(QtWidgets.QMainWindow):
         # Selection was moved with signals blocked; refresh palette explicitly.
         self._refresh_module_palette()
 
-    def _remove_module(self, list_widget, modules, row):
-        """Remove the module at row, keeping remaining parameters intact.
+    def _remove_module(self, list_widget, modules, index):
+        """Remove the top-level module at ``index``, keeping others intact.
 
-        Clearing the editing state before touching the widget prevents the
-        selection-changed handler (fired by takeItem/setCurrentRow) from
-        flushing the editor widgets onto a now-stale index. The list-widget
-        signal is blocked during the mutation, then a clean selection is
-        restored so the editor reloads the correct module.
+        ``index`` is a module index (not a display row). Clearing the editing
+        state before the rebuild prevents the selection-changed handler from
+        flushing the editor widgets onto a now-stale index. The list is rebuilt
+        (indenting branch subs), then a clean selection is restored so the
+        editor reloads the correct module.
         """
         # We are deleting the item that may currently be in the editor; drop
         # the editing state so no stale save happens during the mutation.
         self.editing_workflow_index = -1
         self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
 
         old_len = len(modules)
-        list_widget.blockSignals(True)
-        list_widget.takeItem(row)
-        list_widget.blockSignals(False)
-        del modules[row]
-        self._renumber_workflow_items(list_widget, modules)
+        del modules[index]
+        self._refresh_workflow_list(list_widget, modules)
 
         # Removing renumbers the following modules; shift references to them.
         # References to the removed module itself are left dangling on purpose
@@ -13589,92 +14470,180 @@ class Window(QtWidgets.QMainWindow):
             else wfref.AGGREGATION
         )
         self._remap_references_after_change(
-            scope, wfref.deletion_index_map(row, old_len)
+            scope, wfref.deletion_index_map(index, old_len)
         )
 
         # Restore a valid selection (and reload the editor) if any modules
-        # remain, clamping to the last row when the tail item was removed.
+        # remain, clamping to the last module when the tail was removed.
         if modules:
-            new_row = min(row, len(modules) - 1)
-            list_widget.setCurrentRow(new_row)
+            new_index = min(index, len(modules) - 1)
+            list_widget.setCurrentRow(
+                self._module_item_row(list_widget, new_index)
+            )
         # Cover the now-empty case (no selection event fires to refresh).
         self._refresh_module_palette()
 
     def move_up(self):
-        """Move the selected module up in the workflow order."""
-        current_tab_index = self.workflow_tabs.currentIndex()
-
-        if current_tab_index == 0:  # Single Dataset Workflow
-            current_row = self.single_workflow_list.currentRow()
-            if current_row > 0:  # Can't move first item up
-                self._reorder_module(
-                    self.single_workflow_list,
-                    self.single_workflow_modules,
-                    current_tab_index,
-                    current_row,
-                    current_row - 1,
-                )
-                self._log_workflow_config_event(
-                    "modules.move_up",
-                    tab="single",
-                    from_index=current_row,
-                    to_index=current_row - 1,
-                )
-        elif current_tab_index == 1:  # Aggregation Workflow
-            current_row = self.aggregation_workflow_list.currentRow()
-            if current_row > 0:  # Can't move first item up
-                self._reorder_module(
-                    self.aggregation_workflow_list,
-                    self.aggregation_workflow_modules,
-                    current_tab_index,
-                    current_row,
-                    current_row - 1,
-                )
-                self._log_workflow_config_event(
-                    "modules.move_up",
-                    tab="aggregation",
-                    from_index=current_row,
-                    to_index=current_row - 1,
-                )
+        """Move the selected module (or branch sub-module) up."""
+        self._move_selected(-1)
 
     def move_down(self):
-        """Move the selected module down in the workflow order."""
-        current_tab_index = self.workflow_tabs.currentIndex()
+        """Move the selected module (or branch sub-module) down."""
+        self._move_selected(1)
 
-        if current_tab_index == 0:  # Single Dataset Workflow
-            current_row = self.single_workflow_list.currentRow()
-            max_row = len(self.single_workflow_modules) - 1
-            if 0 <= current_row < max_row:  # Can't move last item down
-                self._reorder_module(
-                    self.single_workflow_list,
-                    self.single_workflow_modules,
-                    current_tab_index,
-                    current_row,
-                    current_row + 1,
-                )
-                self._log_workflow_config_event(
-                    "modules.move_down",
-                    tab="single",
-                    from_index=current_row,
-                    to_index=current_row + 1,
-                )
-        elif current_tab_index == 1:  # Aggregation Workflow
-            current_row = self.aggregation_workflow_list.currentRow()
-            max_row = len(self.aggregation_workflow_modules) - 1
-            if 0 <= current_row < max_row:  # Can't move last item down
-                self._reorder_module(
-                    self.aggregation_workflow_list,
-                    self.aggregation_workflow_modules,
-                    current_tab_index,
-                    current_row,
-                    current_row + 1,
-                )
-                self._log_workflow_config_event(
-                    "modules.move_down",
-                    tab="aggregation",
-                    from_index=current_row,
-                    to_index=current_row + 1,
-                )
+    def _move_selected(self, direction):
+        """Move the current selection up (-1) or down (+1).
+
+        Branch-aware: a top-level module swaps with its neighbour, or moves
+        *into* an adjacent branch as a sub-module. A branch sub-module reorders
+        within its section, or (at the section edge) moves *out* to a top-level
+        module next to the branch. Top-level index changes remap
+        ``$get_prior_result`` back-references; branch-local references are not
+        remapped (the workflow consistency check flags any that break).
+        """
+        tab = self.workflow_tabs.currentIndex()
+        if tab == 0:
+            list_widget = self.single_workflow_list
+            modules = self.single_workflow_modules
+            tabname = "single"
+        elif tab == 1:
+            list_widget = self.aggregation_workflow_list
+            modules = self.aggregation_workflow_modules
+            tabname = "aggregation"
+        else:
+            return
+
+        node = self._selected_node(list_widget)
+        if node is None:
+            return
+
+        # Flush pending edits before restructuring the data model.
+        self._update_editing_workflow_item()
+        old_len = len(modules)
+        if node["kind"] == "module":
+            result = self._move_top_module(
+                modules, node["top"], direction, old_len
+            )
+        else:
+            result = self._move_branch_sub(modules, node, direction, old_len)
+        if result is None:
+            return
+        selector, index_map = result
+
+        if index_map:
+            scope = wfref.SINGLE if tab == 0 else wfref.AGGREGATION
+            self._remap_references_after_change(scope, index_map)
+
+        # Clear editing state so the reselect reloads the editor cleanly.
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
+
+        self._refresh_workflow_list(list_widget, modules)
+        row = self._locate_row(list_widget, selector)
+        if row >= 0:
+            list_widget.setCurrentRow(row)  # fires handler -> reload editor
+        self._refresh_module_palette()
+        self._log_workflow_config_event(
+            "modules.move",
+            tab=tabname,
+            direction=direction,
+            selector=list(selector),
+        )
+
+    def _move_top_module(self, modules, top, direction, old_len):
+        """Move a top-level module; may absorb it into an adjacent branch.
+
+        Returns ``(selector, index_map)`` or None if the move is impossible.
+        """
+        target = top + direction
+        if not (0 <= target < len(modules)):
+            return None
+        neighbour = modules[target]
+        if neighbour[0] == "branch" and isinstance(neighbour[1], dict):
+            # Move this module INTO the adjacent branch.
+            bmods = neighbour[1].setdefault("branch_modules", [])
+            jmods = neighbour[1].setdefault("join_modules", [])
+            entry = modules[top]
+            del modules[top]
+            index_map = wfref.deletion_index_map(top, old_len)
+            if direction > 0:
+                # Was above the branch; becomes its first sub-module. After
+                # deleting `top`, the branch now sits at index `top`.
+                bmods.insert(0, entry)
+                return ("sub", top, "branch", 0), index_map
+            # Was below the branch (target = top - 1); enters at the branch's
+            # last position -- the last join module, or the last branch module
+            # if there is no join section.
+            if jmods:
+                jmods.append(entry)
+                return ("sub", target, "join", len(jmods) - 1), index_map
+            bmods.append(entry)
+            return ("sub", target, "branch", len(bmods) - 1), index_map
+        # Plain neighbour: swap.
+        modules[top], modules[target] = modules[target], modules[top]
+        return ("module", target), {top: target, target: top}
+
+    def _move_branch_sub(self, modules, node, direction, old_len):
+        """Move a branch sub-module.
+
+        The branch's rows form a continuous sequence -- ``branch_modules``
+        then ``join_modules`` -- bordered by the top-level modules before and
+        after the branch. Moving crosses those boundaries: a sub-module can
+        reorder within its section, cross between the branch and join sections,
+        or move out to a top-level module next to the branch.
+
+        Returns ``(selector, index_map)`` or None.
+        """
+        top = node["top"]
+        section = node["section"]
+        j = node["sub"]
+        branch_params = modules[top][1]
+        bmods = branch_params.setdefault("branch_modules", [])
+        jmods = branch_params.setdefault("join_modules", [])
+        submods = bmods if section == "branch" else jmods
+        if not (0 <= j < len(submods)):
+            return None
+
+        # Reorder within the same section.
+        new_j = j + direction
+        if 0 <= new_j < len(submods):
+            submods[j], submods[new_j] = submods[new_j], submods[j]
+            return ("sub", top, section, new_j), None
+
+        entry = submods[j]
+        if section == "branch":
+            if direction < 0:
+                # First branch sub, up -> top-level before the branch.
+                del submods[j]
+                modules.insert(top, entry)
+                return ("module", top), wfref.insertion_index_map(top, old_len)
+            # Last branch sub, down.
+            del submods[j]
+            if jmods:
+                # Cross into the join section as its first module.
+                jmods.insert(0, entry)
+                return ("sub", top, "join", 0), None
+            # No join section -> top-level after the branch.
+            modules.insert(top + 1, entry)
+            return (
+                ("module", top + 1),
+                wfref.insertion_index_map(top + 1, old_len),
+            )
+        # Join section.
+        if direction < 0:
+            # First join sub, up -> into the branch section as its last module.
+            del submods[j]
+            bmods.append(entry)
+            return ("sub", top, "branch", len(bmods) - 1), None
+        # Last join sub, down -> top-level after the branch.
+        del submods[j]
+        modules.insert(top + 1, entry)
+        return (
+            ("module", top + 1),
+            wfref.insertion_index_map(top + 1, old_len),
+        )
 
     def create_python_script(
         self, host_cluster, login_node, filename="start_workflow.py"
@@ -14712,12 +15681,17 @@ class Window(QtWidgets.QMainWindow):
             walk(self.module_tree.topLevelItem(k))
 
     def _build_module_item(self, m):
-        """A leaf tree item for a single module."""
+        """A tree item for a module.
+
+        A plain module is a leaf; a branch module (whose state carries
+        ``subgroups``) expands into one collapsible group per branch plus a
+        join group, each with its sub-module rows.
+        """
         frac = m.get("fraction")
         pct = f"{frac * 100:.0f}" if isinstance(frac, (int, float)) else "-"
         elapsed = m.get("elapsed")
         el = f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "-"
-        return QtWidgets.QTreeWidgetItem(
+        item = QtWidgets.QTreeWidgetItem(
             [
                 str(m.get("i", "")),
                 str(m.get("name", "")),
@@ -14726,6 +15700,53 @@ class Window(QtWidgets.QMainWindow):
                 el,
             ]
         )
+        subgroups = m.get("subgroups")
+        if subgroups:
+            for g in subgroups:
+                item.addChild(self._build_branch_group_item(m, g))
+            item.setData(
+                0,
+                QtCore.Qt.ItemDataRole.UserRole,
+                f"branch:{m.get('i')}",
+            )
+            item.setExpanded(m.get("status") == "running")
+        return item
+
+    def _build_branch_group_item(self, m, g):
+        """A collapsible item for one branch (or the join) of a branch module."""
+        mods = g.get("modules") or []
+        if mods:
+            gfrac = sum(
+                (
+                    1.0
+                    if x.get("status") in ("done", "skipped")
+                    else (x.get("fraction") or 0.0)
+                )
+                for x in mods
+            ) / len(mods)
+        else:
+            gfrac = 0.0
+        kind = g.get("kind", "branch")
+        label = g.get("label", "")
+        disp = "[join]" if kind == "join" else f"[branch] {label}"
+        group_item = QtWidgets.QTreeWidgetItem(
+            [
+                "",
+                disp,
+                str(g.get("status", "")),
+                f"{gfrac * 100:.0f}",
+                "",
+            ]
+        )
+        for x in mods:
+            group_item.addChild(self._build_module_item(x))
+        group_item.setData(
+            0,
+            QtCore.Qt.ItemDataRole.UserRole,
+            f"branch:{m.get('i')}:{kind}:{label}",
+        )
+        group_item.setExpanded(g.get("status") == "running")
+        return group_item
 
     def _stage_label(self, state):
         """A readable label for a stage, e.g. '[single 02] cell2'."""
@@ -15775,10 +16796,14 @@ class Window(QtWidgets.QMainWindow):
         current_tab_index = self.workflow_tabs.currentIndex()
         if current_tab_index == 0:
             workflow_modules = self.single_workflow_modules
-            curr_module_index = self.single_workflow_list.currentRow()
+            curr_module_index = self._selected_module_index(
+                self.single_workflow_list
+            )
         elif current_tab_index == 1:
             workflow_modules = self.aggregation_workflow_modules
-            curr_module_index = self.aggregation_workflow_list.currentRow()
+            curr_module_index = self._selected_module_index(
+                self.aggregation_workflow_list
+            )
         else:
             return
 
@@ -16049,6 +17074,16 @@ class Window(QtWidgets.QMainWindow):
             cmd_button.setFixedWidth(50)
             row_layout.addWidget(cmd_button, stretch=0)
 
+            # Per-branch toggle: hidden unless a branch sub-module is being
+            # edited. Checking it makes this parameter branch-specific,
+            # i.e. ("$branch", [v0, v1, ...]).
+            per_branch_checkbox = QtWidgets.QCheckBox("per-branch")
+            per_branch_checkbox.setToolTip(
+                "Give this parameter a different value for each branch"
+            )
+            per_branch_checkbox.setVisible(False)
+            row_layout.addWidget(per_branch_checkbox, stretch=0)
+
             widget_info = ParameterWidgetInfo(
                 widget=widget,
                 cmd_button=cmd_button,
@@ -16056,6 +17091,7 @@ class Window(QtWidgets.QMainWindow):
                 metadata=param_metadata,
                 original_type=original_type,
                 summary_label=summary_label,
+                per_branch_checkbox=per_branch_checkbox,
             )
 
             # Capture the widget info itself, not just the name: nested
@@ -16064,6 +17100,11 @@ class Window(QtWidgets.QMainWindow):
             cmd_button.clicked.connect(
                 lambda checked, pn=param_name, wi=widget_info: (
                     self._on_cmd_button_clicked(pn, wi)
+                )
+            )
+            per_branch_checkbox.toggled.connect(
+                lambda checked, pn=param_name: (
+                    self._on_per_branch_toggled(pn, checked)
                 )
             )
             return widget_info
@@ -16214,46 +17255,91 @@ class Window(QtWidgets.QMainWindow):
             if value is not None:
                 param_values[param_name] = value
 
-        # Update the appropriate workflow list
+        # Resolve the workflow list for the editing tab.
         if self.editing_workflow_tab == 0:  # Single Dataset Workflow
-            if self.editing_workflow_index < len(self.single_workflow_modules):
-                module_name, old_params = self.single_workflow_modules[
-                    self.editing_workflow_index
-                ]
-                if old_params != param_values:
-                    # Update parameters while keeping module name
-                    self.single_workflow_modules[
-                        self.editing_workflow_index
-                    ] = (
-                        module_name,
-                        param_values,
-                    )
-                    self._log_workflow_config_event(
-                        "modules.params_changed",
-                        tab="single",
-                        index=self.editing_workflow_index,
-                        module=module_name,
-                        params=param_values,
-                    )
+            modules = self.single_workflow_modules
+            tabname = "single"
         elif self.editing_workflow_tab == 1:  # Aggregation Workflow
-            if self.editing_workflow_index < len(
-                self.aggregation_workflow_modules
-            ):
-                module_name, old_params = self.aggregation_workflow_modules[
-                    self.editing_workflow_index
-                ]
-                if old_params != param_values:
-                    # Update parameters while keeping module name
-                    self.aggregation_workflow_modules[
-                        self.editing_workflow_index
-                    ] = (module_name, param_values)
-                    self._log_workflow_config_event(
-                        "modules.params_changed",
-                        tab="aggregation",
-                        index=self.editing_workflow_index,
-                        module=module_name,
-                        params=param_values,
-                    )
+            modules = self.aggregation_workflow_modules
+            tabname = "aggregation"
+        else:
+            return
+
+        idx = self.editing_workflow_index
+        if not (0 <= idx < len(modules)):
+            return
+
+        # When editing a branch sub-module, write back into the branch's
+        # branch_modules / join_modules list (in place).
+        subnode = self.editing_workflow_subnode
+        if subnode is not None:
+            branch_params = modules[idx][1]
+            if not isinstance(branch_params, dict):
+                return
+            key = (
+                "branch_modules"
+                if subnode["section"] == "branch"
+                else "join_modules"
+            )
+            submods = branch_params.get(key)
+            j = subnode["sub"]
+            if not (isinstance(submods, list) and 0 <= j < len(submods)):
+                return
+            sub = submods[j]
+            if not (isinstance(sub, (tuple, list)) and sub):
+                return
+            sub_name = sub[0]
+            old_sub_params = (
+                sub[1] if len(sub) > 1 and isinstance(sub[1], dict) else {}
+            )
+            # Re-wrap per-branch overrides: an edited scalar is written into
+            # this branch id's slot of ("$branch", [...]), leaving the other
+            # branches' values intact.
+            if self._branch_override_params and self.editing_branch_context:
+                bid = self.editing_branch_context["branch_id"]
+                for pname, per_branch in self._branch_override_params.items():
+                    if pname in param_values:
+                        new_list = list(per_branch)
+                        if bid < len(new_list):
+                            new_list[bid] = param_values[pname]
+                        else:
+                            new_list.append(param_values[pname])
+                        param_values[pname] = ("$branch", new_list)
+                        # keep the in-memory list current for further edits
+                        self._branch_override_params[pname] = new_list
+            if old_sub_params != param_values:
+                submods[j] = (sub_name, param_values)
+                self._log_workflow_config_event(
+                    "modules.branch_sub_params_changed",
+                    tab=tabname,
+                    index=idx,
+                    section=subnode["section"],
+                    sub=j,
+                    module=sub_name,
+                    params=param_values,
+                )
+            return
+
+        # Top-level module (keep the module name, update parameters).
+        module_name, old_params = modules[idx]
+        # A branch module's branch_modules / join_modules are managed by the
+        # inline workflow-list editor, not the parameter form. Never let the
+        # form's text round-trip clobber them: preserve the stored values.
+        if module_name == "branch" and isinstance(old_params, dict):
+            for nested_key in ("branch_modules", "join_modules"):
+                if nested_key in old_params:
+                    param_values[nested_key] = old_params[nested_key]
+                else:
+                    param_values.pop(nested_key, None)
+        if old_params != param_values:
+            modules[idx] = (module_name, param_values)
+            self._log_workflow_config_event(
+                "modules.params_changed",
+                tab=tabname,
+                index=idx,
+                module=module_name,
+                params=param_values,
+            )
 
     def _on_parameter_changed(self):
         """Called when a parameter textbox loses focus (editingFinished signal)."""
@@ -16268,6 +17354,8 @@ class Window(QtWidgets.QMainWindow):
         if not self.module_combobox.signalsBlocked():
             self.editing_workflow_index = -1
             self.editing_workflow_tab = -1
+            self.editing_workflow_subnode = None
+            self._clear_branch_context()
             # Manual pick means "compose a new module" -> Add mode.
             self._update_module_button_mode()
 

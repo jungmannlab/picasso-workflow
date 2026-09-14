@@ -184,6 +184,8 @@ class ProgressManager:
         self.size = size
         self._throttle = throttle
         self._module_t0: dict[int, float] = {}
+        # start times for nested branch sub-modules, keyed (i, group, sub)
+        self._sub_t0: dict[tuple, float] = {}
         self._last_progress_emit = 0.0
         self._state = {
             "kind": kind,
@@ -313,6 +315,116 @@ class ProgressManager:
                 m["elapsed"] = round(time.perf_counter() - t0, 3)
             if error is not None:
                 m["error"] = str(error)[:2000]
+        self.emit()
+
+    # -- branch (nested sub-module) tracking ---------------------------------
+
+    def branch_init(self, i: int, groups: list) -> None:
+        """Attach a nested branch structure to module ``i``.
+
+        ``groups`` is a list of ``(label, kind, submodule_names)`` tuples --
+        one per branch plus (optionally) the join group. Each becomes a
+        collapsible sub-tree of module rows under the branch module in the
+        monitor. Safe no-op if module ``i`` is unknown.
+        """
+        m = self._get(i)
+        if m is None:
+            return
+        m["subgroups"] = [
+            {
+                "label": str(label),
+                "kind": kind,
+                "status": PENDING,
+                "modules": [
+                    {
+                        "i": j,
+                        "name": str(name),
+                        "status": PENDING,
+                        "fraction": None,
+                        "msg": None,
+                        "elapsed": None,
+                        "error": None,
+                    }
+                    for j, name in enumerate(names)
+                ],
+            }
+            for label, kind, names in groups
+        ]
+        self.emit()
+
+    def _get_sub(self, i: int, g: int, s: int):
+        """Return ``(group, submodule)`` dicts for a nested sub-module."""
+        m = self._get(i)
+        if m is None:
+            return None, None
+        groups = m.get("subgroups") or []
+        if not (0 <= g < len(groups)):
+            return None, None
+        group = groups[g]
+        mods = group.get("modules") or []
+        if not (0 <= s < len(mods)):
+            return group, None
+        return group, mods[s]
+
+    def branch_submodule_start(self, i: int, g: int, s: int) -> None:
+        """Mark nested sub-module ``(g, s)`` of module ``i`` as running."""
+        group, sub = self._get_sub(i, g, s)
+        if sub is None:
+            return
+        self._sub_t0[(i, g, s)] = time.perf_counter()
+        sub["status"] = RUNNING
+        sub["fraction"] = 0.0
+        if group is not None:
+            group["status"] = RUNNING
+        self.emit()
+
+    def branch_submodule_progress(
+        self,
+        i: int,
+        g: int,
+        s: int,
+        fraction: float | None,
+        msg: str | None = None,
+    ) -> None:
+        """Report intra-progress of a nested sub-module (throttled)."""
+        group, sub = self._get_sub(i, g, s)
+        if sub is None:
+            return
+        if fraction is not None:
+            try:
+                sub["fraction"] = max(0.0, min(1.0, float(fraction)))
+            except (TypeError, ValueError):
+                pass
+        changed = False
+        if msg is not None and msg != sub.get("msg"):
+            sub["msg"] = str(msg)
+            changed = True
+        now = time.perf_counter()
+        if changed or (now - self._last_progress_emit) >= self._throttle:
+            self._last_progress_emit = now
+            self.emit()
+
+    def branch_submodule_end(
+        self, i: int, g: int, s: int, status: str
+    ) -> None:
+        """Mark nested sub-module ``(g, s)`` finished and roll up the group."""
+        group, sub = self._get_sub(i, g, s)
+        if sub is None:
+            return
+        t0 = self._sub_t0.pop((i, g, s), None)
+        sub["status"] = status
+        if status == DONE:
+            sub["fraction"] = 1.0
+        if t0 is not None:
+            sub["elapsed"] = round(time.perf_counter() - t0, 3)
+        if group is not None:
+            mods = group.get("modules") or []
+            if any(mo.get("status") == FAILED for mo in mods):
+                group["status"] = FAILED
+            elif mods and all(
+                mo.get("status") in (DONE, SKIPPED) for mo in mods
+            ):
+                group["status"] = DONE
         self.emit()
 
     # -- aggregation (dataset) tracking --------------------------------------

@@ -10,7 +10,45 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+
+- Every Confluence module reporter now routes its final output through a single
+  `ConfluenceReporter._emit(text, postpone_report)` helper instead of repeating
+  the `if postpone_report: return text` / `update_page_content(...)` guard in
+  each method (59 call sites collapsed). This centralises the post-vs-return
+  decision so it can no longer diverge per reporter — the class of bug where a
+  reporter ignored `postpone_report` and leaked a section. (Two reporters that
+  append figures *after* posting, `localize` and `undrift_rcc`, keep their
+  bespoke tail.)
+
 ### Fixed
+
+- Branch child-page titles now include the branch module's index
+  (`"<run> - NN <label>"`). Confluence page titles must be unique within a
+  space, so two `branch` modules in one workflow that reused a label (e.g. both
+  produced `cell0`) previously collided on a single child page and merged their
+  content; the index disambiguates them.
+
+- The single-file HTML reporter is no longer mistaken for a live branch
+  reporter. `HTMLReporter` subclasses `ConfluenceReporter` and so *inherits*
+  the `open_branch_page`/`report_branch_submodule` hooks; the branch loop's
+  `hasattr` check therefore streamed each branch sub-report into `report.html`
+  *and* re-rendered it in the batch inline-collapsible pass (duplicated
+  sections), while `create_page` overwrote the report title with the last
+  branch's label. Reporters now advertise a `supports_live_branch_pages` class
+  flag (True on `ConfluenceReporter`, False on `HTMLReporter`) and the branch
+  loop filters on it.
+- `branch` sub-reports no longer leak duplicated sections onto the report page.
+  Sixteen module reporters accepted a `postpone_report` argument but ignored it
+  and always posted, so when a branch embedded one (e.g. `create_mask2`,
+  `refine_mask_by_density`) it produced a stray top-level section *and* an empty
+  nested copy — the cell-branch report showed the mask modules repeating once
+  per branch ahead of the Branch section. Each reporter now honours
+  `postpone_report` (returns its text instead of posting).
+- `summarize_branches` now shows its summary figure in the branch join report.
+  As a join module it is rendered deferred (`postpone_report=True`), and the old
+  reporter returned before ever uploading/embedding the figure — so the graph
+  was dropped. The figure is now embedded inline and uploaded on both paths.
 
 - Multi-rank aggregation no longer stalls (up to the one-week barrier timeout)
   when a worker dies after claiming a single dataset but before writing its
@@ -88,6 +126,25 @@ This file was started after v0.5.6; earlier history is in the git log.
   Node 24 majors (`actions/checkout@v5`, `actions/setup-python@v6`).
 
 ### Added
+
+- `branch` Confluence reporting now posts each branch's full sub-module report
+  to its own **child page** nested under the run page, and links to them from
+  the branch section on the main page — keeping the run page compact instead of
+  inlining every branch as a collapsible. The local HTML reporter keeps the
+  single-file inline-collapsible layout (`ConfluenceReporter._render_branch_details`,
+  overridden in `HTMLReporter`). The join/fan-in summary stays on the main page.
+- Branch child pages now populate **live**: each sub-module's report is posted
+  to its branch's child page the moment it finishes, so a running branch fills
+  in during execution instead of only after the whole step completes. The
+  `branch` module hands each finished sub-module to any reporter exposing
+  `open_branch_page`/`report_branch_submodule` (the ConfluenceReporter; the
+  workflow injects `autopicasso._branch_live_reporters`); the final `branch`
+  report then just links the already-populated pages. Reporters without the
+  hook (HTML) are unaffected and still report in one batch.
+- `summarize_branches`: new `plot_type` option (`box` default, or `violin`) for
+  the `replicates` mode; both overlay the individual per-branch points. Violin
+  falls back to a box plot when a category has too few points / no spread for a
+  KDE, so a single-replicate FOV never crashes the summary.
 
 - `[gpu]` optional-dependencies extra (`pip install -e ".[gpu]"`) that installs
   `numba-cuda` (+ a matching `cuda-bindings`), the backend picasso's CUDA fits

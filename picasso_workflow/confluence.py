@@ -14,6 +14,7 @@ Initial date: March 7, 2024
 from __future__ import annotations
 
 import html
+import re
 
 # import logging
 from loguru import logger
@@ -440,6 +441,13 @@ class ConfluenceReporter(AbstractModuleCollection):
     module's parameters and results on the report's Confluence page.
     """
 
+    # Whether the branch module may stream each sub-module to a live child
+    # page via open_branch_page / report_branch_submodule. True here; the
+    # single-file HTMLReporter (a subclass, so it *inherits* those methods)
+    # sets this False so it is not mistaken for a live reporter and does not
+    # both stream into and batch-render the one report file.
+    supports_live_branch_pages = True
+
     def __init__(
         self,
         base_url: str,
@@ -496,6 +504,35 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
             logger.debug(f"""Failed to create page {self.report_page_name}.
                 Continuing on the pre-existing page""")
+
+    def _emit(self, text, postpone_report):
+        """Post ``text`` to the report page, or return it when deferred.
+
+        The single choke point every module reporter routes its final output
+        through, so ``postpone_report`` is honoured identically everywhere:
+        returning the text (to be embedded by a caller, e.g. a branch
+        sub-report) instead of posting must never diverge per reporter. When
+        not deferred the text is posted to the current report page and
+        ``None`` is returned.
+
+        Parameters
+        ----------
+        text : str
+            The Confluence storage-format section to post or return.
+        postpone_report : bool
+            If True, return ``text`` unposted; otherwise post it.
+
+        Returns
+        -------
+        str or None
+            ``text`` when deferred, else ``None``.
+        """
+        if postpone_report:
+            return text
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+        return None
 
     def report_error(
         self,
@@ -647,12 +684,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def conditional_branch(
@@ -847,6 +879,407 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    @staticmethod
+    def _branch_topology_text(results):
+        """Render the executed module-path topology as an indented tree.
+
+        Kept legible for nested branches by drawing a plain-text tree in a
+        ``<pre>`` block (storage-format-safe).
+        """
+        topology = results.get("topology", {})
+        branch_type = topology.get("type", results.get("branch_type", "?"))
+        prefix_index = topology.get("prefix_index")
+        join_modules = topology.get("join_modules", [])
+        branches = topology.get("branches", [])
+
+        lines = []
+        if prefix_index is not None:
+            lines.append(
+                f"prefix (modules 00..{max(prefix_index - 1, 0):02d})"
+            )
+        lines.append(f"└─ branch [{branch_type}] → {len(branches)} branch(es)")
+        for b_idx, branch in enumerate(branches):
+            last_branch = b_idx == len(branches) - 1 and not join_modules
+            connector = "└─" if last_branch else "├─"
+            path = " → ".join(
+                m.split("_", 1)[-1] for m in branch.get("modules", [])
+            )
+            label = branch.get("label", f"branch{b_idx}")
+            lines.append(f"   {connector} {label}: {path or '(no modules)'}")
+        if join_modules:
+            join_path = " → ".join(join_modules)
+            lines.append(f"   └─ join: {join_path}")
+        tree = html.escape("\n".join(lines))
+        return (
+            "<p><strong>Executed module-path topology</strong></p>"
+            f'<pre style="line-height:1.4;">{tree}</pre>'
+        )
+
+    @module_decorator
+    def branch(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Report the ``branch`` module: topology, per-branch and join results.
+
+        Renders a compact summary (branch type, labels, executed-path
+        topology tree) followed by a collapsible full sub-report for each
+        branch and for the join modules.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, build the report text but defer posting it. Default False.
+        """
+        logger.debug(f"Reporting branch module {i:02d}")
+
+        branch_type = results.get("branch_type", "?")
+        labels = results.get("labels", [])
+        branch_results = results.get("branches", [])
+        join_results = results.get("join", {})
+        branch_modules = parameters.get("branch_modules", [])
+        join_modules = parameters.get("join_modules", []) or []
+
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Branch ({html.escape(str(branch_type))})</strong></p>
+        <ul>
+        <li><strong>Branches:</strong> {len(labels)} ({html.escape(', '.join(map(str, labels)) or 'none')})</li>
+        <li><strong>Join modules:</strong> {html.escape(', '.join(m for m, _ in join_modules) if join_modules else 'None')}</li>
+        <li><strong>Start Time:</strong> {html.escape(str(results.get('start time', 'N/A')))}</li>
+        <li><strong>Total Duration:</strong> {results.get("duration", 0) // 60:.0f} min {(results.get("duration", 0) % 60):.02f} s</li>
+        </ul>
+        {self._branch_topology_text(results)}
+        {parameter_text}
+        """
+
+        # Per-branch full sub-reports. On Confluence each branch becomes its
+        # own child page under the run page (keeping the main page compact);
+        # the local HTML reporter keeps them as inline collapsibles. Both
+        # return the markup to splice into the main page here. ``i`` (this
+        # branch module's index) disambiguates child-page titles and must
+        # match what streaming passed to open_branch_page.
+        text += self._render_branch_details(branch_results, branch_modules, i)
+
+        # Join / fan-in sub-reports (collapsible).
+        if join_results:
+            text += """
+            <ac:structured-macro ac:name="expand" ac:schema-version="1">
+            <ac:parameter ac:name="title">Join (fan-in)</ac:parameter>
+            <ac:rich-text-body>
+            """
+            join_branch = {"label": "join", **join_results}
+            text += self._report_branch_submodules(join_branch, join_modules)
+            text += """
+            </ac:rich-text-body>
+            </ac:structured-macro>
+            """
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+
+        return self._emit(text, postpone_report)
+
+    # ``<ac:layout>`` (and its section/cell children) may only appear at the
+    # top level of a Confluence page; nesting one inside an expand macro's
+    # rich-text-body makes Confluence hoist it back out to the top level. The
+    # per-module reporters each wrap their output in a full layout, so those
+    # wrappers are stripped before the output is embedded in the branch
+    # module's collapsible sections (the inner content nests fine).
+    _LAYOUT_TAG_RE = re.compile(r"</?ac:layout(?:-section|-cell)?\b[^>]*>")
+
+    @classmethod
+    def _strip_layout_wrappers(cls, text):
+        """Remove ``ac:layout*`` structural tags so text can nest in a macro."""
+        return cls._LAYOUT_TAG_RE.sub("", text)
+
+    def _report_branch_submodules(self, branch, module_defs):
+        """Render the sub-module reports of one branch (or the join step).
+
+        Reuses each sub-module's own reporter (like
+        :meth:`conditional_branch`), falling back to a plain result list when
+        no specific reporter exists. The per-module reporters' ``<ac:layout>``
+        wrappers are stripped so their content nests inside the branch's
+        collapsible expand macro instead of being hoisted to the top level.
+        """
+        text = ""
+        for sub_key in sorted(k for k in branch if k != "label"):
+            sub_results = branch[sub_key]
+            if not isinstance(sub_results, dict):
+                continue
+            module_name = sub_key.split("_", 1)[-1]
+            text += (
+                '<div style="margin-left: 20px; border-left: 3px solid '
+                '#4a90e2; padding-left: 10px; margin-bottom: 15px;">'
+                f"<h5>{html.escape(sub_key)}</h5>"
+            )
+            if not sub_results.get("success", True):
+                text += "<p>(sub-module did not succeed)</p></div>"
+                continue
+            reporter_method = getattr(self, module_name, None)
+            if reporter_method is not None:
+                try:
+                    sub_idx = int(sub_key.split("_")[0])
+                    sub_params = {}
+                    for idx, (mod_name, mod_params) in enumerate(module_defs):
+                        if idx == sub_idx and mod_name == module_name:
+                            sub_params = mod_params
+                            break
+                    text += self._strip_layout_wrappers(
+                        reporter_method(
+                            sub_idx,
+                            sub_params,
+                            sub_results,
+                            postpone_report=True,
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Error reporting sub-module {sub_key}: {e}")
+                    text += (
+                        '<p style="color:#f0ad4e;">Could not render report: '
+                        f"{html.escape(str(e))}</p>"
+                    )
+            else:
+                text += "<ul>"
+                for k, v in sub_results.items():
+                    if k not in ("folder", "start time", "end time"):
+                        text += f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+                text += "</ul>"
+            text += "</div>"
+        return text
+
+    def _branch_child_page_title(self, label, module_index=None):
+        """Title of the child page holding one branch's full sub-report.
+
+        Confluence page titles must be unique within a space, so the branch
+        module's index is included: a workflow with two ``branch`` modules
+        that happen to reuse a label (e.g. both produce ``cell0``) would
+        otherwise collide on one page and merge their content. ``None`` keeps
+        the bare ``"<run> - <label>"`` form (used only where no index is
+        available, e.g. direct unit-test calls).
+        """
+        if module_index is None:
+            return f"{self.report_page_name} - {label}"
+        return f"{self.report_page_name} - {module_index:02d} {label}"
+
+    @property
+    def _branch_pages(self):
+        """Titles of branch child pages populated live (title -> page id).
+
+        Filled by :meth:`open_branch_page` during a run so the final
+        ``branch`` report links to each child page instead of re-posting its
+        sub-modules. Lazily created so instances built via ``__new__`` (e.g.
+        in tests) work without ``__init__`` having run.
+        """
+        pages = self.__dict__.get("_streamed_branch_pages")
+        if pages is None:
+            pages = self.__dict__["_streamed_branch_pages"] = {}
+        return pages
+
+    def _render_branch_details(
+        self, branch_results, branch_modules, module_index=None
+    ):
+        """Render each branch as its own child page; link them on the run page.
+
+        For Confluence, a branch's full per-sub-module report lives on a
+        dedicated child page nested under the run page, so the main report
+        stays compact. When the run streamed a branch live (see
+        :meth:`open_branch_page`) its child page is already populated and is
+        only linked here; otherwise the page is created and populated now.
+        ``module_index`` (the branch module's index) disambiguates child-page
+        titles across branch modules and must match the value passed to
+        :meth:`open_branch_page` during streaming. Returns a bullet list of
+        links to the child pages, to be spliced into the branch module's
+        section on the main page.
+        (:class:`~picasso_workflow.html_reporter.HTMLReporter` overrides this
+        to keep the single-file inline-collapsible layout.)
+        """
+        if not branch_results:
+            return ""
+        items = []
+        for branch in branch_results:
+            label = str(branch.get("label", "branch"))
+            title = self._branch_child_page_title(label, module_index)
+            if title not in self._branch_pages:
+                # not streamed live -> create the child page and populate it
+                _, child_id = self._create_branch_child_page(
+                    label, module_index
+                )
+                self._post_branch_submodules_to_page(
+                    branch, branch_modules, title, child_id
+                )
+            items.append((label, title))
+        links = "".join(
+            f"<li>{self._page_link(title, label)}</li>"
+            for label, title in items
+        )
+        return (
+            "<p><strong>Per-branch reports</strong> "
+            "(each branch on its own child page):</p>"
+            f"<ul>{links}</ul>"
+        )
+
+    @staticmethod
+    def _page_link(page_title, link_text):
+        """A Confluence storage-format link to another page by title."""
+        return (
+            "<ac:link>"
+            f'<ri:page ri:content-title="{html.escape(page_title)}" />'
+            "<ac:plain-text-link-body>"
+            f"<![CDATA[{link_text}]]>"
+            "</ac:plain-text-link-body></ac:link>"
+        )
+
+    def _create_branch_child_page(self, label, module_index=None):
+        """Create (or reuse) a branch's child page with its header.
+
+        Returns ``(title, page_id)``. The page nests under the run page and
+        opens with a heading linking back to it. The header is passed as the
+        create body so no extra round-trip is needed; on a resumed run the
+        page already exists and is reused as-is. ``module_index`` disambiguates
+        the title across branch modules (see :meth:`_branch_child_page_title`).
+        """
+        title = self._branch_child_page_title(label, module_index)
+        header = (
+            '<ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>'
+            f"<p><strong>Branch: {html.escape(str(label))}</strong> &mdash; "
+            "part of "
+            f"{self._page_link(self.report_page_name, self.report_page_name)}"
+            "</p></ac:layout-cell></ac:layout-section></ac:layout>"
+        )
+        try:
+            page_id = self.ci.create_page(
+                title, body_text=header, parent_id=self.report_page_id
+            )
+        except ConfluenceInterfaceError:
+            # a resumed run reuses the existing child page
+            page_id, _ = self.ci.get_page_properties(title)
+        return title, page_id
+
+    def open_branch_page(self, label, module_index=None):
+        """Create a branch's child page for live (streamed) reporting.
+
+        Returns a ``(title, page_id)`` handle to pass to
+        :meth:`report_branch_submodule`. The page is remembered so the final
+        ``branch`` report links to it instead of re-posting its sub-modules.
+        ``module_index`` must match the value the final report passes to
+        :meth:`_render_branch_details`, so the streamed page and its link
+        resolve to the same title.
+        """
+        title, page_id = self._create_branch_child_page(label, module_index)
+        self._branch_pages[title] = page_id
+        return title, page_id
+
+    def report_branch_submodule(
+        self, handle, sub_idx, module_name, sub_params, sub_results
+    ):
+        """Post one finished sub-module to its branch child page (live).
+
+        Called by the ``branch`` module as each sub-module completes, so the
+        child page fills in during execution rather than only at the end.
+        """
+        title, page_id = handle
+        self._post_one_submodule_to_page(
+            title, page_id, sub_idx, module_name, sub_params, sub_results
+        )
+
+    def _post_branch_submodules_to_page(
+        self, branch, module_defs, page_title, page_id
+    ):
+        """Post one branch's full sub-module reports to its child page (batch).
+
+        Used when a branch was not streamed live; posts each stored
+        sub-module in order.
+        """
+        for sub_key in sorted(k for k in branch if k != "label"):
+            sub_results = branch[sub_key]
+            if not isinstance(sub_results, dict):
+                continue
+            module_name = sub_key.split("_", 1)[-1]
+            sub_idx = int(sub_key.split("_")[0])
+            sub_params = {}
+            for idx, (mod_name, mod_params) in enumerate(module_defs):
+                if idx == sub_idx and mod_name == module_name:
+                    sub_params = mod_params
+                    break
+            self._post_one_submodule_to_page(
+                page_title,
+                page_id,
+                sub_idx,
+                module_name,
+                sub_params,
+                sub_results,
+            )
+
+    def _post_one_submodule_to_page(
+        self,
+        page_title,
+        page_id,
+        sub_idx,
+        module_name,
+        sub_params,
+        sub_results,
+    ):
+        """Post a single sub-module's report onto a branch child page.
+
+        Temporarily retargets the reporter at the child page so the
+        sub-module's own reporter posts its normal section (and uploads its
+        attachments) there, exactly as on a top-level report.
+        """
+        key = f"{sub_idx:02d}_{module_name}"
+        saved_name, saved_id = self.report_page_name, self.report_page_id
+        self.report_page_name, self.report_page_id = page_title, page_id
+        try:
+            if not isinstance(sub_results, dict):
+                return
+            if not sub_results.get("success", True):
+                self.ci.update_page_content(
+                    page_title,
+                    page_id,
+                    f"<p><strong>{html.escape(key)}</strong>: "
+                    "sub-module did not succeed</p>",
+                )
+                return
+            reporter_method = getattr(self, module_name, None)
+            if reporter_method is None:
+                rows = "".join(
+                    f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+                    for k, v in sub_results.items()
+                    if k not in ("folder", "start time", "end time")
+                )
+                self.ci.update_page_content(
+                    page_title,
+                    page_id,
+                    f"<p><strong>{html.escape(key)}</strong></p>"
+                    f"<ul>{rows}</ul>",
+                )
+                return
+            try:
+                reporter_method(sub_idx, sub_params, sub_results)
+            except Exception as e:
+                logger.error(f"Error reporting sub-module {key}: {e}")
+                self.ci.update_page_content(
+                    page_title,
+                    page_id,
+                    '<p style="color:#f0ad4e;">Could not render '
+                    f"report: {html.escape(str(e))}</p>",
+                )
+        finally:
+            self.report_page_name, self.report_page_id = saved_name, saved_id
+
     def analysis_documentation(
         self, i, parameters, results, postpone_report=False
     ):
@@ -882,9 +1315,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:structured-macro>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     ##########################################################################
     # Single dataset modules
@@ -915,12 +1346,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s.</p>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def load_dataset_movie(
         self, i, pars_load, results_load, postpone_report=False
@@ -986,12 +1412,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             </ac:layout-cell></ac:layout-section></ac:layout>
             """
 
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def load_dataset_localizations(
         self, i, parameters, results, postpone_report=False
@@ -1023,9 +1444,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def identify(
@@ -1130,12 +1549,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
 
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def localize(self, i, parameters, results, postpone_report=False):
         """Report the ``localize`` module to Confluence.
@@ -1180,6 +1594,66 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_id,
                 os.path.split(res["filename"])[1],
             )
+
+    @module_decorator
+    def summarize_branches(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Report the ``summarize_branches`` module: stats + summary figure.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default
+            False.
+        """
+        logger.debug(f"Reporting summarize_branches module {i:02d}")
+        stats = results.get("stats", {})
+        rows = ""
+        for name, stat in stats.items():
+            if stat.get("n"):
+                rows += (
+                    f"<li><strong>{html.escape(str(name))}</strong>: "
+                    f"n={stat['n']}, mean={stat['mean']:.4g}, "
+                    f"std={stat['std']:.4g}, min={stat['min']:.4g}, "
+                    f"max={stat['max']:.4g}</li>"
+                )
+            else:
+                rows += (
+                    f"<li><strong>{html.escape(str(name))}</strong>: "
+                    "no data</li>"
+                )
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Branch summary ({html.escape(str(results.get('mode', '')))})</strong></p>
+        <ul>{rows}</ul>
+        {parameter_text}
+        {result_text}
+        """
+        # Embed the summary figure inline and upload it here, so it renders
+        # both as a top-level module and when this reporter is deferred
+        # (postpone_report=True) as a branch/join sub-report nested in the
+        # branch's collapsible -- the earlier "append image after posting"
+        # path was skipped on the deferred branch, dropping the graph.
+        if fp := results.get("fp_fig"):
+            text += self.insert_image(fp, height=400)
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def zfit(
@@ -1262,12 +1736,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
 
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def load_picassoconfig(
@@ -1305,12 +1774,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>saved config for documentation: {results['fp_config']}</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def export_brightfield(
         self, i, parameters, results, postpone_report=False
@@ -1360,12 +1824,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             </ac:layout-cell></ac:layout-section></ac:layout>
             """
 
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def render(
@@ -1496,12 +1955,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def undrift_rcc(self, i, parameters, results, postpone_report=False):
         """Report the ``undrift_rcc`` module to Confluence.
@@ -1534,6 +1988,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -1763,12 +2219,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def manual(self, i, parameters, results, postpone_report=False):
         """ """
@@ -1786,9 +2237,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def summarize_dataset(
@@ -1850,12 +2299,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     # def aggregate_cluster(self, i, parameters, results):
     #     logger.debug("Reporting aggregate_cluster.")
@@ -1903,12 +2347,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <b>TODO: generate plot for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def dbscan(
@@ -1966,12 +2405,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def hdbscan(self, i, parameters, results, postpone_report=False):
         """Report the ``hdbscan`` module to Confluence.
@@ -2002,12 +2436,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <b>TODO: generate plot for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def binding_event_analysis(
@@ -2049,9 +2478,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <b>TODO: show plots for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def resolution_analysis(
@@ -2120,9 +2547,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
 
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def resolution_frc_spatial(
@@ -2196,9 +2621,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
 
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def smlm_clusterer(
@@ -2270,12 +2693,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def gaussian_mixture_cluster(
@@ -2347,9 +2765,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def nneighbor(
@@ -2452,12 +2868,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def fit_csr(
@@ -2635,12 +3046,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def save_single_dataset(
         self, i, parameters, results, postpone_report=False
@@ -2659,12 +3065,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     ##########################################################################
     # Aggregation workflow modules
@@ -2687,12 +3088,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def align_channels(
@@ -2830,9 +3226,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     def combine_channels(self, i, parameters, results, postpone_report=False):
         """Report the ``combine_channels`` module to Confluence.
@@ -2860,12 +3254,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def register_channels(self, i, parameters, results, postpone_report=False):
         """Report the ``register_channels`` module to Confluence.
@@ -2896,12 +3285,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def save_datasets_aggregated(
         self, i, parameters, results, postpone_report=False
@@ -2933,12 +3317,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     # def spinna_manual(self, i, parameters, results, postpone_report=False):
     #     """ """
@@ -3036,12 +3415,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def spinna_batch(
@@ -3100,12 +3474,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def ripleysk(self, i, parameters, results, postpone_report=False):
         logger.debug("Reporting ripleysk.")
@@ -3184,12 +3553,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     # @module_decorator
     # def ripleysk_rafal(
@@ -3380,12 +3744,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def ripleysk_average(self, i, parameters, results, postpone_report=False):
         logger.debug("Reporting ripleysk_average.")
@@ -3425,12 +3784,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def ripleysk_average2(
@@ -3507,9 +3861,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     def protein_interactions(
         self, i, parameters, results, postpone_report=False
@@ -3590,12 +3942,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def protein_interactions_average(
         self, i, parameters, results, postpone_report=False
@@ -3636,12 +3983,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def create_mask(self, i, parameters, results, postpone_report=False):
         """Report the ``create_mask`` module to Confluence.
@@ -3702,12 +4044,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def create_mask2(
@@ -3791,9 +4128,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def refine_mask_by_density(
@@ -3883,9 +4218,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     def dbscan_molint(self, i, parameters, results, postpone_report=False):
         """Report the ``dbscan_molint`` module to Confluence.
@@ -3926,12 +4259,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def CSR_sim_in_mask(self, i, parameters, results, postpone_report=False):
         """Report the ``CSR_sim_in_mask`` module to Confluence.
@@ -3960,12 +4288,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def dbscan_merge_cells(
         self, i, parameters, results, postpone_report=False
@@ -3984,12 +4307,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def dbscan_merge_stimulations(
         self, i, parameters, results, postpone_report=False
@@ -4008,12 +4326,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def binary_barcodes(self, i, parameters, results, postpone_report=False):
         logger.debug("binary_barcodes.")
@@ -4040,12 +4353,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def plot_densities(self, i, parameters, results, postpone_report=False):
         logger.debug("plot_densities.")
@@ -4083,12 +4391,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def find_cluster_motifs(
         self, i, parameters, results, postpone_report=False
@@ -4169,12 +4472,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def interaction_graph(self, i, parameters, results, postpone_report=False):
         """Report the ``interaction_graph`` module to Confluence.
@@ -4216,12 +4514,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def find_gold(
@@ -4266,9 +4559,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def find_similar(
@@ -4394,9 +4685,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def find_structures(
@@ -4517,9 +4806,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def undrift_from_picked(
@@ -4575,12 +4862,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def filter_locs(
@@ -4671,12 +4953,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def filter_transient_binding(
@@ -4762,9 +5039,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     def link_locs(self, i, parameters, results, postpone_report=False):
         """Report the ``link_locs`` module to Confluence.
@@ -4794,21 +5069,17 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
-    def insert_image(self, fp_fig, postpone_report=False):
+    def insert_image(self, fp_fig, postpone_report=False, height=None):
         try:
             self.ci.upload_attachment(self.report_page_id, fp_fig)
         except ConfluenceInterfaceError:
             pass
         _, fn_fig = os.path.split(fp_fig)
+        size = f'ac:height="{height}"' if height else 'ac:width="500"'
         text = f"""
-            <ac:image ac:width="500"><ri:attachment
+            <ac:image {size}><ri:attachment
             ri:filename="{fn_fig}" />
             </ac:image>"""
         return text
@@ -4883,12 +5154,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def random_val(
@@ -5004,12 +5270,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
 
 class UndriftError(Exception):

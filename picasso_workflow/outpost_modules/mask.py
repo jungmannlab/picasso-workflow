@@ -303,6 +303,62 @@ class CellMask:
 
         self._recalc_density_mask_from_binary()
 
+    def component_masks(self, min_area_um2=0.0, fill_holes=True):
+        """Split the binary mask into one CellMask per connected component.
+
+        Unlike :meth:`filter_mask`, which keeps a single component in place,
+        this returns a *new* :class:`CellMask` for every connected component,
+        each carrying the same binning/offset metadata but a single-component
+        binary mask. Used by the ``branch`` module to turn a multi-cell mask
+        into one analysis branch per cell.
+
+        Parameters
+        ----------
+        min_area_um2 : float, optional
+            Drop components whose area (in µm²) is below this. Default 0 (keep
+            all). Useful to discard specks.
+        fill_holes : bool, optional
+            Whether to fill holes in each component. Default True.
+
+        Returns
+        -------
+        list of CellMask
+            One mask per surviving component, largest first.
+        """
+        labeled_array, _ = label(self.binary_mask)
+        labeled_nobkg = labeled_array.ravel()
+        labeled_nobkg = labeled_nobkg[labeled_nobkg > 0]
+        feature, counts = np.unique(labeled_nobkg, return_counts=True)
+        # largest component first
+        order = counts.argsort()[::-1]
+        pixel_area_um2 = self._upsample**2 / 1e6
+        masks = []
+        for rank in order:
+            component_index = feature[rank]
+            component = labeled_array == component_index
+            if fill_holes:
+                component = binary_fill_holes(component)
+            component = component.astype(np.bool_)
+            area = component.sum() * pixel_area_um2
+            if area < min_area_um2:
+                logger.debug(
+                    f"component_masks: dropping component with area "
+                    f"{area:.3f} µm² < {min_area_um2} µm²."
+                )
+                continue
+            instance = CellMask()
+            instance._pixelsize = self._pixelsize
+            instance._binsize = self._binsize
+            instance._blursize = self._blursize
+            instance._threshold = self._threshold
+            instance._upsample = self._upsample
+            instance._offset = self._offset
+            instance._initial_density = self._initial_density
+            instance._binary_mask = component
+            instance._recalc_density_mask_from_binary()
+            masks.append(instance)
+        return masks
+
     def erode(self, erode_nm):
         """Focus the mask by a given number of nanometers"""
         erode_px = int(np.round(erode_nm / self._upsample))

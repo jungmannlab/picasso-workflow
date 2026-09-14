@@ -62,6 +62,69 @@ def test_stage_label(win):
     )
 
 
+def test_branch_module_expands_into_groups(win):
+    from PyQt6 import QtWidgets
+    from PyQt6.QtCore import Qt
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    m = {
+        "i": 4,
+        "name": "branch",
+        "status": "running",
+        "fraction": 0.4,
+        "subgroups": [
+            {
+                "label": "cell0",
+                "kind": "branch",
+                "status": "done",
+                "modules": [
+                    {
+                        "i": 0,
+                        "name": "create_mask2",
+                        "status": "done",
+                        "fraction": 1.0,
+                    },
+                    {
+                        "i": 1,
+                        "name": "nneighbor",
+                        "status": "done",
+                        "fraction": 1.0,
+                    },
+                ],
+            },
+            {
+                "label": "join",
+                "kind": "join",
+                "status": "pending",
+                "modules": [
+                    {
+                        "i": 0,
+                        "name": "summarize_branches",
+                        "status": "pending",
+                        "fraction": None,
+                    },
+                ],
+            },
+        ],
+    }
+    item = win._build_module_item(m)
+    # branch module expands into a group per branch + the join group
+    assert item.childCount() == 2
+    g0 = item.child(0)
+    assert g0.text(1) == "[branch] cell0"
+    assert g0.childCount() == 2
+    assert g0.child(0).text(1) == "create_mask2"
+    assert item.child(1).text(1) == "[join]"
+    # branch + group carry stable expansion keys; a plain module does not
+    assert item.data(0, Qt.ItemDataRole.UserRole) == "branch:4"
+    assert g0.data(0, Qt.ItemDataRole.UserRole) == "branch:4:branch:cell0"
+    leaf = win._build_module_item(
+        {"i": 2, "name": "identify", "status": "done", "fraction": 1.0}
+    )
+    assert leaf.childCount() == 0
+    assert leaf.data(0, Qt.ItemDataRole.UserRole) is None
+
+
 def test_sorted_singles_orders_datasets_then_aggregation(win):
     s0 = _single(0, "done", [])
     s1 = _single(1, "running", [])
