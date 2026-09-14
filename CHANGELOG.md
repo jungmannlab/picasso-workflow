@@ -47,6 +47,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- `picasso_outpost.pick_origami` is much faster on datasets that yield many
+  candidate footprints (e.g. sub-pixel origamis at wide nlocs/rmsd windows):
+  it now picks all candidate footprints in a single `picked_locs` pass (the
+  spatial index is built once instead of rebuilt per candidate — `O(N_locs)`
+  vs `O(N_candidates * N_locs)`), and skips the expensive rotation-sweep
+  registration for any candidate that sub-clusters to fewer than
+  `n_sites_expected - missing_sites_allowed` docking sites (it can never be
+  accepted). Candidate/registration counts are logged, and the result now
+  reports `n_registered` alongside `n_candidates` / `n_accepted`.
+
+### Changed
+
 - Every Confluence module reporter now routes its final output through a single
   `ConfluenceReporter._emit(text, postpone_report)` helper instead of repeating
   the `if postpone_report: return text` / `update_page_content(...)` guard in

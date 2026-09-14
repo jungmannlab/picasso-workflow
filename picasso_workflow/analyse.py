@@ -14092,6 +14092,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         docking_centers = pick_result["docking_site_centers_px"]
         geometry_table = pick_result["geometry_table"]
         results["n_candidates"] = pick_result["n_candidates"]
+        results["n_registered"] = pick_result.get("n_registered")
         results["n_accepted"] = pick_result["n_accepted"]
         results["geometry_table"] = geometry_table
 

@@ -5722,17 +5722,55 @@ def pick_origami(
             "(expected 'footprint' or 'cluster_of_clusters')"
         )
 
+    # A candidate can only be accepted if it resolves at least this many
+    # sites; registration can match at most len(site_centers) of them. So
+    # skip the expensive rotation-sweep registration (~360 seeds/candidate)
+    # for any candidate that sub-clusters to fewer sites than this floor.
+    min_required_sites = max(
+        1, template.n_sites_expected - missing_sites_allowed
+    )
+    logger.debug(
+        f"pick_origami: {len(candidates)} candidate footprints "
+        f"(method={candidate_method}, footprint_diameter="
+        f"{footprint_diameter:.3f} px); registering those with "
+        f">= {min_required_sites} resolved sites."
+    )
+
     accepted_centers_px = []
     docking_site_centers_px = []
     geometry_table = []
-    for cx, cy in candidates:
-        foot_locs = picked_locs(
-            locs,
-            info,
-            [(cx, cy)],
-            pick_diameter=footprint_diameter,
-            add_group=False,
-        )
+    n_registered = 0
+    if not candidates:
+        logger.debug("pick_origami: no candidate footprints found.")
+        return {
+            "accepted_centers_px": [],
+            "docking_site_centers_px": [],
+            "geometry_table": [],
+            "n_candidates": 0,
+            "n_registered": 0,
+            "n_accepted": 0,
+            "candidate_nlocs": nlocs,
+            "candidate_rmsds": rmsds,
+            "candidate_labels": labels,
+        }
+
+    # Pick all candidate footprints in one pass: picked_locs builds the
+    # spatial index once and loops over centers internally, so this is
+    # O(N_locs) instead of O(N_candidates * N_locs) from per-candidate
+    # index rebuilds. The 'group' column maps each loc to its candidate.
+    all_foot_locs = picked_locs(
+        locs,
+        info,
+        candidates,
+        pick_diameter=footprint_diameter,
+        add_group=True,
+    )
+    foot_groups = {int(g): sub for g, sub in all_foot_locs.groupby("group")}
+
+    for cand_idx, (cx, cy) in enumerate(candidates):
+        foot_locs = foot_groups.get(cand_idx)
+        if foot_locs is None or len(foot_locs) == 0:
+            continue
         xy_nm = (
             np.column_stack(
                 [np.asarray(foot_locs["x"]), np.asarray(foot_locs["y"])]
@@ -5742,6 +5780,11 @@ def pick_origami(
         site_centers_nm = subcluster_docking_sites(
             xy_nm, spacing_nm, min_samples=subcluster_min_samples
         )
+        # cheap pre-filter: too few resolved sites -> cannot be accepted,
+        # so don't pay for the full registration sweep.
+        if len(site_centers_nm) < min_required_sites:
+            continue
+        n_registered += 1
         reg = register_to_template(
             site_centers_nm,
             template.sites_nm,
@@ -5777,11 +5820,16 @@ def pick_origami(
             for px in matched_obs_nm / pixelsize:
                 docking_site_centers_px.append((float(px[0]), float(px[1])))
 
+    logger.debug(
+        f"pick_origami: {n_registered} candidates registered, "
+        f"{len(accepted_centers_px)} accepted."
+    )
     return {
         "accepted_centers_px": accepted_centers_px,
         "docking_site_centers_px": docking_site_centers_px,
         "geometry_table": geometry_table,
         "n_candidates": len(candidates),
+        "n_registered": n_registered,
         "n_accepted": len(accepted_centers_px),
         "candidate_nlocs": nlocs,
         "candidate_rmsds": rmsds,
