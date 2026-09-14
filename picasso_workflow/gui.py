@@ -6043,8 +6043,21 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "footprint_diameter": {
                 "type": "float",
-                "description": "Pick diameter (camera px) spanning one origami",
+                "description": (
+                    "Pick diameter (camera px) spanning one origami; "
+                    "overrides pick_diameter_factor when set"
+                ),
                 "min": 0.0,
+                "required": False,
+            },
+            "pick_diameter_factor": {
+                "type": "float",
+                "description": (
+                    "Pick diameter as a multiple of the origami size when "
+                    "footprint_diameter is not set (1.5 = 150%)"
+                ),
+                "min": 0.0,
+                "default": 1.5,
                 "required": False,
             },
             "min_n_locs_per_frame": {

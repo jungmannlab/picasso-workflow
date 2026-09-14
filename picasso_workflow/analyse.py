@@ -14124,6 +14124,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             pixelsize,
             candidate_method=_opt("candidate_method", "footprint"),
             footprint_diameter=_opt("footprint_diameter", zero_is_unset=True),
+            pick_diameter_factor=_opt("pick_diameter_factor", 1.5),
             min_n_locs_per_frame=min_n_locs_per_frame,
             max_n_locs_per_frame=max_n_locs_per_frame,
             min_rmsd=_opt("min_rmsd", 0.0),
@@ -14150,12 +14151,9 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         rcode = generate_random_code(6)
 
-        # footprint diameter actually used (for pick yaml + hdf5 picking)
-        footprint_diameter = _opt("footprint_diameter", zero_is_unset=True)
-        if footprint_diameter is None:
-            footprint_diameter = (
-                template.extent_nm + template.grid_spacing_nm
-            ) / pixelsize
+        # footprint diameter actually used by the picker (for pick yaml +
+        # hdf5 picking), so the saved picks match the detection footprint.
+        footprint_diameter = pick_result["footprint_diameter"]
         docking_diameter = parameters.get(
             "docking_site_diameter",
             max(template.grid_spacing_nm / pixelsize / 2, 1e-6),

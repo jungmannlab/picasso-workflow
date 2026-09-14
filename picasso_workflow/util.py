@@ -1915,7 +1915,11 @@ class AbstractModuleCollection(abc.ABC):
             ``max_rmse_nm`` : float
                 Maximum RMSE-vs-design for acceptance (disabled if unset).
             ``footprint_diameter`` : float
-                Pick diameter (camera px) spanning one origami.
+                Pick diameter (camera px) spanning one origami; overrides
+                ``pick_diameter_factor`` when set.
+            ``pick_diameter_factor`` : float
+                Pick diameter as a multiple of the origami size when
+                ``footprint_diameter`` is unset (default 1.5 = 150 %).
             ``min_n_locs_per_frame``, ``max_n_locs_per_frame`` : float or str
                 nlocs window for pick_similar (quantile strings allowed).
             ``min_rmsd``, ``max_rmsd`` : float

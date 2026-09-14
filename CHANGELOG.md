@@ -12,6 +12,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- `pick_origami` gains a `pick_diameter_factor` parameter (default **1.5**):
+  when `footprint_diameter` is not set explicitly, the pick diameter is now
+  `pick_diameter_factor * origami_size` (150 % of the origami extent) instead of
+  the tighter `extent + spacing`. A larger pick gives margin around the
+  structure and also speeds up detection (coarser `pick_similar` grid, fewer
+  overlapping candidates). The value actually used is returned/echoed so the
+  saved pick yaml/hdf5 match the detection footprint.
+
 - `undrift_from_picked` now accepts a picasso **pick-region `.yaml`**
   (`Centers` + `Diameter`) in addition to an hdf5 of grouped picked locs: given
   a yaml it applies the pick regions to the current `self.locs` to build the
@@ -65,6 +73,15 @@ This file was started after v0.5.6; earlier history is in the git log.
   `n_sites_expected - missing_sites_allowed` docking sites (it can never be
   accepted). Candidate/registration counts are logged, and the result now
   reports `n_registered` alongside `n_candidates` / `n_accepted`.
+  `register_to_template` is now two-stage: every rotation seed is scored with a
+  single cheap gated assignment and only the best `n_refine` (default 4) seeds
+  get the full ICP, rather than ICP-ing all ~360 seeds — several times faster
+  per candidate with the same recovered geometry.
+
+- `pick_origami` accepted picks are now centred on each structure's
+  **centre of mass** (the centroid of its resolved docking sites) instead of the
+  off-centre coarse `pick_similar` seed, so origamis sit centred in their picks
+  (the reported `center_x_px` / `center_y_px` and the saved pick centres).
 
 - `pick_origami` now reports a rejection **funnel** so it is clear which filter
   removed how many candidates: counts for no-localizations, too-few-sites

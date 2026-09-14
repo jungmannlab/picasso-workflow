@@ -5399,6 +5399,7 @@ def register_to_template(
     allow_mirror=True,
     match_gate_nm=None,
     angle_step_deg=2.0,
+    n_refine=4,
 ):
     """Register observed docking sites onto a design template.
 
@@ -5421,6 +5422,11 @@ def register_to_template(
         template's median nearest-neighbour spacing.
     angle_step_deg : float, optional
         Coarse rotation-sweep step in degrees. Default 2.
+    n_refine : int, optional
+        Number of best coarse seeds to ICP-refine. The rotation sweep is
+        scored cheaply (one gated assignment per seed) and only the best
+        ``n_refine`` seeds get the full ICP, instead of ICP-ing every seed.
+        Default 4.
 
     Returns
     -------
@@ -5455,21 +5461,37 @@ def register_to_template(
         return _empty_result()
 
     mirror_options = [False, True] if allow_mirror else [False]
-    best = None  # (n_matched, -rmse, rot, trans, mirror, rows, cols)
+
+    # Stage 1 - cheaply score every rotation seed with a single gated
+    # assignment (no ICP). Stage 2 - ICP-refine only the best `n_refine`
+    # seeds. This is ~(iters x) cheaper than ICP-ing every seed while still
+    # converging on the true alignment (the coarse best is within
+    # angle_step/2 of it).
+    seeds = []  # (n_matched, -rmse0, mirror, rot0, trans0)
     for mirror in mirror_options:
-        src = observed.copy()
-        if mirror:
-            src = src * np.array([-1.0, 1.0])
+        src = observed * np.array([-1.0, 1.0]) if mirror else observed
+        src_mean = src.mean(axis=0)
         for angle in np.arange(0.0, 360.0, angle_step_deg):
             rot0 = _rotation_matrix(np.deg2rad(angle))
-            trans0 = -(rot0 @ src.mean(axis=0))
-            rot, trans, rows, cols, rmse = _icp_refine(
-                src, template, rot0, trans0, match_gate_nm
+            trans0 = -(rot0 @ src_mean)
+            transformed = src @ rot0.T + trans0
+            rows, cols, dists = _match_within_gate(
+                transformed, template, match_gate_nm
             )
-            n_matched = len(rows)
-            key = (n_matched, -rmse)
-            if best is None or key > (best[0], -best[1]):
-                best = (n_matched, rmse, rot, trans, mirror, rows, cols)
+            rmse0 = float(np.sqrt(np.mean(dists**2))) if len(dists) else np.inf
+            seeds.append((len(rows), -rmse0, mirror, rot0, trans0))
+    seeds.sort(key=lambda s: (s[0], s[1]), reverse=True)
+
+    best = None  # (n_matched, rmse, rot, trans, mirror, rows, cols)
+    for n0, _negrmse0, mirror, rot0, trans0 in seeds[: max(1, n_refine)]:
+        src = observed * np.array([-1.0, 1.0]) if mirror else observed
+        rot, trans, rows, cols, rmse = _icp_refine(
+            src, template, rot0, trans0, match_gate_nm
+        )
+        n_matched = len(rows)
+        key = (n_matched, -rmse)
+        if best is None or key > (best[0], -best[1]):
+            best = (n_matched, rmse, rot, trans, mirror, rows, cols)
 
     if best is None or best[0] == 0:
         return _empty_result()
@@ -5649,6 +5671,7 @@ def pick_origami(
     pixelsize,
     candidate_method="footprint",
     footprint_diameter=None,
+    pick_diameter_factor=1.5,
     min_n_locs_per_frame="q0.25",
     max_n_locs_per_frame="q0.98",
     min_rmsd=0.0,
@@ -5678,8 +5701,14 @@ def pick_origami(
     candidate_method : {"footprint", "cluster_of_clusters"}, optional
         Coarse candidate-detection strategy. Default ``"footprint"``.
     footprint_diameter : float, optional
-        Pick diameter (camera px) spanning one origami. Defaults to the
-        template extent plus one grid spacing.
+        Pick diameter (camera px) spanning one origami. If not given, it is
+        derived from the template extent (see ``pick_diameter_factor``).
+    pick_diameter_factor : float, optional
+        When ``footprint_diameter`` is not given, the pick diameter is
+        ``pick_diameter_factor * template.extent_nm / pixelsize`` - i.e. a
+        margin around the origami. Default 1.5 (150 % of the origami size).
+        A larger pick also makes candidate detection faster (coarser
+        ``pick_similar`` grid, fewer overlapping candidates).
     min_n_locs_per_frame, max_n_locs_per_frame : float or str, optional
         nlocs window forwarded to :func:`pick_similar` (quantile strings
         like ``"q0.25"`` allowed). Pass kinetics-derived per-frame values
@@ -5700,19 +5729,25 @@ def pick_origami(
     Returns
     -------
     dict
-        Keys: ``accepted_centers_px`` (list of ``(x, y)``),
+        Keys: ``accepted_centers_px`` (list of ``(x, y)``, centred on each
+        structure's resolved-site centre of mass),
         ``docking_site_centers_px`` (list of ``(x, y)`` for all resolved
         sites in accepted origamis), ``geometry_table`` (list of
-        per-structure dicts), ``n_candidates``, ``n_accepted``, and the
-        candidate phase-space arrays ``candidate_nlocs`` /
-        ``candidate_rmsds`` / ``candidate_labels``.
+        per-structure dicts), ``n_candidates``, ``n_registered``,
+        ``n_accepted``, ``funnel``, ``footprint_diameter`` (camera px, the
+        value actually used), the candidate phase-space arrays
+        ``candidate_nlocs`` / ``candidate_rmsds`` / ``candidate_labels``,
+        and ``accepted_nlocs`` / ``accepted_rmsds``.
     """
     spacing_nm = template.grid_spacing_nm
     # Fall back on a template-derived footprint whenever the caller did not
     # supply a usable one (None or a 0/negative placeholder). A zero diameter
-    # would divide by zero deep inside picasso's get_index_blocks.
+    # would divide by zero deep inside picasso's get_index_blocks. The
+    # pick_diameter_factor gives a margin around the origami (default 150 %).
     if not footprint_diameter or footprint_diameter <= 0:
-        footprint_diameter = (template.extent_nm + spacing_nm) / pixelsize
+        footprint_diameter = (
+            pick_diameter_factor * template.extent_nm / pixelsize
+        )
     if not footprint_diameter or footprint_diameter <= 0:
         raise ValueError(
             "pick_origami could not derive a positive footprint_diameter: "
@@ -5815,6 +5850,7 @@ def pick_origami(
             "candidate_labels": labels,
             "accepted_nlocs": np.empty(0),
             "accepted_rmsds": np.empty(0),
+            "footprint_diameter": footprint_diameter,
         }
 
     # Pick all candidate footprints in one pass: picked_locs builds the
@@ -5873,10 +5909,19 @@ def pick_origami(
                 "spacing": "rejected_spacing",
             }[verdict]
         ] += 1
+        # Centre the structure on the centre of mass of its resolved
+        # docking sites, not the coarse pick_similar seed (which can sit
+        # off-centre), so the origami is centred in its pick.
+        matched_obs_nm = site_centers_nm[reg["matched_observed_indices"]]
+        if len(matched_obs_nm):
+            com_px = matched_obs_nm.mean(axis=0) / pixelsize
+            center_x, center_y = float(com_px[0]), float(com_px[1])
+        else:
+            center_x, center_y = float(cx), float(cy)
         geometry_table.append(
             {
-                "center_x_px": float(cx),
-                "center_y_px": float(cy),
+                "center_x_px": center_x,
+                "center_y_px": center_y,
                 "n_resolved_sites": int(reg["n_resolved"]),
                 "n_missing_sites": int(
                     template.n_sites_expected - reg["n_resolved"]
@@ -5891,10 +5936,9 @@ def pick_origami(
             }
         )
         if accepted:
-            accepted_centers_px.append((float(cx), float(cy)))
+            accepted_centers_px.append((center_x, center_y))
             accepted_nlocs.append(cand_point_nlocs[cand_idx])
             accepted_rmsds.append(cand_point_rmsds[cand_idx])
-            matched_obs_nm = site_centers_nm[reg["matched_observed_indices"]]
             for px in matched_obs_nm / pixelsize:
                 docking_site_centers_px.append((float(px[0]), float(px[1])))
 
@@ -5918,6 +5962,7 @@ def pick_origami(
         "candidate_labels": labels,
         "accepted_nlocs": np.asarray(accepted_nlocs),
         "accepted_rmsds": np.asarray(accepted_rmsds),
+        "footprint_diameter": footprint_diameter,
     }
 
 
