@@ -1154,3 +1154,27 @@ def test_kinetics_window_brackets_matched_simulation():
     )
     assert kmin <= qmin
     assert qmax <= kmax
+
+
+def test_pick_origami_rejects_degenerate_footprint():
+    """A single-site template has no extent, so no positive footprint
+    diameter can be derived: pick_origami must raise a clear error rather
+    than dividing by zero deep inside picasso's get_index_blocks.
+    Regression for footprint_diameter=0 reaching pick_similar."""
+    template = picasso_outpost.origami_template_from_sites([[0.0, 0.0]])
+    assert template.n_sites_expected == 1
+    assert template.extent_nm == 0.0
+    assert template.grid_spacing_nm == 0.0
+
+    locs = pd.DataFrame(
+        np.rec.array(
+            [(0, 1.0, 1.0), (1, 2.0, 2.0)],
+            dtype=[("frame", "u4"), ("x", "f4"), ("y", "f4")],
+        )
+    )
+    info = [{"Width": 64, "Height": 64, "Frames": 100}]
+    with pytest.raises(ValueError) as excinfo:
+        picasso_outpost.pick_origami(
+            locs, info, template, pixelsize=130.0, footprint_diameter=0.0
+        )
+    assert "footprint_diameter" in str(excinfo.value)

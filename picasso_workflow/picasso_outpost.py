@@ -5674,8 +5674,19 @@ def pick_origami(
         ``candidate_rmsds`` / ``candidate_labels``.
     """
     spacing_nm = template.grid_spacing_nm
-    if footprint_diameter is None:
+    # Fall back on a template-derived footprint whenever the caller did not
+    # supply a usable one (None or a 0/negative placeholder). A zero diameter
+    # would divide by zero deep inside picasso's get_index_blocks.
+    if not footprint_diameter or footprint_diameter <= 0:
         footprint_diameter = (template.extent_nm + spacing_nm) / pixelsize
+    if not footprint_diameter or footprint_diameter <= 0:
+        raise ValueError(
+            "pick_origami could not derive a positive footprint_diameter: "
+            f"template extent={template.extent_nm} nm, spacing={spacing_nm} "
+            f"nm, pixelsize={pixelsize} nm. A single-site template has no "
+            "extent - supply footprint_diameter (camera px) explicitly, or "
+            "provide a multi-site geometry."
+        )
     match_gate_nm = 0.5 * spacing_nm if spacing_nm > 0 else None
 
     if candidate_method == "footprint":

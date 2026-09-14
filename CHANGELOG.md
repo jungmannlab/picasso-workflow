@@ -39,7 +39,11 @@ This file was started after v0.5.6; earlier history is in the git log.
   "unset" placeholders (`""` for strings, `0.0`/`0` for `max_rmsd`,
   `max_rmse_nm`, `footprint_diameter`, `grid_spacing_nm`) as not-provided so
   they fall back to real defaults instead of, e.g., `max_rmsd=0` picking
-  nothing.
+  nothing. `picasso_outpost.pick_origami` additionally derives its own
+  template-based footprint whenever `footprint_diameter` is falsy/≤0 (not just
+  `None`) so a `0.0` reaching the function no longer divides by zero inside
+  picasso's `get_index_blocks`; a genuinely degenerate (single-site) template
+  now raises a clear error naming `footprint_diameter`.
 
 ### Changed
 
