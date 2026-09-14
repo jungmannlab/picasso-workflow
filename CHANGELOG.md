@@ -10,6 +10,25 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- New single-dataset workflow module `pick_origami`: design-aware picking of
+  DNA-origami structures. Given the designed geometry — a picasso design
+  `.yaml`, a regular grid (`{n_rows, n_cols, spacing_nm, angle}`), or an
+  explicit site list — it detects candidate footprints (reusing the
+  `pick_similar` family; `candidate_method` = `"footprint"` (default) or
+  `"cluster_of_clusters"`), sub-clusters each into docking sites, registers the
+  resolved constellation against the design template (rotation + translation,
+  optional mirror), and accepts structures that resolve enough sites within the
+  spacing/RMSE tolerances (`missing_sites_allowed`, default 2). Optional imager
+  kinetics (`k_on`, `tau_b`, concentration, exposure) auto-seed the nlocs
+  window, else the `pick_similar` quantile defaults are used. Emits
+  picasso-compatible picks (origami groups **and** all resolved single docking
+  sites) plus a per-structure geometry table (resolved/missing sites, spacing,
+  RMSE-vs-design, orientation). Wired across `util`, `analyse`, `confluence`
+  (reused by the HTML reporter), `gui`, and the `modulespec` registry. Registry
+  logging is intentionally deferred to WP-DYE-QC (single logging path).
+
 ### Changed
 
 - Every Confluence module reporter now routes its final output through a single

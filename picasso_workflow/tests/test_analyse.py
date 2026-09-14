@@ -2085,6 +2085,151 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_find_structures"))
 
+    @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
+    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.analyse.render.plot_scene")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def pick_origami(
+        self,
+        mock_save_locs,
+        mock_plot_scene,
+        mock_picked_locs,
+        mock_pick_origami,
+    ):
+        """Test the pick_origami module wiring (design-aware picking)."""
+        mock_pick_origami.return_value = {
+            "accepted_centers_px": [(10.0, 10.0), (20.0, 22.0)],
+            "docking_site_centers_px": [(10.0, 10.0), (11.0, 11.0)],
+            "geometry_table": [
+                {
+                    "center_x_px": 10.0,
+                    "center_y_px": 10.0,
+                    "n_resolved_sites": 12,
+                    "n_missing_sites": 0,
+                    "mean_spacing_nm": 20.0,
+                    "rmse_nm": 1.2,
+                    "orientation_deg": 35.0,
+                    "mirror": False,
+                    "accepted": True,
+                }
+            ],
+            "n_candidates": 5,
+            "n_accepted": 2,
+            "candidate_nlocs": np.array([50, 75, 100, 40, 90]),
+            "candidate_rmsds": np.array([1.5, 2.0, 2.5, 1.0, 2.2]),
+            "candidate_labels": np.array([0, 0, -1, -1, 0]),
+        }
+        test_locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (
+                        0,
+                        10.0,
+                        10.0,
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        1,
+                        0,
+                    ),
+                    (
+                        1,
+                        10.1,
+                        10.1,
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        1,
+                        0,
+                    ),
+                ],
+                dtype=self.locs_dtype + [("group", "<i4")],
+            )
+        )
+        mock_picked_locs.return_value = test_locs
+
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (
+                        i,
+                        10 + np.random.rand(),
+                        10 + np.random.rand(),
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        i,
+                    )
+                    for i in range(50)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        self.ap.info = [
+            {"Width": 64, "Height": 64, "Frames": 1000, "Pixelsize": 130}
+        ]
+
+        parameters = {
+            "geometry": {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0},
+            "missing_sites_allowed": 2,
+            "candidate_method": "footprint",
+            "n_plot_structures": 1,
+            "display_pixelsize": 1.0,
+        }
+
+        parameters, results = self.ap.pick_origami(0, parameters)
+
+        # the template geometry was resolved from the grid spec
+        assert results["n_sites_expected"] == 12
+        assert abs(results["grid_spacing_nm"] - 20.0) < 1e-6
+        assert results["n_candidates"] == 5
+        assert results["n_accepted"] == 2
+        assert len(results["geometry_table"]) == 1
+
+        # picasso-compatible outputs + geometry table were written
+        for key in (
+            "fp_picks_yaml",
+            "fp_docking_yaml",
+            "fp_picked_locs",
+            "fp_docking_site_locs",
+            "fp_geometry_table",
+            "fp_phasespace",
+        ):
+            assert key in results, f"missing result key {key}"
+        assert os.path.exists(results["fp_picks_yaml"])
+        assert os.path.exists(results["fp_docking_yaml"])
+        assert os.path.exists(results["fp_geometry_table"])
+        assert os.path.exists(results["fp_phasespace"])
+
+        # the picks yaml is in picasso pick format (Centers + Diameter)
+        import yaml as _yaml
+
+        with open(results["fp_picks_yaml"]) as f:
+            picks = _yaml.safe_load(f)
+        assert len(picks["Centers"]) == 2
+        assert "Diameter (nm)" in picks
+
+        assert mock_pick_origami.called
+        assert mock_picked_locs.called
+        assert mock_save_locs.called
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
+
     def pairwise_module_executor(self):
         return
         shutil.rmtree(

@@ -13992,6 +13992,262 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #    @profile_resource_usage
     @module_decorator
+    def pick_origami(self, i, parameters, results):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry, auto-detects and picks the
+        origami structures (tolerating a configurable number of missing
+        docking sites), and emits picasso-compatible picks plus a
+        per-structure geometry table. See
+        :meth:`~picasso_workflow.util.AbstractModuleCollection.pick_origami`
+        for the full parameter contract.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            The module parameters (see the contract method).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        logger.debug(f"# locs: {len(self.locs)}")
+        pixelsize = self.pixelsize
+
+        # --- 1. load the design template (expected geometry) -----------
+        if parameters.get("design_file"):
+            template_spec = {
+                "design_file": parameters["design_file"],
+                "grid_spacing_nm": parameters.get("grid_spacing_nm"),
+            }
+        elif parameters.get("geometry") is not None:
+            template_spec = parameters["geometry"]
+        else:
+            raise ValueError(
+                "pick_origami needs a 'design_file' or a 'geometry' spec"
+            )
+        template = picasso_outpost.load_origami_template(
+            template_spec, grid_spacing_nm=parameters.get("grid_spacing_nm")
+        )
+        results["n_sites_expected"] = template.n_sites_expected
+        results["grid_spacing_nm"] = template.grid_spacing_nm
+
+        # --- 2. nlocs window: kinetics prediction or quantile default --
+        missing_sites_allowed = parameters.get("missing_sites_allowed", 2)
+        kinetics = parameters.get("kinetics")
+        if kinetics:
+            n_frames = self.info[0]["Frames"]
+            exposure = kinetics["exposure"]
+            min_n, max_n = picasso_outpost.kinetics_nlocs_window(
+                kinetics["k_on"],
+                kinetics["tau_b"],
+                kinetics["concentration"],
+                n_frames,
+                exposure,
+                template.n_sites_expected,
+                rel_tol=kinetics.get("rel_tol", 0.5),
+                missing_sites_allowed=missing_sites_allowed,
+            )
+            min_n_locs_per_frame = min_n / n_frames
+            max_n_locs_per_frame = max_n / n_frames
+            results["kinetics_nlocs_window"] = [float(min_n), float(max_n)]
+        else:
+            min_n_locs_per_frame = parameters.get(
+                "min_n_locs_per_frame", "q0.25"
+            )
+            max_n_locs_per_frame = parameters.get(
+                "max_n_locs_per_frame", "q0.98"
+            )
+
+        # --- 3. run the design-aware picker ----------------------------
+        pick_result = picasso_outpost.pick_origami(
+            self.locs,
+            self.info,
+            template,
+            pixelsize,
+            candidate_method=parameters.get("candidate_method", "footprint"),
+            footprint_diameter=parameters.get("footprint_diameter"),
+            min_n_locs_per_frame=min_n_locs_per_frame,
+            max_n_locs_per_frame=max_n_locs_per_frame,
+            min_rmsd=parameters.get("min_rmsd", 0.0),
+            max_rmsd=parameters.get("max_rmsd", np.inf),
+            missing_sites_allowed=missing_sites_allowed,
+            spacing_tol=parameters.get("spacing_tol", 0.3),
+            max_rmse_nm=parameters.get("max_rmse_nm"),
+            subcluster_min_samples=parameters.get("subcluster_min_samples", 3),
+            allow_mirror=parameters.get("allow_mirror", True),
+        )
+        accepted_centers = pick_result["accepted_centers_px"]
+        docking_centers = pick_result["docking_site_centers_px"]
+        geometry_table = pick_result["geometry_table"]
+        results["n_candidates"] = pick_result["n_candidates"]
+        results["n_accepted"] = pick_result["n_accepted"]
+        results["geometry_table"] = geometry_table
+
+        rcode = generate_random_code(6)
+
+        # footprint diameter actually used (for pick yaml + hdf5 picking)
+        footprint_diameter = parameters.get("footprint_diameter")
+        if footprint_diameter is None:
+            footprint_diameter = (
+                template.extent_nm + template.grid_spacing_nm
+            ) / pixelsize
+        docking_diameter = parameters.get(
+            "docking_site_diameter",
+            max(template.grid_spacing_nm / pixelsize / 2, 1e-6),
+        )
+
+        # --- 4a. origami-footprint picks (Centers + Diameter yaml) -----
+        fp_picks_yaml = os.path.join(results["folder"], "pick_origami.yaml")
+        with open(fp_picks_yaml, "w") as f:
+            yaml.dump(
+                {
+                    "Centers": [
+                        [float(c[0]), float(c[1])] for c in accepted_centers
+                    ],
+                    "Diameter (nm)": float(footprint_diameter * pixelsize),
+                    "Shape": "Circle",
+                },
+                f,
+            )
+        results["fp_picks_yaml"] = fp_picks_yaml
+
+        # secondary: picasso picks for all resolved single docking sites
+        fp_docking_yaml = os.path.join(results["folder"], "docking_sites.yaml")
+        with open(fp_docking_yaml, "w") as f:
+            yaml.dump(
+                {
+                    "Centers": [
+                        [float(c[0]), float(c[1])] for c in docking_centers
+                    ],
+                    "Diameter (nm)": float(docking_diameter * pixelsize),
+                    "Shape": "Circle",
+                },
+                f,
+            )
+        results["fp_docking_yaml"] = fp_docking_yaml
+
+        # --- 4b. grouped picked locs (one group per accepted origami) --
+        if len(accepted_centers) > 0:
+            picked_origami_locs = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                accepted_centers,
+                pick_diameter=footprint_diameter,
+                return_nonpicked=False,
+            )
+        else:
+            picked_origami_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
+            picked_origami_locs["group"] = pd.Series(dtype="int32")
+        results["n_picked_locs"] = len(picked_origami_locs)
+
+        if len(docking_centers) > 0:
+            docking_site_locs = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                docking_centers,
+                pick_diameter=docking_diameter,
+                return_nonpicked=False,
+            )
+        else:
+            docking_site_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
+            docking_site_locs["group"] = pd.Series(dtype="int32")
+
+        fp_picked_locs = os.path.join(
+            results["folder"], "picked_origami_locs.hdf5"
+        )
+        origami_info = self.info + [
+            {
+                "Generated by": "picasso-workflow.analyse.pick_origami",
+                "data": "picked origami structures",
+            }
+        ]
+        io.save_locs(fp_picked_locs, picked_origami_locs, origami_info)
+        results["fp_picked_locs"] = fp_picked_locs
+
+        fp_docking_locs = os.path.join(
+            results["folder"], "docking_site_locs.hdf5"
+        )
+        docking_info = self.info + [
+            {
+                "Generated by": "picasso-workflow.analyse.pick_origami",
+                "data": "resolved docking sites",
+            }
+        ]
+        io.save_locs(fp_docking_locs, docking_site_locs, docking_info)
+        results["fp_docking_site_locs"] = fp_docking_locs
+
+        # --- 4c. per-structure geometry table --------------------------
+        fp_geometry_table = os.path.join(
+            results["folder"], "geometry_table.csv"
+        )
+        pd.DataFrame(geometry_table).to_csv(fp_geometry_table, index=False)
+        results["fp_geometry_table"] = fp_geometry_table
+
+        # --- 5. phase-space diagnostic figure --------------------------
+        nlocs = np.asarray(pick_result["candidate_nlocs"])
+        rmsds = np.asarray(pick_result["candidate_rmsds"])
+        fig, ax = plt.subplots()
+        if len(nlocs) and len(nlocs) == len(rmsds):
+            ax.scatter(nlocs, rmsds, color="k", alpha=0.2, label="candidates")
+        ax.set_xlabel("# localizations in footprint")
+        ax.set_ylabel("root mean square distance in footprint")
+        ax.set_title(
+            f"Origami candidates: {results['n_accepted']}"
+            f" / {results['n_candidates']} accepted"
+        )
+        ax.legend()
+        results["fp_phasespace"] = os.path.join(
+            results["folder"], f"origami-phasespace-{rcode}.png"
+        )
+        fig.set_size_inches((9, 9))
+        fig.savefig(results["fp_phasespace"])
+
+        # --- 6. representative accepted structures ---------------------
+        n_plot = parameters.get("n_plot_structures")
+        fp_renderings = []
+        if n_plot is not None and len(accepted_centers) > 0:
+            pixelsize_display = parameters.get("display_pixelsize", 1)
+            n_show = min(n_plot, len(accepted_centers))
+            for idx, pick_i in enumerate(
+                np.random.choice(
+                    len(accepted_centers), size=n_show, replace=False
+                )
+            ):
+                cx, cy = accepted_centers[pick_i]
+                x_min = cx - footprint_diameter / 2
+                y_min = cy - footprint_diameter / 2
+                render_kwargs = {
+                    "oversampling": pixelsize / pixelsize_display,
+                    "viewport": [
+                        (y_min, x_min),
+                        (
+                            cy + footprint_diameter / 2,
+                            cx + footprint_diameter / 2,
+                        ),
+                    ],
+                }
+                fp_renderings.append(
+                    os.path.join(
+                        results["folder"],
+                        f"render_origami_{idx}_{pick_i}-{rcode}.png",
+                    )
+                )
+                render.plot_scene(
+                    picked_origami_locs,
+                    pixelsize_display,
+                    pixelsize,
+                    fp=fp_renderings[-1],
+                    render_kwargs=render_kwargs,
+                    title=f"origami {pick_i}",
+                )
+        results["fp_renderings"] = [fp_renderings]
+
+        return parameters, results
+
+    #    @profile_resource_usage
+    @module_decorator
     def undrift_from_picked(self, i, parameters, results):
         """Undrift using picked localizations.
 

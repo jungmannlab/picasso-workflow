@@ -5964,6 +5964,176 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def pick_origami(self):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry (a picasso design file, a
+        regular grid, or an explicit site list), finds and picks the
+        origami structures automatically, and tolerates a configurable
+        number of missing docking sites.
+
+        Parameters
+        ----------
+        i : int
+            the index of the module
+        parameters : dict
+            with a design source (one of):
+                design_file : str
+                    path to a picasso design .yaml file
+                geometry : dict
+                    a grid {n_rows, n_cols, spacing_nm, angle} or an
+                    explicit {sites_nm: [[x, y], ...]} layout
+            and optional keys:
+                grid_spacing_nm, candidate_method, missing_sites_allowed,
+                spacing_tol, max_rmse_nm, footprint_diameter,
+                min_n_locs_per_frame, max_n_locs_per_frame, min_rmsd,
+                max_rmsd, kinetics, allow_mirror, n_plot_structures,
+                display_pixelsize
+        results : dict
+            the results this function generates. This is created
+            in the decorator wrapper
+        """
+        parameters_spec = {
+            "design_file": {
+                "type": "str",
+                "description": "Path to a picasso design .yaml file",
+                "extensions": [".yaml"],
+                "required": False,
+            },
+            "geometry": {
+                "type": "dict",
+                "description": (
+                    "Grid {n_rows, n_cols, spacing_nm, angle} or explicit "
+                    "{sites_nm: [[x, y], ...]} layout"
+                ),
+                "required": False,
+            },
+            "grid_spacing_nm": {
+                "type": "float",
+                "description": "Physical spacing (nm) anchoring the design",
+                "min": 0.0,
+                "required": False,
+            },
+            "candidate_method": {
+                "type": "str",
+                "description": "Coarse candidate detection strategy",
+                "options": ["footprint", "cluster_of_clusters"],
+                "default": "footprint",
+                "required": False,
+            },
+            "missing_sites_allowed": {
+                "type": "int",
+                "description": "Missing docking sites tolerated per structure",
+                "min": 0,
+                "default": 2,
+                "required": False,
+            },
+            "spacing_tol": {
+                "type": "float",
+                "description": "Relative spacing tolerance for acceptance",
+                "min": 0.0,
+                "default": 0.3,
+                "required": False,
+            },
+            "max_rmse_nm": {
+                "type": "float",
+                "description": "Maximum RMSE-vs-design (nm) for acceptance",
+                "min": 0.0,
+                "required": False,
+            },
+            "footprint_diameter": {
+                "type": "float",
+                "description": "Pick diameter (camera px) spanning one origami",
+                "min": 0.0,
+                "required": False,
+            },
+            "min_n_locs_per_frame": {
+                "type": ["float", "str"],
+                "description": (
+                    "Min nlocs window for pick_similar (quantile 'q..' ok)"
+                ),
+                "required": False,
+            },
+            "max_n_locs_per_frame": {
+                "type": ["float", "str"],
+                "description": (
+                    "Max nlocs window for pick_similar (quantile 'q..' ok)"
+                ),
+                "required": False,
+            },
+            "min_rmsd": {
+                "type": "float",
+                "description": "Minimum RMSD for pick_similar",
+                "required": False,
+            },
+            "max_rmsd": {
+                "type": "float",
+                "description": "Maximum RMSD for pick_similar",
+                "required": False,
+            },
+            "kinetics": {
+                "type": "dict",
+                "description": (
+                    "{k_on, tau_b, concentration, exposure} to auto-seed "
+                    "the nlocs window from predicted locs per site"
+                ),
+                "required": False,
+            },
+            "allow_mirror": {
+                "type": "bool",
+                "description": "Allow a mirrored match during registration",
+                "default": True,
+                "required": False,
+            },
+            "n_plot_structures": {
+                "type": "int",
+                "description": "Number of representative structures to plot",
+                "min": 0,
+                "required": False,
+            },
+            "display_pixelsize": {
+                "type": "float",
+                "description": "Pixel size for display in nm, default: 1",
+                "min": 0.0,
+                "default": 1.0,
+                "required": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "n_candidates": {
+                "type": "int",
+                "description": "Number of candidate origami footprints found",
+            },
+            "n_accepted": {
+                "type": "int",
+                "description": "Number of accepted origami structures",
+            },
+            "n_sites_expected": {
+                "type": "int",
+                "description": "Expected docking sites per origami",
+            },
+        }
+
+        return parameters_spec, results_spec
+
     def undrift_from_picked(self):
         """Performs undrift from piced locs.
 

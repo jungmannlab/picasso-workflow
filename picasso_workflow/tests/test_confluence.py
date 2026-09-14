@@ -857,6 +857,38 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    def pick_origami(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "n_candidates": 5,
+            "n_accepted": 2,
+            "n_sites_expected": 12,
+            "grid_spacing_nm": 20.0,
+            "geometry_table": [
+                {
+                    "center_x_px": 10.0,
+                    "center_y_px": 10.0,
+                    "n_resolved_sites": 12,
+                    "n_missing_sites": 0,
+                    "mean_spacing_nm": 20.0,
+                    "rmse_nm": 1.2,
+                    "orientation_deg": 35.0,
+                    "mirror": False,
+                    "accepted": True,
+                }
+            ],
+        }
+        self.cr.pick_origami(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
     # @unittest.skip("")
     def pairwise_module_executor(self):
         parameters = {"module_name": "mymodule"}

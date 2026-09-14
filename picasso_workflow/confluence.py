@@ -4809,6 +4809,122 @@ class ConfluenceReporter(AbstractModuleCollection):
         return self._emit(text, postpone_report)
 
     @module_decorator
+    def pick_origami(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Report the ``pick_origami`` module to Confluence.
+
+        Summarizes the design-aware picking (candidates, accepted
+        structures, expected/missing sites), renders the per-structure
+        geometry table, and uploads the phase-space + example-structure
+        figures.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default
+            is False.
+        """
+        logger.debug("Reporting pick_origami.")
+        n_expected = results.get("n_sites_expected", "?")
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Pick Origami</strong></p>
+        Summary:
+        <ul>
+        <li># Candidates found: {results.get("n_candidates", "?")}</li>
+        <li># Structures accepted: {results.get("n_accepted", "?")}</li>
+        <li># Sites expected per origami: {n_expected}</li>
+        <li>Grid spacing (design): {results.get("grid_spacing_nm", "?")} nm</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        # per-structure geometry table
+        geometry_table = results.get("geometry_table") or []
+        if geometry_table:
+            columns = [
+                ("center_x_px", "x (px)"),
+                ("center_y_px", "y (px)"),
+                ("n_resolved_sites", "resolved"),
+                ("n_missing_sites", "missing"),
+                ("mean_spacing_nm", "spacing (nm)"),
+                ("rmse_nm", "RMSE (nm)"),
+                ("orientation_deg", "angle (deg)"),
+                ("mirror", "mirror"),
+                ("accepted", "accepted"),
+            ]
+            text += "<table><tr>"
+            for _, title in columns:
+                text += f"<th>{title}</th>"
+            text += "</tr>"
+            for row in geometry_table:
+                text += "<tr>"
+                for key, _ in columns:
+                    value = row.get(key, "")
+                    if isinstance(value, float):
+                        value = f"{value:.2f}"
+                    text += f"<td>{value}</td>"
+                text += "</tr>"
+            text += "</table>"
+
+        # phase-space figure
+        if fp_fig := results.get("fp_phasespace"):
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp_fig)
+            except ConfluenceInterfaceError:
+                pass
+            fn_fig = os.path.split(fp_fig)[1]
+            text += f"""
+                <ac:image ac:height="450">
+                <ri:attachment ri:filename="{fn_fig}" />
+                </ac:image>"""
+
+        # example accepted structures (a single row of renderings)
+        fig_fps = results.get("fp_renderings")  # list (row) of list of fps
+        if fig_fps:
+            for row_fps in fig_fps:
+                if not row_fps:
+                    continue
+                fn_figs = []
+                for fp in row_fps:
+                    try:
+                        self.ci.upload_attachment(self.report_page_id, fp)
+                    except ConfluenceInterfaceError:
+                        pass
+                    fn_figs.append(os.path.split(fp)[1])
+                text += "<table><tr>"
+                for fn in fn_figs:
+                    text += f"""
+                        <td>
+                              <ac:image ac:height="350">
+                              <ri:attachment ri:filename="{fn}" />
+                              </ac:image>
+                        </td>"""
+                text += "</tr></table>"
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        return self._emit(text, postpone_report)
+
+    @module_decorator
     def undrift_from_picked(
         self,
         i,

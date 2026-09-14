@@ -1878,6 +1878,63 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
+    def pick_origami(self):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry (a picasso design file, a
+        regular grid, or an explicit site list), finds and picks the
+        origami structures automatically, and tolerates a configurable
+        number of missing docking sites. Emits picasso-compatible picks
+        (origami groups and all resolved single docking sites) plus a
+        per-structure geometry table (resolved/missing sites, spacing,
+        RMSE-vs-design, orientation).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys (exactly one design source):
+
+            ``design_file`` : str
+                Path to a picasso design ``.yaml`` file, OR
+            ``geometry`` : dict
+                A grid ``{n_rows, n_cols, spacing_nm, angle}`` or an
+                explicit ``{sites_nm: [[x, y], ...]}`` layout.
+
+            Optional keys:
+
+            ``grid_spacing_nm`` : float
+                Physical spacing (nm) used to anchor a design-file scale.
+            ``candidate_method`` : {"footprint", "cluster_of_clusters"}
+                Coarse candidate detection (default ``"footprint"``).
+            ``missing_sites_allowed`` : int
+                Missing sites tolerated per structure (default 2).
+            ``spacing_tol`` : float
+                Relative spacing tolerance for acceptance (default 0.3).
+            ``max_rmse_nm`` : float
+                Maximum RMSE-vs-design for acceptance (disabled if unset).
+            ``footprint_diameter`` : float
+                Pick diameter (camera px) spanning one origami.
+            ``min_n_locs_per_frame``, ``max_n_locs_per_frame`` : float or str
+                nlocs window for pick_similar (quantile strings allowed).
+            ``min_rmsd``, ``max_rmsd`` : float
+                RMSD window for pick_similar.
+            ``kinetics`` : dict
+                ``{k_on, tau_b, concentration, exposure}`` to auto-seed the
+                nlocs window from predicted localizations per site (falls
+                back to the quantile defaults when absent).
+            ``allow_mirror`` : bool
+                Allow a mirrored match during registration (default True).
+            ``n_plot_structures`` : int
+                Number of representative structures to plot.
+            ``display_pixelsize`` : float
+                Pixel size for display in nm (default 1).
+        results : dict
+            Module results (see class docstring).
+        """
+
+    @abc.abstractmethod
     def undrift_from_picked(self):
         """Undrift using picked localizations.
 

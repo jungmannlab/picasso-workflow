@@ -23,6 +23,7 @@ import matplotlib.lines as mlines
 from matplotlib.colors import LogNorm
 import yaml
 import os
+from dataclasses import dataclass
 from datetime import datetime
 
 from picasso import (
@@ -41,7 +42,9 @@ from scipy.spatial import KDTree
 from scipy.special import gamma as _gamma
 from scipy.special import factorial as _factorial
 from scipy.optimize import minimize
+from scipy.optimize import linear_sum_assignment
 from sklearn.cluster import OPTICS
+from sklearn.cluster import DBSCAN
 from scipy import stats
 import itertools
 import glob
@@ -4976,6 +4979,794 @@ def _rmsd_at_com(locs_xy):
     return np.sqrt(
         np.mean((locs_xy[0] - com_x) ** 2 + (locs_xy[1] - com_y) ** 2)
     )
+
+
+########################################################################
+# Start Design-aware origami picking
+#
+# A design-aware picker: given an origami's designed geometry (a picasso
+# design file, a regular grid, or an explicit site list) it finds and
+# picks the origami structures, tolerating a configurable number of
+# missing docking sites. The geometry/kinetics/registration helpers below
+# are pure numpy/scipy/sklearn (no picasso calls) and work internally in
+# nanometres; only the orchestrator ``pick_origami`` couples to the
+# picasso-backed pick_similar family and works in camera pixels.
+########################################################################
+
+
+@dataclass
+class OrigamiTemplate:
+    """Expected docking-site geometry of an origami design.
+
+    Attributes
+    ----------
+    sites_nm : np.ndarray
+        ``(N, 2)`` mean-centered expected site coordinates in nanometres.
+    n_sites_expected : int
+        Number of expected docking sites (``len(sites_nm)``).
+    grid_spacing_nm : float
+        Median nearest-neighbour spacing of the expected sites, in nm.
+    extent_nm : float
+        Maximum pairwise site distance (bounding size), in nm.
+    source : str
+        Human-readable provenance (e.g. the design file path or
+        ``"grid"`` / ``"sites"``).
+    """
+
+    sites_nm: np.ndarray
+    n_sites_expected: int
+    grid_spacing_nm: float
+    extent_nm: float
+    source: str = ""
+
+
+def _median_nn_spacing(sites):
+    """Median nearest-neighbour distance of a point set."""
+    sites = np.asarray(sites, dtype=float).reshape(-1, 2)
+    if len(sites) < 2:
+        return 0.0
+    tree = KDTree(sites)
+    dist, _ = tree.query(sites, k=2)
+    return float(np.median(dist[:, 1]))
+
+
+def _point_extent(sites):
+    """Maximum pairwise distance of a (small) point set."""
+    sites = np.asarray(sites, dtype=float).reshape(-1, 2)
+    if len(sites) < 2:
+        return 0.0
+    diffs = sites[:, None, :] - sites[None, :, :]
+    return float(np.sqrt((diffs**2).sum(axis=-1)).max())
+
+
+def origami_template_from_sites(sites_nm, source="sites"):
+    """Build an :class:`OrigamiTemplate` from explicit site coordinates.
+
+    Parameters
+    ----------
+    sites_nm : array-like
+        ``(N, 2)`` expected docking-site coordinates in nanometres.
+    source : str, optional
+        Provenance tag. Default ``"sites"``.
+
+    Returns
+    -------
+    OrigamiTemplate
+        Mean-centered template with derived spacing/extent.
+    """
+    sites = np.asarray(sites_nm, dtype=float).reshape(-1, 2)
+    if len(sites) == 0:
+        raise ValueError("origami template must have at least one site")
+    sites = sites - sites.mean(axis=0)
+    return OrigamiTemplate(
+        sites_nm=sites,
+        n_sites_expected=len(sites),
+        grid_spacing_nm=_median_nn_spacing(sites),
+        extent_nm=_point_extent(sites),
+        source=source,
+    )
+
+
+def origami_template_from_grid(n_rows, n_cols, spacing_nm, angle=0.0):
+    """Build an :class:`OrigamiTemplate` from a regular grid.
+
+    Parameters
+    ----------
+    n_rows, n_cols : int
+        Number of rows and columns of docking sites.
+    spacing_nm : float
+        Inter-site spacing in nanometres.
+    angle : float, optional
+        Rotation of the grid in degrees. Default 0.
+
+    Returns
+    -------
+    OrigamiTemplate
+        Mean-centered grid template.
+    """
+    xs, ys = np.meshgrid(
+        np.arange(n_cols) * float(spacing_nm),
+        np.arange(n_rows) * float(spacing_nm),
+    )
+    sites = np.column_stack([xs.ravel(), ys.ravel()])
+    if angle:
+        rot = _rotation_matrix(np.deg2rad(angle))
+        sites = sites @ rot.T
+    return origami_template_from_sites(sites, source="grid")
+
+
+def parse_design_sites(path):
+    """Parse expected site coordinates from a picasso design ``.yaml``.
+
+    The design file (written by ``picasso.gui.design``) stores the
+    docking-site coordinates as comma-separated strings under the
+    ``Structure.StructureX`` / ``Structure.StructureY`` keys. The file is
+    read as YAML directly (no picasso import) so this stays picasso-free.
+
+    Parameters
+    ----------
+    path : str
+        Path to the picasso design ``.yaml`` file.
+
+    Returns
+    -------
+    np.ndarray
+        ``(N, 2)`` site coordinates in the design's native units.
+
+    Raises
+    ------
+    ValueError
+        If the file has no ``Structure.StructureX``/``Y`` entries.
+    """
+    with open(path, "r") as f:
+        docs = [d for d in yaml.safe_load_all(f) if isinstance(d, dict)]
+    doc = None
+    for candidate in docs:
+        if "Structure.StructureX" in candidate:
+            doc = candidate
+            break
+    if doc is None:
+        raise ValueError(
+            f"{path}: no 'Structure.StructureX' entry (not a picasso "
+            "design file?)"
+        )
+
+    def _to_floats(value):
+        if isinstance(value, str):
+            parts = [p for p in value.replace(";", ",").split(",")]
+            return np.array([float(p) for p in parts if p.strip() != ""])
+        return np.asarray(value, dtype=float).ravel()
+
+    xs = _to_floats(doc["Structure.StructureX"])
+    ys = _to_floats(doc["Structure.StructureY"])
+    if len(xs) != len(ys):
+        raise ValueError(
+            f"{path}: StructureX/StructureY length mismatch "
+            f"({len(xs)} vs {len(ys)})"
+        )
+    return np.column_stack([xs, ys])
+
+
+def origami_template_from_design_file(path, grid_spacing_nm=None):
+    """Build an :class:`OrigamiTemplate` from a picasso design file.
+
+    Parameters
+    ----------
+    path : str
+        Path to the picasso design ``.yaml`` file.
+    grid_spacing_nm : float, optional
+        If given, the parsed pattern is uniformly rescaled so its median
+        nearest-neighbour spacing equals this value. This anchors the
+        physical scale independent of the design file's native units (see
+        C20 ``grid_spacing_design``). If omitted, the native coordinates
+        are used unchanged.
+
+    Returns
+    -------
+    OrigamiTemplate
+        Mean-centered template.
+    """
+    sites = parse_design_sites(path)
+    if grid_spacing_nm is not None:
+        native = _median_nn_spacing(sites)
+        if native > 0:
+            sites = sites * (float(grid_spacing_nm) / native)
+    return origami_template_from_sites(sites, source=str(path))
+
+
+def load_origami_template(spec, grid_spacing_nm=None):
+    """Load an :class:`OrigamiTemplate` from a flexible specification.
+
+    Parameters
+    ----------
+    spec : str or dict or array-like
+        One of:
+
+        - ``str`` : path to a picasso design ``.yaml`` file.
+        - ``dict`` with ``n_rows``/``n_cols``/``spacing_nm`` (+ optional
+          ``angle``) : a regular grid.
+        - ``dict`` with ``design_file`` (+ optional ``grid_spacing_nm``) :
+          a design file.
+        - ``dict`` with ``sites``/``sites_nm`` or a plain ``(N, 2)``
+          array-like : an explicit site list.
+    grid_spacing_nm : float, optional
+        Physical spacing used to anchor a design-file scale (only used for
+        the design-file paths). Overridden by ``spec['grid_spacing_nm']``
+        if present.
+
+    Returns
+    -------
+    OrigamiTemplate
+    """
+    if isinstance(spec, str):
+        return origami_template_from_design_file(spec, grid_spacing_nm)
+    if isinstance(spec, dict):
+        if "design_file" in spec:
+            return origami_template_from_design_file(
+                spec["design_file"],
+                spec.get("grid_spacing_nm", grid_spacing_nm),
+            )
+        if "n_rows" in spec and "n_cols" in spec:
+            return origami_template_from_grid(
+                spec["n_rows"],
+                spec["n_cols"],
+                spec["spacing_nm"],
+                spec.get("angle", 0.0),
+            )
+        if "sites_nm" in spec or "sites" in spec:
+            return origami_template_from_sites(
+                spec.get("sites_nm", spec.get("sites"))
+            )
+        raise ValueError(f"unrecognised origami template spec: {spec}")
+    # assume array-like of coordinates
+    return origami_template_from_sites(spec)
+
+
+def predict_locs_per_site(k_on, tau_b, concentration, n_frames, exposure):
+    """Predict the mean localizations per docking site over an acquisition.
+
+    Uses the standard DNA-PAINT kinetics: the mean dark time is
+    ``tau_d = 1 / (k_on * concentration)``, the number of binding events
+    over the acquisition is ``T / (tau_b + tau_d)`` with
+    ``T = n_frames * exposure``, and each event yields
+    ``max(1, tau_b / exposure)`` localizations.
+
+    Parameters
+    ----------
+    k_on : float
+        Association rate constant in ``1 / (M s)``.
+    tau_b : float
+        Mean bright (bound) time in seconds.
+    concentration : float
+        Imager concentration in molar (M).
+    n_frames : int
+        Number of frames in the acquisition.
+    exposure : float
+        Camera exposure per frame in seconds.
+
+    Returns
+    -------
+    float
+        Predicted mean number of localizations per docking site.
+    """
+    tau_d = 1.0 / (k_on * concentration)
+    total_time = n_frames * exposure
+    n_events = total_time / (tau_b + tau_d)
+    locs_per_event = max(1.0, tau_b / exposure)
+    return float(n_events * locs_per_event)
+
+
+def kinetics_nlocs_window(
+    k_on,
+    tau_b,
+    concentration,
+    n_frames,
+    exposure,
+    n_sites_expected,
+    rel_tol=0.5,
+    missing_sites_allowed=0,
+):
+    """Predict a per-origami localization-count window from kinetics.
+
+    Converts a kinetics prediction into an absolute ``(min, max)`` window
+    on the total number of localizations expected in a full origami
+    footprint, suitable for seeding :func:`pick_similar` (instead of the
+    quantile defaults).
+
+    Parameters
+    ----------
+    k_on, tau_b, concentration, n_frames, exposure : float
+        Imager kinetics / acquisition parameters (see
+        :func:`predict_locs_per_site`).
+    n_sites_expected : int
+        Number of docking sites in a fully-resolved origami.
+    rel_tol : float, optional
+        Relative half-width of the accepted band. Default 0.5.
+    missing_sites_allowed : int, optional
+        Sites that may be missing; lowers the minimum-count edge
+        accordingly. Default 0.
+
+    Returns
+    -------
+    (float, float)
+        ``(min_n_locs, max_n_locs)`` absolute localization counts.
+    """
+    per_site = predict_locs_per_site(
+        k_on, tau_b, concentration, n_frames, exposure
+    )
+    min_sites = max(1, n_sites_expected - missing_sites_allowed)
+    min_n = per_site * min_sites * (1.0 - rel_tol)
+    max_n = per_site * n_sites_expected * (1.0 + rel_tol)
+    return float(max(0.0, min_n)), float(max_n)
+
+
+def subcluster_docking_sites(
+    xy_nm, expected_spacing_nm, min_samples=3, eps_frac=0.35
+):
+    """Cluster localizations within a footprint into docking-site centers.
+
+    Parameters
+    ----------
+    xy_nm : array-like
+        ``(M, 2)`` localization coordinates (nanometres) within one origami
+        footprint.
+    expected_spacing_nm : float
+        Expected inter-site spacing; sets the DBSCAN neighbourhood radius.
+    min_samples : int, optional
+        DBSCAN ``min_samples``. Default 3.
+    eps_frac : float, optional
+        DBSCAN ``eps`` as a fraction of ``expected_spacing_nm``. Default
+        0.35.
+
+    Returns
+    -------
+    np.ndarray
+        ``(K, 2)`` resolved docking-site centroids in nanometres (empty if
+        none).
+    """
+    xy = np.asarray(xy_nm, dtype=float).reshape(-1, 2)
+    if len(xy) == 0 or expected_spacing_nm <= 0:
+        return np.empty((0, 2))
+    eps = eps_frac * expected_spacing_nm
+    labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(xy)
+    centers = [
+        xy[labels == lbl].mean(axis=0)
+        for lbl in np.unique(labels)
+        if lbl != -1
+    ]
+    return np.array(centers) if centers else np.empty((0, 2))
+
+
+def _rotation_matrix(theta):
+    """2x2 rotation matrix for angle ``theta`` (radians)."""
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([[c, -s], [s, c]])
+
+
+def _rigid_fit(src, dst):
+    """Least-squares proper-rotation + translation mapping src onto dst.
+
+    Kabsch/Umeyama without scaling or reflection: returns ``R`` (det=+1)
+    and ``t`` minimizing ``||R @ src.T + t - dst.T||``.
+    """
+    src = np.asarray(src, dtype=float)
+    dst = np.asarray(dst, dtype=float)
+    src_c = src - src.mean(axis=0)
+    dst_c = dst - dst.mean(axis=0)
+    h = src_c.T @ dst_c
+    u, _, vt = np.linalg.svd(h)
+    d = np.sign(np.linalg.det(vt.T @ u.T))
+    correction = np.diag([1.0, d])
+    rot = vt.T @ correction @ u.T
+    trans = dst.mean(axis=0) - rot @ src.mean(axis=0)
+    return rot, trans
+
+
+def _match_within_gate(transformed, template, gate):
+    """Optimal one-to-one assignment of points within a distance gate.
+
+    Returns matched ``(src_indices, template_indices, distances)``.
+    """
+    if len(transformed) == 0 or len(template) == 0:
+        empty = np.empty(0, dtype=int)
+        return empty, empty, np.empty(0)
+    cost = np.linalg.norm(
+        transformed[:, None, :] - template[None, :, :], axis=2
+    )
+    rows, cols = linear_sum_assignment(cost)
+    dists = cost[rows, cols]
+    keep = dists <= gate
+    return rows[keep], cols[keep], dists[keep]
+
+
+def register_to_template(
+    observed_nm,
+    template_nm,
+    allow_mirror=True,
+    match_gate_nm=None,
+    angle_step_deg=2.0,
+):
+    """Register observed docking sites onto a design template.
+
+    Finds the best rigid alignment (rotation + translation, optional
+    mirror) of ``observed_nm`` onto ``template_nm`` under an unknown
+    correspondence, tolerating missing/extra observed sites. A coarse
+    rotation sweep with gated optimal assignment seeds a Kabsch + ICP
+    refinement.
+
+    Parameters
+    ----------
+    observed_nm : array-like
+        ``(M, 2)`` resolved docking-site coordinates in nanometres.
+    template_nm : array-like
+        ``(N, 2)`` expected site coordinates in nanometres.
+    allow_mirror : bool, optional
+        Whether to also try a mirrored observed pattern. Default True.
+    match_gate_nm : float, optional
+        Max distance for a site to count as matched. Defaults to half the
+        template's median nearest-neighbour spacing.
+    angle_step_deg : float, optional
+        Coarse rotation-sweep step in degrees. Default 2.
+
+    Returns
+    -------
+    dict
+        Registration result with keys ``n_resolved``,
+        ``matched_template_indices``, ``matched_observed_indices``,
+        ``rmse_nm``, ``mean_spacing_nm``, ``orientation_deg``, ``mirror``,
+        ``R`` and ``t``.
+    """
+    observed = np.asarray(observed_nm, dtype=float).reshape(-1, 2)
+    template = np.asarray(template_nm, dtype=float).reshape(-1, 2)
+    template = template - template.mean(axis=0)
+    if match_gate_nm is None:
+        match_gate_nm = 0.5 * _median_nn_spacing(template)
+    if match_gate_nm <= 0:
+        match_gate_nm = np.inf
+
+    def _empty_result():
+        return {
+            "n_resolved": 0,
+            "matched_template_indices": np.empty(0, dtype=int),
+            "matched_observed_indices": np.empty(0, dtype=int),
+            "rmse_nm": np.inf,
+            "mean_spacing_nm": 0.0,
+            "orientation_deg": 0.0,
+            "mirror": False,
+            "R": np.eye(2),
+            "t": np.zeros(2),
+        }
+
+    if len(observed) == 0:
+        return _empty_result()
+
+    mirror_options = [False, True] if allow_mirror else [False]
+    best = None  # (n_matched, -rmse, rot, trans, mirror, rows, cols)
+    for mirror in mirror_options:
+        src = observed.copy()
+        if mirror:
+            src = src * np.array([-1.0, 1.0])
+        for angle in np.arange(0.0, 360.0, angle_step_deg):
+            rot0 = _rotation_matrix(np.deg2rad(angle))
+            trans0 = -(rot0 @ src.mean(axis=0))
+            rot, trans, rows, cols, rmse = _icp_refine(
+                src, template, rot0, trans0, match_gate_nm
+            )
+            n_matched = len(rows)
+            key = (n_matched, -rmse)
+            if best is None or key > (best[0], -best[1]):
+                best = (n_matched, rmse, rot, trans, mirror, rows, cols)
+
+    if best is None or best[0] == 0:
+        return _empty_result()
+
+    n_matched, rmse, rot, trans, mirror, rows, cols = best
+    src = observed * np.array([-1.0, 1.0]) if mirror else observed
+    matched_obs = src[rows]
+    orientation = float(np.degrees(np.arctan2(rot[1, 0], rot[0, 0])))
+    return {
+        "n_resolved": int(n_matched),
+        "matched_template_indices": cols,
+        "matched_observed_indices": rows,
+        "rmse_nm": float(rmse),
+        "mean_spacing_nm": _median_nn_spacing(matched_obs),
+        "orientation_deg": orientation,
+        "mirror": bool(mirror),
+        "R": rot,
+        "t": trans,
+    }
+
+
+def _icp_refine(src, template, rot, trans, gate, iters=5):
+    """Iterative closest-point refinement of a rigid alignment.
+
+    Returns ``(rot, trans, matched_src_idx, matched_template_idx, rmse)``.
+    """
+    rows = cols = np.empty(0, dtype=int)
+    rmse = np.inf
+    for _ in range(iters):
+        transformed = src @ rot.T + trans
+        rows, cols, dists = _match_within_gate(transformed, template, gate)
+        if len(rows) < 2:
+            rmse = float(np.sqrt(np.mean(dists**2))) if len(dists) else np.inf
+            break
+        rmse = float(np.sqrt(np.mean(dists**2)))
+        new_rot, new_trans = _rigid_fit(src[rows], template[cols])
+        if np.allclose(new_rot, rot) and np.allclose(new_trans, trans):
+            rot, trans = new_rot, new_trans
+            transformed = src @ rot.T + trans
+            rows, cols, dists = _match_within_gate(transformed, template, gate)
+            rmse = float(np.sqrt(np.mean(dists**2))) if len(dists) else np.inf
+            break
+        rot, trans = new_rot, new_trans
+    return rot, trans, rows, cols, rmse
+
+
+def accept_candidate(
+    reg,
+    n_sites_expected,
+    missing_sites_allowed=2,
+    spacing_tol=0.3,
+    grid_spacing_nm=None,
+    max_rmse_nm=None,
+):
+    """Decide whether a registered candidate is an accepted origami.
+
+    Parameters
+    ----------
+    reg : dict
+        A :func:`register_to_template` result.
+    n_sites_expected : int
+        Number of docking sites in a fully-resolved origami.
+    missing_sites_allowed : int, optional
+        Maximum number of missing sites tolerated. Default 2.
+    spacing_tol : float, optional
+        Relative tolerance on the resolved-site spacing vs the design
+        spacing. Default 0.3.
+    grid_spacing_nm : float, optional
+        Design inter-site spacing; enables the spacing check when given.
+    max_rmse_nm : float, optional
+        Maximum RMSE-vs-design; enables the RMSE check when given.
+
+    Returns
+    -------
+    bool
+        Whether the candidate is accepted.
+    """
+    if reg["n_resolved"] < n_sites_expected - missing_sites_allowed:
+        return False
+    if max_rmse_nm is not None and reg["rmse_nm"] > max_rmse_nm:
+        return False
+    if grid_spacing_nm is not None and grid_spacing_nm > 0:
+        spacing = reg["mean_spacing_nm"]
+        if spacing > 0:
+            rel = abs(spacing - grid_spacing_nm) / grid_spacing_nm
+            if rel > spacing_tol:
+                return False
+    return True
+
+
+def _candidate_centers_footprint(
+    locs,
+    info,
+    footprint_diameter,
+    min_n_locs_per_frame,
+    max_n_locs_per_frame,
+    min_rmsd,
+    max_rmsd,
+):
+    """Coarse origami-candidate centers via footprint-sized pick_similar."""
+    picks, nlocs, rmsds, labels = pick_similar(
+        locs,
+        info,
+        diameter=footprint_diameter,
+        min_n_locs_per_frame=min_n_locs_per_frame,
+        max_n_locs_per_frame=max_n_locs_per_frame,
+        min_rmsd=min_rmsd,
+        max_rmsd=max_rmsd,
+    )
+    return list(picks), nlocs, rmsds, labels
+
+
+def _candidate_centers_cluster_of_clusters(
+    locs, info, site_diameter, footprint_extent_px, min_n_locs, min_samples
+):
+    """Coarse origami-candidate centers by clustering docking-site picks.
+
+    Finds docking-site-like pick centers with a small (single-site)
+    diameter, then spatially clusters those centers into origami
+    footprints; each footprint's centroid is a candidate.
+    """
+    x_sim, y_sim, rmsds, nlocs = get_pick_similar_vals(
+        locs, info, site_diameter, min_n_locs
+    )
+    site_centers = np.column_stack([x_sim, y_sim])
+    if len(site_centers) == 0:
+        return [], nlocs, rmsds, np.empty(0)
+    labels = DBSCAN(
+        eps=footprint_extent_px, min_samples=min_samples
+    ).fit_predict(site_centers)
+    centers = [
+        tuple(site_centers[labels == lbl].mean(axis=0))
+        for lbl in np.unique(labels)
+        if lbl != -1
+    ]
+    return centers, nlocs, rmsds, labels
+
+
+def pick_origami(
+    locs,
+    info,
+    template,
+    pixelsize,
+    candidate_method="footprint",
+    footprint_diameter=None,
+    min_n_locs_per_frame="q0.25",
+    max_n_locs_per_frame="q0.98",
+    min_rmsd=0.0,
+    max_rmsd=np.inf,
+    missing_sites_allowed=2,
+    spacing_tol=0.3,
+    max_rmse_nm=None,
+    subcluster_min_samples=3,
+    allow_mirror=True,
+):
+    """Design-aware picking of origami structures.
+
+    Detects candidate origami footprints, sub-clusters each into docking
+    sites, registers the resolved constellation against ``template``, and
+    accepts candidates that resolve enough sites within the spacing/RMSE
+    tolerances. Reuses the picasso-backed :func:`pick_similar` family for
+    candidate detection.
+
+    Parameters
+    ----------
+    locs, info : object
+        Localizations and metadata (as elsewhere in this module).
+    template : OrigamiTemplate
+        Expected design geometry (see :func:`load_origami_template`).
+    pixelsize : float
+        Camera pixel size in nanometres (px <-> nm conversion).
+    candidate_method : {"footprint", "cluster_of_clusters"}, optional
+        Coarse candidate-detection strategy. Default ``"footprint"``.
+    footprint_diameter : float, optional
+        Pick diameter (camera px) spanning one origami. Defaults to the
+        template extent plus one grid spacing.
+    min_n_locs_per_frame, max_n_locs_per_frame : float or str, optional
+        nlocs window forwarded to :func:`pick_similar` (quantile strings
+        like ``"q0.25"`` allowed). Pass kinetics-derived per-frame values
+        to seed the window from :func:`kinetics_nlocs_window`.
+    min_rmsd, max_rmsd : float, optional
+        RMSD window forwarded to :func:`pick_similar`.
+    missing_sites_allowed : int, optional
+        Maximum missing sites tolerated per structure. Default 2.
+    spacing_tol : float, optional
+        Relative spacing tolerance for acceptance. Default 0.3.
+    max_rmse_nm : float, optional
+        Maximum RMSE-vs-design for acceptance (disabled if None).
+    subcluster_min_samples : int, optional
+        DBSCAN ``min_samples`` for docking-site sub-clustering. Default 3.
+    allow_mirror : bool, optional
+        Allow a mirrored match during registration. Default True.
+
+    Returns
+    -------
+    dict
+        Keys: ``accepted_centers_px`` (list of ``(x, y)``),
+        ``docking_site_centers_px`` (list of ``(x, y)`` for all resolved
+        sites in accepted origamis), ``geometry_table`` (list of
+        per-structure dicts), ``n_candidates``, ``n_accepted``, and the
+        candidate phase-space arrays ``candidate_nlocs`` /
+        ``candidate_rmsds`` / ``candidate_labels``.
+    """
+    spacing_nm = template.grid_spacing_nm
+    if footprint_diameter is None:
+        footprint_diameter = (template.extent_nm + spacing_nm) / pixelsize
+    match_gate_nm = 0.5 * spacing_nm if spacing_nm > 0 else None
+
+    if candidate_method == "footprint":
+        candidates, nlocs, rmsds, labels = _candidate_centers_footprint(
+            locs,
+            info,
+            footprint_diameter,
+            min_n_locs_per_frame,
+            max_n_locs_per_frame,
+            min_rmsd,
+            max_rmsd,
+        )
+    elif candidate_method == "cluster_of_clusters":
+        site_diameter = max(spacing_nm / pixelsize, 1e-6)
+        nframes = info[0]["Frames"]
+        if isinstance(min_n_locs_per_frame, str):
+            min_n_locs = 1
+        else:
+            min_n_locs = int(nframes * min_n_locs_per_frame)
+        candidates, nlocs, rmsds, labels = (
+            _candidate_centers_cluster_of_clusters(
+                locs,
+                info,
+                site_diameter,
+                footprint_diameter,
+                max(1, min_n_locs),
+                subcluster_min_samples,
+            )
+        )
+    else:
+        raise ValueError(
+            f"unknown candidate_method: {candidate_method!r} "
+            "(expected 'footprint' or 'cluster_of_clusters')"
+        )
+
+    accepted_centers_px = []
+    docking_site_centers_px = []
+    geometry_table = []
+    for cx, cy in candidates:
+        foot_locs = picked_locs(
+            locs,
+            info,
+            [(cx, cy)],
+            pick_diameter=footprint_diameter,
+            add_group=False,
+        )
+        xy_nm = (
+            np.column_stack(
+                [np.asarray(foot_locs["x"]), np.asarray(foot_locs["y"])]
+            )
+            * pixelsize
+        )
+        site_centers_nm = subcluster_docking_sites(
+            xy_nm, spacing_nm, min_samples=subcluster_min_samples
+        )
+        reg = register_to_template(
+            site_centers_nm,
+            template.sites_nm,
+            allow_mirror=allow_mirror,
+            match_gate_nm=match_gate_nm,
+        )
+        accepted = accept_candidate(
+            reg,
+            template.n_sites_expected,
+            missing_sites_allowed=missing_sites_allowed,
+            spacing_tol=spacing_tol,
+            grid_spacing_nm=spacing_nm,
+            max_rmse_nm=max_rmse_nm,
+        )
+        geometry_table.append(
+            {
+                "center_x_px": float(cx),
+                "center_y_px": float(cy),
+                "n_resolved_sites": int(reg["n_resolved"]),
+                "n_missing_sites": int(
+                    template.n_sites_expected - reg["n_resolved"]
+                ),
+                "mean_spacing_nm": float(reg["mean_spacing_nm"]),
+                "rmse_nm": float(reg["rmse_nm"]),
+                "orientation_deg": float(reg["orientation_deg"]),
+                "mirror": bool(reg["mirror"]),
+                "accepted": bool(accepted),
+            }
+        )
+        if accepted:
+            accepted_centers_px.append((float(cx), float(cy)))
+            matched_obs_nm = site_centers_nm[reg["matched_observed_indices"]]
+            for px in matched_obs_nm / pixelsize:
+                docking_site_centers_px.append((float(px[0]), float(px[1])))
+
+    return {
+        "accepted_centers_px": accepted_centers_px,
+        "docking_site_centers_px": docking_site_centers_px,
+        "geometry_table": geometry_table,
+        "n_candidates": len(candidates),
+        "n_accepted": len(accepted_centers_px),
+        "candidate_nlocs": nlocs,
+        "candidate_rmsds": rmsds,
+        "candidate_labels": labels,
+    }
+
+
+########################################################################
+# End Design-aware origami picking
+########################################################################
 
 
 #####
