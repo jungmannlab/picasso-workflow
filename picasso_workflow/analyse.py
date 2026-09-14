@@ -14392,6 +14392,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                     picked_locs[picked_locs["group"] == group]
                     for group in groups
                 ]
+        # Drift can only be estimated if the picks actually contain
+        # localizations. An empty/degenerate pick set (e.g. the upstream
+        # picker accepted no structures) would otherwise crash deep inside
+        # the drift interpolation with a cryptic "array of sample points is
+        # empty".
+        n_pick_locs = sum(len(p) for p in picked_locs)
+        if len(picked_locs) == 0 or n_pick_locs == 0:
+            raise ValueError(
+                f"undrift_from_picked: no localizations in the picks from "
+                f"'{fp_picked}' ({len(picked_locs)} picks, {n_pick_locs} "
+                "locs). The upstream picker likely accepted no structures - "
+                "check its parameters (e.g. an nlocs window that excludes "
+                "everything) and that it produced non-empty picks."
+            )
         # print(result)
         # picked_locs, picked_info = io.load_locs(parameters["fp_picked_locs"])
         self.locs, self.info, drift = picasso_outpost._undrift_from_picked(

@@ -48,6 +48,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `undrift_from_picked` now fails with a clear message instead of a cryptic
+  ``"array of sample points is empty"`` (from `np.interp`) when the picks are
+  empty or too sparse to estimate drift from. It guards the empty-pick case up
+  front, and `_undrift_from_picked_coordinate` now excludes degenerate
+  single-frame picks (whose `1/msd` weight was infinite and poisoned the
+  weighted average to NaN everywhere) and raises a descriptive error when no
+  pick spans more than one frame / covers any frame. Typical trigger: an
+  upstream picker that accepted no structures (e.g. `pick_origami` with an
+  impossible nlocs window), leaving an empty picked-locs file.
+
 - `pick_origami` now rejects an unusable `geometry` with a clear message and
   tolerates the GUI's placeholder sentinels. `load_origami_template` raises a
   descriptive `TypeError`/`ValueError` (naming the accepted forms) instead of a

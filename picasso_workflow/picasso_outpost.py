@@ -4411,11 +4411,23 @@ def _undrift_from_picked_coordinate(info, picked_locs, coordinate):
     sd = (drift - drift_mean) ** 2
     # Mean of square deviation for each pick
     msd = np.nanmean(sd, 1)
-    # New mean drift over picks
-    # where each pick is weighted according to its msd
+    # New mean drift over picks, each weighted by 1/msd. A pick that spans
+    # (essentially) a single frame has msd 0 -> an infinite weight that
+    # poisons np.ma.average into NaN everywhere; exclude such degenerate
+    # picks (weight 0) instead. This is exactly the case that arises when
+    # many spurious single-loc picks are fed in.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        weights = 1.0 / msd
+    weights[~np.isfinite(weights)] = 0.0
     nan_mask = np.isnan(drift)
     drift = np.ma.MaskedArray(drift, mask=nan_mask)
-    drift_mean = np.ma.average(drift, axis=0, weights=1 / msd)
+    if not np.any(weights > 0):
+        raise ValueError(
+            "undrift_from_picked: cannot estimate drift - no pick spans "
+            "more than one frame (all picks are degenerate). The picks are "
+            "too sparse; use more/denser fiducial picks."
+        )
+    drift_mean = np.ma.average(drift, axis=0, weights=weights)
     drift_mean = drift_mean.filled(np.nan)
 
     # Linear interpolation for frames without localizations
@@ -4423,6 +4435,12 @@ def _undrift_from_picked_coordinate(info, picked_locs, coordinate):
         return np.isnan(y), lambda z: z.nonzero()[0]
 
     nans, nonzero = nan_helper(drift_mean)
+    if not np.any(~nans):
+        raise ValueError(
+            "undrift_from_picked: cannot estimate drift - the picks cover "
+            "no frames with a usable localization. The picks are empty or "
+            "too sparse to undrift from."
+        )
     drift_mean[nans] = np.interp(
         nonzero(nans), nonzero(~nans), drift_mean[~nans]
     )
