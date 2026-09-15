@@ -1181,6 +1181,50 @@ def test_classify_candidate_reasons_and_ordering():
     assert not picasso_outpost.accept_candidate(reg(9, 0.1, 20.0), 12, **kw)
 
 
+def test_simulate_origami_phase_space_is_physical_and_reproducible():
+    """Simulated (nlocs, rmsd) match the geometry/kinetics and are seeded."""
+    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
+    geo_rmsd = float(np.sqrt(np.mean((tmpl.sites_nm**2).sum(axis=1))))
+
+    # no jitter, no missing, high locs -> rmsd ~ geometric spread
+    nl, rm = picasso_outpost.simulate_origami_nlocs_rmsd(
+        tmpl, 0.0, 0, 200.0, n_sim=400, random_seed=0
+    )
+    assert abs(rm.mean() - geo_rmsd) < 3.0
+    # nlocs ~ n_sites * mean when nothing missing
+    assert abs(nl.mean() - 12 * 200.0) < 200.0
+
+    # missing sites + jitter produce a real 2D cloud (not a point)
+    nl2, rm2 = picasso_outpost.simulate_origami_nlocs_rmsd(
+        tmpl, 4.0, 4, 50.0, n_sim=2000, random_seed=0
+    )
+    assert np.std(nl2) > 20 and np.std(rm2) > 1.0
+    assert nl2.min() < nl.mean()  # fewer sites -> fewer locs
+
+    # reproducible with the same seed
+    a, _ = picasso_outpost.simulate_origami_nlocs_rmsd(
+        tmpl, 3.0, 2, 50.0, n_sim=100, random_seed=7
+    )
+    b, _ = picasso_outpost.simulate_origami_nlocs_rmsd(
+        tmpl, 3.0, 2, 50.0, n_sim=100, random_seed=7
+    )
+    assert np.array_equal(a, b)
+
+
+def test_phase_space_window_from_sim():
+    """The window brackets the simulated cloud and converts rmsd to px."""
+    nlocs = np.linspace(300, 700, 1000)
+    rmsd_nm = np.linspace(20.0, 32.0, 1000)
+    win = picasso_outpost.phase_space_window_from_sim(
+        nlocs, rmsd_nm, pixelsize=130.0, quantile=0.01
+    )
+    assert win["min_nlocs"] < win["max_nlocs"]
+    assert 300 <= win["min_nlocs"] and win["max_nlocs"] <= 700
+    # rmsd returned in camera px
+    assert abs(win["min_rmsd"] - np.quantile(rmsd_nm, 0.01) / 130.0) < 1e-9
+    assert win["min_rmsd"] < win["max_rmsd"]
+
+
 def test_kinetics_window_brackets_matched_simulation():
     """The kinetics nlocs window brackets the quantile window of a
     matched simulation."""

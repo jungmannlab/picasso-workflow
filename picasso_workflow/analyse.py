@@ -178,6 +178,75 @@ def _summarize_accepted_structures(geometry_table):
     return overview
 
 
+def _phasespace_contour(ax, x, y, color, filled, label):
+    """Draw a 2D-histogram density contour of ``(x, y)`` on ``ax``.
+
+    Returns True if a contour was drawn (enough finite points), else falls
+    back to a light scatter and returns False.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y = x[ok], y[ok]
+    if len(x) < 20 or np.ptp(x) == 0 or np.ptp(y) == 0:
+        if len(x):
+            ax.scatter(x, y, color=color, alpha=0.2, s=8, label=label)
+        return False
+    hist, xedges, yedges = np.histogram2d(x, y, bins=40)
+    xc = 0.5 * (xedges[:-1] + xedges[1:])
+    yc = 0.5 * (yedges[:-1] + yedges[1:])
+    xg, yg = np.meshgrid(xc, yc)
+    zg = hist.T
+    if filled:
+        ax.contourf(xg, yg, zg, levels=6, cmap="Greys", alpha=0.6, zorder=0)
+        ax.plot([], [], color=color, label=label)
+    else:
+        levels = [zg.max() * 0.1] if zg.max() > 0 else [0.5]
+        ax.contour(xg, yg, zg, levels=levels, colors=[color], zorder=1)
+        ax.plot([], [], color=color, label=label)
+    return True
+
+
+def _plot_origami_phasespace(
+    fp, nlocs, rmsds, sim_nlocs, sim_rmsds, acc_nlocs, acc_rmsds, title
+):
+    """Render the origami nlocs-per-frame / rmsd phase-space diagnostic.
+
+    Layers: all candidates as a background density contour, the simulated
+    "expected origami" cloud as a contour line, accepted picks as points.
+
+    Returns
+    -------
+    str
+        The path the figure was saved to (``fp``).
+    """
+    fig, ax = plt.subplots()
+    _phasespace_contour(
+        ax, nlocs, rmsds, "0.4", filled=True, label="candidates"
+    )
+    if len(sim_nlocs) and len(sim_nlocs) == len(sim_rmsds):
+        _phasespace_contour(
+            ax, sim_nlocs, sim_rmsds, "b", filled=False, label="expected (sim)"
+        )
+    if len(acc_nlocs) and len(acc_nlocs) == len(acc_rmsds):
+        ax.scatter(
+            acc_nlocs,
+            acc_rmsds,
+            color="r",
+            edgecolors="k",
+            s=40,
+            zorder=3,
+            label="accepted",
+        )
+    ax.set_xlabel("# localizations per frame in footprint")
+    ax.set_ylabel("root mean square distance in footprint")
+    ax.set_title(title)
+    ax.legend()
+    fig.set_size_inches((9, 9))
+    fig.savefig(fp)
+    return fp
+
+
 # picasso 0.11 fitting methods whose base name has a plain ``-gpu`` variant.
 # GPU is orthogonal to the model choice, so when a GPU fitter is configured
 # these bases are routed to their ``-gpu`` counterpart (see ``localize``).
@@ -14093,28 +14162,22 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["n_sites_expected"] = template.n_sites_expected
         results["grid_spacing_nm"] = template.grid_spacing_nm
 
-        # --- 2. nlocs window: kinetics prediction or quantile default --
+        # --- 2. kinetics -> mean localizations per docking site --------
+        # The picker simulates the expected nlocs/rmsd phase space from the
+        # geometry + these kinetics; an explicit mean_locs_per_site overrides.
         missing_sites_allowed = parameters.get("missing_sites_allowed", 2)
+        mean_locs_per_site = _opt("mean_locs_per_site", zero_is_unset=True)
         kinetics = parameters.get("kinetics")
-        if kinetics:
+        if mean_locs_per_site is None and kinetics:
             n_frames = self.info[0]["Frames"]
-            exposure = kinetics["exposure"]
-            min_n, max_n = picasso_outpost.kinetics_nlocs_window(
+            mean_locs_per_site = picasso_outpost.predict_locs_per_site(
                 kinetics["k_on"],
                 kinetics["tau_b"],
                 kinetics["concentration"],
                 n_frames,
-                exposure,
-                template.n_sites_expected,
-                rel_tol=kinetics.get("rel_tol", 0.5),
-                missing_sites_allowed=missing_sites_allowed,
+                kinetics["exposure"],
             )
-            min_n_locs_per_frame = min_n / n_frames
-            max_n_locs_per_frame = max_n / n_frames
-            results["kinetics_nlocs_window"] = [float(min_n), float(max_n)]
-        else:
-            min_n_locs_per_frame = _opt("min_n_locs_per_frame", "q0.25")
-            max_n_locs_per_frame = _opt("max_n_locs_per_frame", "q0.98")
+            results["mean_locs_per_site"] = float(mean_locs_per_site)
 
         # --- 3. run the design-aware picker ----------------------------
         pick_result = picasso_outpost.pick_origami(
@@ -14125,12 +14188,18 @@ class AutoPicasso(util.AbstractModuleCollection):
             candidate_method=_opt("candidate_method", "footprint"),
             footprint_diameter=_opt("footprint_diameter", zero_is_unset=True),
             pick_diameter_factor=_opt("pick_diameter_factor", 1.5),
-            min_n_locs_per_frame=min_n_locs_per_frame,
-            max_n_locs_per_frame=max_n_locs_per_frame,
-            min_rmsd=_opt("min_rmsd", 0.0),
-            max_rmsd=_opt("max_rmsd", np.inf, zero_is_unset=True),
             missing_sites_allowed=missing_sites_allowed,
-            spacing_tol=_opt("spacing_tol", 0.3),
+            site_uncertainty_nm=_opt("site_uncertainty_nm", 3.0),
+            mean_locs_per_site=mean_locs_per_site,
+            n_sim=_opt("n_sim", 1500),
+            sim_quantile=_opt("sim_quantile", 0.01),
+            random_seed=_opt("random_seed", 0),
+            min_n_locs_per_frame=_opt("min_n_locs_per_frame"),
+            max_n_locs_per_frame=_opt("max_n_locs_per_frame"),
+            min_rmsd=_opt("min_rmsd", zero_is_unset=True),
+            max_rmsd=_opt("max_rmsd", zero_is_unset=True),
+            filter_by_geometry=parameters.get("filter_by_geometry", False),
+            spacing_tol=_opt("spacing_tol", 0.5),
             max_rmse_nm=_opt("max_rmse_nm", zero_is_unset=True),
             subcluster_min_samples=_opt("subcluster_min_samples", 3),
             allow_mirror=parameters.get("allow_mirror", True),
@@ -14251,11 +14320,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_geometry_table"] = fp_geometry_table
 
         # --- 5. phase-space diagnostic figure --------------------------
-        # Candidate cloud (black) with accepted structures overlaid (red),
-        # so one can see where the accepted picks sit in nlocs/rmsd space.
-        # Show localizations *per frame* so the x-axis matches the
-        # min/max_n_locs_per_frame parameters (pick_similar uses
-        # nlocs_per_frame = total_nlocs / n_frames).
+        # nlocs-per-frame vs rmsd, matching the min/max_n_locs_per_frame
+        # parameters (pick_similar uses nlocs_per_frame = total / n_frames):
+        #   - all candidates as a background density contour
+        #   - the simulated "expected origami" phase space as a contour line
+        #     (the region picking targets)
+        #   - accepted picks as points
         n_frames = self.info[0]["Frames"]
         nlocs = np.asarray(pick_result["candidate_nlocs"]) / n_frames
         rmsds = np.asarray(pick_result["candidate_rmsds"])
@@ -14263,30 +14333,21 @@ class AutoPicasso(util.AbstractModuleCollection):
         if len(acc_nlocs):
             acc_nlocs = acc_nlocs / n_frames
         acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
-        fig, ax = plt.subplots()
-        if len(nlocs) and len(nlocs) == len(rmsds):
-            ax.scatter(nlocs, rmsds, color="k", alpha=0.2, label="candidates")
-        if len(acc_nlocs) and len(acc_nlocs) == len(acc_rmsds):
-            ax.scatter(
-                acc_nlocs,
-                acc_rmsds,
-                color="r",
-                edgecolors="k",
-                s=60,
-                label="accepted",
-            )
-        ax.set_xlabel("# localizations per frame in footprint")
-        ax.set_ylabel("root mean square distance in footprint")
-        ax.set_title(
-            f"Origami candidates: {results['n_accepted']}"
-            f" / {results['n_candidates']} accepted"
+        sim_nlocs = np.asarray(pick_result.get("sim_nlocs", [])) / n_frames
+        sim_rmsds = np.asarray(pick_result.get("sim_rmsds", []))
+        results["fp_phasespace"] = _plot_origami_phasespace(
+            os.path.join(results["folder"], f"origami-phasespace-{rcode}.png"),
+            nlocs,
+            rmsds,
+            sim_nlocs,
+            sim_rmsds,
+            acc_nlocs,
+            acc_rmsds,
+            title=(
+                f"Origami: {results['n_accepted']}"
+                f" / {results['n_candidates']} accepted"
+            ),
         )
-        ax.legend()
-        results["fp_phasespace"] = os.path.join(
-            results["folder"], f"origami-phasespace-{rcode}.png"
-        )
-        fig.set_size_inches((9, 9))
-        fig.savefig(results["fp_phasespace"])
 
         # --- 6. representative accepted structures ---------------------
         n_plot = parameters.get("n_plot_structures")

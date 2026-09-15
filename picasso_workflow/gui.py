@@ -6023,21 +6023,77 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "missing_sites_allowed": {
                 "type": "int",
-                "description": "Missing docking sites tolerated per structure",
+                "description": (
+                    "Max missing sites in a simulated origami (and, with "
+                    "filter_by_geometry, tolerated per accepted structure)"
+                ),
                 "min": 0,
                 "default": 2,
                 "required": False,
             },
+            "site_uncertainty_nm": {
+                "type": "float",
+                "description": (
+                    "Per-loc Gaussian spread around each site (nm), for the "
+                    "phase-space simulation"
+                ),
+                "min": 0.0,
+                "default": 3.0,
+                "required": False,
+            },
+            "mean_locs_per_site": {
+                "type": "float",
+                "description": (
+                    "Explicit mean localizations per site (overrides "
+                    "kinetics); drives the simulated pick window"
+                ),
+                "min": 0.0,
+                "required": False,
+            },
+            "n_sim": {
+                "type": "int",
+                "description": "Number of simulated origami realisations",
+                "min": 1,
+                "default": 1500,
+                "required": False,
+            },
+            "sim_quantile": {
+                "type": "float",
+                "description": (
+                    "Per-axis tail fraction dropped when turning the "
+                    "simulated cloud into the pick rectangle"
+                ),
+                "min": 0.0,
+                "max": 0.5,
+                "default": 0.01,
+                "required": False,
+            },
+            "random_seed": {
+                "type": "int",
+                "description": "Simulation random seed (reproducibility)",
+                "min": 0,
+                "default": 0,
+                "required": False,
+            },
+            "filter_by_geometry": {
+                "type": "bool",
+                "description": (
+                    "Also register each pick against the design and reject "
+                    "mismatches (emits docking-site picks); slower"
+                ),
+                "default": False,
+                "required": False,
+            },
             "spacing_tol": {
                 "type": "float",
-                "description": "Relative spacing tolerance for acceptance",
+                "description": "Relative spacing tolerance (geometry filter)",
                 "min": 0.0,
-                "default": 0.3,
+                "default": 0.5,
                 "required": False,
             },
             "max_rmse_nm": {
                 "type": "float",
-                "description": "Maximum RMSE-vs-design (nm) for acceptance",
+                "description": "Max RMSE-vs-design (nm) for the geometry filter",
                 "min": 0.0,
                 "required": False,
             },
@@ -6063,38 +6119,40 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "min_n_locs_per_frame": {
                 "type": ["float", "str"],
                 "description": (
-                    "Min nlocs window for pick_similar (quantile 'q..' ok)"
+                    "Override the simulated min nlocs window (per-frame, or "
+                    "quantile 'q..')"
                 ),
                 "required": False,
             },
             "max_n_locs_per_frame": {
                 "type": ["float", "str"],
                 "description": (
-                    "Max nlocs window for pick_similar (quantile 'q..' ok)"
+                    "Override the simulated max nlocs window (per-frame, or "
+                    "quantile 'q..')"
                 ),
                 "required": False,
             },
             "min_rmsd": {
                 "type": "float",
-                "description": "Minimum RMSD for pick_similar",
+                "description": "Override the simulated min RMSD (camera px)",
                 "required": False,
             },
             "max_rmsd": {
                 "type": "float",
-                "description": "Maximum RMSD for pick_similar",
+                "description": "Override the simulated max RMSD (camera px)",
                 "required": False,
             },
             "kinetics": {
                 "type": "dict",
                 "description": (
-                    "{k_on, tau_b, concentration, exposure} to auto-seed "
-                    "the nlocs window from predicted locs per site"
+                    "{k_on, tau_b, concentration, exposure} -> mean locs per "
+                    "site, driving the simulated pick window"
                 ),
                 "required": False,
             },
             "allow_mirror": {
                 "type": "bool",
-                "description": "Allow a mirrored match during registration",
+                "description": "Allow a mirrored match (geometry filter)",
                 "default": True,
                 "required": False,
             },

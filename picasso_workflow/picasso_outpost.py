@@ -5332,6 +5332,108 @@ def kinetics_nlocs_window(
     return float(max(0.0, min_n)), float(max_n)
 
 
+def simulate_origami_nlocs_rmsd(
+    template,
+    site_uncertainty_nm,
+    missing_sites_allowed,
+    mean_locs_per_site,
+    n_sim=1500,
+    random_seed=0,
+):
+    """Sample the (nlocs, rmsd) phase space of expected origami structures.
+
+    Draws ``n_sim`` origami realisations from the design geometry, each with
+    a random number of missing sites (0..``missing_sites_allowed``, random
+    combination), Gaussian site jitter (``site_uncertainty_nm``) and Poisson
+    localization counts per site (``mean_locs_per_site``). Returns the total
+    localization count and the RMS distance from the centre of mass of each
+    realisation - i.e. where real (partial, noisy) origami land in the same
+    nlocs/rmsd space that :func:`pick_similar` scores candidates in.
+
+    Parameters
+    ----------
+    template : OrigamiTemplate
+        Expected design geometry (mean-centred sites in nm).
+    site_uncertainty_nm : float
+        Per-localization Gaussian spread around each docking site (nm).
+    missing_sites_allowed : int
+        Maximum number of sites that may be missing in a realisation.
+    mean_locs_per_site : float
+        Poisson mean of localizations per present docking site.
+    n_sim : int, optional
+        Number of realisations to sample. Default 1500.
+    random_seed : int, optional
+        Seed for reproducibility. Default 0.
+
+    Returns
+    -------
+    (np.ndarray, np.ndarray)
+        ``(nlocs, rmsd_nm)`` per realisation, each length ``n_sim``.
+    """
+    rng = np.random.default_rng(random_seed)
+    sites = np.asarray(template.sites_nm, dtype=float).reshape(-1, 2)
+    n_sites = len(sites)
+    kmax = int(min(max(0, missing_sites_allowed), n_sites - 1))
+    nlocs_out = np.zeros(n_sim)
+    rmsd_out = np.zeros(n_sim)
+    for s in range(n_sim):
+        k = int(rng.integers(0, kmax + 1))
+        present = (
+            sites
+            if k == 0
+            else sites[rng.choice(n_sites, size=n_sites - k, replace=False)]
+        )
+        n_per = rng.poisson(mean_locs_per_site, size=len(present))
+        total = int(n_per.sum())
+        nlocs_out[s] = total
+        if total < 2:
+            continue
+        locs = np.repeat(present, n_per, axis=0) + rng.normal(
+            0.0, site_uncertainty_nm, size=(total, 2)
+        )
+        com = locs.mean(axis=0)
+        rmsd_out[s] = float(np.sqrt(np.mean(((locs - com) ** 2).sum(axis=1))))
+    return nlocs_out, rmsd_out
+
+
+def phase_space_window_from_sim(
+    nlocs_sim, rmsd_sim_nm, pixelsize, quantile=0.01
+):
+    """Derive a pick_similar rectangle from a simulated phase-space cloud.
+
+    Takes per-axis quantiles of the simulated ``(nlocs, rmsd)`` cloud as the
+    accepted window, dropping the ``quantile`` tail on each side.
+
+    Parameters
+    ----------
+    nlocs_sim : array-like
+        Simulated total localization counts (see
+        :func:`simulate_origami_nlocs_rmsd`).
+    rmsd_sim_nm : array-like
+        Simulated RMSDs in nanometres.
+    pixelsize : float
+        Camera pixel size in nm (RMSD is returned in camera px to match
+        :func:`pick_similar`).
+    quantile : float, optional
+        Tail fraction dropped on each side per axis. Default 0.01.
+
+    Returns
+    -------
+    dict
+        ``min_nlocs`` / ``max_nlocs`` (total counts) and ``min_rmsd`` /
+        ``max_rmsd`` (camera px).
+    """
+    nlocs_sim = np.asarray(nlocs_sim, dtype=float)
+    rmsd_sim_nm = np.asarray(rmsd_sim_nm, dtype=float)
+    lo, hi = quantile, 1.0 - quantile
+    return {
+        "min_nlocs": float(np.quantile(nlocs_sim, lo)),
+        "max_nlocs": float(np.quantile(nlocs_sim, hi)),
+        "min_rmsd": float(np.quantile(rmsd_sim_nm, lo) / pixelsize),
+        "max_rmsd": float(np.quantile(rmsd_sim_nm, hi) / pixelsize),
+    }
+
+
 def subcluster_docking_sites(
     xy_nm, expected_spacing_nm, min_samples=3, eps_frac=0.35
 ):
@@ -5634,28 +5736,6 @@ def accept_candidate(
     )
 
 
-def _candidate_centers_footprint(
-    locs,
-    info,
-    footprint_diameter,
-    min_n_locs_per_frame,
-    max_n_locs_per_frame,
-    min_rmsd,
-    max_rmsd,
-):
-    """Coarse origami-candidate centers via footprint-sized pick_similar."""
-    picks, nlocs, rmsds, labels = pick_similar(
-        locs,
-        info,
-        diameter=footprint_diameter,
-        min_n_locs_per_frame=min_n_locs_per_frame,
-        max_n_locs_per_frame=max_n_locs_per_frame,
-        min_rmsd=min_rmsd,
-        max_rmsd=max_rmsd,
-    )
-    return list(picks), nlocs, rmsds, labels
-
-
 def _candidate_centers_cluster_of_clusters(
     locs, info, site_diameter, footprint_extent_px, min_n_locs, min_samples
 ):
@@ -5690,23 +5770,31 @@ def pick_origami(
     candidate_method="footprint",
     footprint_diameter=None,
     pick_diameter_factor=1.5,
-    min_n_locs_per_frame="q0.25",
-    max_n_locs_per_frame="q0.98",
-    min_rmsd=0.0,
-    max_rmsd=np.inf,
     missing_sites_allowed=2,
-    spacing_tol=0.3,
+    site_uncertainty_nm=3.0,
+    mean_locs_per_site=None,
+    n_sim=1500,
+    sim_quantile=0.01,
+    random_seed=0,
+    min_n_locs_per_frame=None,
+    max_n_locs_per_frame=None,
+    min_rmsd=None,
+    max_rmsd=None,
+    filter_by_geometry=False,
+    spacing_tol=0.5,
     max_rmse_nm=None,
     subcluster_min_samples=3,
     allow_mirror=True,
 ):
     """Design-aware picking of origami structures.
 
-    Detects candidate origami footprints, sub-clusters each into docking
-    sites, registers the resolved constellation against ``template``, and
-    accepts candidates that resolve enough sites within the spacing/RMSE
-    tolerances. Reuses the picasso-backed :func:`pick_similar` family for
-    candidate detection.
+    Predicts where expected origami land in ``pick_similar``'s nlocs/rmsd
+    phase space by simulating realisations of the design geometry (random
+    missing sites, Gaussian site jitter, Poisson kinetics), derives the
+    pick window from that simulated cloud, and picks with
+    :func:`pick_similar`. The window itself is the primary filter; matching
+    each pick's resolved sites against the design geometry is an optional
+    post-filter (``filter_by_geometry``).
 
     Parameters
     ----------
@@ -5723,40 +5811,57 @@ def pick_origami(
         derived from the template extent (see ``pick_diameter_factor``).
     pick_diameter_factor : float, optional
         When ``footprint_diameter`` is not given, the pick diameter is
-        ``pick_diameter_factor * template.extent_nm / pixelsize`` - i.e. a
-        margin around the origami. Default 1.5 (150 % of the origami size).
-        A larger pick also makes candidate detection faster (coarser
-        ``pick_similar`` grid, fewer overlapping candidates).
-    min_n_locs_per_frame, max_n_locs_per_frame : float or str, optional
-        nlocs window forwarded to :func:`pick_similar` (quantile strings
-        like ``"q0.25"`` allowed). Pass kinetics-derived per-frame values
-        to seed the window from :func:`kinetics_nlocs_window`.
-    min_rmsd, max_rmsd : float, optional
-        RMSD window forwarded to :func:`pick_similar`.
+        ``pick_diameter_factor * template.extent_nm / pixelsize``. Default
+        1.5 (150 % of the origami size).
     missing_sites_allowed : int, optional
-        Maximum missing sites tolerated per structure. Default 2.
+        Maximum missing sites in a simulated realisation (and, when
+        ``filter_by_geometry``, tolerated per accepted structure). Default 2.
+    site_uncertainty_nm : float, optional
+        Per-localization Gaussian spread around each docking site, for the
+        simulation. Default 3.
+    mean_locs_per_site : float, optional
+        Poisson mean localizations per docking site (from kinetics). When
+        given, the pick window is derived by simulation; otherwise the
+        overrides / quantile defaults are used.
+    n_sim : int, optional
+        Number of simulated realisations. Default 1500.
+    sim_quantile : float, optional
+        Per-axis tail fraction dropped when turning the simulated cloud into
+        the pick rectangle. Default 0.01.
+    random_seed : int, optional
+        Simulation seed (reproducibility). Default 0.
+    min_n_locs_per_frame, max_n_locs_per_frame : float or str, optional
+        Override the simulated nlocs window (per-frame value, or a quantile
+        string like ``"q0.25"``). When unset, the simulated window (or, with
+        no simulation, ``"q0.25"``/``"q0.98"``) is used.
+    min_rmsd, max_rmsd : float, optional
+        Override the simulated RMSD window (camera px). When unset, the
+        simulated window (or, with no simulation, ``0``/``inf``) is used.
+    filter_by_geometry : bool, optional
+        If True, sub-cluster each pick into docking sites, register against
+        the design and reject mismatches (and emit docking-site picks).
+        Default False - the phase-space window is the only filter.
     spacing_tol : float, optional
-        Relative spacing tolerance for acceptance. Default 0.3.
+        Relative spacing tolerance for the geometry filter. Default 0.5.
     max_rmse_nm : float, optional
-        Maximum RMSE-vs-design for acceptance (disabled if None).
+        Maximum RMSE-vs-design for the geometry filter (disabled if None).
     subcluster_min_samples : int, optional
         DBSCAN ``min_samples`` for docking-site sub-clustering. Default 3.
     allow_mirror : bool, optional
-        Allow a mirrored match during registration. Default True.
+        Allow a mirrored match during the geometry filter. Default True.
 
     Returns
     -------
     dict
-        Keys: ``accepted_centers_px`` (list of ``(x, y)``, centred on each
-        structure's resolved-site centre of mass),
-        ``docking_site_centers_px`` (list of ``(x, y)`` for all resolved
-        sites in accepted origamis), ``geometry_table`` (list of
-        per-structure dicts), ``n_candidates``, ``n_registered``,
-        ``n_accepted``, ``funnel``, ``footprint_diameter`` (camera px, the
-        value actually used), the candidate phase-space arrays
-        ``candidate_nlocs`` / ``candidate_rmsds`` / ``candidate_labels``,
-        and ``accepted_nlocs`` / ``accepted_rmsds``.
+        Keys include ``accepted_centers_px``, ``docking_site_centers_px``,
+        ``geometry_table``, ``n_candidates`` / ``n_accepted`` /
+        ``n_registered``, ``funnel``, ``footprint_diameter``, the candidate
+        phase-space arrays ``candidate_nlocs`` / ``candidate_rmsds`` /
+        ``candidate_labels``, ``accepted_nlocs`` / ``accepted_rmsds``, the
+        simulated cloud ``sim_nlocs`` (counts) / ``sim_rmsds`` (px), and the
+        resolved ``pick_window`` (bounds actually used).
     """
+    n_frames = info[0]["Frames"]
     spacing_nm = template.grid_spacing_nm
     # Fall back on a template-derived footprint whenever the caller did not
     # supply a usable one (None or a 0/negative placeholder). A zero diameter
@@ -5776,23 +5881,73 @@ def pick_origami(
         )
     match_gate_nm = 0.5 * spacing_nm if spacing_nm > 0 else None
 
+    # --- 1. simulate the expected nlocs/rmsd phase space -----------------
+    sim_nlocs = np.empty(0)
+    sim_rmsds = np.empty(0)  # camera px
+    window = {}
+    if mean_locs_per_site is not None and mean_locs_per_site > 0:
+        sim_nlocs, sim_rmsds_nm = simulate_origami_nlocs_rmsd(
+            template,
+            site_uncertainty_nm,
+            missing_sites_allowed,
+            mean_locs_per_site,
+            n_sim=n_sim,
+            random_seed=random_seed,
+        )
+        sim_rmsds = sim_rmsds_nm / pixelsize
+        window = phase_space_window_from_sim(
+            sim_nlocs, sim_rmsds_nm, pixelsize, sim_quantile
+        )
+
+    # --- 2. resolve the pick_similar window ------------------------------
+    # explicit overrides win; else the simulated window; else quantile/wide
+    # defaults. nlocs bounds are per-frame for pick_similar.
+    def _unset(v):
+        return v is None or v == ""
+
+    if not _unset(min_n_locs_per_frame):
+        min_nlpf = min_n_locs_per_frame
+    elif "min_nlocs" in window:
+        min_nlpf = window["min_nlocs"] / n_frames
+    else:
+        min_nlpf = "q0.25"
+    if not _unset(max_n_locs_per_frame):
+        max_nlpf = max_n_locs_per_frame
+    elif "max_nlocs" in window:
+        max_nlpf = window["max_nlocs"] / n_frames
+    else:
+        max_nlpf = "q0.98"
+    pick_min_rmsd = (
+        min_rmsd if not _unset(min_rmsd) else window.get("min_rmsd", 0.0)
+    )
+    pick_max_rmsd = (
+        max_rmsd if not _unset(max_rmsd) else window.get("max_rmsd", np.inf)
+    )
+
+    # --- 3. pick candidates within the window ---------------------------
     if candidate_method == "footprint":
-        candidates, nlocs, rmsds, labels = _candidate_centers_footprint(
+        picks, nlocs, rmsds, labels = pick_similar(
             locs,
             info,
-            footprint_diameter,
-            min_n_locs_per_frame,
-            max_n_locs_per_frame,
-            min_rmsd,
-            max_rmsd,
+            diameter=footprint_diameter,
+            min_n_locs_per_frame=min_nlpf,
+            max_n_locs_per_frame=max_nlpf,
+            min_rmsd=pick_min_rmsd,
+            max_rmsd=pick_max_rmsd,
         )
+        candidates = list(picks)
+        sel = np.asarray(labels) == 0
+        if int(np.count_nonzero(sel)) == len(candidates):
+            cand_point_nlocs = np.asarray(nlocs)[sel]
+            cand_point_rmsds = np.asarray(rmsds)[sel]
+        else:
+            cand_point_nlocs = np.full(len(candidates), np.nan)
+            cand_point_rmsds = np.full(len(candidates), np.nan)
     elif candidate_method == "cluster_of_clusters":
         site_diameter = max(spacing_nm / pixelsize, 1e-6)
-        nframes = info[0]["Frames"]
-        if isinstance(min_n_locs_per_frame, str):
-            min_n_locs = 1
-        else:
-            min_n_locs = int(nframes * min_n_locs_per_frame)
+        min_n_locs = (
+            1 if isinstance(min_nlpf, str) else int(n_frames * min_nlpf)
+        )
         candidates, nlocs, rmsds, labels = (
             _candidate_centers_cluster_of_clusters(
                 locs,
@@ -5803,48 +5958,48 @@ def pick_origami(
                 subcluster_min_samples,
             )
         )
+        cand_point_nlocs = np.full(len(candidates), np.nan)
+        cand_point_rmsds = np.full(len(candidates), np.nan)
     else:
         raise ValueError(
             f"unknown candidate_method: {candidate_method!r} "
             "(expected 'footprint' or 'cluster_of_clusters')"
         )
 
-    # Per-candidate phase-space coordinates (nlocs, rmsd), aligned to
-    # ``candidates``, so accepted structures can be overlaid on the
-    # candidate cloud. In footprint mode the selected picks are exactly
-    # ``labels == 0`` in candidate order; cluster-of-clusters has no such
-    # per-candidate mapping, so those coordinates are left as NaN.
-    cand_point_nlocs = np.full(len(candidates), np.nan)
-    cand_point_rmsds = np.full(len(candidates), np.nan)
-    if candidate_method == "footprint":
-        sel = np.asarray(labels) == 0
-        if int(np.count_nonzero(sel)) == len(candidates):
-            cand_point_nlocs = np.asarray(nlocs)[sel]
-            cand_point_rmsds = np.asarray(rmsds)[sel]
+    pick_window = {
+        "min_nlocs": float(window.get("min_nlocs", np.nan)),
+        "max_nlocs": float(window.get("max_nlocs", np.nan)),
+        "min_rmsd": (
+            float(pick_min_rmsd)
+            if not isinstance(pick_min_rmsd, str)
+            else np.nan
+        ),
+        "max_rmsd": (
+            float(pick_max_rmsd)
+            if not isinstance(pick_max_rmsd, str)
+            and np.isfinite(pick_max_rmsd)
+            else np.nan
+        ),
+    }
 
-    # A candidate can only be accepted if it resolves at least this many
-    # sites; registration can match at most len(site_centers) of them. So
-    # skip the expensive rotation-sweep registration (~360 seeds/candidate)
-    # for any candidate that sub-clusters to fewer sites than this floor.
-    min_required_sites = max(
-        1, template.n_sites_expected - missing_sites_allowed
-    )
-    logger.debug(
-        f"pick_origami: {len(candidates)} candidate footprints "
-        f"(method={candidate_method}, footprint_diameter="
-        f"{footprint_diameter:.3f} px); registering those with "
-        f">= {min_required_sites} resolved sites."
-    )
-
-    # Rejection funnel: how many candidates each stage removes.
     funnel = {
         "n_candidates": len(candidates),
-        "no_locs": 0,  # footprint contained no localizations
-        "too_few_sites": 0,  # sub-clustered below min_required_sites
-        "rejected_missing_sites": 0,  # registered but too few matched
-        "rejected_rmse": 0,  # RMSE-vs-design too high
-        "rejected_spacing": 0,  # resolved spacing off design
+        "no_locs": 0,
+        "too_few_sites": 0,
+        "rejected_missing_sites": 0,
+        "rejected_rmse": 0,
+        "rejected_spacing": 0,
         "accepted": 0,
+    }
+    base_return = {
+        "n_candidates": len(candidates),
+        "candidate_nlocs": nlocs,
+        "candidate_rmsds": rmsds,
+        "candidate_labels": labels,
+        "sim_nlocs": sim_nlocs,
+        "sim_rmsds": sim_rmsds,
+        "pick_window": pick_window,
+        "footprint_diameter": footprint_diameter,
     }
 
     accepted_centers_px = []
@@ -5853,28 +6008,57 @@ def pick_origami(
     docking_site_centers_px = []
     geometry_table = []
     n_registered = 0
+
     if not candidates:
-        logger.debug("pick_origami: no candidate footprints found.")
+        logger.debug("pick_origami: no candidates within the pick window.")
         return {
+            **base_return,
             "accepted_centers_px": [],
             "docking_site_centers_px": [],
             "geometry_table": [],
-            "n_candidates": 0,
             "n_registered": 0,
             "n_accepted": 0,
             "funnel": funnel,
-            "candidate_nlocs": nlocs,
-            "candidate_rmsds": rmsds,
-            "candidate_labels": labels,
             "accepted_nlocs": np.empty(0),
             "accepted_rmsds": np.empty(0),
-            "footprint_diameter": footprint_diameter,
         }
 
-    # Pick all candidate footprints in one pass: picked_locs builds the
-    # spatial index once and loops over centers internally, so this is
-    # O(N_locs) instead of O(N_candidates * N_locs) from per-candidate
-    # index rebuilds. The 'group' column maps each loc to its candidate.
+    # --- 4a. no geometry filter: the window is the filter ---------------
+    if not filter_by_geometry:
+        for cand_idx, (cx, cy) in enumerate(candidates):
+            accepted_centers_px.append((float(cx), float(cy)))
+            accepted_nlocs.append(cand_point_nlocs[cand_idx])
+            accepted_rmsds.append(cand_point_rmsds[cand_idx])
+            geometry_table.append(
+                {
+                    "center_x_px": float(cx),
+                    "center_y_px": float(cy),
+                    "nlocs": float(cand_point_nlocs[cand_idx]),
+                    "rejection_reason": "",
+                    "accepted": True,
+                }
+            )
+        funnel["accepted"] = len(accepted_centers_px)
+        logger.debug(
+            f"pick_origami: {funnel['n_candidates']} candidates accepted "
+            "within the pick window (no geometry filter)."
+        )
+        return {
+            **base_return,
+            "accepted_centers_px": accepted_centers_px,
+            "docking_site_centers_px": [],
+            "geometry_table": geometry_table,
+            "n_registered": 0,
+            "n_accepted": len(accepted_centers_px),
+            "funnel": funnel,
+            "accepted_nlocs": np.asarray(accepted_nlocs),
+            "accepted_rmsds": np.asarray(accepted_rmsds),
+        }
+
+    # --- 4b. geometry filter: register each pick against the design -----
+    min_required_sites = max(
+        1, template.n_sites_expected - missing_sites_allowed
+    )
     all_foot_locs = picked_locs(
         locs,
         info,
@@ -5968,19 +6152,15 @@ def pick_origami(
         f"spacing -> {funnel['accepted']} accepted."
     )
     return {
+        **base_return,
         "accepted_centers_px": accepted_centers_px,
         "docking_site_centers_px": docking_site_centers_px,
         "geometry_table": geometry_table,
-        "n_candidates": len(candidates),
         "n_registered": n_registered,
         "n_accepted": len(accepted_centers_px),
         "funnel": funnel,
-        "candidate_nlocs": nlocs,
-        "candidate_rmsds": rmsds,
-        "candidate_labels": labels,
         "accepted_nlocs": np.asarray(accepted_nlocs),
         "accepted_rmsds": np.asarray(accepted_rmsds),
-        "footprint_diameter": footprint_diameter,
     }
 
 

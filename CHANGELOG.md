@@ -10,6 +10,25 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+
+- `pick_origami` now picks by a **simulation-derived phase-space window**
+  instead of a per-candidate geometry gate, which over-discarded structures and
+  was hard to tune. From the design geometry it simulates `n_sim` origami
+  realisations (random missing sites 0..`missing_sites_allowed`, Gaussian site
+  jitter `site_uncertainty_nm`, Poisson kinetics via `mean_locs_per_site` /
+  `kinetics`), takes the per-axis `sim_quantile` window of the resulting
+  (nlocs, rmsd) cloud, and picks with `pick_similar` in that window (pick
+  diameter = origami size × `pick_diameter_factor`). `min/max_n_locs_per_frame`
+  and `min/max_rmsd` override the simulated bounds. Matching each pick's
+  resolved sites against the design is now an **optional** post-filter
+  (`filter_by_geometry`, default off) that also emits the docking-site picks.
+  The phase-space report figure now shows all candidates as a background
+  density contour, the simulated "expected origami" cloud as a contour line,
+  and accepted picks as points. New result keys `sim_nlocs` / `sim_rmsds` /
+  `pick_window`; new `picasso_outpost.simulate_origami_nlocs_rmsd` and
+  `phase_space_window_from_sim`.
+
 ### Added
 
 - `pick_origami` gains a `pick_diameter_factor` parameter (default **1.5**):

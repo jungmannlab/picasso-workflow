@@ -2121,6 +2121,14 @@ class TestAnalyseModules(unittest.TestCase):
             "candidate_labels": np.array([0, 0, -1, -1, 0]),
             "accepted_nlocs": np.array([50, 90]),
             "accepted_rmsds": np.array([1.5, 2.2]),
+            "sim_nlocs": np.array([48, 52, 60, 88, 92]),
+            "sim_rmsds": np.array([1.4, 1.6, 2.0, 2.1, 2.3]),
+            "pick_window": {
+                "min_nlocs": 40.0,
+                "max_nlocs": 100.0,
+                "min_rmsd": 1.0,
+                "max_rmsd": 2.5,
+            },
             "footprint_diameter": 0.7,
         }
         test_locs = pd.DataFrame(

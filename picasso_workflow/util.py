@@ -1906,30 +1906,47 @@ class AbstractModuleCollection(abc.ABC):
 
             ``grid_spacing_nm`` : float
                 Physical spacing (nm) used to anchor a design-file scale.
-            ``candidate_method`` : {"footprint", "cluster_of_clusters"}
-                Coarse candidate detection (default ``"footprint"``).
             ``missing_sites_allowed`` : int
-                Missing sites tolerated per structure (default 2).
-            ``spacing_tol`` : float
-                Relative spacing tolerance for acceptance (default 0.3).
-            ``max_rmse_nm`` : float
-                Maximum RMSE-vs-design for acceptance (disabled if unset).
+                Max missing sites in a simulated origami (and, with
+                ``filter_by_geometry``, tolerated per accepted structure)
+                (default 2).
+            ``site_uncertainty_nm`` : float
+                Per-localization Gaussian spread around each site, for the
+                phase-space simulation (default 3).
+            ``kinetics`` : dict
+                ``{k_on, tau_b, concentration, exposure}`` -> mean locs per
+                site, driving the simulated pick window.
+            ``mean_locs_per_site`` : float
+                Explicit mean localizations per site (overrides ``kinetics``).
+            ``n_sim`` : int
+                Number of simulated realisations (default 1500).
+            ``sim_quantile`` : float
+                Per-axis tail fraction dropped when turning the simulated
+                cloud into the pick rectangle (default 0.01).
+            ``random_seed`` : int
+                Simulation seed (default 0).
+            ``min_n_locs_per_frame``, ``max_n_locs_per_frame`` : float or str
+                Override the simulated nlocs window (quantile strings ok).
+            ``min_rmsd``, ``max_rmsd`` : float
+                Override the simulated RMSD window (camera px).
             ``footprint_diameter`` : float
                 Pick diameter (camera px) spanning one origami; overrides
                 ``pick_diameter_factor`` when set.
             ``pick_diameter_factor`` : float
                 Pick diameter as a multiple of the origami size when
                 ``footprint_diameter`` is unset (default 1.5 = 150 %).
-            ``min_n_locs_per_frame``, ``max_n_locs_per_frame`` : float or str
-                nlocs window for pick_similar (quantile strings allowed).
-            ``min_rmsd``, ``max_rmsd`` : float
-                RMSD window for pick_similar.
-            ``kinetics`` : dict
-                ``{k_on, tau_b, concentration, exposure}`` to auto-seed the
-                nlocs window from predicted localizations per site (falls
-                back to the quantile defaults when absent).
+            ``filter_by_geometry`` : bool
+                Also register each pick against the design and reject
+                mismatches (emits docking-site picks); default False.
+            ``spacing_tol`` : float
+                Relative spacing tolerance for the geometry filter
+                (default 0.5).
+            ``max_rmse_nm`` : float
+                Max RMSE-vs-design for the geometry filter (disabled if unset).
             ``allow_mirror`` : bool
-                Allow a mirrored match during registration (default True).
+                Allow a mirrored match in the geometry filter (default True).
+            ``candidate_method`` : {"footprint", "cluster_of_clusters"}
+                Coarse candidate detection (default ``"footprint"``).
             ``n_plot_structures`` : int
                 Number of representative structures to plot.
             ``display_pixelsize`` : float
