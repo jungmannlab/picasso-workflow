@@ -5434,6 +5434,94 @@ def phase_space_window_from_sim(
     }
 
 
+def origami_phase_space_preview(
+    geometry,
+    n_frames,
+    kinetics=None,
+    mean_locs_per_site=None,
+    missing_sites_allowed=2,
+    site_uncertainty_nm=3.0,
+    pixelsize=130.0,
+    n_sim=1500,
+    sim_quantile=0.01,
+    random_seed=0,
+    grid_spacing_nm=None,
+):
+    """Preview the expected origami nlocs/rmsd phase space for a geometry.
+
+    One-call helper intended for interactive/GUI use (cheap - order 0.1 s):
+    loads the geometry, turns kinetics into a mean-locs-per-site, simulates
+    the expected ``(nlocs, rmsd)`` cloud and derives the suggested pick
+    window. The GUI can show the cloud and offer
+    ``min_n_locs_per_frame`` / ``max_n_locs_per_frame`` for the user to
+    accept or edit.
+
+    Parameters
+    ----------
+    geometry : str or dict or array-like
+        Origami geometry spec (see :func:`load_origami_template`).
+    n_frames : int
+        Number of frames in the acquisition (for per-frame nlocs).
+    kinetics : dict, optional
+        ``{k_on, tau_b, concentration, exposure}`` -> mean locs per site.
+    mean_locs_per_site : float, optional
+        Explicit mean locs per site (overrides ``kinetics``).
+    missing_sites_allowed, site_uncertainty_nm, n_sim, sim_quantile,
+    random_seed : see :func:`simulate_origami_nlocs_rmsd` /
+        :func:`phase_space_window_from_sim` / :func:`pick_origami`.
+    pixelsize : float, optional
+        Camera pixel size in nm. Default 130.
+    grid_spacing_nm : float, optional
+        Physical spacing to anchor a design-file scale.
+
+    Returns
+    -------
+    dict
+        ``n_sites_expected``, ``grid_spacing_nm``, ``mean_locs_per_site``,
+        the simulated cloud (``sim_nlocs`` counts / ``sim_nlocs_per_frame`` /
+        ``sim_rmsd_px``), and the suggested window
+        (``min_n_locs_per_frame`` / ``max_n_locs_per_frame`` /
+        ``min_rmsd`` / ``max_rmsd`` in px).
+    """
+    template = load_origami_template(geometry, grid_spacing_nm=grid_spacing_nm)
+    if mean_locs_per_site is None:
+        if not kinetics:
+            raise ValueError(
+                "origami_phase_space_preview needs mean_locs_per_site or "
+                "kinetics {k_on, tau_b, concentration, exposure}"
+            )
+        mean_locs_per_site = predict_locs_per_site(
+            kinetics["k_on"],
+            kinetics["tau_b"],
+            kinetics["concentration"],
+            n_frames,
+            kinetics["exposure"],
+        )
+    sim_nlocs, sim_rmsds_nm = simulate_origami_nlocs_rmsd(
+        template,
+        site_uncertainty_nm,
+        missing_sites_allowed,
+        mean_locs_per_site,
+        n_sim=n_sim,
+        random_seed=random_seed,
+    )
+    window = phase_space_window_from_sim(
+        sim_nlocs, sim_rmsds_nm, pixelsize, sim_quantile
+    )
+    return {
+        "n_sites_expected": template.n_sites_expected,
+        "grid_spacing_nm": template.grid_spacing_nm,
+        "mean_locs_per_site": float(mean_locs_per_site),
+        "sim_nlocs": sim_nlocs,
+        "sim_nlocs_per_frame": sim_nlocs / n_frames,
+        "sim_rmsd_px": sim_rmsds_nm / pixelsize,
+        "min_n_locs_per_frame": window["min_nlocs"] / n_frames,
+        "max_n_locs_per_frame": window["max_nlocs"] / n_frames,
+        "min_rmsd": window["min_rmsd"],
+        "max_rmsd": window["max_rmsd"],
+    }
+
+
 def subcluster_docking_sites(
     xy_nm, expected_spacing_nm, min_samples=3, eps_frac=0.35
 ):

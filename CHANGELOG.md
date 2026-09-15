@@ -120,6 +120,16 @@ This file was started after v0.5.6; earlier history is in the git log.
   in a **grid** (rows of up to `n_plot_columns`, default 8) instead of a single
   long row, so many structures stay legible.
 
+- The `pick_origami` phase-space figure is now **three side-by-side panels**
+  (all candidates / simulated expected origami / accepted picks) sharing axes,
+  each drawn as points or, above `contour_threshold` points (default 2000), a
+  density contour - the single overlaid plot was too crowded to read.
+
+- New `picasso_outpost.origami_phase_space_preview`: a cheap (~0.1 s) one-call
+  helper that simulates the expected origami phase space for a geometry +
+  kinetics and returns the suggested `min/max_n_locs_per_frame` window, so a
+  GUI can preview the cloud and let the user set the nlocs range interactively.
+
 - `pick_origami` now reports a rejection **funnel** so it is clear which filter
   removed how many candidates: counts for no-localizations, too-few-sites
   (pre-registration prefilter), and post-registration rejections split by

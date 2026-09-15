@@ -178,71 +178,97 @@ def _summarize_accepted_structures(geometry_table):
     return overview
 
 
-def _phasespace_contour(ax, x, y, color, filled, label):
-    """Draw a 2D-histogram density contour of ``(x, y)`` on ``ax``.
-
-    Returns True if a contour was drawn (enough finite points), else falls
-    back to a light scatter and returns False.
-    """
+def _finite_xy(x, y):
+    """Return the finite, equal-length ``(x, y)`` subset as float arrays."""
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
+    if len(x) != len(y):
+        return np.empty(0), np.empty(0)
     ok = np.isfinite(x) & np.isfinite(y)
-    x, y = x[ok], y[ok]
-    if len(x) < 20 or np.ptp(x) == 0 or np.ptp(y) == 0:
-        if len(x):
-            ax.scatter(x, y, color=color, alpha=0.2, s=8, label=label)
-        return False
-    hist, xedges, yedges = np.histogram2d(x, y, bins=40)
-    xc = 0.5 * (xedges[:-1] + xedges[1:])
-    yc = 0.5 * (yedges[:-1] + yedges[1:])
-    xg, yg = np.meshgrid(xc, yc)
-    zg = hist.T
-    if filled:
-        ax.contourf(xg, yg, zg, levels=6, cmap="Greys", alpha=0.6, zorder=0)
-        ax.plot([], [], color=color, label=label)
+    return x[ok], y[ok]
+
+
+def _scatter_or_contour(ax, x, y, color, cmap, contour_threshold):
+    """Plot ``(x, y)`` as points, or a filled density contour if there are
+    more than ``contour_threshold`` points (scatter gets unreadable).
+
+    Returns the number of finite points plotted.
+    """
+    x, y = _finite_xy(x, y)
+    if len(x) == 0:
+        return 0
+    if len(x) <= contour_threshold or np.ptp(x) == 0 or np.ptp(y) == 0:
+        ax.scatter(x, y, s=10, color=color, alpha=0.4)
     else:
-        levels = [zg.max() * 0.1] if zg.max() > 0 else [0.5]
-        ax.contour(xg, yg, zg, levels=levels, colors=[color], zorder=1)
-        ax.plot([], [], color=color, label=label)
-    return True
+        hist, xedges, yedges = np.histogram2d(x, y, bins=60)
+        xc = 0.5 * (xedges[:-1] + xedges[1:])
+        yc = 0.5 * (yedges[:-1] + yedges[1:])
+        xg, yg = np.meshgrid(xc, yc)
+        ax.contourf(xg, yg, hist.T, levels=8, cmap=cmap)
+    return len(x)
 
 
 def _plot_origami_phasespace(
-    fp, nlocs, rmsds, sim_nlocs, sim_rmsds, acc_nlocs, acc_rmsds, title
+    fp,
+    nlocs,
+    rmsds,
+    sim_nlocs,
+    sim_rmsds,
+    acc_nlocs,
+    acc_rmsds,
+    title,
+    contour_threshold=2000,
 ):
     """Render the origami nlocs-per-frame / rmsd phase-space diagnostic.
 
-    Layers: all candidates as a background density contour, the simulated
-    "expected origami" cloud as a contour line, accepted picks as points.
+    Three panels sharing axes - all candidates, the simulated "expected
+    origami" cloud, and the accepted picks - each drawn as points, or a
+    density contour when there are more than ``contour_threshold`` points.
 
     Returns
     -------
     str
         The path the figure was saved to (``fp``).
     """
-    fig, ax = plt.subplots()
-    _phasespace_contour(
-        ax, nlocs, rmsds, "0.4", filled=True, label="candidates"
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharex=True, sharey=True)
+
+    # shared axis limits from all finite points, so panels are comparable
+    xs, ys = [], []
+    for xv, yv in (
+        (nlocs, rmsds),
+        (sim_nlocs, sim_rmsds),
+        (acc_nlocs, acc_rmsds),
+    ):
+        fx, fy = _finite_xy(xv, yv)
+        if len(fx):
+            xs.append(fx)
+            ys.append(fy)
+    if xs:
+        allx = np.concatenate(xs)
+        ally = np.concatenate(ys)
+        xpad = 0.05 * (np.ptp(allx) or 1.0)
+        ypad = 0.05 * (np.ptp(ally) or 1.0)
+        axes[0].set_xlim(allx.min() - xpad, allx.max() + xpad)
+        axes[0].set_ylim(ally.min() - ypad, ally.max() + ypad)
+
+    n_cand = _scatter_or_contour(
+        axes[0], nlocs, rmsds, "0.3", "Greys", contour_threshold
     )
-    if len(sim_nlocs) and len(sim_nlocs) == len(sim_rmsds):
-        _phasespace_contour(
-            ax, sim_nlocs, sim_rmsds, "b", filled=False, label="expected (sim)"
-        )
-    if len(acc_nlocs) and len(acc_nlocs) == len(acc_rmsds):
-        ax.scatter(
-            acc_nlocs,
-            acc_rmsds,
-            color="r",
-            edgecolors="k",
-            s=40,
-            zorder=3,
-            label="accepted",
-        )
-    ax.set_xlabel("# localizations per frame in footprint")
-    ax.set_ylabel("root mean square distance in footprint")
-    ax.set_title(title)
-    ax.legend()
-    fig.set_size_inches((9, 9))
+    axes[0].set_title(f"All candidates (n={n_cand})")
+    n_sim = _scatter_or_contour(
+        axes[1], sim_nlocs, sim_rmsds, "b", "Blues", contour_threshold
+    )
+    axes[1].set_title(f"Expected origami, simulated (n={n_sim})")
+    n_acc = _scatter_or_contour(
+        axes[2], acc_nlocs, acc_rmsds, "r", "Reds", contour_threshold
+    )
+    axes[2].set_title(f"Accepted picks (n={n_acc})")
+
+    for ax in axes:
+        ax.set_xlabel("# localizations per frame in footprint")
+    axes[0].set_ylabel("root mean square distance in footprint")
+    fig.suptitle(title)
+    fig.tight_layout()
     fig.savefig(fp)
     return fp
 
@@ -14347,6 +14373,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 f"Origami: {results['n_accepted']}"
                 f" / {results['n_candidates']} accepted"
             ),
+            contour_threshold=parameters.get("contour_threshold", 2000),
         )
 
         # --- 6. representative accepted structures ---------------------

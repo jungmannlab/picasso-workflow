@@ -1211,6 +1211,38 @@ def test_simulate_origami_phase_space_is_physical_and_reproducible():
     assert np.array_equal(a, b)
 
 
+def test_origami_phase_space_preview():
+    """The one-call GUI preview returns a per-frame nlocs window from a
+    geometry + kinetics."""
+    out = picasso_outpost.origami_phase_space_preview(
+        {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0},
+        n_frames=10000,
+        kinetics={
+            "k_on": 1e6,
+            "tau_b": 0.5,
+            "concentration": 5e-9,
+            "exposure": 0.1,
+        },
+        missing_sites_allowed=3,
+        pixelsize=130.0,
+        n_sim=500,
+    )
+    assert out["n_sites_expected"] == 12
+    assert out["mean_locs_per_site"] > 0
+    assert len(out["sim_nlocs_per_frame"]) == 500
+    # a sensible, ordered per-frame window
+    assert 0 < out["min_n_locs_per_frame"] < out["max_n_locs_per_frame"]
+    assert out["min_rmsd"] < out["max_rmsd"]
+    # explicit mean_locs_per_site works without kinetics
+    out2 = picasso_outpost.origami_phase_space_preview(
+        {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0},
+        n_frames=10000,
+        mean_locs_per_site=100.0,
+        n_sim=200,
+    )
+    assert len(out2["sim_nlocs"]) == 200
+
+
 def test_phase_space_window_from_sim():
     """The window brackets the simulated cloud and converts rmsd to px."""
     nlocs = np.linspace(300, 700, 1000)
