@@ -188,9 +188,14 @@ def _finite_xy(x, y):
     return x[ok], y[ok]
 
 
-def _scatter_or_contour(ax, x, y, color, cmap, contour_threshold):
+def _scatter_or_contour(
+    ax, x, y, color, cmap, contour_threshold, hist_range=None
+):
     """Plot ``(x, y)`` as points, or a filled density contour if there are
     more than ``contour_threshold`` points (scatter gets unreadable).
+
+    ``hist_range`` (``[[x0, x1], [y0, y1]]``) bounds the contour histogram to
+    the visible region so its resolution is not wasted on far outliers.
 
     Returns the number of finite points plotted.
     """
@@ -200,7 +205,7 @@ def _scatter_or_contour(ax, x, y, color, cmap, contour_threshold):
     if len(x) <= contour_threshold or np.ptp(x) == 0 or np.ptp(y) == 0:
         ax.scatter(x, y, s=10, color=color, alpha=0.4)
     else:
-        hist, xedges, yedges = np.histogram2d(x, y, bins=60)
+        hist, xedges, yedges = np.histogram2d(x, y, bins=60, range=hist_range)
         xc = 0.5 * (xedges[:-1] + xedges[1:])
         yc = 0.5 * (yedges[:-1] + yedges[1:])
         xg, yg = np.meshgrid(xc, yc)
@@ -232,35 +237,71 @@ def _plot_origami_phasespace(
     """
     fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharex=True, sharey=True)
 
-    # shared axis limits from all finite points, so panels are comparable
-    xs, ys = [], []
-    for xv, yv in (
-        (nlocs, rmsds),
-        (sim_nlocs, sim_rmsds),
-        (acc_nlocs, acc_rmsds),
-    ):
+    # Robust shared limits. The useful region is where origami actually are -
+    # the simulated + accepted clouds - so the upper limit is driven by those,
+    # not by the candidate cloud, which usually has a long high-nlocs tail
+    # (dense/aggregated regions) reaching far past the origami and squashing
+    # the useful low-nlocs area. The candidate low end is still kept visible.
+    cand_x, cand_y = _finite_xy(nlocs, rmsds)
+    focus_x, focus_y = [], []
+    for xv, yv in ((sim_nlocs, sim_rmsds), (acc_nlocs, acc_rmsds)):
         fx, fy = _finite_xy(xv, yv)
         if len(fx):
-            xs.append(fx)
-            ys.append(fy)
-    if xs:
-        allx = np.concatenate(xs)
-        ally = np.concatenate(ys)
-        xpad = 0.05 * (np.ptp(allx) or 1.0)
-        ypad = 0.05 * (np.ptp(ally) or 1.0)
-        axes[0].set_xlim(allx.min() - xpad, allx.max() + xpad)
-        axes[0].set_ylim(ally.min() - ypad, ally.max() + ypad)
+            focus_x.append(fx)
+            focus_y.append(fy)
+
+    x_lo = x_hi = y_lo = y_hi = None
+    if focus_x:
+        fx = np.concatenate(focus_x)
+        fy = np.concatenate(focus_y)
+        x_lo, x_hi = fx.min(), fx.max()
+        y_lo, y_hi = fy.min(), fy.max()
+        if len(cand_x):  # keep the candidate low end visible
+            x_lo = min(x_lo, np.quantile(cand_x, 0.01))
+            y_lo = min(y_lo, np.quantile(cand_y, 0.01))
+    elif len(cand_x):  # no sim/accepted reference: robust candidate range,
+        # upper bound via a Tukey fence (Q3 + 1.5 IQR) so a heavy high-nlocs
+        # tail cannot stretch the axis.
+        qx1, qx3 = np.quantile(cand_x, [0.25, 0.75])
+        qy1, qy3 = np.quantile(cand_y, [0.25, 0.75])
+        x_lo = np.quantile(cand_x, 0.01)
+        x_hi = min(cand_x.max(), qx3 + 1.5 * (qx3 - qx1))
+        y_lo = np.quantile(cand_y, 0.01)
+        y_hi = min(cand_y.max(), qy3 + 1.5 * (qy3 - qy1))
+
+    hist_range = None
+    if x_hi is not None:
+        rx = (x_hi - x_lo) or 1.0
+        ry = (y_hi - y_lo) or 1.0
+        # extra headroom above the useful region for candidate context
+        x0, x1 = x_lo - 0.1 * rx, x_hi + 0.4 * rx
+        y0, y1 = y_lo - 0.15 * ry, y_hi + 0.25 * ry
+        hist_range = [[x0, x1], [y0, y1]]
+        axes[0].set_xlim(x0, x1)
+        axes[0].set_ylim(y0, y1)
 
     n_cand = _scatter_or_contour(
-        axes[0], nlocs, rmsds, "0.3", "Greys", contour_threshold
+        axes[0], nlocs, rmsds, "0.3", "Greys", contour_threshold, hist_range
     )
     axes[0].set_title(f"All candidates (n={n_cand})")
     n_sim = _scatter_or_contour(
-        axes[1], sim_nlocs, sim_rmsds, "b", "Blues", contour_threshold
+        axes[1],
+        sim_nlocs,
+        sim_rmsds,
+        "b",
+        "Blues",
+        contour_threshold,
+        hist_range,
     )
     axes[1].set_title(f"Expected origami, simulated (n={n_sim})")
     n_acc = _scatter_or_contour(
-        axes[2], acc_nlocs, acc_rmsds, "r", "Reds", contour_threshold
+        axes[2],
+        acc_nlocs,
+        acc_rmsds,
+        "r",
+        "Reds",
+        contour_threshold,
+        hist_range,
     )
     axes[2].set_title(f"Accepted picks (n={n_acc})")
 

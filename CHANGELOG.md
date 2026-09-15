@@ -123,7 +123,11 @@ This file was started after v0.5.6; earlier history is in the git log.
 - The `pick_origami` phase-space figure is now **three side-by-side panels**
   (all candidates / simulated expected origami / accepted picks) sharing axes,
   each drawn as points or, above `contour_threshold` points (default 2000), a
-  density contour - the single overlaid plot was too crowded to read.
+  density contour - the single overlaid plot was too crowded to read. The axis
+  limits now focus on the useful region: the upper bound is driven by the
+  simulated + accepted clouds (or a Tukey fence over the candidates when there
+  is no simulation), instead of the candidate cloud's far high-nlocs tail
+  (dense/aggregated regions) that previously stretched the x-axis ~8x too wide.
 
 - New `picasso_outpost.origami_phase_space_preview`: a cheap (~0.1 s) one-call
   helper that simulates the expected origami phase space for a geometry +
