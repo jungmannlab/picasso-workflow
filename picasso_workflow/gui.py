@@ -10310,6 +10310,190 @@ class TileParametersDialog(QtWidgets.QDialog):
             )
 
 
+class PhaseSpacePreviewDialog(QtWidgets.QDialog):
+    """Preview the simulated origami nlocs/rmsd phase space.
+
+    Simulates the expected ``(nlocs, rmsd)`` cloud for the current
+    ``pick_origami`` geometry + kinetics (via
+    :func:`picasso_workflow.picasso_outpost.origami_phase_space_preview`),
+    shows it with the suggested pick window, and lets the user write the
+    suggested ``min/max_n_locs_per_frame`` (and RMSD) back into the module's
+    parameter fields. The simulation is cheap (order 0.1 s), so this is
+    interactive.
+    """
+
+    def __init__(self, parent, param_values, apply_callback):
+        super().__init__(parent)
+        self.setWindowTitle("Origami phase-space preview")
+        self.resize(760, 680)
+        self._params = param_values or {}
+        self._apply_callback = apply_callback
+        self._preview = None
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Acquisition inputs that are not part of the module parameters
+        # (they come from the movie/camera at run time).
+        form = QtWidgets.QFormLayout()
+        self.n_frames_spin = QtWidgets.QSpinBox()
+        self.n_frames_spin.setRange(1, 100_000_000)
+        self.n_frames_spin.setValue(40000)
+        form.addRow("Number of frames:", self.n_frames_spin)
+        self.pixelsize_spin = QtWidgets.QDoubleSpinBox()
+        self.pixelsize_spin.setRange(1.0, 100000.0)
+        self.pixelsize_spin.setValue(130.0)
+        self.pixelsize_spin.setSuffix(" nm")
+        form.addRow("Pixel size:", self.pixelsize_spin)
+        layout.addLayout(form)
+
+        self.sim_button = QtWidgets.QPushButton("Simulate && preview")
+        self.sim_button.clicked.connect(self._simulate)
+        layout.addWidget(self.sim_button)
+
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+
+        self._figure = Figure(figsize=(6, 4))
+        self._canvas = FigureCanvasQTAgg(self._figure)
+        layout.addWidget(self._canvas, 1)
+
+        self.result_label = QtWidgets.QLabel(
+            "Set the acquisition parameters and click " "'Simulate & preview'."
+        )
+        self.result_label.setWordWrap(True)
+        layout.addWidget(self.result_label)
+
+        buttons = QtWidgets.QDialogButtonBox()
+        self.apply_button = buttons.addButton(
+            "Apply window to parameters",
+            QtWidgets.QDialogButtonBox.ButtonRole.ApplyRole,
+        )
+        self.apply_button.setEnabled(False)
+        self.apply_button.clicked.connect(self._apply)
+        close_button = buttons.addButton(
+            QtWidgets.QDialogButtonBox.StandardButton.Close
+        )
+        close_button.clicked.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def _as_float(value, default):
+        try:
+            if value is None or value == "":
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _as_int(value, default):
+        try:
+            if value is None or value == "":
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _simulate(self):
+        from picasso_workflow import picasso_outpost
+
+        p = self._params
+        geometry = p.get("geometry")
+        if not geometry:
+            self.result_label.setText(
+                "No geometry set - fill in the 'geometry' parameter "
+                "(e.g. {'n_rows': 3, 'n_cols': 4, 'spacing_nm': 20}) first."
+            )
+            return
+        kinetics = p.get("kinetics") or None
+        mean_locs = p.get("mean_locs_per_site")
+        mean_locs = self._as_float(mean_locs, None) if mean_locs else None
+        if kinetics is None and mean_locs is None:
+            self.result_label.setText(
+                "Provide 'kinetics' {k_on, tau_b, concentration, exposure} "
+                "or 'mean_locs_per_site' to simulate."
+            )
+            return
+        try:
+            preview = picasso_outpost.origami_phase_space_preview(
+                geometry,
+                n_frames=self.n_frames_spin.value(),
+                kinetics=kinetics,
+                mean_locs_per_site=mean_locs,
+                missing_sites_allowed=self._as_int(
+                    p.get("missing_sites_allowed"), 2
+                ),
+                site_uncertainty_nm=self._as_float(
+                    p.get("site_uncertainty_nm"), 3.0
+                ),
+                pixelsize=self.pixelsize_spin.value(),
+                n_sim=self._as_int(p.get("n_sim"), 1500),
+                sim_quantile=self._as_float(p.get("sim_quantile"), 0.01),
+                grid_spacing_nm=self._as_float(p.get("grid_spacing_nm"), None),
+            )
+        except Exception as exc:
+            self.result_label.setText(f"Simulation failed: {exc}")
+            return
+
+        self._preview = preview
+        self._plot(preview)
+        self.result_label.setText(
+            "Suggested window:  min_n_locs_per_frame = "
+            f"{preview['min_n_locs_per_frame']:.4g},  "
+            f"max_n_locs_per_frame = {preview['max_n_locs_per_frame']:.4g}  "
+            f"(RMSD {preview['min_rmsd']:.3g}-{preview['max_rmsd']:.3g} px).  "
+            f"{preview['n_sites_expected']} sites, "
+            f"{preview['mean_locs_per_site']:.1f} locs/site."
+        )
+        self.apply_button.setEnabled(True)
+
+    def _plot(self, preview):
+        from matplotlib.patches import Rectangle
+
+        self._figure.clear()
+        ax = self._figure.add_subplot(111)
+        ax.scatter(
+            preview["sim_nlocs_per_frame"],
+            preview["sim_rmsd_px"],
+            s=8,
+            alpha=0.3,
+            color="b",
+            label="expected origami",
+        )
+        x0 = preview["min_n_locs_per_frame"]
+        x1 = preview["max_n_locs_per_frame"]
+        y0 = preview["min_rmsd"]
+        y1 = preview["max_rmsd"]
+        ax.add_patch(
+            Rectangle(
+                (x0, y0),
+                x1 - x0,
+                y1 - y0,
+                fill=False,
+                edgecolor="r",
+                lw=2,
+                label="pick window",
+            )
+        )
+        ax.set_xlabel("# localizations per frame in footprint")
+        ax.set_ylabel("root mean square distance (camera px)")
+        ax.legend()
+        self._figure.tight_layout()
+        self._canvas.draw()
+
+    def _apply(self):
+        if not self._preview:
+            return
+        w = self._preview
+        self._apply_callback(
+            w["min_n_locs_per_frame"],
+            w["max_n_locs_per_frame"],
+            w["min_rmsd"],
+            w["max_rmsd"],
+        )
+        self.accept()
+
+
 class Window(QtWidgets.QMainWindow):
     """Main window for the picasso-workflow GUI application."""
 
@@ -17767,8 +17951,70 @@ class Window(QtWidgets.QMainWindow):
             # Populate new parameter widgets
             self._populate_parameter_widgets(module_params)
 
+            # pick_origami: offer an interactive phase-space preview to set
+            # the localizations-per-frame window from the geometry + kinetics.
+            if text == "pick_origami":
+                self._add_phasespace_preview_button()
+
             # Validate parameters and update button state
             self._validate_parameters()
+
+    def _add_phasespace_preview_button(self):
+        """Add the pick_origami 'Preview phase space' button below its params."""
+        btn = QtWidgets.QPushButton("Preview phase space …")
+        btn.setToolTip(
+            "Simulate the expected origami nlocs/rmsd phase space from the "
+            "geometry + kinetics and set the localizations-per-frame window."
+        )
+        btn.clicked.connect(self._open_phasespace_preview)
+        self.module_parameters_layout.addWidget(btn)
+
+    def _current_module_parameter_values(self):
+        """Collect the current parameter values from the entry widgets."""
+        param_values = {}
+        for name, widget_info in self.parameter_widgets.items():
+            try:
+                value = self._get_widget_value(
+                    widget_info.widget,
+                    widget_info.original_type,
+                    widget_info,
+                )
+            except Exception:
+                value = None
+            if value is not None:
+                param_values[name] = value
+        return param_values
+
+    def _open_phasespace_preview(self):
+        """Open the origami phase-space preview dialog."""
+        dialog = PhaseSpacePreviewDialog(
+            self,
+            self._current_module_parameter_values(),
+            self._apply_phasespace_window,
+        )
+        dialog.exec()
+
+    def _apply_phasespace_window(
+        self, min_n_locs_per_frame, max_n_locs_per_frame, min_rmsd, max_rmsd
+    ):
+        """Write the previewed pick window into the parameter widgets."""
+        updates = (
+            ("min_n_locs_per_frame", min_n_locs_per_frame),
+            ("max_n_locs_per_frame", max_n_locs_per_frame),
+            ("min_rmsd", min_rmsd),
+            ("max_rmsd", max_rmsd),
+        )
+        for name, value in updates:
+            widget_info = self.parameter_widgets.get(name)
+            if widget_info is None:
+                continue
+            widget = widget_info.widget
+            if isinstance(widget, QtWidgets.QLineEdit):
+                widget.setText(f"{value:.6g}")
+            elif isinstance(widget, QtWidgets.QDoubleSpinBox):
+                widget.setValue(float(value))
+            elif isinstance(widget, QtWidgets.QSpinBox):
+                widget.setValue(int(round(value)))
 
 
 def _app_icon():

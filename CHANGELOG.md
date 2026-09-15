@@ -130,6 +130,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   kinetics and returns the suggested `min/max_n_locs_per_frame` window, so a
   GUI can preview the cloud and let the user set the nlocs range interactively.
 
+- GUI: a **"Preview phase space …"** button appears under the `pick_origami`
+  module parameters. It opens a dialog (`PhaseSpacePreviewDialog`) that
+  simulates the expected origami nlocs/rmsd cloud from the current geometry +
+  kinetics (asking for the movie's frame count and pixel size), plots it with
+  the suggested pick window, and can write the suggested
+  `min/max_n_locs_per_frame` (and RMSD) straight back into the parameter fields.
+
 - `pick_origami` now reports a rejection **funnel** so it is clear which filter
   removed how many candidates: counts for no-localizations, too-few-sites
   (pre-registration prefilter), and post-registration rejections split by
