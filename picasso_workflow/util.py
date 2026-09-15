@@ -1949,6 +1949,9 @@ class AbstractModuleCollection(abc.ABC):
                 Coarse candidate detection (default ``"footprint"``).
             ``n_plot_structures`` : int
                 Number of representative structures to plot.
+            ``n_plot_columns`` : int
+                Columns in the representative-structure grid; rows wrap
+                (default 8).
             ``display_pixelsize`` : float
                 Pixel size for display in nm (default 1).
         results : dict

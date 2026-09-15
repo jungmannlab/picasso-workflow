@@ -116,6 +116,10 @@ This file was started after v0.5.6; earlier history is in the git log.
   **per frame** (total nlocs / `n_frames`) so its x-axis matches the
   `min/max_n_locs_per_frame` parameters (previously it showed total nlocs).
 
+- The `pick_origami` report now lays the representative accepted structures out
+  in a **grid** (rows of up to `n_plot_columns`, default 8) instead of a single
+  long row, so many structures stay legible.
+
 - `pick_origami` now reports a rejection **funnel** so it is clear which filter
   removed how many candidates: counts for no-localizations, too-few-sites
   (pre-registration prefilter), and post-registration rejections split by

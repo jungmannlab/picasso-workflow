@@ -14387,7 +14387,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                     render_kwargs=render_kwargs,
                     title=f"origami {pick_i}",
                 )
-        results["fp_renderings"] = [fp_renderings]
+        # Lay the representative structures out in a grid: rows of up to
+        # 8 columns (fp_renderings is a list of rows for the reporter).
+        max_cols = parameters.get("n_plot_columns", 8)
+        results["fp_renderings"] = [
+            fp_renderings[i : i + max_cols]
+            for i in range(0, len(fp_renderings), max_cols)
+        ]
 
         return parameters, results
 

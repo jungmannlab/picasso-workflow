@@ -4920,9 +4920,12 @@ class ConfluenceReporter(AbstractModuleCollection):
                 <ri:attachment ri:filename="{fn_fig}" />
                 </ac:image>"""
 
-        # example accepted structures (a single row of renderings)
+        # representative accepted structures, as a grid: fp_renderings is a
+        # list of rows (each row up to n_plot_columns wide), rendered as one
+        # table with one <tr> per row.
         fig_fps = results.get("fp_renderings")  # list (row) of list of fps
-        if fig_fps:
+        if fig_fps and any(fig_fps):
+            text += "<table>"
             for row_fps in fig_fps:
                 if not row_fps:
                     continue
@@ -4933,15 +4936,16 @@ class ConfluenceReporter(AbstractModuleCollection):
                     except ConfluenceInterfaceError:
                         pass
                     fn_figs.append(os.path.split(fp)[1])
-                text += "<table><tr>"
+                text += "<tr>"
                 for fn in fn_figs:
                     text += f"""
                         <td>
-                              <ac:image ac:height="350">
+                              <ac:image ac:height="200">
                               <ri:attachment ri:filename="{fn}" />
                               </ac:image>
                         </td>"""
-                text += "</tr></table>"
+                text += "</tr>"
+            text += "</table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>

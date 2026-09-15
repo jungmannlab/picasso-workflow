@@ -6162,6 +6162,15 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 0,
                 "required": False,
             },
+            "n_plot_columns": {
+                "type": "int",
+                "description": (
+                    "Columns in the representative-structure grid (rows wrap)"
+                ),
+                "min": 1,
+                "default": 8,
+                "required": False,
+            },
             "display_pixelsize": {
                 "type": "float",
                 "description": "Pixel size for display in nm, default: 1",
