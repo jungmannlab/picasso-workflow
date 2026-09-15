@@ -213,6 +213,42 @@ def _scatter_or_contour(
     return len(x)
 
 
+def _draw_pick_window(ax, pick_window):
+    """Outline the pick_similar active range (nlocs/rmsd rectangle) on ``ax``.
+
+    Open edges (unset/infinite bounds) extend to the current axis limits.
+    """
+    if not pick_window:
+        return
+    x0 = pick_window.get("min_nlocs_pf", np.nan)
+    x1 = pick_window.get("max_nlocs_pf", np.nan)
+    y0 = pick_window.get("min_rmsd", np.nan)
+    y1 = pick_window.get("max_rmsd", np.nan)
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    x0 = xlim[0] if not np.isfinite(x0) else x0
+    x1 = xlim[1] if not np.isfinite(x1) else x1
+    y0 = ylim[0] if not np.isfinite(y0) else y0
+    y1 = ylim[1] if not np.isfinite(y1) else y1
+    if x1 <= x0 or y1 <= y0:
+        return
+    from matplotlib.patches import Rectangle
+
+    ax.add_patch(
+        Rectangle(
+            (x0, y0),
+            x1 - x0,
+            y1 - y0,
+            fill=False,
+            edgecolor="g",
+            linestyle="--",
+            linewidth=1.5,
+            label="pick range",
+            zorder=4,
+        )
+    )
+
+
 def _plot_origami_phasespace(
     fp,
     nlocs,
@@ -223,12 +259,14 @@ def _plot_origami_phasespace(
     acc_rmsds,
     title,
     contour_threshold=2000,
+    pick_window=None,
 ):
     """Render the origami nlocs-per-frame / rmsd phase-space diagnostic.
 
     Three panels sharing axes - all candidates, the simulated "expected
     origami" cloud, and the accepted picks - each drawn as points, or a
     density contour when there are more than ``contour_threshold`` points.
+    The pick_similar active range (``pick_window``) is outlined on each panel.
 
     Returns
     -------
@@ -305,8 +343,14 @@ def _plot_origami_phasespace(
     )
     axes[2].set_title(f"Accepted picks (n={n_acc})")
 
+    # outline the pick_similar active range on each panel (after the axis
+    # limits are set, so open edges extend to the visible range)
     for ax in axes:
+        _draw_pick_window(ax, pick_window)
         ax.set_xlabel("# localizations per frame in footprint")
+        handles, _ = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(fontsize="small")
     axes[0].set_ylabel("root mean square distance in footprint")
     fig.suptitle(title)
     fig.tight_layout()
@@ -14402,6 +14446,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
         sim_nlocs = np.asarray(pick_result.get("sim_nlocs", [])) / n_frames
         sim_rmsds = np.asarray(pick_result.get("sim_rmsds", []))
+        # the pick_similar active range (nlocs/rmsd rectangle), nlocs in
+        # per-frame units to match the axes
+        pw = pick_result.get("pick_window") or {}
+        pick_window_pf = {
+            "min_nlocs_pf": pw.get("min_nlocs", np.nan) / n_frames,
+            "max_nlocs_pf": pw.get("max_nlocs", np.nan) / n_frames,
+            "min_rmsd": pw.get("min_rmsd", np.nan),
+            "max_rmsd": pw.get("max_rmsd", np.nan),
+        }
         results["fp_phasespace"] = _plot_origami_phasespace(
             os.path.join(results["folder"], f"origami-phasespace-{rcode}.png"),
             nlocs,
@@ -14415,6 +14468,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 f" / {results['n_candidates']} accepted"
             ),
             contour_threshold=parameters.get("contour_threshold", 2000),
+            pick_window=pick_window_pf,
         )
 
         # --- 6. representative accepted structures ---------------------

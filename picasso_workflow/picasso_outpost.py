@@ -6054,21 +6054,42 @@ def pick_origami(
             "(expected 'footprint' or 'cluster_of_clusters')"
         )
 
-    pick_window = {
-        "min_nlocs": float(window.get("min_nlocs", np.nan)),
-        "max_nlocs": float(window.get("max_nlocs", np.nan)),
-        "min_rmsd": (
-            float(pick_min_rmsd)
-            if not isinstance(pick_min_rmsd, str)
-            else np.nan
-        ),
-        "max_rmsd": (
-            float(pick_max_rmsd)
-            if not isinstance(pick_max_rmsd, str)
-            and np.isfinite(pick_max_rmsd)
-            else np.nan
-        ),
-    }
+    # The pick_similar active range (nlocs/rmsd rectangle), resolved exactly
+    # as pick_similar applies it - quantile strings ("q0.25") resolve against
+    # the candidate nlocs, plain values scale by the frame count - so it can
+    # be drawn on the phase diagrams. Total nlocs (analyse divides by frames).
+    def _resolve_nlocs(v):
+        if isinstance(v, str) and v[:1] == "q":
+            return (
+                float(np.quantile(nlocs, float(v[1:])))
+                if len(nlocs)
+                else (np.nan)
+            )
+        return float(n_frames) * float(v)
+
+    if candidate_method == "footprint":
+        pick_window = {
+            "min_nlocs": _resolve_nlocs(min_nlpf),
+            "max_nlocs": _resolve_nlocs(max_nlpf),
+            "min_rmsd": (
+                float(pick_min_rmsd)
+                if not isinstance(pick_min_rmsd, str)
+                else np.nan
+            ),
+            "max_rmsd": (
+                float(pick_max_rmsd)
+                if not isinstance(pick_max_rmsd, str)
+                and np.isfinite(pick_max_rmsd)
+                else np.nan
+            ),
+        }
+    else:
+        pick_window = {
+            "min_nlocs": np.nan,
+            "max_nlocs": np.nan,
+            "min_rmsd": np.nan,
+            "max_rmsd": np.nan,
+        }
 
     funnel = {
         "n_candidates": len(candidates),

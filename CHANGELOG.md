@@ -128,6 +128,11 @@ This file was started after v0.5.6; earlier history is in the git log.
   simulated + accepted clouds (or a Tukey fence over the candidates when there
   is no simulation), instead of the candidate cloud's far high-nlocs tail
   (dense/aggregated regions) that previously stretched the x-axis ~8x too wide.
+  Each panel now also outlines the **pick_similar active range** (the
+  nlocs/rmsd rectangle actually applied, with quantile bounds resolved against
+  the candidate nlocs and open edges extending to the axis), so it is clear
+  which candidates the window admits. `pick_window` in the result now reports
+  those resolved bounds rather than the raw simulated window.
 
 - New `picasso_outpost.origami_phase_space_preview`: a cheap (~0.1 s) one-call
   helper that simulates the expected origami phase space for a geometry +
