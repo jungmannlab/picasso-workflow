@@ -857,6 +857,63 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    def pick_origami(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "n_candidates": 5,
+            "n_registered": 3,
+            "n_accepted": 2,
+            "n_sites_expected": 12,
+            "grid_spacing_nm": 20.0,
+            "funnel": {
+                "n_candidates": 5,
+                "no_locs": 0,
+                "too_few_sites": 1,
+                "rejected_missing_sites": 1,
+                "rejected_rmse": 1,
+                "rejected_spacing": 0,
+                "accepted": 2,
+            },
+            "accepted_overview": {
+                "n_accepted": 2,
+                "n_mirrored": 0,
+                "n_resolved_sites": {
+                    "mean": 12.0,
+                    "std": 0.0,
+                    "min": 12.0,
+                    "max": 12.0,
+                },
+                "mean_spacing_nm": {
+                    "mean": 20.0,
+                    "std": 0.1,
+                    "min": 19.9,
+                    "max": 20.1,
+                },
+                "rmse_nm": {
+                    "mean": 1.2,
+                    "std": 0.2,
+                    "min": 1.0,
+                    "max": 1.4,
+                },
+                "orientation_deg": {
+                    "mean": 35.0,
+                    "std": 1.0,
+                    "min": 34.0,
+                    "max": 36.0,
+                },
+            },
+        }
+        self.cr.pick_origami(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
     # @unittest.skip("")
     def pairwise_module_executor(self):
         parameters = {"module_name": "mymodule"}

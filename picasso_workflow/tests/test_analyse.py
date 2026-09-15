@@ -2085,6 +2085,166 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_find_structures"))
 
+    @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
+    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.analyse.render.plot_scene")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def pick_origami(
+        self,
+        mock_save_locs,
+        mock_plot_scene,
+        mock_picked_locs,
+        mock_pick_origami,
+    ):
+        """Test the pick_origami module wiring (design-aware picking)."""
+        mock_pick_origami.return_value = {
+            "accepted_centers_px": [(10.0, 10.0), (20.0, 22.0)],
+            "docking_site_centers_px": [(10.0, 10.0), (11.0, 11.0)],
+            "geometry_table": [
+                {
+                    "center_x_px": 10.0,
+                    "center_y_px": 10.0,
+                    "n_resolved_sites": 12,
+                    "n_missing_sites": 0,
+                    "mean_spacing_nm": 20.0,
+                    "rmse_nm": 1.2,
+                    "orientation_deg": 35.0,
+                    "mirror": False,
+                    "accepted": True,
+                }
+            ],
+            "n_candidates": 5,
+            "n_registered": 2,
+            "n_accepted": 2,
+            "candidate_nlocs": np.array([50, 75, 100, 40, 90]),
+            "candidate_rmsds": np.array([1.5, 2.0, 2.5, 1.0, 2.2]),
+            "candidate_labels": np.array([0, 0, -1, -1, 0]),
+            "accepted_nlocs": np.array([50, 90]),
+            "accepted_rmsds": np.array([1.5, 2.2]),
+            "sim_nlocs": np.array([48, 52, 60, 88, 92]),
+            "sim_rmsds": np.array([1.4, 1.6, 2.0, 2.1, 2.3]),
+            "pick_window": {
+                "min_nlocs": 40.0,
+                "max_nlocs": 100.0,
+                "min_rmsd": 1.0,
+                "max_rmsd": 2.5,
+            },
+            "footprint_diameter": 0.7,
+        }
+        test_locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (
+                        0,
+                        10.0,
+                        10.0,
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        1,
+                        0,
+                    ),
+                    (
+                        1,
+                        10.1,
+                        10.1,
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        1,
+                        0,
+                    ),
+                ],
+                dtype=self.locs_dtype + [("group", "<i4")],
+            )
+        )
+        mock_picked_locs.return_value = test_locs
+
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (
+                        i,
+                        10 + np.random.rand(),
+                        10 + np.random.rand(),
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        i,
+                    )
+                    for i in range(50)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        self.ap.info = [
+            {"Width": 64, "Height": 64, "Frames": 1000, "Pixelsize": 130}
+        ]
+
+        parameters = {
+            "geometry": {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0},
+            "missing_sites_allowed": 2,
+            "candidate_method": "footprint",
+            "n_plot_structures": 1,
+            "display_pixelsize": 1.0,
+        }
+
+        parameters, results = self.ap.pick_origami(0, parameters)
+
+        # the template geometry was resolved from the grid spec
+        assert results["n_sites_expected"] == 12
+        assert abs(results["grid_spacing_nm"] - 20.0) < 1e-6
+        assert results["n_candidates"] == 5
+        assert results["n_accepted"] == 2
+        # the full per-structure table is on disk, not carried in results;
+        # results holds only an aggregate overview of accepted structures
+        assert "geometry_table" not in results
+        assert results["accepted_overview"]["n_accepted"] == 1
+
+        # picasso-compatible outputs + geometry table were written
+        for key in (
+            "fp_picks_origami",
+            "fp_picks_dockingsites",
+            "fp_picked_locs_origami",
+            "fp_picked_locs_dockingsites",
+            "fp_geometry_table",
+            "fp_phasespace",
+        ):
+            assert key in results, f"missing result key {key}"
+        assert os.path.exists(results["fp_picks_origami"])
+        assert os.path.exists(results["fp_picks_dockingsites"])
+        assert os.path.exists(results["fp_geometry_table"])
+        assert os.path.exists(results["fp_phasespace"])
+
+        # the picks yaml is in picasso pick format (Centers + Diameter)
+        import yaml as _yaml
+
+        with open(results["fp_picks_origami"]) as f:
+            picks = _yaml.safe_load(f)
+        assert len(picks["Centers"]) == 2
+        assert "Diameter (nm)" in picks
+
+        assert mock_pick_origami.called
+        assert mock_picked_locs.called
+        assert mock_save_locs.called
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
+
     def pairwise_module_executor(self):
         return
         shutil.rmtree(
@@ -2193,26 +2353,86 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_find_gold"))
 
+    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
     @patch("picasso_workflow.analyse.picasso_outpost._undrift_from_picked")
     @patch("picasso_workflow.analyse.io.save_locs")
     @patch("picasso_workflow.analyse.io.load_locs")
     def undrift_from_picked(
-        self, mock_load_locs, mock_save_locs, mock_undrift
+        self,
+        mock_load_locs,
+        mock_save_locs,
+        mock_undrift,
+        mock_picked_locs,
     ):
-        # parameters = {"fp_picked_locs": "fp"}
-        # mock_undrift.return_value = (
-        #     "locs",
-        #     [{"name": "info"}],
-        #     ([2, 4, 3], [3, 2, 1]),
-        # )
-        # mock_save_locs.return_value = None
-        # mock_load_locs.return_value = "locs", [{"name": "info"}]
-        # parameters, results = self.ap.undrift_from_picked(0, parameters)
+        """A pick-region .yaml is applied to self.locs (not opened as hdf5)."""
+        import yaml as _yaml
 
-        # shutil.rmtree(
-        #     os.path.join(self.results_folder, "00_undrift_from_picked")
-        # )
-        pass
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (i, 10.0, 10.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, i)
+                    for i in range(6)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        self.ap.info = [
+            {"Width": 64, "Height": 64, "Frames": 6, "Pixelsize": 130}
+        ]
+
+        # picked_locs (mocked) returns grouped locs: 2 picks (groups 0, 1)
+        grouped = pd.DataFrame(
+            np.rec.array(
+                [
+                    (0, 10.0, 10.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, 1, 0),
+                    (1, 20.0, 20.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, 1, 1),
+                ],
+                dtype=self.locs_dtype + [("group", "<i4")],
+            )
+        )
+        mock_picked_locs.return_value = grouped
+        mock_undrift.return_value = (
+            self.ap.locs,
+            self.ap.info,
+            ([0.0, 0.1], [0.0, 0.2]),
+        )
+        self.ap._plot_drift = MagicMock()
+
+        # write a picasso pick-region yaml (Centers + Diameter)
+        fp_yaml = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            "..",
+            "temp",
+            "picks_undrift.yaml",
+        )
+        os.makedirs(os.path.dirname(fp_yaml), exist_ok=True)
+        with open(fp_yaml, "w") as f:
+            _yaml.dump(
+                {
+                    "Centers": [[10.0, 10.0], [20.0, 20.0]],
+                    "Diameter (nm)": 91.0,
+                    "Shape": "Circle",
+                },
+                f,
+            )
+
+        parameters = {"fp_picked_locs": fp_yaml}
+        parameters, results = self.ap.undrift_from_picked(0, parameters)
+
+        # yaml path: picked_locs applied to self.locs; io.load_locs NOT used
+        assert mock_picked_locs.called
+        assert not mock_load_locs.called
+        # centers forwarded, diameter converted nm -> camera px (91/130)
+        call = mock_picked_locs.call_args
+        assert call[0][2] == [[10.0, 10.0], [20.0, 20.0]]
+        assert abs(call[1]["pick_diameter"] - 91.0 / 130) < 1e-6
+        assert mock_undrift.called
+
+        os.remove(fp_yaml)
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_undrift_from_picked")
+        )
 
     @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
     def filter_locs(self):

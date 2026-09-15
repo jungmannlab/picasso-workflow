@@ -5964,6 +5964,315 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def pick_origami(self):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry (a picasso design file, a
+        regular grid, or an explicit site list), finds and picks the
+        origami structures automatically, and tolerates a configurable
+        number of missing docking sites.
+
+        Parameters
+        ----------
+        i : int
+            the index of the module
+        parameters : dict
+            with a design source (one of):
+                design_file : str
+                    path to a picasso design .yaml file
+                geometry : dict
+                    a grid {n_rows, n_cols, spacing_nm, angle} or an
+                    explicit {sites_nm: [[x, y], ...]} layout
+            and optional keys:
+                grid_spacing_nm, candidate_method, missing_sites_allowed,
+                spacing_tol, max_rmse_nm, footprint_diameter,
+                min_n_locs_per_frame, max_n_locs_per_frame, min_rmsd,
+                max_rmsd, kinetics, allow_mirror, n_plot_structures,
+                display_pixelsize
+        results : dict
+            the results this function generates. This is created
+            in the decorator wrapper
+        """
+        parameters_spec = {
+            "design_file": {
+                "type": "str",
+                "description": "Path to a picasso design .yaml file",
+                "extensions": [".yaml"],
+                "required": False,
+            },
+            "geometry": {
+                "type": "dict",
+                "description": (
+                    "Grid {n_rows, n_cols, spacing_nm, angle} or explicit "
+                    "{sites_nm: [[x, y], ...]} layout"
+                ),
+                "required": False,
+            },
+            "grid_spacing_nm": {
+                "type": "float",
+                "description": "Physical spacing (nm) anchoring the design",
+                "min": 0.0,
+                "required": False,
+            },
+            "candidate_method": {
+                "type": "str",
+                "description": "Coarse candidate detection strategy",
+                "options": ["footprint", "cluster_of_clusters"],
+                "default": "footprint",
+                "required": False,
+            },
+            "missing_sites_allowed": {
+                "type": "int",
+                "description": (
+                    "Max missing sites in a simulated origami (and, with "
+                    "filter_by_geometry, tolerated per accepted structure)"
+                ),
+                "min": 0,
+                "default": 2,
+                "required": False,
+            },
+            "site_uncertainty_nm": {
+                "type": "float",
+                "description": (
+                    "Per-loc Gaussian spread around each site (nm), for the "
+                    "phase-space simulation"
+                ),
+                "min": 0.0,
+                "default": 3.0,
+                "required": False,
+            },
+            "mean_locs_per_site": {
+                "type": "float",
+                "description": (
+                    "Explicit mean localizations per site (overrides "
+                    "kinetics); drives the simulated pick window"
+                ),
+                "min": 0.0,
+                "required": False,
+            },
+            "n_sim": {
+                "type": "int",
+                "description": "Number of simulated origami realisations",
+                "min": 1,
+                "default": 1500,
+                "required": False,
+            },
+            "sim_quantile": {
+                "type": "float",
+                "description": (
+                    "Per-axis tail fraction dropped when turning the "
+                    "simulated cloud into the pick rectangle"
+                ),
+                "min": 0.0,
+                "max": 0.5,
+                "default": 0.01,
+                "required": False,
+            },
+            "random_seed": {
+                "type": "int",
+                "description": "Simulation random seed (reproducibility)",
+                "min": 0,
+                "default": 0,
+                "required": False,
+            },
+            "filter_by_geometry": {
+                "type": "bool",
+                "description": (
+                    "Also register each pick against the design and reject "
+                    "mismatches (emits docking-site picks); slower"
+                ),
+                "default": False,
+                "required": False,
+            },
+            "spacing_tol": {
+                "type": "float",
+                "description": "Relative spacing tolerance (geometry filter)",
+                "min": 0.0,
+                "default": 0.5,
+                "required": False,
+            },
+            "max_rmse_nm": {
+                "type": "float",
+                "description": "Max RMSE-vs-design (nm) for the geometry filter",
+                "min": 0.0,
+                "required": False,
+            },
+            "footprint_diameter": {
+                "type": "float",
+                "description": (
+                    "Pick diameter (camera px) spanning one origami; "
+                    "overrides pick_diameter_factor when set"
+                ),
+                "min": 0.0,
+                "required": False,
+            },
+            "pick_diameter_factor": {
+                "type": "float",
+                "description": (
+                    "Pick diameter as a multiple of the origami size when "
+                    "footprint_diameter is not set (1.5 = 150%)"
+                ),
+                "min": 0.0,
+                "default": 1.5,
+                "required": False,
+            },
+            "min_n_locs_per_frame": {
+                "type": ["float", "str"],
+                "description": (
+                    "Override the simulated min nlocs window (per-frame, or "
+                    "quantile 'q..')"
+                ),
+                "required": False,
+            },
+            "max_n_locs_per_frame": {
+                "type": ["float", "str"],
+                "description": (
+                    "Override the simulated max nlocs window (per-frame, or "
+                    "quantile 'q..')"
+                ),
+                "required": False,
+            },
+            "min_rmsd": {
+                "type": "float",
+                "description": "Override the simulated min RMSD (camera px)",
+                "required": False,
+            },
+            "max_rmsd": {
+                "type": "float",
+                "description": "Override the simulated max RMSD (camera px)",
+                "required": False,
+            },
+            "kinetics": {
+                "type": "dict",
+                "description": (
+                    "{k_on, tau_b, concentration, exposure} -> mean locs per "
+                    "site, driving the simulated pick window"
+                ),
+                "required": False,
+            },
+            "allow_mirror": {
+                "type": "bool",
+                "description": "Allow a mirrored match (geometry filter)",
+                "default": True,
+                "required": False,
+            },
+            "n_plot_structures": {
+                "type": "int",
+                "description": "Number of representative structures to plot",
+                "min": 0,
+                "required": False,
+            },
+            "n_plot_columns": {
+                "type": "int",
+                "description": (
+                    "Columns in the representative-structure grid (rows wrap)"
+                ),
+                "min": 1,
+                "default": 8,
+                "required": False,
+            },
+            "display_pixelsize": {
+                "type": "float",
+                "description": "Pixel size for display in nm, default: 1",
+                "min": 0.0,
+                "default": 1.0,
+                "required": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "n_candidates": {
+                "type": "int",
+                "description": "Number of candidate origami footprints found",
+            },
+            "n_registered": {
+                "type": "int",
+                "description": (
+                    "Candidates that passed the site-count prefilter and were "
+                    "registered against the design template"
+                ),
+            },
+            "n_accepted": {
+                "type": "int",
+                "description": "Number of accepted origami structures",
+            },
+            "n_sites_expected": {
+                "type": "int",
+                "description": "Expected docking sites per origami",
+            },
+            "grid_spacing_nm": {
+                "type": "float",
+                "description": "Design inter-site spacing used (nm)",
+            },
+            "n_picked_locs": {
+                "type": "int",
+                "description": "Number of localizations in accepted origamis",
+            },
+            "fp_picks_origami": {
+                "type": "str",
+                "description": (
+                    "filepath to the picasso pick-region .yaml for accepted "
+                    "origami footprints (Centers + Diameter)"
+                ),
+            },
+            "fp_picks_dockingsites": {
+                "type": "str",
+                "description": (
+                    "filepath to the picasso pick-region .yaml for all "
+                    "resolved single docking sites (Centers + Diameter)"
+                ),
+            },
+            "fp_picked_locs_origami": {
+                "type": "str",
+                "description": (
+                    "filepath to the .hdf5 of picked localizations grouped "
+                    "per accepted origami (one 'group' per origami)"
+                ),
+            },
+            "fp_picked_locs_dockingsites": {
+                "type": "str",
+                "description": (
+                    "filepath to the .hdf5 of picked localizations grouped "
+                    "per resolved docking site (one 'group' per site)"
+                ),
+            },
+            "fp_geometry_table": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-structure geometry table (.csv)"
+                ),
+            },
+            "fp_phasespace": {
+                "type": "str",
+                "description": (
+                    "filepath to the nlocs/rmsd candidate phase-space figure"
+                ),
+            },
+            "fp_renderings": {
+                "type": "list",
+                "description": "filepaths to representative structure renders",
+            },
+        }
+
+        return parameters_spec, results_spec
+
     def undrift_from_picked(self):
         """Performs undrift from piced locs.
 
@@ -5985,8 +6294,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "fp_picked_locs": {
                 "type": ["numpy.ndarray", "str"],
-                "description": "Picked localization coordinates or file path",
-                "extensions": [".hdf5", ".txt"],
+                "description": (
+                    "Picks to undrift from: an hdf5 of grouped picked locs, "
+                    "or a picasso pick-region .yaml (Centers + Diameter) "
+                    "applied to the current locs"
+                ),
+                "extensions": [".hdf5", ".yaml", ".txt"],
                 "required": True,
             },
             "interpolation_method": {
@@ -9995,6 +10308,190 @@ class TileParametersDialog(QtWidgets.QDialog):
             self.window.set_tile_param_value(
                 name, self._coerce(item.text()), channel, dataset=dataset
             )
+
+
+class PhaseSpacePreviewDialog(QtWidgets.QDialog):
+    """Preview the simulated origami nlocs/rmsd phase space.
+
+    Simulates the expected ``(nlocs, rmsd)`` cloud for the current
+    ``pick_origami`` geometry + kinetics (via
+    :func:`picasso_workflow.picasso_outpost.origami_phase_space_preview`),
+    shows it with the suggested pick window, and lets the user write the
+    suggested ``min/max_n_locs_per_frame`` (and RMSD) back into the module's
+    parameter fields. The simulation is cheap (order 0.1 s), so this is
+    interactive.
+    """
+
+    def __init__(self, parent, param_values, apply_callback):
+        super().__init__(parent)
+        self.setWindowTitle("Origami phase-space preview")
+        self.resize(760, 680)
+        self._params = param_values or {}
+        self._apply_callback = apply_callback
+        self._preview = None
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Acquisition inputs that are not part of the module parameters
+        # (they come from the movie/camera at run time).
+        form = QtWidgets.QFormLayout()
+        self.n_frames_spin = QtWidgets.QSpinBox()
+        self.n_frames_spin.setRange(1, 100_000_000)
+        self.n_frames_spin.setValue(40000)
+        form.addRow("Number of frames:", self.n_frames_spin)
+        self.pixelsize_spin = QtWidgets.QDoubleSpinBox()
+        self.pixelsize_spin.setRange(1.0, 100000.0)
+        self.pixelsize_spin.setValue(130.0)
+        self.pixelsize_spin.setSuffix(" nm")
+        form.addRow("Pixel size:", self.pixelsize_spin)
+        layout.addLayout(form)
+
+        self.sim_button = QtWidgets.QPushButton("Simulate && preview")
+        self.sim_button.clicked.connect(self._simulate)
+        layout.addWidget(self.sim_button)
+
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+
+        self._figure = Figure(figsize=(6, 4))
+        self._canvas = FigureCanvasQTAgg(self._figure)
+        layout.addWidget(self._canvas, 1)
+
+        self.result_label = QtWidgets.QLabel(
+            "Set the acquisition parameters and click " "'Simulate & preview'."
+        )
+        self.result_label.setWordWrap(True)
+        layout.addWidget(self.result_label)
+
+        buttons = QtWidgets.QDialogButtonBox()
+        self.apply_button = buttons.addButton(
+            "Apply window to parameters",
+            QtWidgets.QDialogButtonBox.ButtonRole.ApplyRole,
+        )
+        self.apply_button.setEnabled(False)
+        self.apply_button.clicked.connect(self._apply)
+        close_button = buttons.addButton(
+            QtWidgets.QDialogButtonBox.StandardButton.Close
+        )
+        close_button.clicked.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def _as_float(value, default):
+        try:
+            if value is None or value == "":
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _as_int(value, default):
+        try:
+            if value is None or value == "":
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _simulate(self):
+        from picasso_workflow import picasso_outpost
+
+        p = self._params
+        geometry = p.get("geometry")
+        if not geometry:
+            self.result_label.setText(
+                "No geometry set - fill in the 'geometry' parameter "
+                "(e.g. {'n_rows': 3, 'n_cols': 4, 'spacing_nm': 20}) first."
+            )
+            return
+        kinetics = p.get("kinetics") or None
+        mean_locs = p.get("mean_locs_per_site")
+        mean_locs = self._as_float(mean_locs, None) if mean_locs else None
+        if kinetics is None and mean_locs is None:
+            self.result_label.setText(
+                "Provide 'kinetics' {k_on, tau_b, concentration, exposure} "
+                "or 'mean_locs_per_site' to simulate."
+            )
+            return
+        try:
+            preview = picasso_outpost.origami_phase_space_preview(
+                geometry,
+                n_frames=self.n_frames_spin.value(),
+                kinetics=kinetics,
+                mean_locs_per_site=mean_locs,
+                missing_sites_allowed=self._as_int(
+                    p.get("missing_sites_allowed"), 2
+                ),
+                site_uncertainty_nm=self._as_float(
+                    p.get("site_uncertainty_nm"), 3.0
+                ),
+                pixelsize=self.pixelsize_spin.value(),
+                n_sim=self._as_int(p.get("n_sim"), 1500),
+                sim_quantile=self._as_float(p.get("sim_quantile"), 0.01),
+                grid_spacing_nm=self._as_float(p.get("grid_spacing_nm"), None),
+            )
+        except Exception as exc:
+            self.result_label.setText(f"Simulation failed: {exc}")
+            return
+
+        self._preview = preview
+        self._plot(preview)
+        self.result_label.setText(
+            "Suggested window:  min_n_locs_per_frame = "
+            f"{preview['min_n_locs_per_frame']:.4g},  "
+            f"max_n_locs_per_frame = {preview['max_n_locs_per_frame']:.4g}  "
+            f"(RMSD {preview['min_rmsd']:.3g}-{preview['max_rmsd']:.3g} px).  "
+            f"{preview['n_sites_expected']} sites, "
+            f"{preview['mean_locs_per_site']:.1f} locs/site."
+        )
+        self.apply_button.setEnabled(True)
+
+    def _plot(self, preview):
+        from matplotlib.patches import Rectangle
+
+        self._figure.clear()
+        ax = self._figure.add_subplot(111)
+        ax.scatter(
+            preview["sim_nlocs_per_frame"],
+            preview["sim_rmsd_px"],
+            s=8,
+            alpha=0.3,
+            color="b",
+            label="expected origami",
+        )
+        x0 = preview["min_n_locs_per_frame"]
+        x1 = preview["max_n_locs_per_frame"]
+        y0 = preview["min_rmsd"]
+        y1 = preview["max_rmsd"]
+        ax.add_patch(
+            Rectangle(
+                (x0, y0),
+                x1 - x0,
+                y1 - y0,
+                fill=False,
+                edgecolor="r",
+                lw=2,
+                label="pick window",
+            )
+        )
+        ax.set_xlabel("# localizations per frame in footprint")
+        ax.set_ylabel("root mean square distance (camera px)")
+        ax.legend()
+        self._figure.tight_layout()
+        self._canvas.draw()
+
+    def _apply(self):
+        if not self._preview:
+            return
+        w = self._preview
+        self._apply_callback(
+            w["min_n_locs_per_frame"],
+            w["max_n_locs_per_frame"],
+            w["min_rmsd"],
+            w["max_rmsd"],
+        )
+        self.accept()
 
 
 class Window(QtWidgets.QMainWindow):
@@ -17454,8 +17951,70 @@ class Window(QtWidgets.QMainWindow):
             # Populate new parameter widgets
             self._populate_parameter_widgets(module_params)
 
+            # pick_origami: offer an interactive phase-space preview to set
+            # the localizations-per-frame window from the geometry + kinetics.
+            if text == "pick_origami":
+                self._add_phasespace_preview_button()
+
             # Validate parameters and update button state
             self._validate_parameters()
+
+    def _add_phasespace_preview_button(self):
+        """Add the pick_origami 'Preview phase space' button below its params."""
+        btn = QtWidgets.QPushButton("Preview phase space …")
+        btn.setToolTip(
+            "Simulate the expected origami nlocs/rmsd phase space from the "
+            "geometry + kinetics and set the localizations-per-frame window."
+        )
+        btn.clicked.connect(self._open_phasespace_preview)
+        self.module_parameters_layout.addWidget(btn)
+
+    def _current_module_parameter_values(self):
+        """Collect the current parameter values from the entry widgets."""
+        param_values = {}
+        for name, widget_info in self.parameter_widgets.items():
+            try:
+                value = self._get_widget_value(
+                    widget_info.widget,
+                    widget_info.original_type,
+                    widget_info,
+                )
+            except Exception:
+                value = None
+            if value is not None:
+                param_values[name] = value
+        return param_values
+
+    def _open_phasespace_preview(self):
+        """Open the origami phase-space preview dialog."""
+        dialog = PhaseSpacePreviewDialog(
+            self,
+            self._current_module_parameter_values(),
+            self._apply_phasespace_window,
+        )
+        dialog.exec()
+
+    def _apply_phasespace_window(
+        self, min_n_locs_per_frame, max_n_locs_per_frame, min_rmsd, max_rmsd
+    ):
+        """Write the previewed pick window into the parameter widgets."""
+        updates = (
+            ("min_n_locs_per_frame", min_n_locs_per_frame),
+            ("max_n_locs_per_frame", max_n_locs_per_frame),
+            ("min_rmsd", min_rmsd),
+            ("max_rmsd", max_rmsd),
+        )
+        for name, value in updates:
+            widget_info = self.parameter_widgets.get(name)
+            if widget_info is None:
+                continue
+            widget = widget_info.widget
+            if isinstance(widget, QtWidgets.QLineEdit):
+                widget.setText(f"{value:.6g}")
+            elif isinstance(widget, QtWidgets.QDoubleSpinBox):
+                widget.setValue(float(value))
+            elif isinstance(widget, QtWidgets.QSpinBox):
+                widget.setValue(int(round(value)))
 
 
 def _app_icon():

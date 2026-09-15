@@ -132,6 +132,232 @@ def generate_random_code(length):
     return random_code
 
 
+def _summarize_accepted_structures(geometry_table):
+    """Aggregate per-structure geometry over the accepted structures.
+
+    Reduces the (potentially large) per-candidate geometry table to a small,
+    serialisable overview for the report; the full table is kept only on disk
+    (``geometry_table.csv``).
+
+    Parameters
+    ----------
+    geometry_table : list of dict
+        Per-structure geometry rows (see ``picasso_outpost.pick_origami``).
+
+    Returns
+    -------
+    dict
+        ``n_accepted``, ``n_mirrored``, and ``mean``/``std``/``min``/``max``
+        for ``n_resolved_sites``, ``mean_spacing_nm``, ``rmse_nm`` and
+        ``orientation_deg`` over the accepted structures.
+    """
+    accepted = [row for row in (geometry_table or []) if row.get("accepted")]
+    overview = {
+        "n_accepted": len(accepted),
+        "n_mirrored": sum(1 for row in accepted if row.get("mirror")),
+    }
+    for key in (
+        "n_resolved_sites",
+        "mean_spacing_nm",
+        "rmse_nm",
+        "orientation_deg",
+    ):
+        vals = np.asarray(
+            [row.get(key, np.nan) for row in accepted], dtype=float
+        )
+        vals = vals[np.isfinite(vals)]
+        if len(vals):
+            overview[key] = {
+                "mean": float(np.mean(vals)),
+                "std": float(np.std(vals)),
+                "min": float(np.min(vals)),
+                "max": float(np.max(vals)),
+            }
+        else:
+            overview[key] = None
+    return overview
+
+
+def _finite_xy(x, y):
+    """Return the finite, equal-length ``(x, y)`` subset as float arrays."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x) != len(y):
+        return np.empty(0), np.empty(0)
+    ok = np.isfinite(x) & np.isfinite(y)
+    return x[ok], y[ok]
+
+
+def _scatter_or_contour(
+    ax, x, y, color, cmap, contour_threshold, hist_range=None
+):
+    """Plot ``(x, y)`` as points, or a filled density contour if there are
+    more than ``contour_threshold`` points (scatter gets unreadable).
+
+    ``hist_range`` (``[[x0, x1], [y0, y1]]``) bounds the contour histogram to
+    the visible region so its resolution is not wasted on far outliers.
+
+    Returns the number of finite points plotted.
+    """
+    x, y = _finite_xy(x, y)
+    if len(x) == 0:
+        return 0
+    if len(x) <= contour_threshold or np.ptp(x) == 0 or np.ptp(y) == 0:
+        ax.scatter(x, y, s=10, color=color, alpha=0.4)
+    else:
+        hist, xedges, yedges = np.histogram2d(x, y, bins=60, range=hist_range)
+        xc = 0.5 * (xedges[:-1] + xedges[1:])
+        yc = 0.5 * (yedges[:-1] + yedges[1:])
+        xg, yg = np.meshgrid(xc, yc)
+        ax.contourf(xg, yg, hist.T, levels=8, cmap=cmap)
+    return len(x)
+
+
+def _draw_pick_window(ax, pick_window):
+    """Outline the pick_similar active range (nlocs/rmsd rectangle) on ``ax``.
+
+    Open edges (unset/infinite bounds) extend to the current axis limits.
+    """
+    if not pick_window:
+        return
+    x0 = pick_window.get("min_nlocs_pf", np.nan)
+    x1 = pick_window.get("max_nlocs_pf", np.nan)
+    y0 = pick_window.get("min_rmsd", np.nan)
+    y1 = pick_window.get("max_rmsd", np.nan)
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    x0 = xlim[0] if not np.isfinite(x0) else x0
+    x1 = xlim[1] if not np.isfinite(x1) else x1
+    y0 = ylim[0] if not np.isfinite(y0) else y0
+    y1 = ylim[1] if not np.isfinite(y1) else y1
+    if x1 <= x0 or y1 <= y0:
+        return
+    from matplotlib.patches import Rectangle
+
+    ax.add_patch(
+        Rectangle(
+            (x0, y0),
+            x1 - x0,
+            y1 - y0,
+            fill=False,
+            edgecolor="g",
+            linestyle="--",
+            linewidth=1.5,
+            label="pick range",
+            zorder=4,
+        )
+    )
+
+
+def _plot_origami_phasespace(
+    fp,
+    nlocs,
+    rmsds,
+    sim_nlocs,
+    sim_rmsds,
+    acc_nlocs,
+    acc_rmsds,
+    title,
+    contour_threshold=2000,
+    pick_window=None,
+):
+    """Render the origami nlocs-per-frame / rmsd phase-space diagnostic.
+
+    Three panels sharing axes - all candidates, the simulated "expected
+    origami" cloud, and the accepted picks - each drawn as points, or a
+    density contour when there are more than ``contour_threshold`` points.
+    The pick_similar active range (``pick_window``) is outlined on each panel.
+
+    Returns
+    -------
+    str
+        The path the figure was saved to (``fp``).
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharex=True, sharey=True)
+
+    # Robust shared limits. The useful region is where origami actually are -
+    # the simulated + accepted clouds - so the upper limit is driven by those,
+    # not by the candidate cloud, which usually has a long high-nlocs tail
+    # (dense/aggregated regions) reaching far past the origami and squashing
+    # the useful low-nlocs area. The candidate low end is still kept visible.
+    cand_x, cand_y = _finite_xy(nlocs, rmsds)
+    focus_x, focus_y = [], []
+    for xv, yv in ((sim_nlocs, sim_rmsds), (acc_nlocs, acc_rmsds)):
+        fx, fy = _finite_xy(xv, yv)
+        if len(fx):
+            focus_x.append(fx)
+            focus_y.append(fy)
+
+    x_lo = x_hi = y_lo = y_hi = None
+    if focus_x:
+        fx = np.concatenate(focus_x)
+        fy = np.concatenate(focus_y)
+        x_lo, x_hi = fx.min(), fx.max()
+        y_lo, y_hi = fy.min(), fy.max()
+        if len(cand_x):  # keep the candidate low end visible
+            x_lo = min(x_lo, np.quantile(cand_x, 0.01))
+            y_lo = min(y_lo, np.quantile(cand_y, 0.01))
+    elif len(cand_x):  # no sim/accepted reference: robust candidate range,
+        # upper bound via a Tukey fence (Q3 + 1.5 IQR) so a heavy high-nlocs
+        # tail cannot stretch the axis.
+        qx1, qx3 = np.quantile(cand_x, [0.25, 0.75])
+        qy1, qy3 = np.quantile(cand_y, [0.25, 0.75])
+        x_lo = np.quantile(cand_x, 0.01)
+        x_hi = min(cand_x.max(), qx3 + 1.5 * (qx3 - qx1))
+        y_lo = np.quantile(cand_y, 0.01)
+        y_hi = min(cand_y.max(), qy3 + 1.5 * (qy3 - qy1))
+
+    hist_range = None
+    if x_hi is not None:
+        rx = (x_hi - x_lo) or 1.0
+        ry = (y_hi - y_lo) or 1.0
+        # extra headroom above the useful region for candidate context
+        x0, x1 = x_lo - 0.1 * rx, x_hi + 0.4 * rx
+        y0, y1 = y_lo - 0.15 * ry, y_hi + 0.25 * ry
+        hist_range = [[x0, x1], [y0, y1]]
+        axes[0].set_xlim(x0, x1)
+        axes[0].set_ylim(y0, y1)
+
+    n_cand = _scatter_or_contour(
+        axes[0], nlocs, rmsds, "0.3", "Greys", contour_threshold, hist_range
+    )
+    axes[0].set_title(f"All candidates (n={n_cand})")
+    n_sim = _scatter_or_contour(
+        axes[1],
+        sim_nlocs,
+        sim_rmsds,
+        "b",
+        "Blues",
+        contour_threshold,
+        hist_range,
+    )
+    axes[1].set_title(f"Expected origami, simulated (n={n_sim})")
+    n_acc = _scatter_or_contour(
+        axes[2],
+        acc_nlocs,
+        acc_rmsds,
+        "r",
+        "Reds",
+        contour_threshold,
+        hist_range,
+    )
+    axes[2].set_title(f"Accepted picks (n={n_acc})")
+
+    # outline the pick_similar active range on each panel (after the axis
+    # limits are set, so open edges extend to the visible range)
+    for ax in axes:
+        _draw_pick_window(ax, pick_window)
+        ax.set_xlabel("# localizations per frame in footprint")
+        handles, _ = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(fontsize="small")
+    axes[0].set_ylabel("root mean square distance in footprint")
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(fp)
+    return fp
+
+
 # picasso 0.11 fitting methods whose base name has a plain ``-gpu`` variant.
 # GPU is orthogonal to the model choice, so when a GPU fitter is configured
 # these bases are routed to their ``-gpu`` counterpart (see ``localize``).
@@ -13992,6 +14218,309 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #    @profile_resource_usage
     @module_decorator
+    def pick_origami(self, i, parameters, results):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry, auto-detects and picks the
+        origami structures (tolerating a configurable number of missing
+        docking sites), and emits picasso-compatible picks plus a
+        per-structure geometry table. See
+        :meth:`~picasso_workflow.util.AbstractModuleCollection.pick_origami`
+        for the full parameter contract.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            The module parameters (see the contract method).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        logger.debug(f"# locs: {len(self.locs)}")
+        pixelsize = self.pixelsize
+
+        # The GUI-generated template emits unset optional parameters as
+        # placeholder sentinels ("" for strings, 0.0/0 for numbers). Treat
+        # those as "not provided" so they fall back to real defaults instead
+        # of being taken literally (e.g. max_rmsd=0 would pick nothing).
+        def _opt(key, default=None, zero_is_unset=False):
+            val = parameters.get(key, default)
+            if val == "" or val is None:
+                return default
+            if zero_is_unset and isinstance(val, (int, float)) and val == 0:
+                return default
+            return val
+
+        grid_spacing_nm = _opt("grid_spacing_nm", zero_is_unset=True)
+
+        # --- 1. load the design template (expected geometry) -----------
+        if _opt("design_file"):
+            template_spec = {
+                "design_file": parameters["design_file"],
+                "grid_spacing_nm": grid_spacing_nm,
+            }
+        elif _opt("geometry") is not None:
+            template_spec = parameters["geometry"]
+        else:
+            raise ValueError(
+                "pick_origami needs a 'design_file' or a 'geometry' spec"
+            )
+        template = picasso_outpost.load_origami_template(
+            template_spec, grid_spacing_nm=grid_spacing_nm
+        )
+        results["n_sites_expected"] = template.n_sites_expected
+        results["grid_spacing_nm"] = template.grid_spacing_nm
+
+        # --- 2. kinetics -> mean localizations per docking site --------
+        # The picker simulates the expected nlocs/rmsd phase space from the
+        # geometry + these kinetics; an explicit mean_locs_per_site overrides.
+        missing_sites_allowed = parameters.get("missing_sites_allowed", 2)
+        mean_locs_per_site = _opt("mean_locs_per_site", zero_is_unset=True)
+        kinetics = parameters.get("kinetics")
+        if mean_locs_per_site is None and kinetics:
+            n_frames = self.info[0]["Frames"]
+            mean_locs_per_site = picasso_outpost.predict_locs_per_site(
+                kinetics["k_on"],
+                kinetics["tau_b"],
+                kinetics["concentration"],
+                n_frames,
+                kinetics["exposure"],
+            )
+            results["mean_locs_per_site"] = float(mean_locs_per_site)
+
+        # --- 3. run the design-aware picker ----------------------------
+        pick_result = picasso_outpost.pick_origami(
+            self.locs,
+            self.info,
+            template,
+            pixelsize,
+            candidate_method=_opt("candidate_method", "footprint"),
+            footprint_diameter=_opt("footprint_diameter", zero_is_unset=True),
+            pick_diameter_factor=_opt("pick_diameter_factor", 1.5),
+            missing_sites_allowed=missing_sites_allowed,
+            site_uncertainty_nm=_opt("site_uncertainty_nm", 3.0),
+            mean_locs_per_site=mean_locs_per_site,
+            n_sim=_opt("n_sim", 1500),
+            sim_quantile=_opt("sim_quantile", 0.01),
+            random_seed=_opt("random_seed", 0),
+            min_n_locs_per_frame=_opt("min_n_locs_per_frame"),
+            max_n_locs_per_frame=_opt("max_n_locs_per_frame"),
+            min_rmsd=_opt("min_rmsd", zero_is_unset=True),
+            max_rmsd=_opt("max_rmsd", zero_is_unset=True),
+            filter_by_geometry=parameters.get("filter_by_geometry", False),
+            spacing_tol=_opt("spacing_tol", 0.5),
+            max_rmse_nm=_opt("max_rmse_nm", zero_is_unset=True),
+            subcluster_min_samples=_opt("subcluster_min_samples", 3),
+            allow_mirror=parameters.get("allow_mirror", True),
+        )
+        accepted_centers = pick_result["accepted_centers_px"]
+        docking_centers = pick_result["docking_site_centers_px"]
+        geometry_table = pick_result["geometry_table"]
+        results["n_candidates"] = pick_result["n_candidates"]
+        results["n_registered"] = pick_result.get("n_registered")
+        results["n_accepted"] = pick_result["n_accepted"]
+        results["funnel"] = pick_result.get("funnel")
+        # Aggregate overview over the accepted structures (for the report).
+        # The full per-structure table is only written to disk (see
+        # fp_geometry_table below), not carried in results.
+        results["accepted_overview"] = _summarize_accepted_structures(
+            geometry_table
+        )
+
+        rcode = generate_random_code(6)
+
+        # footprint diameter actually used by the picker (for pick yaml +
+        # hdf5 picking), so the saved picks match the detection footprint.
+        footprint_diameter = pick_result["footprint_diameter"]
+        docking_diameter = parameters.get(
+            "docking_site_diameter",
+            max(template.grid_spacing_nm / pixelsize / 2, 1e-6),
+        )
+
+        # --- 4a. origami-footprint picks (Centers + Diameter yaml) -----
+        fp_picks_origami = os.path.join(results["folder"], "pick_origami.yaml")
+        with open(fp_picks_origami, "w") as f:
+            yaml.dump(
+                {
+                    "Centers": [
+                        [float(c[0]), float(c[1])] for c in accepted_centers
+                    ],
+                    "Diameter (nm)": float(footprint_diameter * pixelsize),
+                    "Shape": "Circle",
+                },
+                f,
+            )
+        results["fp_picks_origami"] = fp_picks_origami
+
+        # secondary: picasso picks for all resolved single docking sites
+        fp_picks_dockingsites = os.path.join(
+            results["folder"], "docking_sites.yaml"
+        )
+        with open(fp_picks_dockingsites, "w") as f:
+            yaml.dump(
+                {
+                    "Centers": [
+                        [float(c[0]), float(c[1])] for c in docking_centers
+                    ],
+                    "Diameter (nm)": float(docking_diameter * pixelsize),
+                    "Shape": "Circle",
+                },
+                f,
+            )
+        results["fp_picks_dockingsites"] = fp_picks_dockingsites
+
+        # --- 4b. grouped picked locs (one group per accepted origami) --
+        if len(accepted_centers) > 0:
+            picked_origami_locs = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                accepted_centers,
+                pick_diameter=footprint_diameter,
+                return_nonpicked=False,
+            )
+        else:
+            picked_origami_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
+            picked_origami_locs["group"] = pd.Series(dtype="int32")
+        results["n_picked_locs"] = len(picked_origami_locs)
+
+        if len(docking_centers) > 0:
+            docking_site_locs = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                docking_centers,
+                pick_diameter=docking_diameter,
+                return_nonpicked=False,
+            )
+        else:
+            docking_site_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
+            docking_site_locs["group"] = pd.Series(dtype="int32")
+
+        fp_picked_locs_origami = os.path.join(
+            results["folder"], "picked_origami_locs.hdf5"
+        )
+        origami_info = self.info + [
+            {
+                "Generated by": "picasso-workflow.analyse.pick_origami",
+                "data": "picked origami structures",
+            }
+        ]
+        io.save_locs(fp_picked_locs_origami, picked_origami_locs, origami_info)
+        results["fp_picked_locs_origami"] = fp_picked_locs_origami
+
+        fp_picked_locs_dockingsites = os.path.join(
+            results["folder"], "docking_site_locs.hdf5"
+        )
+        docking_info = self.info + [
+            {
+                "Generated by": "picasso-workflow.analyse.pick_origami",
+                "data": "resolved docking sites",
+            }
+        ]
+        io.save_locs(
+            fp_picked_locs_dockingsites, docking_site_locs, docking_info
+        )
+        results["fp_picked_locs_dockingsites"] = fp_picked_locs_dockingsites
+
+        # --- 4c. per-structure geometry table --------------------------
+        fp_geometry_table = os.path.join(
+            results["folder"], "geometry_table.csv"
+        )
+        pd.DataFrame(geometry_table).to_csv(fp_geometry_table, index=False)
+        results["fp_geometry_table"] = fp_geometry_table
+
+        # --- 5. phase-space diagnostic figure --------------------------
+        # nlocs-per-frame vs rmsd, matching the min/max_n_locs_per_frame
+        # parameters (pick_similar uses nlocs_per_frame = total / n_frames):
+        #   - all candidates as a background density contour
+        #   - the simulated "expected origami" phase space as a contour line
+        #     (the region picking targets)
+        #   - accepted picks as points
+        n_frames = self.info[0]["Frames"]
+        nlocs = np.asarray(pick_result["candidate_nlocs"]) / n_frames
+        rmsds = np.asarray(pick_result["candidate_rmsds"])
+        acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+        if len(acc_nlocs):
+            acc_nlocs = acc_nlocs / n_frames
+        acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
+        sim_nlocs = np.asarray(pick_result.get("sim_nlocs", [])) / n_frames
+        sim_rmsds = np.asarray(pick_result.get("sim_rmsds", []))
+        # the pick_similar active range (nlocs/rmsd rectangle), nlocs in
+        # per-frame units to match the axes
+        pw = pick_result.get("pick_window") or {}
+        pick_window_pf = {
+            "min_nlocs_pf": pw.get("min_nlocs", np.nan) / n_frames,
+            "max_nlocs_pf": pw.get("max_nlocs", np.nan) / n_frames,
+            "min_rmsd": pw.get("min_rmsd", np.nan),
+            "max_rmsd": pw.get("max_rmsd", np.nan),
+        }
+        results["fp_phasespace"] = _plot_origami_phasespace(
+            os.path.join(results["folder"], f"origami-phasespace-{rcode}.png"),
+            nlocs,
+            rmsds,
+            sim_nlocs,
+            sim_rmsds,
+            acc_nlocs,
+            acc_rmsds,
+            title=(
+                f"Origami: {results['n_accepted']}"
+                f" / {results['n_candidates']} accepted"
+            ),
+            contour_threshold=parameters.get("contour_threshold", 2000),
+            pick_window=pick_window_pf,
+        )
+
+        # --- 6. representative accepted structures ---------------------
+        n_plot = parameters.get("n_plot_structures")
+        fp_renderings = []
+        if n_plot is not None and len(accepted_centers) > 0:
+            pixelsize_display = parameters.get("display_pixelsize", 1)
+            n_show = min(n_plot, len(accepted_centers))
+            for idx, pick_i in enumerate(
+                np.random.choice(
+                    len(accepted_centers), size=n_show, replace=False
+                )
+            ):
+                cx, cy = accepted_centers[pick_i]
+                x_min = cx - footprint_diameter / 2
+                y_min = cy - footprint_diameter / 2
+                render_kwargs = {
+                    "oversampling": pixelsize / pixelsize_display,
+                    "viewport": [
+                        (y_min, x_min),
+                        (
+                            cy + footprint_diameter / 2,
+                            cx + footprint_diameter / 2,
+                        ),
+                    ],
+                }
+                fp_renderings.append(
+                    os.path.join(
+                        results["folder"],
+                        f"render_origami_{idx}_{pick_i}-{rcode}.png",
+                    )
+                )
+                render.plot_scene(
+                    picked_origami_locs,
+                    pixelsize_display,
+                    pixelsize,
+                    fp=fp_renderings[-1],
+                    render_kwargs=render_kwargs,
+                    title=f"origami {pick_i}",
+                )
+        # Lay the representative structures out in a grid: rows of up to
+        # 8 columns (fp_renderings is a list of rows for the reporter).
+        max_cols = parameters.get("n_plot_columns", 8)
+        results["fp_renderings"] = [
+            fp_renderings[i : i + max_cols]
+            for i in range(0, len(fp_renderings), max_cols)
+        ]
+
+        return parameters, results
+
+    #    @profile_resource_usage
+    @module_decorator
     def undrift_from_picked(self, i, parameters, results):
         """Undrift using picked localizations.
 
@@ -14003,23 +14532,75 @@ class AutoPicasso(util.AbstractModuleCollection):
             Required keys:
 
             ``fp_picked_locs`` : str
-                Filepath to the picked locs to undrift from (an hdf5 file of
-                locs with a ``'group'`` column describing the picks).
+                Filepath to the picks to undrift from. Either an hdf5 file of
+                locs with a ``'group'`` column describing the picks (e.g.
+                ``pick_origami``'s ``fp_picked_locs_origami`` /
+                ``fp_picked_locs_dockingsites``), or a picasso pick-region
+                ``.yaml``
+                (``Centers`` + ``Diameter``, e.g. ``pick_origami``'s
+                ``fp_picks_origami`` / ``fp_picks_dockingsites``) which is
+                applied to ``self.locs`` to build the grouped picks.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         pixelsize = self.pixelsize
-        picked_locs, info = io.load_locs(parameters["fp_picked_locs"])
-        # with open(parameters["fp_picked_locs"], "rb") as f:
-        #     result = pickle.load(f)
+        fp_picked = parameters["fp_picked_locs"]
 
-        if not isinstance(picked_locs, list):
-            # picked locs are saved as one recarray, with the 'group' the pick
-            groups = np.unique(picked_locs["group"])
+        if str(fp_picked).lower().endswith((".yaml", ".yml")):
+            # A picasso pick-region file (Centers + Diameter). Apply it to the
+            # current locs to build grouped picked locs (one group per pick).
+            with open(fp_picked, "r") as f:
+                regions = yaml.safe_load(f)
+            centers = regions["Centers"]
+            if not centers:
+                raise ValueError(
+                    f"{fp_picked}: no pick centers to undrift from (the "
+                    "upstream picker accepted no structures)."
+                )
+            if "Diameter (nm)" in regions:
+                pick_diameter = regions["Diameter (nm)"] / pixelsize
+            elif "Diameter" in regions:
+                pick_diameter = regions["Diameter"]  # already in camera px
+            else:
+                raise ValueError(
+                    f"{fp_picked}: pick-region yaml needs a 'Diameter (nm)' "
+                    "or 'Diameter' entry"
+                )
+            picked_df = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                centers,
+                pick_diameter=pick_diameter,
+                add_group=True,
+            )
+            groups = np.unique(picked_df["group"])
             picked_locs = [
-                picked_locs[picked_locs["group"] == group] for group in groups
+                picked_df[picked_df["group"] == group] for group in groups
             ]
+        else:
+            picked_locs, info = io.load_locs(fp_picked)
+            if not isinstance(picked_locs, list):
+                # saved as one recarray, with 'group' identifying the pick
+                groups = np.unique(picked_locs["group"])
+                picked_locs = [
+                    picked_locs[picked_locs["group"] == group]
+                    for group in groups
+                ]
+        # Drift can only be estimated if the picks actually contain
+        # localizations. An empty/degenerate pick set (e.g. the upstream
+        # picker accepted no structures) would otherwise crash deep inside
+        # the drift interpolation with a cryptic "array of sample points is
+        # empty".
+        n_pick_locs = sum(len(p) for p in picked_locs)
+        if len(picked_locs) == 0 or n_pick_locs == 0:
+            raise ValueError(
+                f"undrift_from_picked: no localizations in the picks from "
+                f"'{fp_picked}' ({len(picked_locs)} picks, {n_pick_locs} "
+                "locs). The upstream picker likely accepted no structures - "
+                "check its parameters (e.g. an nlocs window that excludes "
+                "everything) and that it produced non-empty picks."
+            )
         # print(result)
         # picked_locs, picked_info = io.load_locs(parameters["fp_picked_locs"])
         self.locs, self.info, drift = picasso_outpost._undrift_from_picked(

@@ -12,6 +12,180 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- `pick_origami` now picks by a **simulation-derived phase-space window**
+  instead of a per-candidate geometry gate, which over-discarded structures and
+  was hard to tune. From the design geometry it simulates `n_sim` origami
+  realisations (random missing sites 0..`missing_sites_allowed`, Gaussian site
+  jitter `site_uncertainty_nm`, Poisson kinetics via `mean_locs_per_site` /
+  `kinetics`), takes the per-axis `sim_quantile` window of the resulting
+  (nlocs, rmsd) cloud, and picks with `pick_similar` in that window (pick
+  diameter = origami size × `pick_diameter_factor`). `min/max_n_locs_per_frame`
+  and `min/max_rmsd` override the simulated bounds. Matching each pick's
+  resolved sites against the design is now an **optional** post-filter
+  (`filter_by_geometry`, default off) that also emits the docking-site picks.
+  The phase-space report figure now shows all candidates as a background
+  density contour, the simulated "expected origami" cloud as a contour line,
+  and accepted picks as points. New result keys `sim_nlocs` / `sim_rmsds` /
+  `pick_window`; new `picasso_outpost.simulate_origami_nlocs_rmsd` and
+  `phase_space_window_from_sim`.
+
+### Added
+
+- `pick_origami` gains a `pick_diameter_factor` parameter (default **1.5**):
+  when `footprint_diameter` is not set explicitly, the pick diameter is now
+  `pick_diameter_factor * origami_size` (150 % of the origami extent) instead of
+  the tighter `extent + spacing`. A larger pick gives margin around the
+  structure and also speeds up detection (coarser `pick_similar` grid, fewer
+  overlapping candidates). The value actually used is returned/echoed so the
+  saved pick yaml/hdf5 match the detection footprint.
+
+- `undrift_from_picked` now accepts a picasso **pick-region `.yaml`**
+  (`Centers` + `Diameter`) in addition to an hdf5 of grouped picked locs: given
+  a yaml it applies the pick regions to the current `self.locs` to build the
+  grouped picks, then undrifts. This lets `pick_origami`'s pick outputs
+  (`fp_picks_origami` / `fp_picks_dockingsites`) feed straight into
+  `undrift_from_picked` (its grouped-hdf5 outputs `fp_picked_locs` /
+  `fp_docking_site_locs` continue to work as before). A clear error is raised
+  if the yaml has no pick centers.
+
+- New single-dataset workflow module `pick_origami`: design-aware picking of
+  DNA-origami structures. Given the designed geometry — a picasso design
+  `.yaml`, a regular grid (`{n_rows, n_cols, spacing_nm, angle}`), or an
+  explicit site list — it detects candidate footprints (reusing the
+  `pick_similar` family; `candidate_method` = `"footprint"` (default) or
+  `"cluster_of_clusters"`), sub-clusters each into docking sites, registers the
+  resolved constellation against the design template (rotation + translation,
+  optional mirror), and accepts structures that resolve enough sites within the
+  spacing/RMSE tolerances (`missing_sites_allowed`, default 2). Optional imager
+  kinetics (`k_on`, `tau_b`, concentration, exposure) auto-seed the nlocs
+  window, else the `pick_similar` quantile defaults are used. Emits
+  picasso-compatible picks (origami groups **and** all resolved single docking
+  sites) plus a per-structure geometry table (resolved/missing sites, spacing,
+  RMSE-vs-design, orientation). Wired across `util`, `analyse`, `confluence`
+  (reused by the HTML reporter), `gui`, and the `modulespec` registry. Registry
+  logging is intentionally deferred to WP-DYE-QC (single logging path).
+
+### Fixed
+
+- `undrift_from_picked` now fails with a clear message instead of a cryptic
+  ``"array of sample points is empty"`` (from `np.interp`) when the picks are
+  empty or too sparse to estimate drift from. It guards the empty-pick case up
+  front, and `_undrift_from_picked_coordinate` now excludes degenerate
+  single-frame picks (whose `1/msd` weight was infinite and poisoned the
+  weighted average to NaN everywhere) and raises a descriptive error when no
+  pick spans more than one frame / covers any frame. Typical trigger: an
+  upstream picker that accepted no structures (e.g. `pick_origami` with an
+  impossible nlocs window), leaving an empty picked-locs file.
+
+- `pick_origami` now rejects an unusable `geometry` with a clear message and
+  tolerates the GUI's placeholder sentinels. `load_origami_template` raises a
+  descriptive `TypeError`/`ValueError` (naming the accepted forms) instead of a
+  cryptic `float() ... not 'set'` when handed a Python set literal like
+  `{0, 3, 4, 20}`, and the `pick_origami` module treats the GUI-generated
+  "unset" placeholders (`""` for strings, `0.0`/`0` for `max_rmsd`,
+  `max_rmse_nm`, `footprint_diameter`, `grid_spacing_nm`) as not-provided so
+  they fall back to real defaults instead of, e.g., `max_rmsd=0` picking
+  nothing. `picasso_outpost.pick_origami` additionally derives its own
+  template-based footprint whenever `footprint_diameter` is falsy/≤0 (not just
+  `None`) so a `0.0` reaching the function no longer divides by zero inside
+  picasso's `get_index_blocks`; a genuinely degenerate (single-site) template
+  now raises a clear error naming `footprint_diameter`.
+
+### Changed
+
+- `picasso_outpost.pick_origami` is much faster on datasets that yield many
+  candidate footprints (e.g. sub-pixel origamis at wide nlocs/rmsd windows):
+  it now picks all candidate footprints in a single `picked_locs` pass (the
+  spatial index is built once instead of rebuilt per candidate — `O(N_locs)`
+  vs `O(N_candidates * N_locs)`), and skips the expensive rotation-sweep
+  registration for any candidate that sub-clusters to fewer than
+  `n_sites_expected - missing_sites_allowed` docking sites (it can never be
+  accepted). Candidate/registration counts are logged, and the result now
+  reports `n_registered` alongside `n_candidates` / `n_accepted`.
+  `register_to_template` is now two-stage: every rotation seed is scored with a
+  single cheap gated assignment and only the best `n_refine` (default 4) seeds
+  get the full ICP, rather than ICP-ing all ~360 seeds — several times faster
+  per candidate with the same recovered geometry.
+
+- `pick_origami` accepted picks are now centred on each structure's
+  **centre of mass** (the centroid of its resolved docking sites) instead of the
+  off-centre coarse `pick_similar` seed, so origamis sit centred in their picks
+  (the reported `center_x_px` / `center_y_px` and the saved pick centres).
+
+- The `pick_origami` nlocs/rmsd phase-space figure now plots localizations
+  **per frame** (total nlocs / `n_frames`) so its x-axis matches the
+  `min/max_n_locs_per_frame` parameters (previously it showed total nlocs).
+
+- The `pick_origami` report now lays the representative accepted structures out
+  in a **grid** (rows of up to `n_plot_columns`, default 8) instead of a single
+  long row, so many structures stay legible.
+
+- The `pick_origami` phase-space figure is now **three side-by-side panels**
+  (all candidates / simulated expected origami / accepted picks) sharing axes,
+  each drawn as points or, above `contour_threshold` points (default 2000), a
+  density contour - the single overlaid plot was too crowded to read. The axis
+  limits now focus on the useful region: the upper bound is driven by the
+  simulated + accepted clouds (or a Tukey fence over the candidates when there
+  is no simulation), instead of the candidate cloud's far high-nlocs tail
+  (dense/aggregated regions) that previously stretched the x-axis ~8x too wide.
+  Each panel now also outlines the **pick_similar active range** (the
+  nlocs/rmsd rectangle actually applied, with quantile bounds resolved against
+  the candidate nlocs and open edges extending to the axis), so it is clear
+  which candidates the window admits. `pick_window` in the result now reports
+  those resolved bounds rather than the raw simulated window.
+
+- New `picasso_outpost.origami_phase_space_preview`: a cheap (~0.1 s) one-call
+  helper that simulates the expected origami phase space for a geometry +
+  kinetics and returns the suggested `min/max_n_locs_per_frame` window, so a
+  GUI can preview the cloud and let the user set the nlocs range interactively.
+
+- GUI: a **"Preview phase space …"** button appears under the `pick_origami`
+  module parameters. It opens a dialog (`PhaseSpacePreviewDialog`) that
+  simulates the expected origami nlocs/rmsd cloud from the current geometry +
+  kinetics (asking for the movie's frame count and pixel size), plots it with
+  the suggested pick window, and can write the suggested
+  `min/max_n_locs_per_frame` (and RMSD) straight back into the parameter fields.
+
+- `pick_origami` now reports a rejection **funnel** so it is clear which filter
+  removed how many candidates: counts for no-localizations, too-few-sites
+  (pre-registration prefilter), and post-registration rejections split by
+  missing-sites / RMSE / spacing, down to accepted (the buckets sum to the
+  candidate count). Exposed as `results["funnel"]`, logged, and rendered in the
+  Confluence/HTML report. The nlocs/rmsd phase-space diagnostic figure now
+  overlays the accepted structures (red) on the candidate cloud, and the
+  geometry table gains per-structure `nlocs` and `rejection_reason` columns. A
+  new `classify_candidate` helper returns the first failing criterion;
+  `accept_candidate` is now a thin boolean wrapper over it.
+
+- The `pick_origami` Confluence/HTML report no longer dumps a per-structure row
+  for every candidate (which swamped the report once filters were relaxed). It
+  now shows an aggregate overview over the accepted structures only
+  (mean&plusmn;std / min / max of resolved sites, spacing, RMSE, orientation,
+  and the mirrored count); the full per-structure table remains available as
+  `geometry_table.csv` in the module results folder.
+
+- `pick_origami` result keys tidied: the full per-structure `geometry_table` is
+  no longer carried in the module results (it lives only in
+  `geometry_table.csv`); results now expose a compact `accepted_overview`
+  instead. The pick-region yaml result keys were renamed for clarity and to be
+  referenced by downstream modules: `fp_picks_yaml` &rarr; `fp_picks_origami`
+  (accepted origami footprints) and `fp_docking_yaml` &rarr;
+  `fp_picks_dockingsites` (all resolved single docking sites). The grouped
+  picked-locs hdf5 keys were renamed to match:
+  `fp_picked_locs` &rarr; `fp_picked_locs_origami` and
+  `fp_docking_site_locs` &rarr; `fp_picked_locs_dockingsites` (so the scheme is
+  `fp_picks_*` for pick-region yamls and `fp_picked_locs_*` for the hdf5s).
+
+- The GUI `pick_origami` results spec now lists every result the module
+  produces (`n_registered`, `grid_spacing_nm`, `n_picked_locs`, and all
+  `fp_picks_*` / `fp_picked_locs_*` / `fp_geometry_table` / `fp_phasespace` /
+  `fp_renderings` file paths), so they are selectable as
+  `$get_previous_module_result` targets in the workflow-builder command box.
+  (The `modulespec.py` `ModuleSpec` is unchanged - it declares capability
+  tokens, not result keys.)
+
+### Changed
+
 - Every Confluence module reporter now routes its final output through a single
   `ConfluenceReporter._emit(text, postpone_report)` helper instead of repeating
   the `if postpone_report: return text` / `update_page_content(...)` guard in

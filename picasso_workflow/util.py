@@ -1878,6 +1878,87 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
+    def pick_origami(self):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry (a picasso design file, a
+        regular grid, or an explicit site list), finds and picks the
+        origami structures automatically, and tolerates a configurable
+        number of missing docking sites. Emits picasso-compatible picks
+        (origami groups and all resolved single docking sites) plus a
+        per-structure geometry table (resolved/missing sites, spacing,
+        RMSE-vs-design, orientation).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys (exactly one design source):
+
+            ``design_file`` : str
+                Path to a picasso design ``.yaml`` file, OR
+            ``geometry`` : dict
+                A grid ``{n_rows, n_cols, spacing_nm, angle}`` or an
+                explicit ``{sites_nm: [[x, y], ...]}`` layout.
+
+            Optional keys:
+
+            ``grid_spacing_nm`` : float
+                Physical spacing (nm) used to anchor a design-file scale.
+            ``missing_sites_allowed`` : int
+                Max missing sites in a simulated origami (and, with
+                ``filter_by_geometry``, tolerated per accepted structure)
+                (default 2).
+            ``site_uncertainty_nm`` : float
+                Per-localization Gaussian spread around each site, for the
+                phase-space simulation (default 3).
+            ``kinetics`` : dict
+                ``{k_on, tau_b, concentration, exposure}`` -> mean locs per
+                site, driving the simulated pick window.
+            ``mean_locs_per_site`` : float
+                Explicit mean localizations per site (overrides ``kinetics``).
+            ``n_sim`` : int
+                Number of simulated realisations (default 1500).
+            ``sim_quantile`` : float
+                Per-axis tail fraction dropped when turning the simulated
+                cloud into the pick rectangle (default 0.01).
+            ``random_seed`` : int
+                Simulation seed (default 0).
+            ``min_n_locs_per_frame``, ``max_n_locs_per_frame`` : float or str
+                Override the simulated nlocs window (quantile strings ok).
+            ``min_rmsd``, ``max_rmsd`` : float
+                Override the simulated RMSD window (camera px).
+            ``footprint_diameter`` : float
+                Pick diameter (camera px) spanning one origami; overrides
+                ``pick_diameter_factor`` when set.
+            ``pick_diameter_factor`` : float
+                Pick diameter as a multiple of the origami size when
+                ``footprint_diameter`` is unset (default 1.5 = 150 %).
+            ``filter_by_geometry`` : bool
+                Also register each pick against the design and reject
+                mismatches (emits docking-site picks); default False.
+            ``spacing_tol`` : float
+                Relative spacing tolerance for the geometry filter
+                (default 0.5).
+            ``max_rmse_nm`` : float
+                Max RMSE-vs-design for the geometry filter (disabled if unset).
+            ``allow_mirror`` : bool
+                Allow a mirrored match in the geometry filter (default True).
+            ``candidate_method`` : {"footprint", "cluster_of_clusters"}
+                Coarse candidate detection (default ``"footprint"``).
+            ``n_plot_structures`` : int
+                Number of representative structures to plot.
+            ``n_plot_columns`` : int
+                Columns in the representative-structure grid; rows wrap
+                (default 8).
+            ``display_pixelsize`` : float
+                Pixel size for display in nm (default 1).
+        results : dict
+            Module results (see class docstring).
+        """
+
+    @abc.abstractmethod
     def undrift_from_picked(self):
         """Undrift using picked localizations.
 
@@ -1889,8 +1970,10 @@ class AbstractModuleCollection(abc.ABC):
             Required keys:
 
             ``fp_picked_locs`` : str
-                Filepath to the picked locs to undrift from (an hdf5 file of
-                locs with a ``'group'`` column describing the picks).
+                Filepath to the picks to undrift from. Either an hdf5 file of
+                locs with a ``'group'`` column describing the picks, or a
+                picasso pick-region ``.yaml`` (``Centers`` + ``Diameter``),
+                which is applied to ``self.locs`` to build the grouped picks.
         results : dict
             Module results (see class docstring).
         """
