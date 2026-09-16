@@ -132,7 +132,11 @@ This file was started after v0.5.6; earlier history is in the git log.
   nlocs/rmsd rectangle actually applied, with quantile bounds resolved against
   the candidate nlocs and open edges extending to the axis), so it is clear
   which candidates the window admits. `pick_window` in the result now reports
-  those resolved bounds rather than the raw simulated window.
+  those resolved bounds rather than the raw simulated window. The phase-space
+  axes now always include both the candidate cloud (Tukey-fenced) and the pick
+  window, so a run that picks nothing still shows *why* - e.g. the window not
+  overlapping the candidates. `pick_origami` also logs the resolved window
+  against the candidate nlocs/rmsd percentiles for the same reason.
 
 - New `picasso_outpost.origami_phase_space_preview`: a cheap (~0.1 s) one-call
   helper that simulates the expected origami phase space for a geometry +

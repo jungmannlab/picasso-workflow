@@ -6111,6 +6111,41 @@ def pick_origami(
         "footprint_diameter": footprint_diameter,
     }
 
+    # Diagnostic: does the pick window bracket the candidate cloud? If not
+    # (e.g. the simulated RMSD band sits below the real localization spread),
+    # nothing is picked - this line makes the mismatch visible in the log.
+    all_nlocs = np.asarray(nlocs)
+    all_rmsds = np.asarray(rmsds)
+    if len(all_nlocs):
+        nl5, nl50, nl95 = np.percentile(all_nlocs, [5, 50, 95])
+        rm5, rm50, rm95 = np.percentile(all_rmsds, [5, 50, 95])
+        logger.debug(
+            "pick_origami window: nlocs [%.0f, %.0f] total, rmsd [%.3f, %.3f] "
+            "px (footprint_diameter %.3f px). Candidate nlocs p5/50/95 = "
+            "%.0f/%.0f/%.0f, rmsd p5/50/95 = %.3f/%.3f/%.3f. %d candidates in "
+            "window."
+            % (
+                pick_window["min_nlocs"],
+                pick_window["max_nlocs"],
+                pick_window["min_rmsd"],
+                pick_window["max_rmsd"],
+                footprint_diameter,
+                nl5,
+                nl50,
+                nl95,
+                rm5,
+                rm50,
+                rm95,
+                len(candidates),
+            )
+        )
+    else:
+        logger.debug(
+            "pick_origami: pick_similar found no footprint regions at all "
+            "(footprint_diameter %.3f px) - check the geometry/pixelsize."
+            % footprint_diameter
+        )
+
     accepted_centers_px = []
     accepted_nlocs = []
     accepted_rmsds = []
