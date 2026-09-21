@@ -61,6 +61,12 @@ This file was started after v0.5.6; earlier history is in the git log.
   lattice method also **exports the on-lattice single docking sites directly**
   as a picasso pick set (`fp_pattern_site_picks`) plus a node-tagged table
   (`fp_pattern_sites_table`, each site labelled with its design-node index).
+  The on-lattice gate now also requires the localizations to be **uniformly
+  distributed across the sites** - similar counts per site
+  (`pattern_max_nlocs_cv`) and a similar spread at every site
+  (`pattern_max_spread_cv`) - which a genuine origami has but an aggregate,
+  bead or misregistered blob does not, so those are excluded from the defect
+  classes rather than polluting them.
 
 - `pick_origami` gains an optional **geometry-pattern clustering** pass
   (`cluster_patterns`, default off): it groups the accepted structures by their

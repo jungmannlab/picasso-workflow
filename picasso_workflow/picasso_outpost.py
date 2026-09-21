@@ -5537,7 +5537,11 @@ _SITE_EPS_FRAC = 0.2
 
 
 def subcluster_docking_sites(
-    xy_nm, expected_spacing_nm, min_samples=3, eps_frac=_SITE_EPS_FRAC
+    xy_nm,
+    expected_spacing_nm,
+    min_samples=3,
+    eps_frac=_SITE_EPS_FRAC,
+    return_stats=False,
 ):
     """Cluster localizations within a footprint into docking-site centers.
 
@@ -5558,24 +5562,46 @@ def subcluster_docking_sites(
         systematically **under**-counts the sites of bright, well-resolved
         structures. Lower it further if sites are still merged; raise it if a
         single site splits into several.
+    return_stats : bool, optional
+        Also return, per resolved site (in ``centers`` order), the number of
+        localizations and their RMS spread (nm) about the site centre.
 
     Returns
     -------
     np.ndarray
         ``(K, 2)`` resolved docking-site centroids in nanometres (empty if
-        none).
+        none). If ``return_stats``, a ``(centers, site_nlocs, site_spread_nm)``
+        tuple instead.
     """
     xy = np.asarray(xy_nm, dtype=float).reshape(-1, 2)
+    empty = np.empty((0, 2))
     if len(xy) == 0 or expected_spacing_nm <= 0:
-        return np.empty((0, 2))
+        if return_stats:
+            return empty, np.empty(0), np.empty(0)
+        return empty
     eps = eps_frac * expected_spacing_nm
     labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(xy)
-    centers = [
-        xy[labels == lbl].mean(axis=0)
-        for lbl in np.unique(labels)
-        if lbl != -1
-    ]
-    return np.array(centers) if centers else np.empty((0, 2))
+    centers, nlocs, spread = [], [], []
+    for lbl in np.unique(labels):
+        if lbl == -1:
+            continue
+        pts = xy[labels == lbl]
+        c = pts.mean(axis=0)
+        centers.append(c)
+        nlocs.append(len(pts))
+        spread.append(
+            float(np.sqrt(np.mean(((pts - c) ** 2).sum(axis=1))))
+            if len(pts) > 1
+            else 0.0
+        )
+    centers = np.array(centers) if centers else empty
+    if return_stats:
+        return (
+            centers,
+            np.asarray(nlocs, dtype=float),
+            np.asarray(spread, dtype=float),
+        )
+    return centers
 
 
 def _rotation_matrix(theta):
@@ -6264,8 +6290,12 @@ def lattice_defect_features(
     n_nodes = len(template)
     if sym_perms is None:
         sym_perms = template_symmetry_permutations(template)
-    sites = subcluster_docking_sites(
-        xy_nm, expected_spacing_nm, min_samples=min_samples, eps_frac=eps_frac
+    sites, site_nlocs, _ = subcluster_docking_sites(
+        xy_nm,
+        expected_spacing_nm,
+        min_samples=min_samples,
+        eps_frac=eps_frac,
+        return_stats=True,
     )
     occ = np.zeros(n_nodes, dtype=int)
     # per resolved site: the design-node index it registers to (-1 = no match)
@@ -6276,6 +6306,9 @@ def lattice_defect_features(
         "frac_on_lattice": 0.0,
         "rmse_nm": float("inf"),
         "fitted_spacing_nm": 0.0,
+        "nlocs_cv": float("inf"),
+        "spread_cv": float("inf"),
+        "mean_site_spread_nm": float("inf"),
         "occupancy": tuple(int(v) for v in occ),
         "site_centers_nm": sites,
         "site_nodes": site_nodes,
@@ -6295,6 +6328,39 @@ def lattice_defect_features(
     # design/observed; the pick's actual spacing is design_nn / scale.
     scale, _, _, rmse_scaled = _similarity_fit(src[rows], template[cols])
     design_nn = _median_nn_spacing(template)
+    # uniformity of the ON-LATTICE sites: a genuine origami blinks similarly at
+    # every site and every site's localization cloud has the same spread;
+    # aggregates / merged or smeared sites do not. CV = std / mean.
+    #  - counts per site from the (tight) DBSCAN cores (background-free)
+    #  - spread per site from ALL locs assigned to their nearest matched site
+    #    (within half a spacing) - the eps-bounded core spread cannot see a
+    #    smeared/merged site, this can.
+    m_nlocs = site_nlocs[rows]
+    nlocs_cv = (
+        float(np.std(m_nlocs) / np.mean(m_nlocs))
+        if m_nlocs.mean()
+        else float("inf")
+    )
+    matched_centers = sites[rows]
+    xy = np.asarray(xy_nm, dtype=float).reshape(-1, 2)
+    dist, assign = KDTree(matched_centers).query(xy)
+    keep = dist < 0.5 * expected_spacing_nm
+    per_site_spread = []
+    for k in range(len(matched_centers)):
+        sel = keep & (assign == k)
+        if np.count_nonzero(sel) > 1:
+            per_site_spread.append(float(np.sqrt(np.mean(dist[sel] ** 2))))
+    per_site_spread = np.asarray(per_site_spread)
+    spread_cv = (
+        float(np.std(per_site_spread) / np.mean(per_site_spread))
+        if len(per_site_spread) >= 2 and per_site_spread.mean() > 0
+        else float("inf")
+    )
+    mean_spread = (
+        float(np.mean(per_site_spread))
+        if len(per_site_spread)
+        else float("inf")
+    )
     aux.update(
         {
             "n_matched": int(len(cols)),
@@ -6303,6 +6369,9 @@ def lattice_defect_features(
             "fitted_spacing_nm": (
                 float(design_nn / scale) if scale > 0 else 0.0
             ),
+            "nlocs_cv": nlocs_cv,
+            "spread_cv": spread_cv,
+            "mean_site_spread_nm": mean_spread,
             "occupancy": _canonical_occupancy(occ, sym_perms),
         }
     )
@@ -6339,6 +6408,9 @@ def _summarize_lattice_clusters(labels, aux, n_nodes):
                 "median_fitted_spacing_nm": _med("fitted_spacing_nm"),
                 "median_frac_on_lattice": _med("frac_on_lattice"),
                 "median_n_sites": _med("n_sites"),
+                "median_nlocs_cv": _med("nlocs_cv"),
+                "median_spread_cv": _med("spread_cv"),
+                "median_site_spread_nm": _med("mean_site_spread_nm"),
             }
         )
     summary.sort(key=lambda c: (c["is_offlattice"], -c["n_structures"]))
@@ -6354,14 +6426,20 @@ def cluster_lattice_defects(
     rmse_gate_frac=0.3,
     frac_on_lattice_gate=0.6,
     spacing_tol=0.3,
+    max_nlocs_cv=0.8,
+    max_spread_cv=0.4,
     min_samples=3,
     eps_frac=_SITE_EPS_FRAC,
 ):
     """Two-stage design-aware clustering of picks on a known lattice.
 
-    Stage A separates *on-lattice* picks (enough matched sites, low
-    best-fit residual, recovered spacing near design) from off-lattice /
-    sparse ones (label ``-1``). Stage B groups the on-lattice picks by their
+    Stage A separates *on-lattice* picks from off-lattice / sparse ones
+    (label ``-1``). A pick is on-lattice when it has enough matched sites, a
+    low best-fit residual, recovered spacing near design, **and** its
+    localizations are similarly distributed across sites - similar counts
+    per site (``max_nlocs_cv``) and a similar spread at every site
+    (``max_spread_cv``) - as a genuine origami has but an aggregate or a
+    misregistered blob does not. Stage B groups the on-lattice picks by their
     canonical defect-occupancy pattern - each cluster is one defect class
     (which design nodes are missing). Returns ``labels``, per-structure
     ``aux``, ``cluster_summary``, ``n_nodes`` and the ``symmetry_perms``.
@@ -6396,6 +6474,8 @@ def cluster_lattice_defects(
             and a["rmse_nm"] <= rmse_gate
             and a["frac_on_lattice"] >= frac_on_lattice_gate
             and spacing_ok
+            and a["nlocs_cv"] <= max_nlocs_cv
+            and a["spread_cv"] <= max_spread_cv
         )
     counts = Counter(aux[i]["occupancy"] for i in range(n) if on[i])
     occ_to_label = {

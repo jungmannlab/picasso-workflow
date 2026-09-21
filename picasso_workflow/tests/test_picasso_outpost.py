@@ -1556,3 +1556,31 @@ def test_cluster_lattice_defects_two_stage_separation():
         if not c["is_offlattice"]
     )
     assert occ_sums == [11, 12]
+
+
+def test_cluster_lattice_defects_uniformity_gate():
+    """A structure with one anomalously bright site (non-uniform blinking)
+    fails the on-lattice gate, while the same geometry with uniform blinking
+    passes - so aggregates / bad picks are excluded from the defect classes."""
+    rng = np.random.default_rng(0)
+    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+
+    def blob(bright_mult):
+        pts = []
+        for j in range(12):
+            n = 25 * (bright_mult if j == 0 else 1)
+            pts.append(tmpl[j] + rng.normal(0, 1.4, size=(n, 2)))
+        cloud = np.vstack(pts) @ _rot2d(rng.uniform(0, 360)).T
+        return cloud + rng.normal(0, 40, 2)
+
+    uniform = [blob(1) for _ in range(20)]
+    bright = [blob(10) for _ in range(20)]
+    res = picasso_outpost.cluster_lattice_defects(uniform + bright, tmpl, 20.0)
+    labels = res["labels"]
+    # uniform picks are on-lattice; the one-bright-site picks are rejected
+    assert (labels[:20] != -1).sum() >= 18
+    assert (labels[20:] == -1).sum() >= 18
+    # the summary carries the uniformity metrics
+    on = [c for c in res["cluster_summary"] if not c["is_offlattice"]]
+    assert on and np.isfinite(on[0]["median_nlocs_cv"])
+    assert np.isfinite(on[0]["median_spread_cv"])

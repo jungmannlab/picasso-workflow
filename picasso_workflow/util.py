@@ -1990,6 +1990,14 @@ class AbstractModuleCollection(abc.ABC):
             ``pattern_frac_on_lattice`` : float
                 Lattice method: min fraction of resolved sites that must sit
                 on lattice nodes (default 0.6).
+            ``pattern_max_nlocs_cv`` : float
+                Lattice method: max coefficient of variation of the
+                localizations per site to be on-lattice - a genuine origami
+                blinks similarly at every site (default 0.8).
+            ``pattern_max_spread_cv`` : float
+                Lattice method: max coefficient of variation of the per-site
+                localization spread to be on-lattice - every site's cloud
+                should spread by the same amount (default 0.4).
         results : dict
             Module results (see class docstring). With ``cluster_patterns``
             also ``n_pattern_clusters``, ``pattern_summary``,

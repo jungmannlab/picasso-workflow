@@ -6279,6 +6279,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "max": 1.0,
                 "required": False,
             },
+            "pattern_max_nlocs_cv": {
+                "type": "float",
+                "description": (
+                    "Lattice method: max coefficient of variation of the "
+                    "localizations per site to be on-lattice (uniform "
+                    "blinking; default 0.8)"
+                ),
+                "min": 0.0,
+                "required": False,
+            },
+            "pattern_max_spread_cv": {
+                "type": "float",
+                "description": (
+                    "Lattice method: max coefficient of variation of the "
+                    "per-site localization spread to be on-lattice (uniform "
+                    "spread; default 0.4)"
+                ),
+                "min": 0.0,
+                "required": False,
+            },
         }
 
         results_spec = {

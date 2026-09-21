@@ -14836,6 +14836,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ("pattern_min_sites", "min_on_lattice_sites", int),
                 ("pattern_rmse_gate_frac", "rmse_gate_frac", float),
                 ("pattern_frac_on_lattice", "frac_on_lattice_gate", float),
+                ("pattern_max_nlocs_cv", "max_nlocs_cv", float),
+                ("pattern_max_spread_cv", "max_spread_cv", float),
             ):
                 if parameters.get(pkey):
                     lattice_kwargs[akey] = cast(parameters[pkey])

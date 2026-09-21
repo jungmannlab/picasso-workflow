@@ -138,6 +138,12 @@ def _pattern_cluster_lines(summary, method):
                 sp = c.get("median_fitted_spacing_nm")
                 if sp is not None and np.isfinite(sp):
                     parts.append(f"spacing {sp:.1f} nm")
+                ncv = c.get("median_nlocs_cv")
+                scv = c.get("median_spread_cv")
+                if ncv is not None and np.isfinite(ncv):
+                    parts.append(f"nlocs CV {ncv:.2f}")
+                if scv is not None and np.isfinite(scv):
+                    parts.append(f"spread CV {scv:.2f}")
             if nlocs_txt:
                 parts.append(nlocs_txt)
         else:
