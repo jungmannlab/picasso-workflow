@@ -52,7 +52,10 @@ This file was started after v0.5.6; earlier history is in the git log.
   tunes the auto mode. Emits, per pattern, a picasso pick `.yaml` and a grouped
   `.hdf5`, plus a `pattern_table.csv` summary, a grid of example structure
   renders per pattern (`n_pattern_examples`, brightest first) shown as labelled
-  rows in the report, and three figures coloured by pattern: the
+  rows in the report (the examples shown are the members most representative
+  of each cluster - nearest its descriptor centroid - not the brightest, which
+  are atypical/aggregates and misrepresent the cluster), and three figures
+  coloured by pattern: the
   nlocs-per-frame/rmsd **phase space** (now smoothed per-cluster density
   contours rather than an unreadable scatter), a **PCA descriptor-space** view
   (how the clustering separates), and a per-cluster **pairwise site-distance

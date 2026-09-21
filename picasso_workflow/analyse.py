@@ -14896,12 +14896,20 @@ class AutoPicasso(util.AbstractModuleCollection):
         if pd_fp:
             results["fp_pattern_pairdist"] = pd_fp
 
-        # example renders per (non-noise) cluster: the brightest members
-        # (most localizations => clearest pattern), so the reporter can show
-        # what each geometry cluster actually looks like. Keyed by label ->
-        # list of render filepaths.
+        # example renders per (non-noise) cluster: the members most
+        # *representative* of the cluster (nearest its descriptor centroid),
+        # NOT the brightest - brightness/blink counts are deliberately not a
+        # clustering dimension, so the brightest members are the atypical,
+        # densest ones (often aggregates) and misrepresent the cluster.
         pixelsize_display = parameters.get("display_pixelsize", 1)
         n_examples = int(parameters.get("n_pattern_examples", 8) or 0)
+        # standardized descriptor features, to rank members by typicality
+        feats_all = np.asarray(cl.get("features"))
+        have_feats = feats_all.ndim == 2 and len(feats_all) == len(labels)
+        if have_feats:
+            from sklearn.preprocessing import StandardScaler
+
+            feats_std = StandardScaler().fit_transform(feats_all)
         # bound the total across all clusters (n_examples x #clusters can
         # explode when many clusters are found); log if the budget bites.
         render_budget = _MAX_STRUCTURE_RENDERS
@@ -14921,12 +14929,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             if lbl == -1 or n_examples <= 0 or render_budget <= 0:
                 continue
             member_pos = np.where(labels == lbl)[0]
-            # brightest first, so the examples read as clearly as possible
-            member_pos = sorted(
-                member_pos,
-                key=lambda i: len(groups[group_ids[i]]),
-                reverse=True,
-            )[: min(n_examples, render_budget)]
+            take = min(n_examples, render_budget)
+            if have_feats and len(member_pos) > 1:
+                # most typical first: nearest the cluster feature centroid
+                centroid = feats_std[member_pos].mean(axis=0)
+                dist = np.linalg.norm(feats_std[member_pos] - centroid, axis=1)
+                member_pos = member_pos[np.argsort(dist)][:take]
+            else:
+                member_pos = member_pos[:take]
             row = []
             for rank, i in enumerate(member_pos):
                 gid = group_ids[i]

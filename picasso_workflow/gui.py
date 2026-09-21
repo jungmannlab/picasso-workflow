@@ -6212,8 +6212,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "n_pattern_examples": {
                 "type": "int",
                 "description": (
-                    "Example structures rendered per pattern cluster for the "
-                    "report (brightest first); 0 to skip"
+                    "Representative structures rendered per pattern cluster "
+                    "for the report (nearest the cluster centroid); 0 to skip"
                 ),
                 "min": 0,
                 "default": 8,
