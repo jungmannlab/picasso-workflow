@@ -1454,9 +1454,10 @@ def test_cluster_structure_patterns_empty_input():
 # --- design-aware (lattice) defect clustering --------------------------
 
 
-def _lattice_blob(node_idx, template, spacing, rng, n_per=30, sig=2.0):
+def _lattice_blob(node_idx, template, spacing, rng, n_per=50, sig=1.2):
     """Localizations for a pick occupying ``node_idx`` of a scaled template,
-    at a random orientation/offset."""
+    at a random orientation/offset. Bright/tight so all present sites resolve
+    reliably (keeps the known-answer assertions deterministic)."""
     base = template / 20.0 * spacing
     pts = [
         base[j] + rng.normal(0, sig, size=(max(1, rng.poisson(n_per)), 2))
@@ -1489,6 +1490,9 @@ def test_lattice_defect_features_reads_fit_and_occupancy():
     assert sum(a["occupancy"]) == 12
     assert a["rmse_nm"] < 4.0
     assert abs(a["fitted_spacing_nm"] - 20.0) < 3.0
+    # every resolved site is tagged with a design-node index (a full grid ->
+    # each site maps to a distinct node, i.e. a permutation of 0..11)
+    assert sorted(a["site_nodes"].tolist()) == list(range(12))
 
     scaled = _lattice_blob(range(12), tmpl, 24.0, rng)
     a2 = picasso_outpost.lattice_defect_features(scaled, tmpl, 20.0)

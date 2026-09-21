@@ -2474,8 +2474,18 @@ class TestAnalyseModules(unittest.TestCase):
         mock_lattice.return_value = {
             "labels": np.array([0, 1]),
             "aux": [
-                {"rmse_nm": 1.0},
-                {"rmse_nm": 1.5},
+                {
+                    "rmse_nm": 1.0,
+                    "site_centers_nm": np.array(
+                        [[1300.0, 1300.0], [1320.0, 1300.0]]
+                    ),
+                    "site_nodes": np.array([0, 1]),
+                },
+                {
+                    "rmse_nm": 1.5,
+                    "site_centers_nm": np.array([[2600.0, 2860.0]]),
+                    "site_nodes": np.array([5]),
+                },
             ],
             "n_nodes": 12,
             "cluster_summary": [
@@ -2549,6 +2559,15 @@ class TestAnalyseModules(unittest.TestCase):
         # occupancy carried through to the summary
         by_label = {c["label"]: c for c in results["pattern_summary"]}
         assert by_label[1]["n_defects"] == 1
+        # resolved single sites exported as picks + node-tagged table
+        assert results["n_pattern_sites"] == 3
+        assert os.path.exists(results["fp_pattern_site_picks"])
+        assert os.path.exists(results["fp_pattern_sites_table"])
+        import yaml as _y
+
+        with open(results["fp_pattern_site_picks"]) as f:
+            sp = _y.safe_load(f)
+        assert len(sp["Centers"]) == 3
 
         shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
 

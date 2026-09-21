@@ -1998,7 +1998,11 @@ class AbstractModuleCollection(abc.ABC):
             ``fp_pattern_phasespace``, the lattice-method
             ``fp_pattern_defectmaps`` or the pairwise-method
             ``fp_pattern_feature_space`` / ``fp_pattern_pairdist`` (.png), and
-            ``fp_pattern_renderings`` (label -> list of example renders).
+            ``fp_pattern_renderings`` (label -> list of example renders). The
+            lattice method also exports the resolved single docking sites of
+            the on-lattice structures: ``fp_pattern_site_picks`` (a picasso
+            pick .yaml), ``fp_pattern_sites_table`` (.csv, each site tagged
+            with its design-node index) and ``n_pattern_sites``.
         """
 
     @abc.abstractmethod

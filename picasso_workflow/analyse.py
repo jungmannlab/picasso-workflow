@@ -14994,6 +14994,20 @@ class AutoPicasso(util.AbstractModuleCollection):
             if dm:
                 results["fp_pattern_defectmaps"] = dm
 
+            # export the resolved single docking sites of the on-lattice
+            # structures as a picasso pick set (registration already tags each
+            # with its design-node index). Coordinates are absolute nm, so
+            # nm / pixelsize gives the camera-px pick centre.
+            self._export_lattice_site_picks(
+                results,
+                cl.get("aux"),
+                labels,
+                group_ids,
+                template,
+                pixelsize,
+                parameters,
+            )
+
         # example renders per cluster: the members most *representative* of the
         # cluster, NOT the brightest (brightness is deliberately not a
         # clustering dimension, so the brightest are atypical aggregates). For
@@ -15078,6 +15092,75 @@ class AutoPicasso(util.AbstractModuleCollection):
             fp_pattern_renderings[int(lbl)] = row
             render_budget -= len(row)
         results["fp_pattern_renderings"] = fp_pattern_renderings
+
+    def _export_lattice_site_picks(
+        self,
+        results,
+        aux,
+        labels,
+        group_ids,
+        template,
+        pixelsize,
+        parameters,
+    ):
+        """Export the resolved single docking sites of the on-lattice
+        structures as a picasso pick set + a table tagging each with its
+        design-node index.
+
+        The lattice method already resolves each pick's sites and registers
+        them to the design; this surfaces those sites (matched to a node) as
+        directly usable single-site picks. Populates ``fp_pattern_site_picks``
+        (.yaml), ``fp_pattern_sites_table`` (.csv) and ``n_pattern_sites``.
+        """
+        if not aux:
+            return
+        centers_px, rows = [], []
+        for i, lbl in enumerate(labels):
+            if lbl == -1:
+                continue
+            a = aux[i]
+            sites = np.asarray(a.get("site_centers_nm"))
+            nodes = np.asarray(a.get("site_nodes"))
+            if sites.ndim != 2 or len(sites) != len(nodes):
+                continue
+            gid = int(group_ids[i])
+            rmse = float(a.get("rmse_nm", float("nan")))
+            for (cx_nm, cy_nm), node in zip(sites, nodes):
+                if node < 0:  # only sites matched to a design node
+                    continue
+                cx, cy = float(cx_nm / pixelsize), float(cy_nm / pixelsize)
+                centers_px.append([cx, cy])
+                rows.append(
+                    {
+                        "center_x_px": cx,
+                        "center_y_px": cy,
+                        "node_index": int(node),
+                        "cluster": int(lbl),
+                        "structure_group": gid,
+                        "rmse_nm": rmse,
+                    }
+                )
+        if not centers_px:
+            return
+        docking_diameter = parameters.get(
+            "docking_site_diameter",
+            max(template.grid_spacing_nm / pixelsize / 2, 1e-6),
+        )
+        fp_sites = os.path.join(results["folder"], "pattern_site_picks.yaml")
+        with open(fp_sites, "w") as f:
+            yaml.dump(
+                {
+                    "Centers": centers_px,
+                    "Diameter (nm)": float(docking_diameter * pixelsize),
+                    "Shape": "Circle",
+                },
+                f,
+            )
+        results["fp_pattern_site_picks"] = fp_sites
+        fp_tbl = os.path.join(results["folder"], "pattern_sites.csv")
+        pd.DataFrame(rows).to_csv(fp_tbl, index=False)
+        results["fp_pattern_sites_table"] = fp_tbl
+        results["n_pattern_sites"] = len(centers_px)
 
     #    @profile_resource_usage
     @module_decorator

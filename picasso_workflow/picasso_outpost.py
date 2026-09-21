@@ -6268,6 +6268,8 @@ def lattice_defect_features(
         xy_nm, expected_spacing_nm, min_samples=min_samples, eps_frac=eps_frac
     )
     occ = np.zeros(n_nodes, dtype=int)
+    # per resolved site: the design-node index it registers to (-1 = no match)
+    site_nodes = -np.ones(len(sites), dtype=int)
     aux = {
         "n_sites": int(len(sites)),
         "n_matched": 0,
@@ -6276,6 +6278,7 @@ def lattice_defect_features(
         "fitted_spacing_nm": 0.0,
         "occupancy": tuple(int(v) for v in occ),
         "site_centers_nm": sites,
+        "site_nodes": site_nodes,
     }
     if len(sites) < 3:
         return aux
@@ -6286,6 +6289,7 @@ def lattice_defect_features(
         aux["rmse_nm"] = float(reg["rmse_nm"])
         return aux
     occ[cols] = 1
+    site_nodes[rows] = cols
     src = sites * np.array([-1.0, 1.0]) if reg["mirror"] else sites
     # similarity maps observed sites onto the design template, so its scale is
     # design/observed; the pick's actual spacing is design_nn / scale.

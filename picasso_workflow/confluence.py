@@ -5025,6 +5025,15 @@ class ConfluenceReporter(AbstractModuleCollection):
                 pattern_lines,
             )
 
+            if results.get("fp_pattern_site_picks"):
+                n_sites = results.get("n_pattern_sites", "?")
+                text += (
+                    f"<p>{n_sites} resolved single docking sites exported as "
+                    "picks (<code>pattern_site_picks.yaml</code>; each tagged "
+                    "with its design-node index in "
+                    "<code>pattern_sites.csv</code>).</p>"
+                )
+
             # phase-space (nlocs/frame vs rmsd), the defect-map diagram
             # (lattice), and the descriptor-space / pairwise-distance views
             # (pairwise) - all coloured by / grouped by pattern cluster

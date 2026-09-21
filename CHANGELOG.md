@@ -56,7 +56,11 @@ This file was started after v0.5.6; earlier history is in the git log.
   `pattern_min_sites` / `pattern_rmse_gate_frac` / `pattern_frac_on_lattice`.
   The report shows a per-cluster **defect-map** diagram (design nodes marked
   occupied/missing) with the representative example renders, and lists each
-  defect class with its occupancy, fit residual and recovered spacing.
+  defect class with its occupancy, fit residual and recovered spacing. Because
+  registration already assigns every resolved site to a design node, the
+  lattice method also **exports the on-lattice single docking sites directly**
+  as a picasso pick set (`fp_pattern_site_picks`) plus a node-tagged table
+  (`fp_pattern_sites_table`, each site labelled with its design-node index).
 
 - `pick_origami` gains an optional **geometry-pattern clustering** pass
   (`cluster_patterns`, default off): it groups the accepted structures by their

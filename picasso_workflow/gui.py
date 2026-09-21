@@ -6425,6 +6425,28 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "(lattice method only)"
                 ),
             },
+            "fp_pattern_site_picks": {
+                "type": "str",
+                "description": (
+                    "filepath to the picasso pick .yaml of the resolved "
+                    "single docking sites of on-lattice structures "
+                    "(lattice method only)"
+                ),
+            },
+            "fp_pattern_sites_table": {
+                "type": "str",
+                "description": (
+                    "filepath to the .csv of resolved single sites with their "
+                    "design-node index / cluster / structure (lattice only)"
+                ),
+            },
+            "n_pattern_sites": {
+                "type": "int",
+                "description": (
+                    "number of resolved single docking sites exported "
+                    "(lattice method only)"
+                ),
+            },
             "pattern_method": {
                 "type": "str",
                 "description": (
