@@ -1449,3 +1449,106 @@ def test_cluster_structure_patterns_empty_input():
     )
     assert res["labels"].shape == (0,)
     assert res["cluster_summary"] == []
+
+
+# --- design-aware (lattice) defect clustering --------------------------
+
+
+def _lattice_blob(node_idx, template, spacing, rng, n_per=30, sig=2.0):
+    """Localizations for a pick occupying ``node_idx`` of a scaled template,
+    at a random orientation/offset."""
+    base = template / 20.0 * spacing
+    pts = [
+        base[j] + rng.normal(0, sig, size=(max(1, rng.poisson(n_per)), 2))
+        for j in node_idx
+    ]
+    cloud = np.vstack(pts) @ _rot2d(rng.uniform(0, 360)).T
+    return cloud + rng.normal(0, 40, 2)
+
+
+def test_template_symmetry_permutations_3x4_grid():
+    """A 3x4 grid has the 4-element D2 symmetry group (no 90 deg rotation)."""
+    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    perms = picasso_outpost.template_symmetry_permutations(tmpl)
+    assert len(perms) == 4
+    # each permutation is a bijection of the 12 nodes
+    for p in perms:
+        assert sorted(p.tolist()) == list(range(12))
+
+
+def test_lattice_defect_features_reads_fit_and_occupancy():
+    """A full grid registers with full occupancy, low residual and recovered
+    spacing; a scaled grid recovers its spacing; a missing site shows up as a
+    zero in the occupancy."""
+    rng = np.random.default_rng(0)
+    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+
+    full = _lattice_blob(range(12), tmpl, 20.0, rng)
+    a = picasso_outpost.lattice_defect_features(full, tmpl, 20.0)
+    assert a["n_matched"] == 12
+    assert sum(a["occupancy"]) == 12
+    assert a["rmse_nm"] < 4.0
+    assert abs(a["fitted_spacing_nm"] - 20.0) < 3.0
+
+    scaled = _lattice_blob(range(12), tmpl, 24.0, rng)
+    a2 = picasso_outpost.lattice_defect_features(scaled, tmpl, 20.0)
+    assert abs(a2["fitted_spacing_nm"] - 24.0) < 3.0
+
+    miss = _lattice_blob([j for j in range(12) if j != 5], tmpl, 20.0, rng)
+    a3 = picasso_outpost.lattice_defect_features(miss, tmpl, 20.0)
+    assert sum(a3["occupancy"]) == 11
+
+
+def test_lattice_defect_symmetry_canonicalizes_corners():
+    """Missing any of the 4 symmetry-equivalent corners is one defect class."""
+    rng = np.random.default_rng(1)
+    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    occ = set()
+    for corner in (0, 3, 8, 11):  # the four corners (row*4 + col indexing)
+        cloud = _lattice_blob(
+            [j for j in range(12) if j != corner], tmpl, 20.0, rng
+        )
+        occ.add(
+            picasso_outpost.lattice_defect_features(cloud, tmpl, 20.0)[
+                "occupancy"
+            ]
+        )
+    assert len(occ) == 1
+
+
+def test_cluster_lattice_defects_two_stage_separation():
+    """Stage A splits off-lattice junk (-1); stage B groups the on-lattice
+    picks by defect pattern (full vs a fixed single-site defect)."""
+    rng = np.random.default_rng(0)
+    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    structs, truth = [], []
+    for _ in range(60):
+        structs.append(_lattice_blob(range(12), tmpl, 20.0, rng))
+        truth.append("full")
+    for _ in range(60):
+        structs.append(
+            _lattice_blob([j for j in range(12) if j != 5], tmpl, 20.0, rng)
+        )
+        truth.append("miss")
+    for _ in range(60):
+        structs.append(rng.normal(0, 60, size=(int(rng.integers(3, 8)), 2)))
+        truth.append("junk")
+    truth = np.array(truth)
+
+    res = picasso_outpost.cluster_lattice_defects(structs, tmpl, 20.0)
+    labels = res["labels"]
+    assert res["n_nodes"] == 12
+    # junk is off-lattice
+    assert set(truth[labels == -1]) == {"junk"}
+    # two on-lattice defect classes, each pure and full occupancy 12 vs 11
+    for c in res["cluster_summary"]:
+        if c["is_offlattice"]:
+            continue
+        members = truth[labels == c["label"]]
+        assert len(set(members)) == 1
+    occ_sums = sorted(
+        c["n_sites_occupied"]
+        for c in res["cluster_summary"]
+        if not c["is_offlattice"]
+    )
+    assert occ_sums == [11, 12]

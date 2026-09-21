@@ -52,6 +52,7 @@ from scipy.spatial.distance import pdist
 from scipy import stats
 import itertools
 import glob
+from collections import Counter
 
 # logger = logging.getLogger(__name__)
 
@@ -6158,6 +6159,255 @@ def _summarize_pattern_clusters(labels, aux):
         key=lambda c: (c["is_noise"], -c["median_n_sites"], -c["n_structures"])
     )
     return summary
+
+
+########################################################################
+# Design-aware (lattice) pattern clustering
+#
+# When the design is a known lattice, register each pick onto it and
+# describe it in the lattice's own frame: (a) how well it fits (best-fit
+# similarity residual, recovered spacing, on-lattice fraction) and (b) its
+# defect pattern (which design nodes are occupied). This sees lattice
+# quality and defect geometry that the template-agnostic pairwise-distance
+# descriptor cannot. Reuses register_to_template.
+########################################################################
+
+
+def _similarity_fit(src, dst):
+    """Best-fit similarity (rotation + isotropic scale + translation) mapping
+    ``src`` onto ``dst`` (Umeyama). Returns ``(scale, R, t, rmse)``."""
+    src = np.asarray(src, dtype=float).reshape(-1, 2)
+    dst = np.asarray(dst, dtype=float).reshape(-1, 2)
+    n = len(src)
+    if n == 0:
+        return 1.0, np.eye(2), np.zeros(2), np.inf
+    mu_s, mu_d = src.mean(axis=0), dst.mean(axis=0)
+    xs, xd = src - mu_s, dst - mu_d
+    sigma = (xd.T @ xs) / n
+    u, d, vt = np.linalg.svd(sigma)
+    s_corr = np.eye(2)
+    if np.linalg.det(u) * np.linalg.det(vt) < 0:
+        s_corr[-1, -1] = -1.0
+    rot = u @ s_corr @ vt
+    var_s = (xs**2).sum() / n
+    scale = float((d * np.diag(s_corr)).sum() / var_s) if var_s > 0 else 1.0
+    t = mu_d - scale * (rot @ mu_s)
+    transformed = scale * (src @ rot.T) + t
+    rmse = float(np.sqrt(np.mean(((transformed - dst) ** 2).sum(axis=1))))
+    return scale, rot, t, rmse
+
+
+def template_symmetry_permutations(template_nm, tol_frac=0.15):
+    """Node-index permutations of the design's symmetry group.
+
+    The rigid + mirror transforms that map the node set onto itself, as
+    permutations of the node indices. Canonicalizing the defect-occupancy
+    vector over these makes symmetry-equivalent defect patterns identical
+    (e.g. a missing corner is the same defect whichever corner registration
+    happened to land it on).
+    """
+    template = np.asarray(template_nm, dtype=float).reshape(-1, 2)
+    template = template - template.mean(axis=0)
+    n = len(template)
+    if n == 0:
+        return [np.arange(0, dtype=int)]
+    nn = _median_nn_spacing(template)
+    tol = tol_frac * nn if nn > 0 else 1e-6
+    tree = KDTree(template)
+    perms, seen = [], set()
+    for k in range(4):  # rotations 0/90/180/270 x {identity, x-reflection}
+        a = 0.5 * np.pi * k
+        rot = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+        for mirror in (np.eye(2), np.array([[-1.0, 0.0], [0.0, 1.0]])):
+            transformed = template @ (rot @ mirror).T
+            dist, idx = tree.query(transformed)
+            if np.all(dist <= tol) and len(set(idx.tolist())) == n:
+                key = tuple(int(v) for v in idx)
+                if key not in seen:
+                    seen.add(key)
+                    perms.append(np.asarray(idx, dtype=int))
+    return perms or [np.arange(n, dtype=int)]
+
+
+def _canonical_occupancy(occ, perms):
+    """Lexicographically maximal occupancy over the symmetry group - a
+    canonical, symmetry-invariant representative of the defect pattern."""
+    occ = np.asarray(occ, dtype=int)
+    best = tuple(int(v) for v in occ)
+    for p in perms:
+        cand = tuple(int(v) for v in occ[p])
+        if cand > best:
+            best = cand
+    return best
+
+
+def lattice_defect_features(
+    xy_nm,
+    template_nm,
+    expected_spacing_nm,
+    allow_mirror=True,
+    min_samples=3,
+    eps_frac=_SITE_EPS_FRAC,
+    sym_perms=None,
+):
+    """Design-aware descriptor of one pick.
+
+    Registers the pick's resolved sites onto the design lattice and reports
+    (a) lattice-fit quality - best-fit similarity residual (nm), recovered
+    spacing, matched fraction - and (b) the defect pattern - a canonical
+    per-node occupancy vector. Returns a dict of features (``occupancy`` is
+    the symmetry-canonical tuple; ``rmse_nm`` is the residual after removing
+    the global best-fit scale, i.e. local site disorder).
+    """
+    template = np.asarray(template_nm, dtype=float).reshape(-1, 2)
+    template = template - template.mean(axis=0)
+    n_nodes = len(template)
+    if sym_perms is None:
+        sym_perms = template_symmetry_permutations(template)
+    sites = subcluster_docking_sites(
+        xy_nm, expected_spacing_nm, min_samples=min_samples, eps_frac=eps_frac
+    )
+    occ = np.zeros(n_nodes, dtype=int)
+    aux = {
+        "n_sites": int(len(sites)),
+        "n_matched": 0,
+        "frac_on_lattice": 0.0,
+        "rmse_nm": float("inf"),
+        "fitted_spacing_nm": 0.0,
+        "occupancy": tuple(int(v) for v in occ),
+        "site_centers_nm": sites,
+    }
+    if len(sites) < 3:
+        return aux
+    reg = register_to_template(sites, template, allow_mirror=allow_mirror)
+    cols = np.asarray(reg["matched_template_indices"], dtype=int)
+    rows = np.asarray(reg["matched_observed_indices"], dtype=int)
+    if len(cols) < 3:
+        aux["rmse_nm"] = float(reg["rmse_nm"])
+        return aux
+    occ[cols] = 1
+    src = sites * np.array([-1.0, 1.0]) if reg["mirror"] else sites
+    # similarity maps observed sites onto the design template, so its scale is
+    # design/observed; the pick's actual spacing is design_nn / scale.
+    scale, _, _, rmse_scaled = _similarity_fit(src[rows], template[cols])
+    design_nn = _median_nn_spacing(template)
+    aux.update(
+        {
+            "n_matched": int(len(cols)),
+            "frac_on_lattice": float(len(cols) / len(sites)),
+            "rmse_nm": float(rmse_scaled),
+            "fitted_spacing_nm": (
+                float(design_nn / scale) if scale > 0 else 0.0
+            ),
+            "occupancy": _canonical_occupancy(occ, sym_perms),
+        }
+    )
+    return aux
+
+
+def _summarize_lattice_clusters(labels, aux, n_nodes):
+    """Per-class summary for the lattice-defect clustering."""
+    labels = np.asarray(labels, dtype=int)
+    summary = []
+    for lbl in np.unique(labels):
+        idx = np.where(labels == lbl)[0]
+
+        def _med(key):
+            vals = [aux[i][key] for i in idx if np.isfinite(aux[i][key])]
+            return float(np.median(vals)) if vals else float("nan")
+
+        off = lbl == -1
+        occ = (
+            list(aux[idx[0]]["occupancy"])
+            if len(idx) and not off
+            else [0] * n_nodes
+        )
+        n_occ = int(sum(occ))
+        summary.append(
+            {
+                "label": int(lbl),
+                "n_structures": int(len(idx)),
+                "is_offlattice": bool(off),
+                "occupancy": occ,
+                "n_sites_occupied": n_occ,
+                "n_defects": (None if off else int(n_nodes - n_occ)),
+                "median_rmse_nm": _med("rmse_nm"),
+                "median_fitted_spacing_nm": _med("fitted_spacing_nm"),
+                "median_frac_on_lattice": _med("frac_on_lattice"),
+                "median_n_sites": _med("n_sites"),
+            }
+        )
+    summary.sort(key=lambda c: (c["is_offlattice"], -c["n_structures"]))
+    return summary
+
+
+def cluster_lattice_defects(
+    structures_xy_nm,
+    template_nm,
+    expected_spacing_nm,
+    allow_mirror=True,
+    min_on_lattice_sites=4,
+    rmse_gate_frac=0.3,
+    frac_on_lattice_gate=0.6,
+    spacing_tol=0.3,
+    min_samples=3,
+    eps_frac=_SITE_EPS_FRAC,
+):
+    """Two-stage design-aware clustering of picks on a known lattice.
+
+    Stage A separates *on-lattice* picks (enough matched sites, low
+    best-fit residual, recovered spacing near design) from off-lattice /
+    sparse ones (label ``-1``). Stage B groups the on-lattice picks by their
+    canonical defect-occupancy pattern - each cluster is one defect class
+    (which design nodes are missing). Returns ``labels``, per-structure
+    ``aux``, ``cluster_summary``, ``n_nodes`` and the ``symmetry_perms``.
+    """
+    template = np.asarray(template_nm, dtype=float).reshape(-1, 2)
+    template = template - template.mean(axis=0)
+    n_nodes = len(template)
+    perms = template_symmetry_permutations(template)
+    design_nn = _median_nn_spacing(template)
+    rmse_gate = rmse_gate_frac * expected_spacing_nm
+    aux = [
+        lattice_defect_features(
+            s,
+            template,
+            expected_spacing_nm,
+            allow_mirror=allow_mirror,
+            min_samples=min_samples,
+            eps_frac=eps_frac,
+            sym_perms=perms,
+        )
+        for s in structures_xy_nm
+    ]
+    n = len(aux)
+    labels = np.full(n, -1, dtype=int)
+    on = np.zeros(n, dtype=bool)
+    for i, a in enumerate(aux):
+        spacing_ok = a["fitted_spacing_nm"] > 0 and (
+            abs(a["fitted_spacing_nm"] - design_nn) <= spacing_tol * design_nn
+        )
+        on[i] = (
+            a["n_matched"] >= min_on_lattice_sites
+            and a["rmse_nm"] <= rmse_gate
+            and a["frac_on_lattice"] >= frac_on_lattice_gate
+            and spacing_ok
+        )
+    counts = Counter(aux[i]["occupancy"] for i in range(n) if on[i])
+    occ_to_label = {
+        occ: lbl for lbl, (occ, _) in enumerate(counts.most_common())
+    }
+    for i in range(n):
+        if on[i]:
+            labels[i] = occ_to_label[aux[i]["occupancy"]]
+    summary = _summarize_lattice_clusters(labels, aux, n_nodes)
+    return {
+        "labels": labels,
+        "aux": aux,
+        "cluster_summary": summary,
+        "n_nodes": n_nodes,
+        "symmetry_perms": perms,
+    }
 
 
 def pick_origami(

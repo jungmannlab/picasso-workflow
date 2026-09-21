@@ -41,6 +41,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- Design-aware **lattice-defect** clustering primitives in `picasso_outpost`
+  (`cluster_lattice_defects`, `lattice_defect_features`,
+  `template_symmetry_permutations`). For a known lattice design, each pick is
+  registered onto the lattice and described in the lattice's own frame:
+  (a) lattice-fit quality - best-fit-similarity residual (local disorder),
+  recovered spacing, on-lattice fraction - and (b) its defect pattern - a
+  symmetry-canonical per-node occupancy vector. A two-stage clustering then
+  separates on-lattice picks from off-lattice/sparse ones and groups the
+  on-lattice picks by defect pattern. This sees lattice quality and defect
+  geometry that the template-agnostic pairwise-distance descriptor cannot.
+  (Wiring into the `pick_origami` module/report follows.)
+
 - `pick_origami` gains an optional **geometry-pattern clustering** pass
   (`cluster_patterns`, default off): it groups the accepted structures by their
   resolved arrangement — single spot / partial / full grid / aggregate — using
