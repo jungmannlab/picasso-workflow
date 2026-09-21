@@ -1960,8 +1960,8 @@ class AbstractModuleCollection(abc.ABC):
                 invariant site-graph descriptor, and emit per-pattern picks
                 plus a summary (default False).
             ``n_pattern_clusters`` : int
-                Fixed number of pattern clusters (Gaussian mixture). Unset =
-                auto-discover the count with HDBSCAN.
+                Number of pattern clusters: 0 (or unset) auto-discovers the
+                count with HDBSCAN; a value >= 2 fixes it (Gaussian mixture).
             ``pattern_min_cluster_size`` : int
                 Minimum structures per auto-discovered pattern cluster
                 (HDBSCAN; ignored when ``n_pattern_clusters`` is set,

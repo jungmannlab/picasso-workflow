@@ -14632,10 +14632,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             * pixelsize
             for g in group_ids
         ]
+        # n_pattern_clusters: 0/1/unset -> auto-discover (HDBSCAN); a value
+        # >= 2 fixes the count (Gaussian mixture).
+        k = parameters.get("n_pattern_clusters")
+        k = int(k) if k and int(k) >= 2 else None
         cl = picasso_outpost.cluster_structure_patterns(
             structures_xy_nm,
             expected_spacing_nm=template.grid_spacing_nm,
-            k=parameters.get("n_pattern_clusters") or None,
+            k=k,
             min_cluster_size=parameters.get("pattern_min_cluster_size", 25),
         )
         labels = np.asarray(cl["labels"])

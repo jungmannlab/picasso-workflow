@@ -6191,10 +6191,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "n_pattern_clusters": {
                 "type": "int",
                 "description": (
-                    "Fixed number of geometry-pattern clusters (Gaussian "
-                    "mixture); leave unset to auto-discover (HDBSCAN)"
+                    "Number of geometry-pattern clusters: 0 = auto-discover "
+                    "(HDBSCAN, recommended); >=2 fixes the count (Gaussian "
+                    "mixture)"
                 ),
-                "min": 1,
+                "min": 0,
+                "default": 0,
                 "required": False,
             },
             "pattern_min_cluster_size": {
