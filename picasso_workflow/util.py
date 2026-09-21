@@ -1954,8 +1954,24 @@ class AbstractModuleCollection(abc.ABC):
                 (default 8).
             ``display_pixelsize`` : float
                 Pixel size for display in nm (default 1).
+            ``cluster_patterns`` : bool
+                Cluster the accepted structures by their resolved geometry
+                (single spot / partial / full grid / aggregate) using an
+                invariant site-graph descriptor, and emit per-pattern picks
+                plus a summary (default False).
+            ``n_pattern_clusters`` : int
+                Fixed number of pattern clusters (Gaussian mixture). Unset =
+                auto-discover the count with HDBSCAN.
+            ``pattern_min_cluster_size`` : int
+                Minimum structures per auto-discovered pattern cluster
+                (HDBSCAN; ignored when ``n_pattern_clusters`` is set,
+                default 25).
         results : dict
-            Module results (see class docstring).
+            Module results (see class docstring). With ``cluster_patterns``
+            also ``n_pattern_clusters``, ``pattern_summary``,
+            ``fp_pattern_table`` (.csv), ``fp_pattern_picks``
+            (label -> pick .yaml), ``fp_pattern_phasespace`` (.png), and
+            ``fp_pattern_renderings``.
         """
 
     @abc.abstractmethod

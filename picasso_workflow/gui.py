@@ -6178,6 +6178,35 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 1.0,
                 "required": False,
             },
+            "cluster_patterns": {
+                "type": "bool",
+                "description": (
+                    "Cluster accepted structures by resolved geometry "
+                    "(single spot / partial / full grid / aggregate) and "
+                    "emit per-pattern picks + a summary"
+                ),
+                "default": False,
+                "required": False,
+            },
+            "n_pattern_clusters": {
+                "type": "int",
+                "description": (
+                    "Fixed number of geometry-pattern clusters (Gaussian "
+                    "mixture); leave unset to auto-discover (HDBSCAN)"
+                ),
+                "min": 1,
+                "required": False,
+            },
+            "pattern_min_cluster_size": {
+                "type": "int",
+                "description": (
+                    "Minimum structures per auto-discovered pattern cluster "
+                    "(HDBSCAN); ignored when n_pattern_clusters is set"
+                ),
+                "min": 2,
+                "default": 25,
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -6268,6 +6297,47 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "fp_renderings": {
                 "type": "list",
                 "description": "filepaths to representative structure renders",
+            },
+            "n_pattern_clusters": {
+                "type": "int",
+                "description": (
+                    "Number of geometry-pattern clusters discovered "
+                    "(cluster_patterns only)"
+                ),
+            },
+            "pattern_summary": {
+                "type": "list",
+                "description": (
+                    "Per-pattern summary (label, n_structures, median "
+                    "n_sites/n_locs/spacing); cluster_patterns only"
+                ),
+            },
+            "fp_pattern_table": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-pattern summary table (.csv)"
+                ),
+            },
+            "fp_pattern_picks": {
+                "type": "dict",
+                "description": (
+                    "map of pattern label -> picasso pick-region .yaml for "
+                    "that pattern's structures (cluster_patterns only)"
+                ),
+            },
+            "fp_pattern_phasespace": {
+                "type": "str",
+                "description": (
+                    "filepath to the phase-space figure coloured by "
+                    "geometry pattern (cluster_patterns only)"
+                ),
+            },
+            "fp_pattern_renderings": {
+                "type": "list",
+                "description": (
+                    "filepaths to one representative render per pattern "
+                    "cluster (cluster_patterns only)"
+                ),
             },
         }
 

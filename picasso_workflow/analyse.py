@@ -361,6 +361,50 @@ def _plot_origami_phasespace(
     return fp
 
 
+def _plot_pattern_phasespace(fp, nlocs, rmsds, labels, summary):
+    """Scatter accepted structures in (nlocs-per-frame, rmsd), coloured by
+    geometry-pattern cluster.
+
+    ``labels`` is the per-structure cluster label and ``nlocs``/``rmsds``
+    the matching per-structure values (same order). ``summary`` is the
+    per-cluster summary (for the legend's median site count). ``-1`` is the
+    unclustered/noise group. Returns the saved path.
+    """
+    nlocs = np.asarray(nlocs, dtype=float)
+    rmsds = np.asarray(rmsds, dtype=float)
+    labels = np.asarray(labels)
+    med_sites = {c["label"]: c["median_n_sites"] for c in summary}
+    order = [c["label"] for c in summary] or sorted(set(labels.tolist()))
+    cmap = plt.get_cmap("tab10")
+    fig, ax = plt.subplots(figsize=(7, 6))
+    for i, lbl in enumerate(order):
+        m = labels == lbl
+        if not np.any(m):
+            continue
+        if lbl == -1:
+            color, name = "0.6", "unclustered"
+        else:
+            color = cmap(i % 10)
+            name = f"pattern {lbl} (~{med_sites.get(lbl, 0):.0f} sites)"
+        ax.scatter(
+            nlocs[m],
+            rmsds[m],
+            s=10,
+            alpha=0.4,
+            color=color,
+            label=f"{name}, n={int(m.sum())}",
+        )
+    ax.set_xlabel("# localizations per frame in footprint")
+    ax.set_ylabel("root mean square distance in footprint")
+    ax.set_title("Accepted structures by geometry pattern")
+    handles, _ = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize="small", markerscale=2)
+    fig.tight_layout()
+    fig.savefig(fp)
+    return fp
+
+
 # picasso 0.11 fitting methods whose base name has a plain ``-gpu`` variant.
 # GPU is orthogonal to the model choice, so when a GPU fitter is configured
 # these bases are routed to their ``-gpu`` counterpart (see ``localize``).
@@ -14520,7 +14564,172 @@ class AutoPicasso(util.AbstractModuleCollection):
             for i in range(0, len(fp_renderings), max_cols)
         ]
 
+        # --- 7. optional: cluster accepted structures by geometry ------
+        # Group the picked origami by their resolved site pattern (single
+        # spot / partial / full grid / aggregate) using an invariant
+        # site-graph descriptor, and emit per-pattern picks + a summary.
+        if (
+            _opt("cluster_patterns", False)
+            and len(accepted_centers) > 0
+            and template.grid_spacing_nm
+            and template.grid_spacing_nm > 0
+        ):
+            self._cluster_origami_patterns(
+                parameters,
+                results,
+                pick_result,
+                picked_origami_locs,
+                origami_info,
+                accepted_centers,
+                template,
+                pixelsize,
+                footprint_diameter,
+                n_frames,
+                rcode,
+            )
+        elif _opt("cluster_patterns", False):
+            logger.debug(
+                "pick_origami: cluster_patterns requested but skipped "
+                "(no accepted structures or single-site geometry)."
+            )
+
         return parameters, results
+
+    def _cluster_origami_patterns(
+        self,
+        parameters,
+        results,
+        pick_result,
+        picked_origami_locs,
+        origami_info,
+        accepted_centers,
+        template,
+        pixelsize,
+        footprint_diameter,
+        n_frames,
+        rcode,
+    ):
+        """Cluster accepted origami by resolved geometry and emit outputs.
+
+        Builds the invariant site-graph descriptor for each accepted
+        structure (:func:`picasso_outpost.cluster_structure_patterns`) and
+        writes, per discovered pattern cluster, a picasso pick ``.yaml`` and
+        a grouped ``.hdf5``, plus a ``pattern_table.csv`` summary, a
+        representative render per cluster, and a phase-space scatter coloured
+        by pattern. Populates the ``fp_pattern_*`` / ``pattern_summary`` /
+        ``n_pattern_clusters`` result keys.
+        """
+        groups = {
+            int(g): sub for g, sub in picked_origami_locs.groupby("group")
+        }
+        group_ids = sorted(groups)
+        if not group_ids:
+            return
+        structures_xy_nm = [
+            np.column_stack(
+                [np.asarray(groups[g]["x"]), np.asarray(groups[g]["y"])]
+            )
+            * pixelsize
+            for g in group_ids
+        ]
+        cl = picasso_outpost.cluster_structure_patterns(
+            structures_xy_nm,
+            expected_spacing_nm=template.grid_spacing_nm,
+            k=parameters.get("n_pattern_clusters") or None,
+            min_cluster_size=parameters.get("pattern_min_cluster_size", 25),
+        )
+        labels = np.asarray(cl["labels"])
+        summary = cl["cluster_summary"]
+        results["pattern_summary"] = summary
+        results["n_pattern_clusters"] = int(len(set(labels.tolist()) - {-1}))
+
+        fp_pattern_table = os.path.join(results["folder"], "pattern_table.csv")
+        pd.DataFrame(summary).to_csv(fp_pattern_table, index=False)
+        results["fp_pattern_table"] = fp_pattern_table
+
+        # per-cluster picks (.yaml) + grouped locs (.hdf5)
+        fp_pattern_picks = {}
+        diameter_nm = float(footprint_diameter * pixelsize)
+        for lbl in sorted(set(labels.tolist())):
+            member_pos = np.where(labels == lbl)[0]
+            member_gids = [group_ids[i] for i in member_pos]
+            centers_lbl = [accepted_centers[g] for g in member_gids]
+            tag = "noise" if lbl == -1 else str(int(lbl))
+            fp_yaml = os.path.join(
+                results["folder"], f"pattern_{tag}_picks.yaml"
+            )
+            with open(fp_yaml, "w") as f:
+                yaml.dump(
+                    {
+                        "Centers": [
+                            [float(c[0]), float(c[1])] for c in centers_lbl
+                        ],
+                        "Diameter (nm)": diameter_nm,
+                        "Shape": "Circle",
+                    },
+                    f,
+                )
+            fp_pattern_picks[int(lbl)] = fp_yaml
+            sub = picked_origami_locs[
+                picked_origami_locs["group"].isin(member_gids)
+            ]
+            io.save_locs(
+                os.path.join(results["folder"], f"pattern_{tag}_locs.hdf5"),
+                sub,
+                origami_info,
+            )
+        results["fp_pattern_picks"] = fp_pattern_picks
+
+        # phase-space scatter coloured by pattern (aligned to group_ids)
+        gid_idx = np.asarray(group_ids, dtype=int)
+        acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+        acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
+        if len(acc_nlocs) and len(acc_rmsds):
+            nlocs_pf = acc_nlocs[gid_idx] / n_frames
+            rmsds_pf = acc_rmsds[gid_idx]
+            fp_pattern_ps = os.path.join(
+                results["folder"], f"pattern-phasespace-{rcode}.png"
+            )
+            results["fp_pattern_phasespace"] = _plot_pattern_phasespace(
+                fp_pattern_ps, nlocs_pf, rmsds_pf, labels, summary
+            )
+
+        # one representative render per (non-noise) cluster: the member with
+        # the most localizations, so the pattern is as clear as possible
+        pixelsize_display = parameters.get("display_pixelsize", 1)
+        fp_pattern_renderings = []
+        for c in summary:
+            lbl = c["label"]
+            if lbl == -1:
+                continue
+            member_pos = np.where(labels == lbl)[0]
+            best = max(member_pos, key=lambda i: len(groups[group_ids[i]]))
+            gid = group_ids[best]
+            cx, cy = accepted_centers[gid]
+            x_min = cx - footprint_diameter / 2
+            y_min = cy - footprint_diameter / 2
+            fp = os.path.join(
+                results["folder"], f"pattern_{int(lbl)}_render-{rcode}.png"
+            )
+            render.plot_scene(
+                picked_origami_locs[picked_origami_locs["group"] == gid],
+                pixelsize_display,
+                pixelsize,
+                fp=fp,
+                render_kwargs={
+                    "oversampling": pixelsize / pixelsize_display,
+                    "viewport": [
+                        (y_min, x_min),
+                        (
+                            cy + footprint_diameter / 2,
+                            cx + footprint_diameter / 2,
+                        ),
+                    ],
+                },
+                title=f"pattern {int(lbl)} (~{c['median_n_sites']:.0f} sites)",
+            )
+            fp_pattern_renderings.append(fp)
+        results["fp_pattern_renderings"] = fp_pattern_renderings
 
     #    @profile_resource_usage
     @module_decorator

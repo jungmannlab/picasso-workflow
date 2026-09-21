@@ -4947,6 +4947,58 @@ class ConfluenceReporter(AbstractModuleCollection):
                 text += "</tr>"
             text += "</table>"
 
+        # geometry-pattern clustering (optional): per-cluster counts +
+        # coloured phase-space + a representative structure per pattern
+        pattern_summary = results.get("pattern_summary")
+        if pattern_summary:
+            n_pat = results.get("n_pattern_clusters", "?")
+            text += f"""
+        <p><strong>Geometry patterns</strong> ({n_pat} clusters;
+        per-cluster picks in <code>pattern_&lt;label&gt;_picks.yaml</code>):
+        </p>
+        <ul>"""
+            for c in pattern_summary:
+                name = (
+                    "unclustered"
+                    if c.get("is_noise")
+                    else f"pattern {c['label']}"
+                )
+                text += (
+                    f"<li>{name}: {c['n_structures']} structures, "
+                    f"median {c['median_n_sites']:.0f} sites, "
+                    f"{c['median_n_locs']:.0f} locs, "
+                    f"spacing {c['median_nn_nm']:.1f} nm</li>"
+                )
+            text += "</ul>"
+
+            if fp_pat := results.get("fp_pattern_phasespace"):
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp_pat)
+                except ConfluenceInterfaceError:
+                    pass
+                fn_pat = os.path.split(fp_pat)[1]
+                text += f"""
+                <ac:image ac:height="450">
+                <ri:attachment ri:filename="{fn_pat}" />
+                </ac:image>"""
+
+            pat_renders = results.get("fp_pattern_renderings")
+            if pat_renders:
+                text += "<table><tr>"
+                for fp in pat_renders:
+                    try:
+                        self.ci.upload_attachment(self.report_page_id, fp)
+                    except ConfluenceInterfaceError:
+                        pass
+                    fn = os.path.split(fp)[1]
+                    text += f"""
+                        <td>
+                              <ac:image ac:height="200">
+                              <ri:attachment ri:filename="{fn}" />
+                              </ac:image>
+                        </td>"""
+                text += "</tr></table>"
+
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """

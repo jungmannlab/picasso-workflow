@@ -31,6 +31,23 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- `pick_origami` gains an optional **geometry-pattern clustering** pass
+  (`cluster_patterns`, default off): it groups the accepted structures by their
+  resolved arrangement — single spot / partial / full grid / aggregate — using
+  a rotation- and translation-invariant, scale-aware **site-graph descriptor**
+  (resolved docking-site count, localization & site-centre radii of gyration,
+  median nearest-neighbour spacing, elongation, and a normalized pairwise
+  site-distance histogram). The cluster count is auto-discovered with HDBSCAN,
+  or fixed via `n_pattern_clusters` (Gaussian mixture); `pattern_min_cluster_size`
+  tunes the auto mode. Emits, per pattern, a picasso pick `.yaml` and a grouped
+  `.hdf5`, plus a `pattern_table.csv` summary, one representative render each,
+  and a phase-space scatter coloured by pattern. New result keys
+  `n_pattern_clusters` / `pattern_summary` / `fp_pattern_table` /
+  `fp_pattern_picks` / `fp_pattern_phasespace` / `fp_pattern_renderings`; new
+  `picasso_outpost.structure_pattern_features` and
+  `cluster_structure_patterns`. Wired across `util`, `analyse`, `confluence`,
+  and `gui`.
+
 - `pick_origami` gains a `pick_diameter_factor` parameter (default **1.5**):
   when `footprint_diameter` is not set explicitly, the pick diameter is now
   `pick_diameter_factor * origami_size` (150 % of the origami extent) instead of

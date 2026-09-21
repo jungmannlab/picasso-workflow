@@ -1301,3 +1301,129 @@ def test_pick_origami_rejects_degenerate_footprint():
             locs, info, template, pixelsize=130.0, footprint_diameter=0.0
         )
     assert "footprint_diameter" in str(excinfo.value)
+
+
+# --- pattern clustering ------------------------------------------------
+
+
+def _pattern_blob(sites_nm, n_per, rng, prec_nm=1.4):
+    """Localizations = each site smeared by Gaussian localization noise."""
+    sites = np.asarray(sites_nm, dtype=float).reshape(-1, 2)
+    pts = np.repeat(sites, n_per, axis=0)
+    return pts + rng.normal(0.0, prec_nm, size=pts.shape)
+
+
+def test_structure_pattern_features_reads_out_geometry():
+    """The site-graph descriptor recovers site count and lattice spacing,
+    and is (near-)invariant to rotation."""
+    rng = np.random.default_rng(0)
+    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
+    cloud = _pattern_blob(tmpl.sites_nm @ _rot2d(37.0).T, 25, rng)
+    feats, names, aux = picasso_outpost.structure_pattern_features(
+        cloud, expected_spacing_nm=20.0, max_pair_nm=90.0
+    )
+    assert len(feats) == len(names)
+    assert aux["n_sites"] == 12
+    assert abs(aux["nn_nm"] - 20.0) < 3.0
+    # rotation invariance of the descriptor
+    cloud2 = _pattern_blob(tmpl.sites_nm @ _rot2d(113.0).T, 25, rng)
+    feats2, _, _ = picasso_outpost.structure_pattern_features(
+        cloud2, expected_spacing_nm=20.0, max_pair_nm=90.0
+    )
+    assert np.linalg.norm(feats - feats2) < 0.4 * np.linalg.norm(feats)
+
+
+def test_structure_pattern_features_single_site_has_no_pairs():
+    """A single-site structure resolves to 1 site with an empty distance
+    histogram and zero spacing/elongation."""
+    rng = np.random.default_rng(1)
+    cloud = _pattern_blob(np.array([[0.0, 0.0]]), 30, rng)
+    feats, names, aux = picasso_outpost.structure_pattern_features(
+        cloud, expected_spacing_nm=20.0, max_pair_nm=90.0
+    )
+    assert aux["n_sites"] == 1
+    assert aux["nn_nm"] == 0.0
+    hist = feats[[i for i, n in enumerate(names) if n.startswith("pdist_")]]
+    assert np.all(hist == 0.0)
+
+
+def test_cluster_structure_patterns_auto_separates_designs():
+    """HDBSCAN auto-discovery groups distinct geometric patterns with high
+    purity (each discovered cluster is dominated by one true pattern)."""
+    rng = np.random.default_rng(0)
+
+    def grid():
+        s = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+        return s
+
+    def line():
+        s = np.array([[i * 20.0, 0.0] for i in range(3)])
+        return s - s.mean(0)
+
+    def pair():
+        s = np.array([[0.0, 0.0], [20.0, 0.0]])
+        return s - s.mean(0)
+
+    def single():
+        return np.array([[0.0, 0.0]])
+
+    structs, truth = [], []
+    for name, builder in (
+        ("grid", grid),
+        ("line", line),
+        ("pair", pair),
+        ("single", single),
+    ):
+        for _ in range(40):
+            sites = builder() @ _rot2d(rng.uniform(0, 360)).T
+            n_per = max(1, int(rng.poisson(20)))
+            structs.append(_pattern_blob(sites, n_per, rng))
+            truth.append(name)
+    truth = np.array(truth)
+
+    res = picasso_outpost.cluster_structure_patterns(
+        structs, expected_spacing_nm=20.0, min_cluster_size=15
+    )
+    labels = res["labels"]
+    assert res["method"] == "hdbscan"
+    # at least the 4 designs are separated
+    assert len(set(labels) - {-1}) >= 4
+    # each non-noise cluster is pure
+    from collections import Counter
+
+    total = correct = 0
+    for lbl in set(labels) - {-1}:
+        members = truth[labels == lbl]
+        total += len(members)
+        correct += Counter(members).most_common(1)[0][1]
+    assert correct / total > 0.95
+    # summary is sorted by median site count, grid cluster on top
+    assert res["cluster_summary"][0]["median_n_sites"] == 12.0
+
+
+def test_cluster_structure_patterns_fixed_k_assigns_all():
+    """With an explicit k every structure gets one of k labels (no noise)."""
+    rng = np.random.default_rng(2)
+    structs = []
+    for _ in range(30):
+        s = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+        structs.append(
+            _pattern_blob(s @ _rot2d(rng.uniform(0, 360)).T, 20, rng)
+        )
+    for _ in range(30):
+        structs.append(_pattern_blob(np.array([[0.0, 0.0]]), 20, rng))
+    res = picasso_outpost.cluster_structure_patterns(
+        structs, expected_spacing_nm=20.0, k=2
+    )
+    assert res["method"] == "gmm(k=2)"
+    assert set(res["labels"]) == {0, 1}
+    assert len(res["labels"]) == 60
+
+
+def test_cluster_structure_patterns_empty_input():
+    """No structures -> empty, well-formed result (no crash)."""
+    res = picasso_outpost.cluster_structure_patterns(
+        [], expected_spacing_nm=20.0
+    )
+    assert res["labels"].shape == (0,)
+    assert res["cluster_summary"] == []

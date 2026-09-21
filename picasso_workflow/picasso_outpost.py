@@ -45,6 +45,10 @@ from scipy.optimize import minimize
 from scipy.optimize import linear_sum_assignment
 from sklearn.cluster import OPTICS
 from sklearn.cluster import DBSCAN
+from sklearn.cluster import HDBSCAN
+from sklearn.mixture import GaussianMixture
+from sklearn.preprocessing import StandardScaler
+from scipy.spatial.distance import pdist
 from scipy import stats
 import itertools
 import glob
@@ -5848,6 +5852,274 @@ def _candidate_centers_cluster_of_clusters(
         if lbl != -1
     ]
     return centers, nlocs, rmsds, labels
+
+
+########################################################################
+# Pattern clustering: group picked structures by their resolved geometry
+#
+# Describes each picked structure with a rotation- and translation-
+# invariant, scale-aware "site-graph" descriptor (resolved docking-site
+# count + pairwise-distance histogram + spread/elongation), then clusters
+# those descriptors so distinct designs/incomplete-labelling states/
+# aggregates fall into separate groups. Pure numpy/scipy/sklearn.
+########################################################################
+
+
+def _elongation(pts):
+    """Isotropy of a point set: sqrt(min/max covariance eigenvalue).
+
+    Rotation-invariant. 0 for a perfectly collinear set (a line), 1 for an
+    isotropic set (e.g. a square grid). 0 for < 2 points.
+    """
+    pts = np.asarray(pts, dtype=float).reshape(-1, 2)
+    if len(pts) < 2:
+        return 0.0
+    cov = np.cov(pts.T)
+    w = np.clip(np.linalg.eigvalsh(cov), 0.0, None)
+    if w[-1] <= 0:
+        return 0.0
+    return float(np.sqrt(w[0] / w[-1]))
+
+
+def _radius_of_gyration(xy):
+    """RMS distance of points from their centre of mass (0 if < 2 points)."""
+    xy = np.asarray(xy, dtype=float).reshape(-1, 2)
+    if len(xy) < 2:
+        return 0.0
+    com = xy.mean(axis=0)
+    return float(np.sqrt(np.mean(((xy - com) ** 2).sum(axis=1))))
+
+
+def structure_pattern_features(
+    xy_nm,
+    expected_spacing_nm,
+    max_pair_nm,
+    n_dist_bins=12,
+    min_samples=3,
+    eps_frac=0.35,
+):
+    """Rotation/translation-invariant pattern descriptor of one structure.
+
+    Resolves the localizations into docking sites (:func:`
+    subcluster_docking_sites`) and describes the site arrangement with
+    invariant features: the resolved site count, the localization and
+    site-centre radii of gyration (nm), the median nearest-neighbour site
+    spacing (nm), the site-set elongation, and a normalized histogram of
+    the pairwise site-centre distances (the "site graph"). Translation and
+    rotation invariant by construction; scale-aware because distances stay
+    in nanometres.
+
+    Parameters
+    ----------
+    xy_nm : array-like
+        ``(M, 2)`` localization coordinates (nm) of one picked structure.
+    expected_spacing_nm : float
+        Design inter-site spacing; sets the subclustering neighbourhood.
+    max_pair_nm : float
+        Upper edge of the pairwise-distance histogram (nm). Distances above
+        this land in the last bin.
+    n_dist_bins : int, optional
+        Number of pairwise-distance histogram bins. Default 12.
+    min_samples, eps_frac : see :func:`subcluster_docking_sites`.
+
+    Returns
+    -------
+    (np.ndarray, list of str, dict)
+        The feature vector, the matching feature names, and an ``aux`` dict
+        of interpretable scalars (``n_locs``, ``n_sites``, ``loc_rg_nm``,
+        ``site_rg_nm``, ``nn_nm``, ``elongation``, ``site_centers_nm``).
+    """
+    xy = np.asarray(xy_nm, dtype=float).reshape(-1, 2)
+    n_locs = len(xy)
+    loc_rg = _radius_of_gyration(xy)
+    sites = subcluster_docking_sites(
+        xy, expected_spacing_nm, min_samples=min_samples, eps_frac=eps_frac
+    )
+    n_sites = len(sites)
+
+    edges = np.linspace(0.0, float(max_pair_nm), n_dist_bins + 1)
+    hist = np.zeros(n_dist_bins, dtype=float)
+    if n_sites >= 2:
+        d = pdist(sites)
+        # clip to the last bin so far-apart sites still register
+        d = np.clip(d, 0.0, edges[-1] - 1e-9)
+        hist, _ = np.histogram(d, bins=edges)
+        hist = hist.astype(float)
+        total = hist.sum()
+        if total > 0:
+            hist /= total
+        site_rg = _radius_of_gyration(sites)
+        nn = _median_nn_spacing(sites)
+        elong = _elongation(sites)
+    else:
+        site_rg = 0.0
+        nn = 0.0
+        elong = 0.0
+
+    scalars = np.array([n_sites, loc_rg, site_rg, nn, elong], dtype=float)
+    feats = np.concatenate([scalars, hist])
+    names = [
+        "n_sites",
+        "loc_rg_nm",
+        "site_rg_nm",
+        "nn_nm",
+        "elongation",
+    ] + [f"pdist_{i}" for i in range(n_dist_bins)]
+    aux = {
+        "n_locs": n_locs,
+        "n_sites": n_sites,
+        "loc_rg_nm": loc_rg,
+        "site_rg_nm": site_rg,
+        "nn_nm": nn,
+        "elongation": elong,
+        "site_centers_nm": sites,
+    }
+    return feats, names, aux
+
+
+def cluster_structure_patterns(
+    structures_xy_nm,
+    expected_spacing_nm,
+    max_pair_nm=None,
+    n_dist_bins=12,
+    k=None,
+    min_cluster_size=25,
+    min_samples=3,
+    eps_frac=0.35,
+    random_seed=0,
+):
+    """Cluster picked structures into geometric-pattern groups.
+
+    Builds the invariant site-graph descriptor
+    (:func:`structure_pattern_features`) for every structure, standardizes
+    the feature matrix, and clusters it. With ``k`` unset the cluster count
+    is auto-discovered with HDBSCAN (structures too dissimilar to join a
+    cluster get label ``-1``); with ``k`` given a ``k``-component Gaussian
+    mixture assigns every structure to one of ``k`` clusters.
+
+    Parameters
+    ----------
+    structures_xy_nm : sequence of array-like
+        One ``(M_i, 2)`` array of localization coordinates (nm) per picked
+        structure.
+    expected_spacing_nm : float
+        Design inter-site spacing (nm).
+    max_pair_nm : float, optional
+        Upper edge of the pairwise-distance histogram (nm). Defaults to the
+        99th percentile of observed site-centre spans (fallback: 3x the
+        expected spacing).
+    n_dist_bins : int, optional
+        Pairwise-distance histogram bins. Default 12.
+    k : int, optional
+        Fixed number of clusters (Gaussian mixture). If None (default), the
+        count is auto-discovered with HDBSCAN.
+    min_cluster_size : int, optional
+        HDBSCAN minimum cluster size (auto mode only). Default 25.
+    min_samples, eps_frac : see :func:`subcluster_docking_sites`.
+    random_seed : int, optional
+        Seed for the Gaussian mixture (fixed-k mode). Default 0.
+
+    Returns
+    -------
+    dict
+        ``labels`` (per structure; ``-1`` = unclustered/noise),
+        ``features`` (n x d matrix), ``feature_names``, ``aux`` (list of
+        per-structure aux dicts), ``max_pair_nm``, ``method``, and
+        ``cluster_summary`` (per-label counts and median n_sites / n_locs /
+        spacing / rg, sorted by median site count descending).
+    """
+    structures = [
+        np.asarray(s, dtype=float).reshape(-1, 2) for s in structures_xy_nm
+    ]
+    n = len(structures)
+    if n == 0:
+        return {
+            "labels": np.empty(0, dtype=int),
+            "features": np.empty((0, 0)),
+            "feature_names": [],
+            "aux": [],
+            "max_pair_nm": 0.0,
+            "method": "none",
+            "cluster_summary": [],
+        }
+
+    # choose a histogram span from the data if not given
+    if max_pair_nm is None or max_pair_nm <= 0:
+        spans = []
+        for s in structures:
+            if len(s) >= 2:
+                spans.append(float(np.max(pdist(s))))
+        max_pair_nm = (
+            float(np.percentile(spans, 99))
+            if spans
+            else 3.0 * expected_spacing_nm
+        )
+        max_pair_nm = max(max_pair_nm, 1e-6)
+
+    feats, names, aux = [], None, []
+    for s in structures:
+        f, names, a = structure_pattern_features(
+            s,
+            expected_spacing_nm,
+            max_pair_nm,
+            n_dist_bins=n_dist_bins,
+            min_samples=min_samples,
+            eps_frac=eps_frac,
+        )
+        feats.append(f)
+        aux.append(a)
+    features = np.vstack(feats)
+
+    # standardize so the histogram bins and scalar features are comparable
+    scaled = StandardScaler().fit_transform(features)
+
+    if k is not None and k > 0:
+        gm = GaussianMixture(n_components=int(k), random_state=random_seed)
+        labels = gm.fit_predict(scaled).astype(int)
+        method = f"gmm(k={int(k)})"
+    else:
+        hdb = HDBSCAN(min_cluster_size=int(min_cluster_size))
+        labels = hdb.fit_predict(scaled).astype(int)
+        method = "hdbscan"
+
+    cluster_summary = _summarize_pattern_clusters(labels, aux)
+    return {
+        "labels": labels,
+        "features": features,
+        "feature_names": names,
+        "aux": aux,
+        "max_pair_nm": float(max_pair_nm),
+        "method": method,
+        "cluster_summary": cluster_summary,
+    }
+
+
+def _summarize_pattern_clusters(labels, aux):
+    """Per-cluster medians (n_sites/n_locs/spacing/rg), site-count sorted."""
+    labels = np.asarray(labels, dtype=int)
+    summary = []
+    for lbl in np.unique(labels):
+        idx = np.where(labels == lbl)[0]
+
+        def _med(key):
+            vals = [aux[i][key] for i in idx]
+            return float(np.median(vals)) if vals else 0.0
+
+        summary.append(
+            {
+                "label": int(lbl),
+                "n_structures": int(len(idx)),
+                "median_n_sites": _med("n_sites"),
+                "median_n_locs": _med("n_locs"),
+                "median_nn_nm": _med("nn_nm"),
+                "median_site_rg_nm": _med("site_rg_nm"),
+                "is_noise": bool(lbl == -1),
+            }
+        )
+    summary.sort(
+        key=lambda c: (c["is_noise"], -c["median_n_sites"], -c["n_structures"])
+    )
+    return summary
 
 
 def pick_origami(
