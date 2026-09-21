@@ -1976,11 +1976,27 @@ class AbstractModuleCollection(abc.ABC):
             ``pattern_min_samples`` : int
                 DBSCAN ``min_samples`` for docking-site subclustering
                 (default 3).
+            ``pattern_method`` : {"lattice", "pairwise"}
+                Clustering method. ``"lattice"`` (default for multi-site
+                designs) registers each pick onto the design lattice and
+                clusters by lattice-fit quality + defect occupancy;
+                ``"pairwise"`` uses the template-agnostic descriptor.
+            ``pattern_min_sites`` : int
+                Lattice method: min matched sites to count as on-lattice
+                (default 4).
+            ``pattern_rmse_gate_frac`` : float
+                Lattice method: max lattice-fit residual to be on-lattice, as
+                a fraction of spacing (default 0.3).
+            ``pattern_frac_on_lattice`` : float
+                Lattice method: min fraction of resolved sites that must sit
+                on lattice nodes (default 0.6).
         results : dict
             Module results (see class docstring). With ``cluster_patterns``
             also ``n_pattern_clusters``, ``pattern_summary``,
-            ``fp_pattern_table`` (.csv), ``fp_pattern_picks``
-            (label -> pick .yaml), ``fp_pattern_phasespace`` /
+            ``pattern_method``, ``fp_pattern_table`` (.csv),
+            ``fp_pattern_picks`` (label -> pick .yaml),
+            ``fp_pattern_phasespace``, the lattice-method
+            ``fp_pattern_defectmaps`` or the pairwise-method
             ``fp_pattern_feature_space`` / ``fp_pattern_pairdist`` (.png), and
             ``fp_pattern_renderings`` (label -> list of example renders).
         """

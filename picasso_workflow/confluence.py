@@ -107,6 +107,54 @@ def _expand_macro(title, mapping, skip_keys=()):
     return text
 
 
+def _pattern_cluster_lines(summary, method):
+    """One human-readable line per pattern / defect cluster for the report.
+
+    ``method`` is ``"lattice"`` (defect classes: occupancy / fit residual /
+    recovered spacing) or ``"pairwise"`` (generic descriptor: site count /
+    spacing / rmsd). Returns an ordered ``{name: description}`` mapping.
+    """
+    lines = {}
+    for c in summary:
+        off = c.get("is_offlattice") or c.get("is_noise")
+        nlpf = c.get("median_nlocs_per_frame")
+        nlocs_txt = (
+            f"{nlpf:.4f} locs/frame"
+            if nlpf is not None and np.isfinite(nlpf)
+            else None
+        )
+        if method == "lattice":
+            name = "off-lattice / sparse" if off else f"cluster {c['label']}"
+            parts = [f"{c['n_structures']} structures"]
+            if not off:
+                n_nodes = len(c.get("occupancy", []))
+                parts.append(
+                    f"{c.get('n_sites_occupied', '?')}/{n_nodes} sites"
+                )
+                parts.append(f"{c.get('n_defects', '?')} defects")
+                rmse = c.get("median_rmse_nm")
+                if rmse is not None and np.isfinite(rmse):
+                    parts.append(f"fit rmse {rmse:.1f} nm")
+                sp = c.get("median_fitted_spacing_nm")
+                if sp is not None and np.isfinite(sp):
+                    parts.append(f"spacing {sp:.1f} nm")
+            if nlocs_txt:
+                parts.append(nlocs_txt)
+        else:
+            name = "unclustered" if off else f"pattern {c['label']}"
+            parts = [
+                f"{c['n_structures']} structures",
+                f"median {c.get('median_n_sites', 0):.0f} sites",
+                nlocs_txt or f"{c.get('median_n_locs', 0):.0f} locs",
+            ]
+            rmsd = c.get("median_rmsd_px")
+            if rmsd is not None and np.isfinite(rmsd):
+                parts.append(f"rmsd {rmsd:.3f} px")
+            parts.append(f"spacing {c.get('median_nn_nm', 0):.1f} nm")
+        lines[name] = ", ".join(parts)
+    return lines
+
+
 def _code_macro(text, language=None):
     """Wrap text in a Confluence code macro, preserving its formatting.
 
@@ -4921,6 +4969,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             _fp_all.extend([fp for fp in (_row or []) if fp])
         for _k in (
             "fp_pattern_phasespace",
+            "fp_pattern_defectmaps",
             "fp_pattern_feature_space",
             "fp_pattern_pairdist",
         ):
@@ -4964,44 +5013,24 @@ class ConfluenceReporter(AbstractModuleCollection):
         pattern_summary = results.get("pattern_summary")
         if pattern_summary:
             n_pat = results.get("n_pattern_clusters", "?")
-            # collapsible list of the pattern clusters, one line each with the
-            # median site count / localizations / rmsd / spacing
-            pattern_lines = {}
-            for c in pattern_summary:
-                name = (
-                    "unclustered"
-                    if c.get("is_noise")
-                    else f"pattern {c['label']}"
-                )
-                rmsd = c.get("median_rmsd_px")
-                rmsd_txt = (
-                    f"rmsd {rmsd:.3f} px, "
-                    if rmsd is not None and np.isfinite(rmsd)
-                    else ""
-                )
-                nlpf = c.get("median_nlocs_per_frame")
-                nlocs_txt = (
-                    f"{nlpf:.4f} locs/frame, "
-                    if nlpf is not None and np.isfinite(nlpf)
-                    else f"{c['median_n_locs']:.0f} locs, "
-                )
-                pattern_lines[name] = (
-                    f"{c['n_structures']} structures, median "
-                    f"{c['median_n_sites']:.0f} sites, "
-                    f"{nlocs_txt}"
-                    f"{rmsd_txt}"
-                    f"spacing {c['median_nn_nm']:.1f} nm"
-                )
+            method = results.get("pattern_method", "pairwise")
+            pattern_lines = _pattern_cluster_lines(pattern_summary, method)
+            title = (
+                f"Defect classes: {n_pat} on-lattice clusters"
+                if method == "lattice"
+                else f"Geometry patterns: {n_pat} clusters"
+            )
             text += _expand_macro(
-                f"Geometry patterns: {n_pat} clusters "
-                "(per-cluster picks in pattern_<label>_picks.yaml)",
+                f"{title} (per-cluster picks in pattern_<label>_picks.yaml)",
                 pattern_lines,
             )
 
-            # phase-space (nlocs/frame vs rmsd), descriptor-space (PCA) and
-            # pairwise-distance signature, all coloured by pattern cluster
+            # phase-space (nlocs/frame vs rmsd), the defect-map diagram
+            # (lattice), and the descriptor-space / pairwise-distance views
+            # (pairwise) - all coloured by / grouped by pattern cluster
             for _key in (
                 "fp_pattern_phasespace",
+                "fp_pattern_defectmaps",
                 "fp_pattern_feature_space",
                 "fp_pattern_pairdist",
             ):

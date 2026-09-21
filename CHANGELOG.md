@@ -51,7 +51,12 @@ This file was started after v0.5.6; earlier history is in the git log.
   separates on-lattice picks from off-lattice/sparse ones and groups the
   on-lattice picks by defect pattern. This sees lattice quality and defect
   geometry that the template-agnostic pairwise-distance descriptor cannot.
-  (Wiring into the `pick_origami` module/report follows.)
+  This is now the **default** pattern-clustering method for multi-site designs
+  in `pick_origami` (`pattern_method`, else `pairwise`); gates are tunable via
+  `pattern_min_sites` / `pattern_rmse_gate_frac` / `pattern_frac_on_lattice`.
+  The report shows a per-cluster **defect-map** diagram (design nodes marked
+  occupied/missing) with the representative example renders, and lists each
+  defect class with its occupancy, fit residual and recovered spacing.
 
 - `pick_origami` gains an optional **geometry-pattern clustering** pass
   (`cluster_patterns`, default off): it groups the accepted structures by their

@@ -6240,6 +6240,45 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 1,
                 "required": False,
             },
+            "pattern_method": {
+                "type": "str",
+                "description": (
+                    "Pattern-clustering method: 'lattice' (register onto the "
+                    "design; cluster by lattice-fit + defect occupancy) or "
+                    "'pairwise' (template-agnostic descriptor). Default: "
+                    "lattice for multi-site designs, else pairwise"
+                ),
+                "options": ["lattice", "pairwise"],
+                "required": False,
+            },
+            "pattern_min_sites": {
+                "type": "int",
+                "description": (
+                    "Lattice method: min matched sites for a pick to count as "
+                    "on-lattice (default 4)"
+                ),
+                "min": 1,
+                "required": False,
+            },
+            "pattern_rmse_gate_frac": {
+                "type": "float",
+                "description": (
+                    "Lattice method: max lattice-fit residual to be "
+                    "on-lattice, as a fraction of spacing (default 0.3)"
+                ),
+                "min": 0.0,
+                "required": False,
+            },
+            "pattern_frac_on_lattice": {
+                "type": "float",
+                "description": (
+                    "Lattice method: min fraction of resolved sites that must "
+                    "sit on lattice nodes (default 0.6)"
+                ),
+                "min": 0.0,
+                "max": 1.0,
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -6376,7 +6415,21 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": (
                     "filepath to the per-cluster pairwise site-distance "
-                    "signature figure (cluster_patterns only)"
+                    "signature figure (pairwise method only)"
+                ),
+            },
+            "fp_pattern_defectmaps": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-cluster defect-map diagram "
+                    "(lattice method only)"
+                ),
+            },
+            "pattern_method": {
+                "type": "str",
+                "description": (
+                    "which pattern-clustering method ran ('lattice' or "
+                    "'pairwise')"
                 ),
             },
             "fp_pattern_renderings": {

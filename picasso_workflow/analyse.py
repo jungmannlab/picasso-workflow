@@ -529,6 +529,53 @@ def _plot_pattern_pairdist(
     return fp
 
 
+def _plot_defect_maps(fp, summary, nodes_nm, max_clusters=24):
+    """Defect-map diagram per lattice cluster: the design nodes with occupied
+    (filled green) vs missing (open red) marked - each cluster's defect
+    fingerprint. Clusters are the on-lattice ones, most populous first."""
+    nodes = np.asarray(nodes_nm, dtype=float).reshape(-1, 2)
+    clusters = [c for c in summary if not c.get("is_offlattice")][
+        :max_clusters
+    ]
+    if not clusters or len(nodes) == 0:
+        return None
+    ncol = min(6, len(clusters))
+    nrow = int(np.ceil(len(clusters) / ncol))
+    fig, axes = plt.subplots(
+        nrow, ncol, figsize=(2.2 * ncol, 2.4 * nrow), squeeze=False
+    )
+    for ax in axes.flat:
+        ax.axis("off")
+    for idx, c in enumerate(clusters):
+        ax = axes[idx // ncol][idx % ncol]
+        ax.set_aspect("equal")
+        occ = np.asarray(c.get("occupancy", []), dtype=int)
+        for j, (x, y) in enumerate(nodes):
+            filled = j < len(occ) and occ[j] == 1
+            ax.scatter(
+                [x],
+                [-y],  # y-down, image-like
+                s=90,
+                facecolors="#2ca02c" if filled else "none",
+                edgecolors="#2ca02c" if filled else "#d62728",
+                linewidths=1.5,
+            )
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title(
+            f"cluster {c['label']}: {c.get('n_sites_occupied', '?')}/"
+            f"{len(nodes)} sites (n={c['n_structures']})",
+            fontsize=8,
+        )
+    fig.suptitle(
+        "Defect pattern per cluster (green=occupied, red=missing node)"
+    )
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
 # Hard ceiling on how many per-structure example images pick_origami renders
 # (and therefore uploads to the report). Rendering + uploading thousands of
 # structure PNGs one-by-one is the dominant cost and has wedged runs in the
@@ -14774,27 +14821,62 @@ class AutoPicasso(util.AbstractModuleCollection):
             * pixelsize
             for g in group_ids
         ]
-        # n_pattern_clusters: 0/1/unset -> auto-discover (HDBSCAN); a value
-        # >= 2 fixes the count (Gaussian mixture). pattern_eps_frac /
-        # pattern_min_samples tune the per-structure site subclustering.
-        k = parameters.get("n_pattern_clusters")
-        k = int(k) if k and int(k) >= 2 else None
-        cluster_kwargs = {}
-        if parameters.get("pattern_eps_frac"):
-            cluster_kwargs["eps_frac"] = float(parameters["pattern_eps_frac"])
-        if parameters.get("pattern_min_samples"):
-            cluster_kwargs["min_samples"] = int(
-                parameters["pattern_min_samples"]
-            )
-        cl = picasso_outpost.cluster_structure_patterns(
-            structures_xy_nm,
-            expected_spacing_nm=template.grid_spacing_nm,
-            k=k,
-            min_cluster_size=parameters.get("pattern_min_cluster_size", 25),
-            **cluster_kwargs,
+        # method: design-aware lattice-defect clustering (register each pick
+        # onto the design lattice; cluster by fit quality + defect occupancy)
+        # is the default for multi-node lattice designs; the template-agnostic
+        # pairwise-distance descriptor is the fallback for arbitrary designs.
+        method = parameters.get("pattern_method") or (
+            "lattice" if template.n_sites_expected >= 3 else "pairwise"
         )
+        if method == "lattice":
+            lattice_kwargs = {}
+            for pkey, akey, cast in (
+                ("pattern_eps_frac", "eps_frac", float),
+                ("pattern_min_samples", "min_samples", int),
+                ("pattern_min_sites", "min_on_lattice_sites", int),
+                ("pattern_rmse_gate_frac", "rmse_gate_frac", float),
+                ("pattern_frac_on_lattice", "frac_on_lattice_gate", float),
+            ):
+                if parameters.get(pkey):
+                    lattice_kwargs[akey] = cast(parameters[pkey])
+            cl = picasso_outpost.cluster_lattice_defects(
+                structures_xy_nm,
+                template.sites_nm,
+                template.grid_spacing_nm,
+                allow_mirror=parameters.get("allow_mirror", True),
+                **lattice_kwargs,
+            )
+        else:
+            # n_pattern_clusters: 0/1/unset -> auto-discover (HDBSCAN); >= 2
+            # fixes the count (GMM). pattern_eps_frac / pattern_min_samples
+            # tune the per-structure site subclustering.
+            k = parameters.get("n_pattern_clusters")
+            k = int(k) if k and int(k) >= 2 else None
+            cluster_kwargs = {}
+            if parameters.get("pattern_eps_frac"):
+                cluster_kwargs["eps_frac"] = float(
+                    parameters["pattern_eps_frac"]
+                )
+            if parameters.get("pattern_min_samples"):
+                cluster_kwargs["min_samples"] = int(
+                    parameters["pattern_min_samples"]
+                )
+            cl = picasso_outpost.cluster_structure_patterns(
+                structures_xy_nm,
+                expected_spacing_nm=template.grid_spacing_nm,
+                k=k,
+                min_cluster_size=parameters.get(
+                    "pattern_min_cluster_size", 25
+                ),
+                **cluster_kwargs,
+            )
+        results["pattern_method"] = method
         labels = np.asarray(cl["labels"])
         summary = cl["cluster_summary"]
+        # unify the noise / off-lattice flag so the shared code below and the
+        # reporter can stay method-agnostic
+        for c in summary:
+            c.setdefault("is_noise", bool(c.get("is_offlattice", False)))
         # annotate each cluster with its median pick_similar rmsd (camera px)
         # and median nlocs-per-frame - the phase-space axes the pick window is
         # set in. accepted_rmsds/nlocs are aligned to accepted_centers;
@@ -14832,7 +14914,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             member_pos = np.where(labels == lbl)[0]
             member_gids = [group_ids[i] for i in member_pos]
             centers_lbl = [accepted_centers[g] for g in member_gids]
-            tag = "noise" if lbl == -1 else str(int(lbl))
+            if lbl == -1:
+                tag = "offlattice" if method == "lattice" else "noise"
+            else:
+                tag = str(int(lbl))
             fp_yaml = os.path.join(
                 results["folder"], f"pattern_{tag}_picks.yaml"
             )
@@ -14896,14 +14981,32 @@ class AutoPicasso(util.AbstractModuleCollection):
         if pd_fp:
             results["fp_pattern_pairdist"] = pd_fp
 
-        # example renders per (non-noise) cluster: the members most
-        # *representative* of the cluster (nearest its descriptor centroid),
-        # NOT the brightest - brightness/blink counts are deliberately not a
-        # clustering dimension, so the brightest members are the atypical,
-        # densest ones (often aggregates) and misrepresent the cluster.
+        # lattice method: a defect-map diagram per cluster (which design nodes
+        # are occupied / missing - the defect fingerprint)
+        if method == "lattice":
+            dm = _plot_defect_maps(
+                os.path.join(
+                    results["folder"], f"pattern-defectmaps-{rcode}.png"
+                ),
+                summary,
+                template.sites_nm,
+            )
+            if dm:
+                results["fp_pattern_defectmaps"] = dm
+
+        # example renders per cluster: the members most *representative* of the
+        # cluster, NOT the brightest (brightness is deliberately not a
+        # clustering dimension, so the brightest are atypical aggregates). For
+        # the lattice method "typical" = cleanest lattice fit (lowest residual);
+        # for pairwise = nearest the descriptor centroid.
         pixelsize_display = parameters.get("display_pixelsize", 1)
         n_examples = int(parameters.get("n_pattern_examples", 8) or 0)
-        # standardized descriptor features, to rank members by typicality
+        aux = cl.get("aux")
+        lattice_rmse = None
+        if method == "lattice" and aux:
+            lattice_rmse = np.array(
+                [a.get("rmse_nm", np.inf) for a in aux], dtype=float
+            )
         feats_all = np.asarray(cl.get("features"))
         have_feats = feats_all.ndim == 2 and len(feats_all) == len(labels)
         if have_feats:
@@ -14930,7 +15033,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 continue
             member_pos = np.where(labels == lbl)[0]
             take = min(n_examples, render_budget)
-            if have_feats and len(member_pos) > 1:
+            if lattice_rmse is not None:
+                # cleanest lattice fit first (lowest residual)
+                member_pos = member_pos[np.argsort(lattice_rmse[member_pos])][
+                    :take
+                ]
+            elif have_feats and len(member_pos) > 1:
                 # most typical first: nearest the cluster feature centroid
                 centroid = feats_std[member_pos].mean(axis=0)
                 dist = np.linalg.norm(feats_std[member_pos] - centroid, axis=1)

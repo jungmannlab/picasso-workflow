@@ -2374,6 +2374,7 @@ class TestAnalyseModules(unittest.TestCase):
         parameters = {
             "geometry": {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0},
             "cluster_patterns": True,
+            "pattern_method": "pairwise",
             "pattern_min_cluster_size": 2,
             "n_plot_structures": 0,
             "display_pixelsize": 1.0,
@@ -2382,6 +2383,7 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.pick_origami(0, parameters)
 
         assert mock_cluster.called
+        assert results["pattern_method"] == "pairwise"
         assert results["n_pattern_clusters"] == 2
         assert len(results["pattern_summary"]) == 2
         # each cluster annotated with a median pick_similar rmsd (px) and
@@ -2410,6 +2412,143 @@ class TestAnalyseModules(unittest.TestCase):
             picks0 = _yaml.safe_load(f)
         assert len(picks0["Centers"]) == 1
         assert "Diameter (nm)" in picks0
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
+
+    @patch("picasso_workflow.analyse.picasso_outpost.cluster_lattice_defects")
+    @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
+    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.analyse.render.plot_scene")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def test_pick_origami_cluster_patterns_lattice(
+        self,
+        mock_save_locs,
+        mock_plot_scene,
+        mock_picked_locs,
+        mock_pick_origami,
+        mock_lattice,
+    ):
+        """The lattice method (default for grid designs) clusters by defect
+        occupancy and emits a defect-map figure."""
+        mock_pick_origami.return_value = {
+            "accepted_centers_px": [(10.0, 10.0), (20.0, 22.0)],
+            "docking_site_centers_px": [],
+            "geometry_table": [],
+            "n_candidates": 2,
+            "n_registered": 0,
+            "n_accepted": 2,
+            "candidate_nlocs": np.array([50, 90]),
+            "candidate_rmsds": np.array([1.5, 2.2]),
+            "candidate_labels": np.array([0, 0]),
+            "accepted_nlocs": np.array([50, 90]),
+            "accepted_rmsds": np.array([1.5, 2.2]),
+            "sim_nlocs": np.array([48, 92]),
+            "sim_rmsds": np.array([1.4, 2.3]),
+            "pick_window": {
+                "min_nlocs": 40.0,
+                "max_nlocs": 100.0,
+                "min_rmsd": 1.0,
+                "max_rmsd": 2.5,
+            },
+            "footprint_diameter": 0.7,
+        }
+        picked = pd.DataFrame(
+            np.rec.array(
+                [
+                    (0, 10.0, 10.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+                    + (0,),
+                    (0, 10.1, 10.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+                    + (0,),
+                    (0, 20.0, 22.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+                    + (1,),
+                    (0, 20.1, 22.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+                    + (1,),
+                ],
+                dtype=self.locs_dtype + [("group", "<i4")],
+            )
+        )
+        mock_picked_locs.return_value = picked
+
+        occ_full = [1] * 12
+        occ_defect = [1] * 11 + [0]
+        mock_lattice.return_value = {
+            "labels": np.array([0, 1]),
+            "aux": [
+                {"rmse_nm": 1.0},
+                {"rmse_nm": 1.5},
+            ],
+            "n_nodes": 12,
+            "cluster_summary": [
+                {
+                    "label": 0,
+                    "n_structures": 1,
+                    "is_offlattice": False,
+                    "occupancy": occ_full,
+                    "n_sites_occupied": 12,
+                    "n_defects": 0,
+                    "median_rmse_nm": 1.0,
+                    "median_fitted_spacing_nm": 20.0,
+                    "median_frac_on_lattice": 1.0,
+                    "median_n_sites": 12.0,
+                },
+                {
+                    "label": 1,
+                    "n_structures": 1,
+                    "is_offlattice": False,
+                    "occupancy": occ_defect,
+                    "n_sites_occupied": 11,
+                    "n_defects": 1,
+                    "median_rmse_nm": 1.5,
+                    "median_fitted_spacing_nm": 20.0,
+                    "median_frac_on_lattice": 0.92,
+                    "median_n_sites": 11.0,
+                },
+            ],
+        }
+
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (
+                        i,
+                        10 + np.random.rand(),
+                        10 + np.random.rand(),
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        i,
+                    )
+                    for i in range(20)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        self.ap.info = [
+            {"Width": 64, "Height": 64, "Frames": 1000, "Pixelsize": 130}
+        ]
+
+        parameters = {
+            "geometry": {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0},
+            "cluster_patterns": True,
+            "n_plot_structures": 0,
+            "display_pixelsize": 1.0,
+        }
+        parameters, results = self.ap.pick_origami(0, parameters)
+
+        # lattice is the default for a grid design
+        assert mock_lattice.called
+        assert results["pattern_method"] == "lattice"
+        assert results["n_pattern_clusters"] == 2
+        assert os.path.exists(results["fp_pattern_defectmaps"])
+        assert os.path.exists(results["fp_pattern_table"])
+        # occupancy carried through to the summary
+        by_label = {c["label"]: c for c in results["pattern_summary"]}
+        assert by_label[1]["n_defects"] == 1
 
         shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
 
