@@ -14662,6 +14662,20 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         labels = np.asarray(cl["labels"])
         summary = cl["cluster_summary"]
+        # annotate each cluster with its median pick_similar rmsd (camera px,
+        # the phase-space axis the pick window is set in). accepted_rmsds is
+        # aligned to accepted_centers; group_ids maps structures -> that index,
+        # in the same order as labels.
+        acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
+        if len(acc_rmsds):
+            rmsd_by_struct = acc_rmsds[np.asarray(group_ids, dtype=int)]
+            for c in summary:
+                m = labels == c["label"]
+                c["median_rmsd_px"] = (
+                    float(np.median(rmsd_by_struct[m]))
+                    if np.any(m)
+                    else float("nan")
+                )
         results["pattern_summary"] = summary
         results["n_pattern_clusters"] = int(len(set(labels.tolist()) - {-1}))
 

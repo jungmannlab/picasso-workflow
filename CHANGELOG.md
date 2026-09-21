@@ -52,8 +52,9 @@ This file was started after v0.5.6; earlier history is in the git log.
   tunes the auto mode. Emits, per pattern, a picasso pick `.yaml` and a grouped
   `.hdf5`, plus a `pattern_table.csv` summary, a grid of example structure
   renders per pattern (`n_pattern_examples`, brightest first) shown as labelled
-  rows in the report, and a phase-space scatter coloured by pattern. New result
-  keys
+  rows in the report, and a phase-space scatter coloured by pattern. The report
+  lists the clusters in a collapsible (expand) block with each cluster's median
+  site count, localizations, rmsd (px) and spacing. New result keys
   `n_pattern_clusters` / `pattern_summary` / `fp_pattern_table` /
   `fp_pattern_picks` / `fp_pattern_phasespace` / `fp_pattern_renderings`; new
   `picasso_outpost.structure_pattern_features` and

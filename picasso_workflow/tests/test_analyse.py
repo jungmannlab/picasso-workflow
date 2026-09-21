@@ -2368,6 +2368,10 @@ class TestAnalyseModules(unittest.TestCase):
         assert mock_cluster.called
         assert results["n_pattern_clusters"] == 2
         assert len(results["pattern_summary"]) == 2
+        # each cluster annotated with a median pick_similar rmsd (px)
+        by_label = {c["label"]: c for c in results["pattern_summary"]}
+        assert by_label[0]["median_rmsd_px"] == 1.5
+        assert by_label[1]["median_rmsd_px"] == 2.2
         assert os.path.exists(results["fp_pattern_table"])
         assert set(results["fp_pattern_picks"]) == {0, 1}
         for fp in results["fp_pattern_picks"].values():

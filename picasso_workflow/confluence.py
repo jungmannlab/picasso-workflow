@@ -4959,24 +4959,33 @@ class ConfluenceReporter(AbstractModuleCollection):
         pattern_summary = results.get("pattern_summary")
         if pattern_summary:
             n_pat = results.get("n_pattern_clusters", "?")
-            text += f"""
-        <p><strong>Geometry patterns</strong> ({n_pat} clusters;
-        per-cluster picks in <code>pattern_&lt;label&gt;_picks.yaml</code>):
-        </p>
-        <ul>"""
+            # collapsible list of the pattern clusters, one line each with the
+            # median site count / localizations / rmsd / spacing
+            pattern_lines = {}
             for c in pattern_summary:
                 name = (
                     "unclustered"
                     if c.get("is_noise")
                     else f"pattern {c['label']}"
                 )
-                text += (
-                    f"<li>{name}: {c['n_structures']} structures, "
-                    f"median {c['median_n_sites']:.0f} sites, "
-                    f"{c['median_n_locs']:.0f} locs, "
-                    f"spacing {c['median_nn_nm']:.1f} nm</li>"
+                rmsd = c.get("median_rmsd_px")
+                rmsd_txt = (
+                    f"rmsd {rmsd:.3f} px, "
+                    if rmsd is not None and np.isfinite(rmsd)
+                    else ""
                 )
-            text += "</ul>"
+                pattern_lines[name] = (
+                    f"{c['n_structures']} structures, median "
+                    f"{c['median_n_sites']:.0f} sites, "
+                    f"{c['median_n_locs']:.0f} locs, "
+                    f"{rmsd_txt}"
+                    f"spacing {c['median_nn_nm']:.1f} nm"
+                )
+            text += _expand_macro(
+                f"Geometry patterns: {n_pat} clusters "
+                "(per-cluster picks in pattern_<label>_picks.yaml)",
+                pattern_lines,
+            )
 
             if fp_pat := results.get("fp_pattern_phasespace"):
                 fn_pat = os.path.split(fp_pat)[1]
