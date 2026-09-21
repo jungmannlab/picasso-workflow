@@ -6056,8 +6056,18 @@ def cluster_structure_patterns(
         )
         max_pair_nm = max(max_pair_nm, 1e-6)
 
+    # Per-structure descriptor (subcluster + pairwise histogram). This is a
+    # single-threaded Python loop over every accepted structure and is the
+    # dominant cost; a heartbeat every ~2000 structures makes a long run
+    # visibly progressing rather than looking hung.
+    logger.debug(
+        "cluster_structure_patterns: describing %d structures "
+        "(max_pair_nm=%.1f)",
+        n,
+        max_pair_nm,
+    )
     feats, names, aux = [], None, []
-    for s in structures:
+    for idx, s in enumerate(structures):
         f, names, a = structure_pattern_features(
             s,
             expected_spacing_nm,
@@ -6068,6 +6078,12 @@ def cluster_structure_patterns(
         )
         feats.append(f)
         aux.append(a)
+        if n > 4000 and (idx + 1) % 2000 == 0:
+            logger.debug(
+                "cluster_structure_patterns: described %d/%d structures",
+                idx + 1,
+                n,
+            )
     features = np.vstack(feats)
 
     # standardize so the histogram bins and scalar features are comparable
@@ -6083,6 +6099,14 @@ def cluster_structure_patterns(
         method = "hdbscan"
 
     cluster_summary = _summarize_pattern_clusters(labels, aux)
+    logger.debug(
+        "cluster_structure_patterns: %s -> %d clusters (+%d noise) "
+        "from %d structures",
+        method,
+        int(len(set(labels.tolist()) - {-1})),
+        int(np.count_nonzero(labels == -1)),
+        n,
+    )
     return {
         "labels": labels,
         "features": features,

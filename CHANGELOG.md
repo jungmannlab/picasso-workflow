@@ -86,6 +86,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `pick_origami` no longer wedges the report for tens of minutes when many
+  structures are accepted. A large `n_plot_structures` on a big accepted set
+  (e.g. a permissive window accepting ~16 000 structures) rendered thousands of
+  example images and then uploaded them to Confluence one-by-one in the
+  reporter. The number of per-structure example images rendered/uploaded is now
+  hard-capped at 200 (covering both the representative renders and, in total,
+  the per-pattern example renders), with a warning logged when the cap bites.
+  `cluster_structure_patterns` also logs a progress heartbeat so a long
+  per-structure descriptor pass is visibly advancing rather than looking hung.
+
 - `undrift_from_picked` now fails with a clear message instead of a cryptic
   ``"array of sample points is empty"`` (from `np.interp`) when the picks are
   empty or too sparse to estimate drift from. It guards the empty-pick case up

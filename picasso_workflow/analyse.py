@@ -405,6 +405,15 @@ def _plot_pattern_phasespace(fp, nlocs, rmsds, labels, summary):
     return fp
 
 
+# Hard ceiling on how many per-structure example images pick_origami renders
+# (and therefore uploads to the report). Rendering + uploading thousands of
+# structure PNGs one-by-one is the dominant cost and has wedged runs in the
+# Confluence reporter for tens of minutes; cap it and log when the cap bites.
+# Applies to the base representative renders and, in total, to the per-pattern
+# example renders.
+_MAX_STRUCTURE_RENDERS = 200
+
+
 # picasso 0.11 fitting methods whose base name has a plain ``-gpu`` variant.
 # GPU is orthogonal to the model choice, so when a GPU fitter is configured
 # these bases are routed to their ``-gpu`` counterpart (see ``localize``).
@@ -14524,6 +14533,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         if n_plot is not None and len(accepted_centers) > 0:
             pixelsize_display = parameters.get("display_pixelsize", 1)
             n_show = min(n_plot, len(accepted_centers))
+            if n_show > _MAX_STRUCTURE_RENDERS:
+                logger.warning(
+                    "pick_origami: n_plot_structures=%s capped to %d renders "
+                    "(rendering + uploading thousands of structures wedges the "
+                    "report).",
+                    n_plot,
+                    _MAX_STRUCTURE_RENDERS,
+                )
+                n_show = _MAX_STRUCTURE_RENDERS
             for idx, pick_i in enumerate(
                 np.random.choice(
                     len(accepted_centers), size=n_show, replace=False
@@ -14704,10 +14722,23 @@ class AutoPicasso(util.AbstractModuleCollection):
         # list of render filepaths.
         pixelsize_display = parameters.get("display_pixelsize", 1)
         n_examples = int(parameters.get("n_pattern_examples", 8) or 0)
+        # bound the total across all clusters (n_examples x #clusters can
+        # explode when many clusters are found); log if the budget bites.
+        render_budget = _MAX_STRUCTURE_RENDERS
+        n_nonoise = sum(1 for c in summary if c["label"] != -1)
+        if n_examples * n_nonoise > render_budget:
+            logger.warning(
+                "pick_origami: %d pattern example renders requested "
+                "(%d examples x %d clusters) capped to %d total.",
+                n_examples * n_nonoise,
+                n_examples,
+                n_nonoise,
+                render_budget,
+            )
         fp_pattern_renderings = {}
         for c in summary:
             lbl = c["label"]
-            if lbl == -1 or n_examples <= 0:
+            if lbl == -1 or n_examples <= 0 or render_budget <= 0:
                 continue
             member_pos = np.where(labels == lbl)[0]
             # brightest first, so the examples read as clearly as possible
@@ -14715,7 +14746,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 member_pos,
                 key=lambda i: len(groups[group_ids[i]]),
                 reverse=True,
-            )[:n_examples]
+            )[: min(n_examples, render_budget)]
             row = []
             for rank, i in enumerate(member_pos):
                 gid = group_ids[i]
@@ -14747,6 +14778,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 row.append(fp)
             fp_pattern_renderings[int(lbl)] = row
+            render_budget -= len(row)
         results["fp_pattern_renderings"] = fp_pattern_renderings
 
     #    @profile_resource_usage
