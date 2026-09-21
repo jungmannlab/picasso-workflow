@@ -14698,41 +14698,55 @@ class AutoPicasso(util.AbstractModuleCollection):
                 fp_pattern_ps, nlocs_pf, rmsds_pf, labels, summary
             )
 
-        # one representative render per (non-noise) cluster: the member with
-        # the most localizations, so the pattern is as clear as possible
+        # example renders per (non-noise) cluster: the brightest members
+        # (most localizations => clearest pattern), so the reporter can show
+        # what each geometry cluster actually looks like. Keyed by label ->
+        # list of render filepaths.
         pixelsize_display = parameters.get("display_pixelsize", 1)
-        fp_pattern_renderings = []
+        n_examples = int(parameters.get("n_pattern_examples", 8) or 0)
+        fp_pattern_renderings = {}
         for c in summary:
             lbl = c["label"]
-            if lbl == -1:
+            if lbl == -1 or n_examples <= 0:
                 continue
             member_pos = np.where(labels == lbl)[0]
-            best = max(member_pos, key=lambda i: len(groups[group_ids[i]]))
-            gid = group_ids[best]
-            cx, cy = accepted_centers[gid]
-            x_min = cx - footprint_diameter / 2
-            y_min = cy - footprint_diameter / 2
-            fp = os.path.join(
-                results["folder"], f"pattern_{int(lbl)}_render-{rcode}.png"
-            )
-            render.plot_scene(
-                picked_origami_locs[picked_origami_locs["group"] == gid],
-                pixelsize_display,
-                pixelsize,
-                fp=fp,
-                render_kwargs={
-                    "oversampling": pixelsize / pixelsize_display,
-                    "viewport": [
-                        (y_min, x_min),
-                        (
-                            cy + footprint_diameter / 2,
-                            cx + footprint_diameter / 2,
-                        ),
-                    ],
-                },
-                title=f"pattern {int(lbl)} (~{c['median_n_sites']:.0f} sites)",
-            )
-            fp_pattern_renderings.append(fp)
+            # brightest first, so the examples read as clearly as possible
+            member_pos = sorted(
+                member_pos,
+                key=lambda i: len(groups[group_ids[i]]),
+                reverse=True,
+            )[:n_examples]
+            row = []
+            for rank, i in enumerate(member_pos):
+                gid = group_ids[i]
+                cx, cy = accepted_centers[gid]
+                x_min = cx - footprint_diameter / 2
+                y_min = cy - footprint_diameter / 2
+                fp = os.path.join(
+                    results["folder"],
+                    f"pattern_{int(lbl)}_ex{rank}_g{gid}-{rcode}.png",
+                )
+                render.plot_scene(
+                    picked_origami_locs[picked_origami_locs["group"] == gid],
+                    pixelsize_display,
+                    pixelsize,
+                    fp=fp,
+                    render_kwargs={
+                        "oversampling": pixelsize / pixelsize_display,
+                        "viewport": [
+                            (y_min, x_min),
+                            (
+                                cy + footprint_diameter / 2,
+                                cx + footprint_diameter / 2,
+                            ),
+                        ],
+                    },
+                    title=(
+                        f"pattern {int(lbl)} " f"({len(groups[gid])} locs)"
+                    ),
+                )
+                row.append(fp)
+            fp_pattern_renderings[int(lbl)] = row
         results["fp_pattern_renderings"] = fp_pattern_renderings
 
     #    @profile_resource_usage

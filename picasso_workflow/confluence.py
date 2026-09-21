@@ -4982,22 +4982,38 @@ class ConfluenceReporter(AbstractModuleCollection):
                 <ri:attachment ri:filename="{fn_pat}" />
                 </ac:image>"""
 
-            pat_renders = results.get("fp_pattern_renderings")
+            # example structures per pattern: one labelled row each, so the
+            # reader can see what each geometry cluster looks like. Keyed by
+            # cluster label -> list of render filepaths.
+            pat_renders = results.get("fp_pattern_renderings") or {}
             if pat_renders:
-                text += "<table><tr>"
-                for fp in pat_renders:
-                    try:
-                        self.ci.upload_attachment(self.report_page_id, fp)
-                    except ConfluenceInterfaceError:
-                        pass
-                    fn = os.path.split(fp)[1]
-                    text += f"""
+                text += "<table>"
+                for c in pattern_summary:
+                    if c.get("is_noise"):
+                        continue
+                    lbl = c["label"]
+                    fps = pat_renders.get(lbl, pat_renders.get(str(lbl)))
+                    if not fps:
+                        continue
+                    text += (
+                        f"""<tr><td><p><strong>pattern {lbl}</strong><br/>"""
+                        f"""~{c['median_n_sites']:.0f} sites, """
+                        f"""{c['n_structures']} structures</p></td>"""
+                    )
+                    for fp in fps:
+                        try:
+                            self.ci.upload_attachment(self.report_page_id, fp)
+                        except ConfluenceInterfaceError:
+                            pass
+                        fn = os.path.split(fp)[1]
+                        text += f"""
                         <td>
-                              <ac:image ac:height="200">
+                              <ac:image ac:height="150">
                               <ri:attachment ri:filename="{fn}" />
                               </ac:image>
                         </td>"""
-                text += "</tr></table>"
+                    text += "</tr>"
+                text += "</table>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>

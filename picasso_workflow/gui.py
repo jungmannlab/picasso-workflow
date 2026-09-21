@@ -6209,6 +6209,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 25,
                 "required": False,
             },
+            "n_pattern_examples": {
+                "type": "int",
+                "description": (
+                    "Example structures rendered per pattern cluster for the "
+                    "report (brightest first); 0 to skip"
+                ),
+                "min": 0,
+                "default": 8,
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -6335,10 +6345,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 ),
             },
             "fp_pattern_renderings": {
-                "type": "list",
+                "type": "dict",
                 "description": (
-                    "filepaths to one representative render per pattern "
-                    "cluster (cluster_patterns only)"
+                    "map of pattern label -> list of example structure "
+                    "render filepaths (cluster_patterns only)"
                 ),
             },
         }

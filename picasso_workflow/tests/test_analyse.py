@@ -2373,7 +2373,10 @@ class TestAnalyseModules(unittest.TestCase):
         for fp in results["fp_pattern_picks"].values():
             assert os.path.exists(fp)
         assert os.path.exists(results["fp_pattern_phasespace"])
-        assert len(results["fp_pattern_renderings"]) == 2
+        # example renders keyed by pattern label -> list of render fps
+        pat_renders = results["fp_pattern_renderings"]
+        assert set(pat_renders) == {0, 1}
+        assert all(len(v) >= 1 for v in pat_renders.values())
 
         import yaml as _yaml
 

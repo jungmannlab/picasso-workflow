@@ -1966,12 +1966,15 @@ class AbstractModuleCollection(abc.ABC):
                 Minimum structures per auto-discovered pattern cluster
                 (HDBSCAN; ignored when ``n_pattern_clusters`` is set,
                 default 25).
+            ``n_pattern_examples`` : int
+                Example structures rendered per pattern cluster for the
+                report, brightest first (default 8; 0 to skip).
         results : dict
             Module results (see class docstring). With ``cluster_patterns``
             also ``n_pattern_clusters``, ``pattern_summary``,
             ``fp_pattern_table`` (.csv), ``fp_pattern_picks``
             (label -> pick .yaml), ``fp_pattern_phasespace`` (.png), and
-            ``fp_pattern_renderings``.
+            ``fp_pattern_renderings`` (label -> list of example renders).
         """
 
     @abc.abstractmethod
