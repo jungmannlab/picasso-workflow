@@ -1969,11 +1969,19 @@ class AbstractModuleCollection(abc.ABC):
             ``n_pattern_examples`` : int
                 Example structures rendered per pattern cluster for the
                 report, brightest first (default 8; 0 to skip).
+            ``pattern_eps_frac`` : float
+                Docking-site subclustering neighbourhood as a fraction of the
+                site spacing (default 0.2). Lower if sites are merged /
+                under-counted; raise if a single site splits.
+            ``pattern_min_samples`` : int
+                DBSCAN ``min_samples`` for docking-site subclustering
+                (default 3).
         results : dict
             Module results (see class docstring). With ``cluster_patterns``
             also ``n_pattern_clusters``, ``pattern_summary``,
             ``fp_pattern_table`` (.csv), ``fp_pattern_picks``
-            (label -> pick .yaml), ``fp_pattern_phasespace`` (.png), and
+            (label -> pick .yaml), ``fp_pattern_phasespace`` /
+            ``fp_pattern_feature_space`` / ``fp_pattern_pairdist`` (.png), and
             ``fp_pattern_renderings`` (label -> list of example renders).
         """
 

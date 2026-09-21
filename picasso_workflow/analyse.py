@@ -361,47 +361,171 @@ def _plot_origami_phasespace(
     return fp
 
 
-def _plot_pattern_phasespace(fp, nlocs, rmsds, labels, summary):
-    """Scatter accepted structures in (nlocs-per-frame, rmsd), coloured by
-    geometry-pattern cluster.
+def _pattern_color_map(summary, labels):
+    """A stable label -> colour mapping shared across the pattern figures.
 
-    ``labels`` is the per-structure cluster label and ``nlocs``/``rmsds``
-    the matching per-structure values (same order). ``summary`` is the
-    per-cluster summary (for the legend's median site count). ``-1`` is the
-    unclustered/noise group. Returns the saved path.
+    Returns ``(order, color)`` where ``order`` is the label order (from the
+    summary) and ``color(label)`` gives that cluster's colour (grey for the
+    ``-1`` noise group), so a cluster keeps the same colour in every plot.
     """
-    nlocs = np.asarray(nlocs, dtype=float)
-    rmsds = np.asarray(rmsds, dtype=float)
-    labels = np.asarray(labels)
-    med_sites = {c["label"]: c["median_n_sites"] for c in summary}
-    order = [c["label"] for c in summary] or sorted(set(labels.tolist()))
+    order = [c["label"] for c in summary] or sorted(
+        set(np.asarray(labels).tolist())
+    )
     cmap = plt.get_cmap("tab10")
-    fig, ax = plt.subplots(figsize=(7, 6))
-    for i, lbl in enumerate(order):
-        m = labels == lbl
-        if not np.any(m):
-            continue
+
+    def color(lbl):
         if lbl == -1:
-            color, name = "0.6", "unclustered"
-        else:
-            color = cmap(i % 10)
-            name = f"pattern {lbl} (~{med_sites.get(lbl, 0):.0f} sites)"
-        ax.scatter(
-            nlocs[m],
-            rmsds[m],
-            s=10,
-            alpha=0.4,
-            color=color,
-            label=f"{name}, n={int(m.sum())}",
+            return "0.6"
+        return cmap(order.index(lbl) % 10) if lbl in order else "0.4"
+
+    return order, color
+
+
+def _labelled_2d_axes(ax, x, y, labels, summary, min_contour=60):
+    """Draw per-cluster density on ``ax``: a smoothed contour when a cluster
+    has enough points (clearer than an overplotted scatter), else a scatter.
+
+    Axes are bounded by a Tukey fence on the pooled cloud so a few outliers
+    cannot stretch them. Colours follow :func:`_pattern_color_map`.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    labels = np.asarray(labels)
+    fin = np.isfinite(x) & np.isfinite(y)
+    if not np.any(fin):
+        return
+    px, py = x[fin], y[fin]
+
+    def _fence(v):
+        q1, q3 = np.quantile(v, [0.25, 0.75])
+        iqr = q3 - q1
+        lo = max(float(v.min()), float(q1 - 1.5 * iqr))
+        hi = min(float(v.max()), float(q3 + 1.5 * iqr))
+        if hi <= lo:
+            lo, hi = float(v.min()), float(v.max())
+        if hi <= lo:
+            hi = lo + 1.0
+        return lo, hi
+
+    x0, x1 = _fence(px)
+    y0, y1 = _fence(py)
+    hrange = [[x0, x1], [y0, y1]]
+    med = {c["label"]: c.get("median_n_sites", 0) for c in summary}
+    order, color = _pattern_color_map(summary, labels)
+    for lbl in order:
+        m = labels == lbl
+        cx, cy = x[m], y[m]
+        f = np.isfinite(cx) & np.isfinite(cy)
+        cx, cy = cx[f], cy[f]
+        if len(cx) == 0:
+            continue
+        col = color(lbl)
+        name = (
+            "unclustered"
+            if lbl == -1
+            else f"pattern {lbl} (~{med.get(lbl, 0):.0f} sites)"
         )
+        lab = f"{name}, n={len(cx)}"
+        if len(cx) < min_contour or np.ptp(cx) == 0 or np.ptp(cy) == 0:
+            ax.scatter(cx, cy, s=8, alpha=0.5, color=[col], label=lab)
+            continue
+        hist, xe, ye = np.histogram2d(cx, cy, bins=40, range=hrange)
+        hist = gaussian_filter(hist, 1.0)
+        if hist.max() <= 0:
+            continue
+        xc = 0.5 * (xe[:-1] + xe[1:])
+        yc = 0.5 * (ye[:-1] + ye[1:])
+        levels = np.linspace(hist.max() * 0.25, hist.max() * 0.9, 3)
+        ax.contour(xc, yc, hist.T, levels=levels, colors=[col], linewidths=1.3)
+        ax.plot([], [], color=col, label=lab)  # legend proxy
+    ax.set_xlim(x0, x1)
+    ax.set_ylim(y0, y1)
+    handles, _ = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize="small")
+
+
+def _plot_pattern_phasespace(fp, nlocs, rmsds, labels, summary):
+    """Accepted structures in (nlocs-per-frame, rmsd), as per-cluster density
+    contours (clearer than a scatter of thousands of points)."""
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(ax, nlocs, rmsds, labels, summary)
     ax.set_xlabel("# localizations per frame in footprint")
     ax.set_ylabel("root mean square distance in footprint")
     ax.set_title("Accepted structures by geometry pattern")
-    handles, _ = ax.get_legend_handles_labels()
-    if handles:
-        ax.legend(fontsize="small", markerscale=2)
     fig.tight_layout()
     fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_pattern_feature_space(fp, features, labels, summary):
+    """PCA(2) of the standardized descriptor features, per-cluster density -
+    shows how well the clustering separates in the full descriptor space."""
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+
+    feats = np.asarray(features, dtype=float)
+    if feats.ndim != 2 or len(feats) < 2:
+        return None
+    scaled = StandardScaler().fit_transform(feats)
+    if scaled.shape[1] > 2:
+        emb = PCA(n_components=2, random_state=0).fit_transform(scaled)
+    elif scaled.shape[1] == 2:
+        emb = scaled
+    else:
+        emb = np.column_stack([scaled[:, 0], np.zeros(len(scaled))])
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(ax, emb[:, 0], emb[:, 1], labels, summary)
+    ax.set_xlabel("descriptor PC 1")
+    ax.set_ylabel("descriptor PC 2")
+    ax.set_title("Pattern clusters in descriptor space (PCA)")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_pattern_pairdist(
+    fp, features, feature_names, labels, summary, max_pair_nm
+):
+    """Per-cluster mean pairwise site-distance histogram - the lattice
+    'signature' of each pattern (one line per cluster)."""
+    idx = [
+        i for i, n in enumerate(feature_names) if str(n).startswith("pdist_")
+    ]
+    if not idx:
+        return None
+    hist = np.asarray(features, dtype=float)[:, idx]
+    edges = np.linspace(0.0, float(max_pair_nm), len(idx) + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    labels = np.asarray(labels)
+    _, color = _pattern_color_map(summary, labels)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for c in summary:
+        lbl = c["label"]
+        if c.get("is_noise"):
+            continue
+        m = labels == lbl
+        if not np.any(m):
+            continue
+        ax.plot(
+            centers,
+            hist[m].mean(axis=0),
+            color=color(lbl),
+            label=f"pattern {lbl} (~{c.get('median_n_sites', 0):.0f} sites)",
+        )
+    ax.set_xlabel("pairwise site distance (nm)")
+    ax.set_ylabel("mean normalized count")
+    ax.set_title("Pairwise site-distance signature per pattern")
+    handles, _ = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize="small")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
     return fp
 
 
@@ -14651,28 +14775,46 @@ class AutoPicasso(util.AbstractModuleCollection):
             for g in group_ids
         ]
         # n_pattern_clusters: 0/1/unset -> auto-discover (HDBSCAN); a value
-        # >= 2 fixes the count (Gaussian mixture).
+        # >= 2 fixes the count (Gaussian mixture). pattern_eps_frac /
+        # pattern_min_samples tune the per-structure site subclustering.
         k = parameters.get("n_pattern_clusters")
         k = int(k) if k and int(k) >= 2 else None
+        cluster_kwargs = {}
+        if parameters.get("pattern_eps_frac"):
+            cluster_kwargs["eps_frac"] = float(parameters["pattern_eps_frac"])
+        if parameters.get("pattern_min_samples"):
+            cluster_kwargs["min_samples"] = int(
+                parameters["pattern_min_samples"]
+            )
         cl = picasso_outpost.cluster_structure_patterns(
             structures_xy_nm,
             expected_spacing_nm=template.grid_spacing_nm,
             k=k,
             min_cluster_size=parameters.get("pattern_min_cluster_size", 25),
+            **cluster_kwargs,
         )
         labels = np.asarray(cl["labels"])
         summary = cl["cluster_summary"]
-        # annotate each cluster with its median pick_similar rmsd (camera px,
-        # the phase-space axis the pick window is set in). accepted_rmsds is
-        # aligned to accepted_centers; group_ids maps structures -> that index,
-        # in the same order as labels.
+        # annotate each cluster with its median pick_similar rmsd (camera px)
+        # and median nlocs-per-frame - the phase-space axes the pick window is
+        # set in. accepted_rmsds/nlocs are aligned to accepted_centers;
+        # group_ids maps structures -> that index, in the same order as labels.
         acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
-        if len(acc_rmsds):
-            rmsd_by_struct = acc_rmsds[np.asarray(group_ids, dtype=int)]
-            for c in summary:
-                m = labels == c["label"]
+        acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+        gid_idx = np.asarray(group_ids, dtype=int)
+        for c in summary:
+            m = labels == c["label"]
+            if len(acc_rmsds):
+                rmsd_by_struct = acc_rmsds[gid_idx]
                 c["median_rmsd_px"] = (
                     float(np.median(rmsd_by_struct[m]))
+                    if np.any(m)
+                    else float("nan")
+                )
+            if len(acc_nlocs) and n_frames:
+                nlpf_by_struct = acc_nlocs[gid_idx] / n_frames
+                c["median_nlocs_per_frame"] = (
+                    float(np.median(nlpf_by_struct[m]))
                     if np.any(m)
                     else float("nan")
                 )
@@ -14729,6 +14871,30 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["fp_pattern_phasespace"] = _plot_pattern_phasespace(
                 fp_pattern_ps, nlocs_pf, rmsds_pf, labels, summary
             )
+
+        # descriptor-space view (PCA of the site-graph features, coloured by
+        # cluster) - shows how the HDBSCAN/GMM clustering actually separated.
+        fs = _plot_pattern_feature_space(
+            os.path.join(
+                results["folder"], f"pattern-featurespace-{rcode}.png"
+            ),
+            cl.get("features"),
+            labels,
+            summary,
+        )
+        if fs:
+            results["fp_pattern_feature_space"] = fs
+        # per-cluster pairwise site-distance signature (the lattice fingerprint)
+        pd_fp = _plot_pattern_pairdist(
+            os.path.join(results["folder"], f"pattern-pairdist-{rcode}.png"),
+            cl.get("features"),
+            cl.get("feature_names", []),
+            labels,
+            summary,
+            cl.get("max_pair_nm", 0.0),
+        )
+        if pd_fp:
+            results["fp_pattern_pairdist"] = pd_fp
 
         # example renders per (non-noise) cluster: the brightest members
         # (most localizations => clearest pattern), so the reporter can show

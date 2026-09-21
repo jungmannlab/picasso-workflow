@@ -2325,7 +2325,23 @@ class TestAnalyseModules(unittest.TestCase):
                     "is_noise": False,
                 },
             ],
-            "feature_names": [],
+            "features": np.array(
+                [
+                    [12.0, 27.0, 27.0, 20.0, 0.7, 0.2, 0.5, 0.3],
+                    [1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                ]
+            ),
+            "feature_names": [
+                "n_sites",
+                "loc_rg_nm",
+                "site_rg_nm",
+                "nn_nm",
+                "elongation",
+                "pdist_0",
+                "pdist_1",
+                "pdist_2",
+            ],
+            "max_pair_nm": 90.0,
             "method": "hdbscan",
         }
 
@@ -2368,11 +2384,17 @@ class TestAnalyseModules(unittest.TestCase):
         assert mock_cluster.called
         assert results["n_pattern_clusters"] == 2
         assert len(results["pattern_summary"]) == 2
-        # each cluster annotated with a median pick_similar rmsd (px)
+        # each cluster annotated with a median pick_similar rmsd (px) and
+        # nlocs-per-frame (accepted_nlocs / n_frames = 1000)
         by_label = {c["label"]: c for c in results["pattern_summary"]}
         assert by_label[0]["median_rmsd_px"] == 1.5
         assert by_label[1]["median_rmsd_px"] == 2.2
+        assert by_label[0]["median_nlocs_per_frame"] == 0.05
+        assert by_label[1]["median_nlocs_per_frame"] == 0.09
         assert os.path.exists(results["fp_pattern_table"])
+        # descriptor-space (PCA) and pairwise-distance signature figures
+        assert os.path.exists(results["fp_pattern_feature_space"])
+        assert os.path.exists(results["fp_pattern_pairdist"])
         assert set(results["fp_pattern_picks"]) == {0, 1}
         for fp in results["fp_pattern_picks"].values():
             assert os.path.exists(fp)

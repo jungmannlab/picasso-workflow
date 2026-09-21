@@ -6219,6 +6219,27 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 8,
                 "required": False,
             },
+            "pattern_eps_frac": {
+                "type": "float",
+                "description": (
+                    "Docking-site subclustering neighbourhood as a fraction "
+                    "of site spacing (default 0.2). Lower it if sites are "
+                    "merged / n_sites is under-counted; raise it if a single "
+                    "site splits"
+                ),
+                "min": 0.0,
+                "max": 0.5,
+                "required": False,
+            },
+            "pattern_min_samples": {
+                "type": "int",
+                "description": (
+                    "DBSCAN min_samples for docking-site subclustering "
+                    "(default 3)"
+                ),
+                "min": 1,
+                "required": False,
+            },
         }
 
         results_spec = {
@@ -6342,6 +6363,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": (
                     "filepath to the phase-space figure coloured by "
                     "geometry pattern (cluster_patterns only)"
+                ),
+            },
+            "fp_pattern_feature_space": {
+                "type": "str",
+                "description": (
+                    "filepath to the PCA descriptor-space figure coloured by "
+                    "pattern cluster (cluster_patterns only)"
+                ),
+            },
+            "fp_pattern_pairdist": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-cluster pairwise site-distance "
+                    "signature figure (cluster_patterns only)"
                 ),
             },
             "fp_pattern_renderings": {

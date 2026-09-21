@@ -52,9 +52,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   tunes the auto mode. Emits, per pattern, a picasso pick `.yaml` and a grouped
   `.hdf5`, plus a `pattern_table.csv` summary, a grid of example structure
   renders per pattern (`n_pattern_examples`, brightest first) shown as labelled
-  rows in the report, and a phase-space scatter coloured by pattern. The report
-  lists the clusters in a collapsible (expand) block with each cluster's median
-  site count, localizations, rmsd (px) and spacing. New result keys
+  rows in the report, and three figures coloured by pattern: the
+  nlocs-per-frame/rmsd **phase space** (now smoothed per-cluster density
+  contours rather than an unreadable scatter), a **PCA descriptor-space** view
+  (how the clustering separates), and a per-cluster **pairwise site-distance
+  signature** (the lattice fingerprint). The report lists the clusters in a
+  collapsible (expand) block with each cluster's median site count,
+  nlocs-per-frame, rmsd (px) and spacing. New result keys
   `n_pattern_clusters` / `pattern_summary` / `fp_pattern_table` /
   `fp_pattern_picks` / `fp_pattern_phasespace` / `fp_pattern_renderings`; new
   `picasso_outpost.structure_pattern_features` and
@@ -102,11 +106,14 @@ This file was started after v0.5.6; earlier history is in the git log.
   large enough to *chain* adjacent sites together through their localization
   tails - and the more localizations a site had, the more likely the bridge -
   so bright, well-resolved structures had their site count roughly halved (a
-  clearly-12-site origami reported as ~5). The default `eps_frac` is now `0.25`
-  (a quarter of the spacing), which groups each site's own localizations while
-  staying well below the inter-site gap. This corrects the per-structure site
-  counts feeding `pick_origami`'s geometry-pattern clustering (and the
-  `filter_by_geometry` registration path).
+  clearly-12-site origami reported as ~5). The neighbourhood is now a single
+  shared default `_SITE_EPS_FRAC = 0.2` (a fifth of the spacing) used
+  consistently by `subcluster_docking_sites`, `structure_pattern_features` and
+  `cluster_structure_patterns` (the last two previously re-defaulted to 0.35,
+  overriding the subcluster default), and is tunable per run via
+  `pick_origami`'s `pattern_eps_frac` / `pattern_min_samples`. This corrects
+  the per-structure site counts feeding the geometry-pattern clustering (and
+  the `filter_by_geometry` registration path).
 
 - `pick_origami` no longer wedges the report for tens of minutes when many
   structures are accepted. A large `n_plot_structures` on a big accepted set

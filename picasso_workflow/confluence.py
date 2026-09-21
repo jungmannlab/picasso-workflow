@@ -4919,8 +4919,13 @@ class ConfluenceReporter(AbstractModuleCollection):
             _fp_all.append(results["fp_phasespace"])
         for _row in results.get("fp_renderings") or []:
             _fp_all.extend([fp for fp in (_row or []) if fp])
-        if results.get("fp_pattern_phasespace"):
-            _fp_all.append(results["fp_pattern_phasespace"])
+        for _k in (
+            "fp_pattern_phasespace",
+            "fp_pattern_feature_space",
+            "fp_pattern_pairdist",
+        ):
+            if results.get(_k):
+                _fp_all.append(results[_k])
         for _fps in (results.get("fp_pattern_renderings") or {}).values():
             _fp_all.extend([fp for fp in (_fps or []) if fp])
         self.ci.upload_attachments(self.report_page_id, _fp_all)
@@ -4974,10 +4979,16 @@ class ConfluenceReporter(AbstractModuleCollection):
                     if rmsd is not None and np.isfinite(rmsd)
                     else ""
                 )
+                nlpf = c.get("median_nlocs_per_frame")
+                nlocs_txt = (
+                    f"{nlpf:.4f} locs/frame, "
+                    if nlpf is not None and np.isfinite(nlpf)
+                    else f"{c['median_n_locs']:.0f} locs, "
+                )
                 pattern_lines[name] = (
                     f"{c['n_structures']} structures, median "
                     f"{c['median_n_sites']:.0f} sites, "
-                    f"{c['median_n_locs']:.0f} locs, "
+                    f"{nlocs_txt}"
                     f"{rmsd_txt}"
                     f"spacing {c['median_nn_nm']:.1f} nm"
                 )
@@ -4987,9 +4998,16 @@ class ConfluenceReporter(AbstractModuleCollection):
                 pattern_lines,
             )
 
-            if fp_pat := results.get("fp_pattern_phasespace"):
-                fn_pat = os.path.split(fp_pat)[1]
-                text += f"""
+            # phase-space (nlocs/frame vs rmsd), descriptor-space (PCA) and
+            # pairwise-distance signature, all coloured by pattern cluster
+            for _key in (
+                "fp_pattern_phasespace",
+                "fp_pattern_feature_space",
+                "fp_pattern_pairdist",
+            ):
+                if fp_pat := results.get(_key):
+                    fn_pat = os.path.split(fp_pat)[1]
+                    text += f"""
                 <ac:image ac:height="450">
                 <ri:attachment ri:filename="{fn_pat}" />
                 </ac:image>"""

@@ -5526,8 +5526,17 @@ def origami_phase_space_preview(
     }
 
 
+# Default DBSCAN neighbourhood for resolving docking sites, as a fraction of
+# the design site spacing. Must be well below the inter-site gap or DBSCAN
+# *chains* adjacent sites through their localization tails and under-counts
+# sites (worse the brighter the structure). A fifth of the spacing groups a
+# site's own localizations while keeping neighbours apart. Tunable per run via
+# pick_origami's ``pattern_eps_frac``.
+_SITE_EPS_FRAC = 0.2
+
+
 def subcluster_docking_sites(
-    xy_nm, expected_spacing_nm, min_samples=3, eps_frac=0.25
+    xy_nm, expected_spacing_nm, min_samples=3, eps_frac=_SITE_EPS_FRAC
 ):
     """Cluster localizations within a footprint into docking-site centers.
 
@@ -5542,12 +5551,12 @@ def subcluster_docking_sites(
         DBSCAN ``min_samples``. Default 3.
     eps_frac : float, optional
         DBSCAN ``eps`` as a fraction of ``expected_spacing_nm``. Default
-        0.25 (eps = a quarter of the site spacing). Values much above this
-        let DBSCAN *chain* adjacent sites together through their tails - the
-        more localizations a site has, the more likely the bridge - which
+        ``_SITE_EPS_FRAC`` (a fifth of the site spacing). Values much above
+        this let DBSCAN *chain* adjacent sites together through their tails -
+        the more localizations a site has, the more likely the bridge - which
         systematically **under**-counts the sites of bright, well-resolved
-        structures. A quarter-spacing eps groups each site's own
-        localizations while staying well below the inter-site gap.
+        structures. Lower it further if sites are still merged; raise it if a
+        single site splits into several.
 
     Returns
     -------
@@ -5901,7 +5910,7 @@ def structure_pattern_features(
     max_pair_nm,
     n_dist_bins=12,
     min_samples=3,
-    eps_frac=0.35,
+    eps_frac=_SITE_EPS_FRAC,
 ):
     """Rotation/translation-invariant pattern descriptor of one structure.
 
@@ -5990,7 +5999,7 @@ def cluster_structure_patterns(
     k=None,
     min_cluster_size=25,
     min_samples=3,
-    eps_frac=0.35,
+    eps_frac=_SITE_EPS_FRAC,
     random_seed=0,
 ):
     """Cluster picked structures into geometric-pattern groups.
