@@ -12,6 +12,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- Confluence attachment uploads are faster and no longer a reporting
+  bottleneck. `ConfluenceInterface.upload_attachment` no longer does a second
+  API round-trip (a full attachment listing) after every upload just to return
+  an id no report code used; the id lookup is now opt-in via `return_id=True`
+  (use `get_attachment_id` when needed). A new
+  `ConfluenceInterface.upload_attachments(page_id, filepaths)` uploads a page's
+  figures concurrently (small thread pool, per-file failure tolerant); the
+  `pick_origami` reporter now batch-uploads all its figures in one pass instead
+  of one blocking round-trip per image.
+
 - `pick_origami` now picks by a **simulation-derived phase-space window**
   instead of a per-candidate geometry gate, which over-discarded structures and
   was hard to tune. From the design geometry it simulates `n_sim` origami

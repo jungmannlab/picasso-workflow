@@ -21,6 +21,7 @@ from loguru import logger
 import os
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import yaml
@@ -4908,12 +4909,24 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ul>
         """
 
+        # Upload every figure this module references in one concurrent batch.
+        # Uploads are network round-trips; doing them sequentially per file
+        # was the dominant reporting cost (and the wedge risk for pattern
+        # reports with many renders). After this the sections below just
+        # reference the attachments by filename.
+        _fp_all = []
+        if results.get("fp_phasespace"):
+            _fp_all.append(results["fp_phasespace"])
+        for _row in results.get("fp_renderings") or []:
+            _fp_all.extend([fp for fp in (_row or []) if fp])
+        if results.get("fp_pattern_phasespace"):
+            _fp_all.append(results["fp_pattern_phasespace"])
+        for _fps in (results.get("fp_pattern_renderings") or {}).values():
+            _fp_all.extend([fp for fp in (_fps or []) if fp])
+        self.ci.upload_attachments(self.report_page_id, _fp_all)
+
         # phase-space figure
         if fp_fig := results.get("fp_phasespace"):
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
             fn_fig = os.path.split(fp_fig)[1]
             text += f"""
                 <ac:image ac:height="450">
@@ -4929,15 +4942,9 @@ class ConfluenceReporter(AbstractModuleCollection):
             for row_fps in fig_fps:
                 if not row_fps:
                     continue
-                fn_figs = []
-                for fp in row_fps:
-                    try:
-                        self.ci.upload_attachment(self.report_page_id, fp)
-                    except ConfluenceInterfaceError:
-                        pass
-                    fn_figs.append(os.path.split(fp)[1])
                 text += "<tr>"
-                for fn in fn_figs:
+                for fp in row_fps:
+                    fn = os.path.split(fp)[1]
                     text += f"""
                         <td>
                               <ac:image ac:height="200">
@@ -4972,10 +4979,6 @@ class ConfluenceReporter(AbstractModuleCollection):
             text += "</ul>"
 
             if fp_pat := results.get("fp_pattern_phasespace"):
-                try:
-                    self.ci.upload_attachment(self.report_page_id, fp_pat)
-                except ConfluenceInterfaceError:
-                    pass
                 fn_pat = os.path.split(fp_pat)[1]
                 text += f"""
                 <ac:image ac:height="450">
@@ -5001,10 +5004,6 @@ class ConfluenceReporter(AbstractModuleCollection):
                         f"""{c['n_structures']} structures</p></td>"""
                     )
                     for fp in fps:
-                        try:
-                            self.ci.upload_attachment(self.report_page_id, fp)
-                        except ConfluenceInterfaceError:
-                            pass
                         fn = os.path.split(fp)[1]
                         text += f"""
                         <td>
@@ -5887,7 +5886,7 @@ class ConfluenceInterface:
         # implement logger
 
     @confluence_call
-    def upload_attachment(self, page_id, filename):
+    def upload_attachment(self, page_id, filename, return_id=False):
         """Upload an attachment to a page.
 
         Parameters
@@ -5896,15 +5895,23 @@ class ConfluenceInterface:
             The page id to attach the file to.
         filename : str
             The local filename of the file to attach.
+        return_id : bool, optional
+            Look the freshly uploaded attachment up and return its id. This
+            costs a second API round-trip (a full attachment listing whose
+            cost grows with the page's attachment count), so it is off by
+            default: report code references attachments by filename, not id.
+            Use :meth:`get_attachment_id` when the id is genuinely needed.
 
         Returns
         -------
-        attachment_id : str
-            The id of the attachment.
+        str or None
+            The attachment id if ``return_id`` is set, else ``None``.
         """
         self.confluence.attach_file(
             filename=filename, page_id=page_id, space=self.space_key
         )
+        if not return_id:
+            return None
 
         target_name = os.path.basename(str(filename))
         attachments_container = self.confluence.get_attachments_from_content(
@@ -5923,6 +5930,49 @@ class ConfluenceInterface:
             )
 
         return attachment_id
+
+    def upload_attachments(self, page_id, filenames, max_workers=4):
+        """Upload several attachments to a page concurrently.
+
+        Uploads are I/O-bound network round-trips, so a small thread pool
+        turns N sequential uploads into roughly N / ``max_workers`` wall
+        time. Each file is uploaded independently and tolerant of failure -
+        a file that raises is logged and skipped (mirroring the per-file
+        ``try/except`` at the call sites) so one bad upload does not abort
+        the batch.
+
+        Parameters
+        ----------
+        page_id : str
+            The page id to attach the files to.
+        filenames : iterable of str
+            Local filepaths to attach.
+        max_workers : int, optional
+            Thread-pool size. Kept modest (default 4) to avoid tripping
+            Confluence rate limits.
+
+        Returns
+        -------
+        list of str
+            Basenames of the files that uploaded successfully (the names to
+            reference in ``<ri:attachment>`` macros).
+        """
+        filenames = [f for f in filenames if f]
+        if not filenames:
+            return []
+
+        def _one(fp):
+            try:
+                self.upload_attachment(page_id, fp)
+                return os.path.basename(str(fp))
+            except Exception as e:  # noqa: BLE001 - keep the batch going
+                logger.warning(f"Failed to upload attachment '{fp}': {e}")
+                return None
+
+        workers = max(1, min(max_workers, len(filenames)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            uploaded = list(pool.map(_one, filenames))
+        return [name for name in uploaded if name]
 
     @confluence_call
     def get_attachment_id(self, page_id, filename):
