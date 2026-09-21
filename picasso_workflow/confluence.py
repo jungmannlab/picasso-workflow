@@ -124,13 +124,13 @@ def _pattern_cluster_lines(summary, method):
             else None
         )
         if method == "lattice":
-            name = "off-lattice / sparse" if off else f"cluster {c['label']}"
+            n_nodes = len(c.get("occupancy", []))
+            if off:
+                name = "off-lattice / sparse"
+            else:
+                name = f"{c.get('n_sites_occupied', '?')}/{n_nodes}-site"
             parts = [f"{c['n_structures']} structures"]
             if not off:
-                n_nodes = len(c.get("occupancy", []))
-                parts.append(
-                    f"{c.get('n_sites_occupied', '?')}/{n_nodes} sites"
-                )
                 parts.append(f"{c.get('n_defects', '?')} defects")
                 rmse = c.get("median_rmse_nm")
                 if rmse is not None and np.isfinite(rmse):

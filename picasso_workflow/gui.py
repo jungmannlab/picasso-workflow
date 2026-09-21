@@ -6251,13 +6251,35 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "options": ["lattice", "pairwise"],
                 "required": False,
             },
+            "pattern_defect_grouping": {
+                "type": "str",
+                "description": (
+                    "Lattice method: how to group on-lattice picks - "
+                    "'completeness' (by number of occupied sites; a few "
+                    "robust classes) or 'exact' (by the exact defect "
+                    "pattern). Default completeness"
+                ),
+                "options": ["completeness", "exact"],
+                "required": False,
+            },
             "pattern_min_sites": {
                 "type": "int",
                 "description": (
-                    "Lattice method: min matched sites for a pick to count as "
-                    "on-lattice (default 4)"
+                    "Lattice method: absolute floor on matched sites for a "
+                    "pick to count as on-lattice (default 4; the effective "
+                    "minimum is max(this, min_sites_frac x n_nodes))"
                 ),
                 "min": 1,
+                "required": False,
+            },
+            "pattern_min_sites_frac": {
+                "type": "float",
+                "description": (
+                    "Lattice method: min matched sites as a fraction of the "
+                    "design nodes to be on-lattice (default 0.66)"
+                ),
+                "min": 0.0,
+                "max": 1.0,
                 "required": False,
             },
             "pattern_rmse_gate_frac": {

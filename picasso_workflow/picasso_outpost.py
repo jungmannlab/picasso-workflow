@@ -6379,7 +6379,12 @@ def lattice_defect_features(
 
 
 def _summarize_lattice_clusters(labels, aux, n_nodes):
-    """Per-class summary for the lattice-defect clustering."""
+    """Per-class summary for the lattice-defect clustering.
+
+    ``occupancy`` is the per-node occupancy *probability* over the class
+    members (0/1 for an exact-pattern class; a fraction for a completeness
+    class, revealing which nodes tend to be missing).
+    """
     labels = np.asarray(labels, dtype=int)
     summary = []
     for lbl in np.unique(labels):
@@ -6390,12 +6395,13 @@ def _summarize_lattice_clusters(labels, aux, n_nodes):
             return float(np.median(vals)) if vals else float("nan")
 
         off = lbl == -1
-        occ = (
-            list(aux[idx[0]]["occupancy"])
-            if len(idx) and not off
-            else [0] * n_nodes
-        )
-        n_occ = int(sum(occ))
+        if len(idx) and not off:
+            occ_mat = np.array([aux[i]["occupancy"] for i in idx], dtype=float)
+            occ = [float(v) for v in occ_mat.mean(axis=0)]
+            n_occ = int(round(float(occ_mat.sum(axis=1).mean())))
+        else:
+            occ = [0.0] * n_nodes
+            n_occ = 0
         summary.append(
             {
                 "label": int(lbl),
@@ -6413,7 +6419,14 @@ def _summarize_lattice_clusters(labels, aux, n_nodes):
                 "median_site_spread_nm": _med("mean_site_spread_nm"),
             }
         )
-    summary.sort(key=lambda c: (c["is_offlattice"], -c["n_structures"]))
+    # on-lattice first, then most complete (fewest defects), then most populous
+    summary.sort(
+        key=lambda c: (
+            c["is_offlattice"],
+            -c["n_sites_occupied"],
+            -c["n_structures"],
+        )
+    )
     return summary
 
 
@@ -6422,27 +6435,35 @@ def cluster_lattice_defects(
     template_nm,
     expected_spacing_nm,
     allow_mirror=True,
-    min_on_lattice_sites=4,
-    rmse_gate_frac=0.3,
-    frac_on_lattice_gate=0.6,
+    min_on_lattice_sites=None,
+    min_on_lattice_frac=0.66,
+    rmse_gate_frac=0.2,
+    frac_on_lattice_gate=0.8,
     spacing_tol=0.3,
-    max_nlocs_cv=0.8,
-    max_spread_cv=0.4,
+    max_nlocs_cv=0.5,
+    max_spread_cv=0.3,
+    defect_grouping="completeness",
     min_samples=3,
     eps_frac=_SITE_EPS_FRAC,
 ):
     """Two-stage design-aware clustering of picks on a known lattice.
 
     Stage A separates *on-lattice* picks from off-lattice / sparse ones
-    (label ``-1``). A pick is on-lattice when it has enough matched sites, a
-    low best-fit residual, recovered spacing near design, **and** its
-    localizations are similarly distributed across sites - similar counts
-    per site (``max_nlocs_cv``) and a similar spread at every site
-    (``max_spread_cv``) - as a genuine origami has but an aggregate or a
-    misregistered blob does not. Stage B groups the on-lattice picks by their
-    canonical defect-occupancy pattern - each cluster is one defect class
-    (which design nodes are missing). Returns ``labels``, per-structure
-    ``aux``, ``cluster_summary``, ``n_nodes`` and the ``symmetry_perms``.
+    (label ``-1``). A pick is on-lattice when it registers to enough of the
+    design nodes (``min_on_lattice_sites`` / ``min_on_lattice_frac``), with a
+    low best-fit residual, recovered spacing near design, few off-lattice
+    extras (``frac_on_lattice_gate``), **and** localizations similarly
+    distributed across its sites - similar counts (``max_nlocs_cv``) and
+    similar spread (``max_spread_cv``) - as a genuine origami has but an
+    aggregate or misregistered blob does not.
+
+    Stage B groups the on-lattice picks. ``defect_grouping="completeness"``
+    (default) groups by the number of occupied sites (full / 1-defect /
+    2-defect / ... - a handful of interpretable classes robust to the
+    per-structure blinking noise that fragments exact patterns);
+    ``"exact"`` groups by the canonical defect pattern (which specific nodes
+    are missing). Returns ``labels``, per-structure ``aux``,
+    ``cluster_summary``, ``n_nodes`` and the ``symmetry_perms``.
     """
     template = np.asarray(template_nm, dtype=float).reshape(-1, 2)
     template = template - template.mean(axis=0)
@@ -6450,6 +6471,10 @@ def cluster_lattice_defects(
     perms = template_symmetry_permutations(template)
     design_nn = _median_nn_spacing(template)
     rmse_gate = rmse_gate_frac * expected_spacing_nm
+    # min matched sites: the larger of an absolute floor and a fraction of the
+    # design nodes, so junk that matches only a few nodes is rejected.
+    floor = 4 if min_on_lattice_sites is None else int(min_on_lattice_sites)
+    min_sites = max(floor, int(np.ceil(min_on_lattice_frac * n_nodes)))
     aux = [
         lattice_defect_features(
             s,
@@ -6470,20 +6495,24 @@ def cluster_lattice_defects(
             abs(a["fitted_spacing_nm"] - design_nn) <= spacing_tol * design_nn
         )
         on[i] = (
-            a["n_matched"] >= min_on_lattice_sites
+            a["n_matched"] >= min_sites
             and a["rmse_nm"] <= rmse_gate
             and a["frac_on_lattice"] >= frac_on_lattice_gate
             and spacing_ok
             and a["nlocs_cv"] <= max_nlocs_cv
             and a["spread_cv"] <= max_spread_cv
         )
-    counts = Counter(aux[i]["occupancy"] for i in range(n) if on[i])
-    occ_to_label = {
-        occ: lbl for lbl, (occ, _) in enumerate(counts.most_common())
-    }
-    for i in range(n):
-        if on[i]:
-            labels[i] = occ_to_label[aux[i]["occupancy"]]
+    on_idx = [i for i in range(n) if on[i]]
+    if defect_grouping == "exact":
+        counts = Counter(aux[i]["occupancy"] for i in on_idx)
+        key_to_label = {
+            occ: lbl for lbl, (occ, _) in enumerate(counts.most_common())
+        }
+        for i in on_idx:
+            labels[i] = key_to_label[aux[i]["occupancy"]]
+    else:  # completeness: group by number of occupied sites
+        for i in on_idx:
+            labels[i] = int(sum(aux[i]["occupancy"]))
     summary = _summarize_lattice_clusters(labels, aux, n_nodes)
     return {
         "labels": labels,
@@ -6491,6 +6520,7 @@ def cluster_lattice_defects(
         "cluster_summary": summary,
         "n_nodes": n_nodes,
         "symmetry_perms": perms,
+        "defect_grouping": defect_grouping,
     }
 
 

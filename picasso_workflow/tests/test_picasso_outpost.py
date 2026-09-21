@@ -1550,12 +1550,29 @@ def test_cluster_lattice_defects_two_stage_separation():
             continue
         members = truth[labels == c["label"]]
         assert len(set(members)) == 1
+    # default grouping is by completeness -> tiers labelled by occupied count
+    assert res["defect_grouping"] == "completeness"
     occ_sums = sorted(
         c["n_sites_occupied"]
         for c in res["cluster_summary"]
         if not c["is_offlattice"]
     )
     assert occ_sums == [11, 12]
+    # occupancy is a per-node probability (0..1) over the class members
+    full = [
+        c
+        for c in res["cluster_summary"]
+        if not c["is_offlattice"] and c["n_sites_occupied"] == 12
+    ][0]
+    assert all(0.0 <= p <= 1.0 for p in full["occupancy"])
+    assert min(full["occupancy"]) == 1.0  # full class: every node always on
+
+    # exact grouping still separates the two patterns (>= 2 classes)
+    res_exact = picasso_outpost.cluster_lattice_defects(
+        structs, tmpl, 20.0, defect_grouping="exact"
+    )
+    on_classes = {lb for lb in res_exact["labels"] if lb != -1}
+    assert len(on_classes) >= 2
 
 
 def test_cluster_lattice_defects_uniformity_gate():

@@ -530,9 +530,10 @@ def _plot_pattern_pairdist(
 
 
 def _plot_defect_maps(fp, summary, nodes_nm, max_clusters=24):
-    """Defect-map diagram per lattice cluster: the design nodes with occupied
-    (filled green) vs missing (open red) marked - each cluster's defect
-    fingerprint. Clusters are the on-lattice ones, most populous first."""
+    """Defect-map diagram per lattice cluster: the design nodes shaded by
+    their occupancy *probability* over the cluster (solid green = always
+    present, faded/red = often missing) - each class's defect fingerprint.
+    Clusters are the on-lattice ones, most complete first."""
     nodes = np.asarray(nodes_nm, dtype=float).reshape(-1, 2)
     clusters = [c for c in summary if not c.get("is_offlattice")][
         :max_clusters
@@ -549,26 +550,29 @@ def _plot_defect_maps(fp, summary, nodes_nm, max_clusters=24):
     for idx, c in enumerate(clusters):
         ax = axes[idx // ncol][idx % ncol]
         ax.set_aspect("equal")
-        occ = np.asarray(c.get("occupancy", []), dtype=int)
+        occ = np.asarray(c.get("occupancy", []), dtype=float)
         for j, (x, y) in enumerate(nodes):
-            filled = j < len(occ) and occ[j] == 1
+            p = float(occ[j]) if j < len(occ) else 0.0
+            # green filled with alpha = occupancy probability; red ring when a
+            # node is often missing (p < 0.5) so defects read at a glance
             ax.scatter(
                 [x],
                 [-y],  # y-down, image-like
                 s=90,
-                facecolors="#2ca02c" if filled else "none",
-                edgecolors="#2ca02c" if filled else "#d62728",
+                facecolors=(0.17, 0.63, 0.17, max(0.05, p)),
+                edgecolors="#2ca02c" if p >= 0.5 else "#d62728",
                 linewidths=1.5,
             )
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_title(
-            f"cluster {c['label']}: {c.get('n_sites_occupied', '?')}/"
-            f"{len(nodes)} sites (n={c['n_structures']})",
+            f"{c.get('n_sites_occupied', '?')}/{len(nodes)} sites "
+            f"(n={c['n_structures']})",
             fontsize=8,
         )
     fig.suptitle(
-        "Defect pattern per cluster (green=occupied, red=missing node)"
+        "Occupancy per class (green shade = fraction of structures "
+        "occupying the node)"
     )
     fig.tight_layout()
     fig.savefig(fp)
@@ -14834,10 +14838,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ("pattern_eps_frac", "eps_frac", float),
                 ("pattern_min_samples", "min_samples", int),
                 ("pattern_min_sites", "min_on_lattice_sites", int),
+                ("pattern_min_sites_frac", "min_on_lattice_frac", float),
                 ("pattern_rmse_gate_frac", "rmse_gate_frac", float),
                 ("pattern_frac_on_lattice", "frac_on_lattice_gate", float),
                 ("pattern_max_nlocs_cv", "max_nlocs_cv", float),
                 ("pattern_max_spread_cv", "max_spread_cv", float),
+                ("pattern_defect_grouping", "defect_grouping", str),
             ):
                 if parameters.get(pkey):
                     lattice_kwargs[akey] = cast(parameters[pkey])

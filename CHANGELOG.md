@@ -12,6 +12,24 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- The lattice-defect clustering is recalibrated against real data so it no
+  longer fills the report with junk classes. On a real cy3b run (3930 picks,
+  median 2 resolved sites each - i.e. mostly 1-2 spot blobs) the old settings
+  admitted ~500 picks fragmented into ~220 exact-defect classes, almost all
+  junk. Two changes fix it: (1) the on-lattice gate is stricter - a pick must
+  now match a **fraction of the design nodes** (`pattern_min_sites_frac`,
+  default 0.66 -> >=8 of 12) with tighter residual/uniformity thresholds
+  (`rmse_gate_frac` 0.3->0.2, `frac_on_lattice` 0.6->0.8, `max_nlocs_cv`
+  0.8->0.5, `max_spread_cv` 0.4->0.3); (2) on-lattice picks are grouped by
+  **completeness** (number of occupied sites), not exact pattern, giving a
+  handful of robust classes instead of one-per-noisy-pattern
+  (`pattern_defect_grouping`, `"completeness"` default or `"exact"`). Same
+  real run now yields 94 genuine origami in 5 tiers (37 full 12-site at rmse
+  ~2 nm, then 11/10/9/8-site) with the 3836 junk picks in the off-lattice
+  bucket. The per-class occupancy is now a per-node **probability** and the
+  defect-map figure shades nodes by it (revealing which nodes tend to be
+  missing).
+
 - Confluence attachment uploads are faster and no longer a reporting
   bottleneck. `ConfluenceInterface.upload_attachment` no longer does a second
   API round-trip (a full attachment listing) after every upload just to return

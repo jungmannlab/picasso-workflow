@@ -1981,9 +1981,17 @@ class AbstractModuleCollection(abc.ABC):
                 designs) registers each pick onto the design lattice and
                 clusters by lattice-fit quality + defect occupancy;
                 ``"pairwise"`` uses the template-agnostic descriptor.
+            ``pattern_defect_grouping`` : {"completeness", "exact"}
+                Lattice method: group on-lattice picks by number of occupied
+                sites (default, a few robust classes) or by the exact defect
+                pattern.
             ``pattern_min_sites`` : int
-                Lattice method: min matched sites to count as on-lattice
-                (default 4).
+                Lattice method: absolute floor on matched sites to count as
+                on-lattice (default 4; effective minimum is
+                ``max(this, pattern_min_sites_frac * n_nodes)``).
+            ``pattern_min_sites_frac`` : float
+                Lattice method: min matched sites as a fraction of the design
+                nodes (default 0.66).
             ``pattern_rmse_gate_frac`` : float
                 Lattice method: max lattice-fit residual to be on-lattice, as
                 a fraction of spacing (default 0.3).
