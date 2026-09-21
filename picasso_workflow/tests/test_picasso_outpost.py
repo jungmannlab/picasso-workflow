@@ -1134,6 +1134,28 @@ def test_geometry_recovery_from_simulated_locs_is_idempotent():
     assert reg1["rmse_nm"] == reg2["rmse_nm"]
 
 
+def test_subcluster_resolves_all_sites_for_bright_structures():
+    """Dense, bright origami must not have their sites merged by DBSCAN
+    chaining. Regression: eps=0.35*spacing bridged adjacent 20 nm sites
+    through their tails and systematically under-counted (roughly halved) the
+    resolved sites of bright, well-populated structures - worse the more
+    localizations a site had. A quarter-spacing eps recovers them."""
+    rng = np.random.default_rng(1)
+    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
+    # bright (50 locs/site), slightly spread (sigma 3 nm), random orientation
+    sites = tmpl.sites_nm @ _rot2d(28.0).T + np.array([300.0, 200.0])
+    cloud = np.vstack([s + rng.normal(0, 3.0, size=(50, 2)) for s in sites])
+    centers = picasso_outpost.subcluster_docking_sites(
+        cloud, tmpl.grid_spacing_nm
+    )
+    assert len(centers) >= 9  # ~all 12; the old default merged this to ~3
+    # the old, too-large neighbourhood demonstrably merged the sites
+    merged = picasso_outpost.subcluster_docking_sites(
+        cloud, tmpl.grid_spacing_nm, eps_frac=0.35
+    )
+    assert len(merged) < len(centers)
+
+
 def test_classify_candidate_reasons_and_ordering():
     """classify_candidate names the first failing criterion, in order
     missing_sites -> rmse -> spacing, and accept_candidate mirrors it."""

@@ -5527,7 +5527,7 @@ def origami_phase_space_preview(
 
 
 def subcluster_docking_sites(
-    xy_nm, expected_spacing_nm, min_samples=3, eps_frac=0.35
+    xy_nm, expected_spacing_nm, min_samples=3, eps_frac=0.25
 ):
     """Cluster localizations within a footprint into docking-site centers.
 
@@ -5542,7 +5542,12 @@ def subcluster_docking_sites(
         DBSCAN ``min_samples``. Default 3.
     eps_frac : float, optional
         DBSCAN ``eps`` as a fraction of ``expected_spacing_nm``. Default
-        0.35.
+        0.25 (eps = a quarter of the site spacing). Values much above this
+        let DBSCAN *chain* adjacent sites together through their tails - the
+        more localizations a site has, the more likely the bridge - which
+        systematically **under**-counts the sites of bright, well-resolved
+        structures. A quarter-spacing eps groups each site's own
+        localizations while staying well below the inter-site gap.
 
     Returns
     -------

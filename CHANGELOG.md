@@ -97,6 +97,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `subcluster_docking_sites` no longer systematically **under**-counts docking
+  sites. The DBSCAN neighbourhood was `0.35 x spacing` (7 nm at 20 nm design),
+  large enough to *chain* adjacent sites together through their localization
+  tails - and the more localizations a site had, the more likely the bridge -
+  so bright, well-resolved structures had their site count roughly halved (a
+  clearly-12-site origami reported as ~5). The default `eps_frac` is now `0.25`
+  (a quarter of the spacing), which groups each site's own localizations while
+  staying well below the inter-site gap. This corrects the per-structure site
+  counts feeding `pick_origami`'s geometry-pattern clustering (and the
+  `filter_by_geometry` registration path).
+
 - `pick_origami` no longer wedges the report for tens of minutes when many
   structures are accepted. A large `n_plot_structures` on a big accepted set
   (e.g. a permissive window accepting ~16 000 structures) rendered thousands of
