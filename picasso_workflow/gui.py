@@ -5984,11 +5984,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     a grid {n_rows, n_cols, spacing_nm, angle} or an
                     explicit {sites_nm: [[x, y], ...]} layout
             and optional keys:
-                grid_spacing_nm, candidate_method, missing_sites_allowed,
-                spacing_tol, max_rmse_nm, footprint_diameter,
+                footprint_diameter, pick_diameter_factor,
                 min_n_locs_per_frame, max_n_locs_per_frame, min_rmsd,
-                max_rmsd, kinetics, allow_mirror, n_plot_structures,
-                display_pixelsize
+                max_rmsd, allow_mirror, n_plot_structures, display_pixelsize,
+                cluster_patterns and the pattern_* clustering parameters
         results : dict
             the results this function generates. This is created
             in the decorator wrapper
@@ -6006,66 +6005,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "Grid {n_rows, n_cols, spacing_nm, angle} or explicit "
                     "{sites_nm: [[x, y], ...]} layout"
                 ),
-                "required": False,
-            },
-            "grid_spacing_nm": {
-                "type": "float",
-                "description": "Physical spacing (nm) anchoring the design",
-                "min": 0.0,
-                "required": False,
-            },
-            "missing_sites_allowed": {
-                "type": "int",
-                "description": (
-                    "Max missing sites in a simulated origami (for the "
-                    "phase-space simulation)"
-                ),
-                "min": 0,
-                "default": 2,
-                "required": False,
-            },
-            "site_uncertainty_nm": {
-                "type": "float",
-                "description": (
-                    "Per-loc Gaussian spread around each site (nm), for the "
-                    "phase-space simulation"
-                ),
-                "min": 0.0,
-                "default": 3.0,
-                "required": False,
-            },
-            "mean_locs_per_site": {
-                "type": "float",
-                "description": (
-                    "Explicit mean localizations per site (overrides "
-                    "kinetics); drives the simulated pick window"
-                ),
-                "min": 0.0,
-                "required": False,
-            },
-            "n_sim": {
-                "type": "int",
-                "description": "Number of simulated origami realisations",
-                "min": 1,
-                "default": 1500,
-                "required": False,
-            },
-            "sim_quantile": {
-                "type": "float",
-                "description": (
-                    "Per-axis tail fraction dropped when turning the "
-                    "simulated cloud into the pick rectangle"
-                ),
-                "min": 0.0,
-                "max": 0.5,
-                "default": 0.01,
-                "required": False,
-            },
-            "random_seed": {
-                "type": "int",
-                "description": "Simulation random seed (reproducibility)",
-                "min": 0,
-                "default": 0,
                 "required": False,
             },
             "footprint_diameter": {
@@ -6113,17 +6052,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Override the simulated max RMSD (camera px)",
                 "required": False,
             },
-            "kinetics": {
-                "type": "dict",
-                "description": (
-                    "{k_on, tau_b, concentration, exposure} -> mean locs per "
-                    "site, driving the simulated pick window"
-                ),
-                "required": False,
-            },
             "allow_mirror": {
                 "type": "bool",
-                "description": "Allow a mirrored match (geometry filter)",
+                "description": "Allow a mirrored match to the design",
                 "default": True,
                 "required": False,
             },
@@ -10469,6 +10400,60 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
         self.pixelsize_spin.setValue(130.0)
         self.pixelsize_spin.setSuffix(" nm")
         form.addRow("Pixel size:", self.pixelsize_spin)
+
+        # Simulation inputs. These used to be pick_origami parameters, but they
+        # only shape the *suggested* window - the module takes the resulting
+        # min/max_rmsd + min/max_n_locs_per_frame explicitly - so they live
+        # here in the (design-time) preview instead.
+        self.mean_locs_spin = QtWidgets.QDoubleSpinBox()
+        self.mean_locs_spin.setRange(0.0, 1e6)
+        self.mean_locs_spin.setDecimals(1)
+        self.mean_locs_spin.setValue(20.0)
+        self.mean_locs_spin.setToolTip(
+            "Mean localizations per docking site (0 = derive from kinetics)"
+        )
+        form.addRow("Mean locs / site:", self.mean_locs_spin)
+
+        self.missing_sites_spin = QtWidgets.QSpinBox()
+        self.missing_sites_spin.setRange(0, 1000)
+        self.missing_sites_spin.setValue(2)
+        form.addRow("Missing sites allowed:", self.missing_sites_spin)
+
+        self.site_uncertainty_spin = QtWidgets.QDoubleSpinBox()
+        self.site_uncertainty_spin.setRange(0.0, 1000.0)
+        self.site_uncertainty_spin.setValue(3.0)
+        self.site_uncertainty_spin.setSuffix(" nm")
+        form.addRow("Site uncertainty:", self.site_uncertainty_spin)
+
+        self.n_sim_spin = QtWidgets.QSpinBox()
+        self.n_sim_spin.setRange(1, 1_000_000)
+        self.n_sim_spin.setValue(1500)
+        form.addRow("# simulations:", self.n_sim_spin)
+
+        self.sim_quantile_spin = QtWidgets.QDoubleSpinBox()
+        self.sim_quantile_spin.setRange(0.0, 0.5)
+        self.sim_quantile_spin.setDecimals(4)
+        self.sim_quantile_spin.setValue(0.01)
+        form.addRow("Window tail quantile:", self.sim_quantile_spin)
+
+        self.random_seed_spin = QtWidgets.QSpinBox()
+        self.random_seed_spin.setRange(0, 1_000_000_000)
+        self.random_seed_spin.setValue(0)
+        form.addRow("Random seed:", self.random_seed_spin)
+
+        # kinetics (used only when 'Mean locs / site' is 0); free-text so
+        # scientific notation is natural (k_on 1e6, concentration 5e-9, ...)
+        self.kinetics_edits = {}
+        for key, placeholder in (
+            ("k_on", "1e6"),
+            ("tau_b", "0.5"),
+            ("concentration", "5e-9"),
+            ("exposure", "0.1"),
+        ):
+            edit = QtWidgets.QLineEdit()
+            edit.setPlaceholderText(placeholder)
+            self.kinetics_edits[key] = edit
+            form.addRow(f"kinetics {key}:", edit)
         layout.addLayout(form)
 
         self.sim_button = QtWidgets.QPushButton("Simulate && preview")
@@ -10530,13 +10515,19 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
                 "(e.g. {'n_rows': 3, 'n_cols': 4, 'spacing_nm': 20}) first."
             )
             return
-        kinetics = p.get("kinetics") or None
-        mean_locs = p.get("mean_locs_per_site")
-        mean_locs = self._as_float(mean_locs, None) if mean_locs else None
+        mean_locs = self.mean_locs_spin.value() or None
+        kinetics = None
+        if mean_locs is None:
+            vals = {
+                k: self._as_float(e.text(), None)
+                for k, e in self.kinetics_edits.items()
+            }
+            if all(v is not None for v in vals.values()):
+                kinetics = vals
         if kinetics is None and mean_locs is None:
             self.result_label.setText(
-                "Provide 'kinetics' {k_on, tau_b, concentration, exposure} "
-                "or 'mean_locs_per_site' to simulate."
+                "Set 'Mean locs / site', or fill all four kinetics fields "
+                "(k_on, tau_b, concentration, exposure), to simulate."
             )
             return
         try:
@@ -10545,16 +10536,12 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
                 n_frames=self.n_frames_spin.value(),
                 kinetics=kinetics,
                 mean_locs_per_site=mean_locs,
-                missing_sites_allowed=self._as_int(
-                    p.get("missing_sites_allowed"), 2
-                ),
-                site_uncertainty_nm=self._as_float(
-                    p.get("site_uncertainty_nm"), 3.0
-                ),
+                missing_sites_allowed=self.missing_sites_spin.value(),
+                site_uncertainty_nm=self.site_uncertainty_spin.value(),
                 pixelsize=self.pixelsize_spin.value(),
-                n_sim=self._as_int(p.get("n_sim"), 1500),
-                sim_quantile=self._as_float(p.get("sim_quantile"), 0.01),
-                grid_spacing_nm=self._as_float(p.get("grid_spacing_nm"), None),
+                n_sim=self.n_sim_spin.value(),
+                sim_quantile=self.sim_quantile_spin.value(),
+                random_seed=self.random_seed_spin.value(),
             )
         except Exception as exc:
             self.result_label.setText(f"Simulation failed: {exc}")

@@ -14554,44 +14554,26 @@ class AutoPicasso(util.AbstractModuleCollection):
                 return default
             return val
 
-        grid_spacing_nm = _opt("grid_spacing_nm", zero_is_unset=True)
-
         # --- 1. load the design template (expected geometry) -----------
+        # The design spacing comes from the geometry spec (grid ``spacing_nm``
+        # or the explicit site list); the picker works in that frame.
         if _opt("design_file"):
-            template_spec = {
-                "design_file": parameters["design_file"],
-                "grid_spacing_nm": grid_spacing_nm,
-            }
+            template_spec = {"design_file": parameters["design_file"]}
         elif _opt("geometry") is not None:
             template_spec = parameters["geometry"]
         else:
             raise ValueError(
                 "pick_origami needs a 'design_file' or a 'geometry' spec"
             )
-        template = picasso_outpost.load_origami_template(
-            template_spec, grid_spacing_nm=grid_spacing_nm
-        )
+        template = picasso_outpost.load_origami_template(template_spec)
         results["n_sites_expected"] = template.n_sites_expected
         results["grid_spacing_nm"] = template.grid_spacing_nm
 
-        # --- 2. kinetics -> mean localizations per docking site --------
-        # The picker simulates the expected nlocs/rmsd phase space from the
-        # geometry + these kinetics; an explicit mean_locs_per_site overrides.
-        missing_sites_allowed = parameters.get("missing_sites_allowed", 2)
-        mean_locs_per_site = _opt("mean_locs_per_site", zero_is_unset=True)
-        kinetics = parameters.get("kinetics")
-        if mean_locs_per_site is None and kinetics:
-            n_frames = self.info[0]["Frames"]
-            mean_locs_per_site = picasso_outpost.predict_locs_per_site(
-                kinetics["k_on"],
-                kinetics["tau_b"],
-                kinetics["concentration"],
-                n_frames,
-                kinetics["exposure"],
-            )
-            results["mean_locs_per_site"] = float(mean_locs_per_site)
-
-        # --- 3. run the design-aware picker ----------------------------
+        # --- 2. run the design-aware picker ----------------------------
+        # The pick window is set explicitly via min/max_rmsd and
+        # min/max_n_locs_per_frame (the "Preview phase space" GUI dialog
+        # simulates the expected origami cloud to suggest those bounds); the
+        # module itself no longer simulates.
         pick_result = picasso_outpost.pick_origami(
             self.locs,
             self.info,
@@ -14599,12 +14581,6 @@ class AutoPicasso(util.AbstractModuleCollection):
             pixelsize,
             footprint_diameter=_opt("footprint_diameter", zero_is_unset=True),
             pick_diameter_factor=_opt("pick_diameter_factor", 1.5),
-            missing_sites_allowed=missing_sites_allowed,
-            site_uncertainty_nm=_opt("site_uncertainty_nm", 3.0),
-            mean_locs_per_site=mean_locs_per_site,
-            n_sim=_opt("n_sim", 1500),
-            sim_quantile=_opt("sim_quantile", 0.01),
-            random_seed=_opt("random_seed", 0),
             min_n_locs_per_frame=_opt("min_n_locs_per_frame"),
             max_n_locs_per_frame=_opt("max_n_locs_per_frame"),
             min_rmsd=_opt("min_rmsd", zero_is_unset=True),

@@ -1902,32 +1902,18 @@ class AbstractModuleCollection(abc.ABC):
                 A grid ``{n_rows, n_cols, spacing_nm, angle}`` or an
                 explicit ``{sites_nm: [[x, y], ...]}`` layout.
 
+            The design spacing comes from the ``geometry`` spec itself (the
+            grid ``spacing_nm`` or the explicit site list).
+
             Optional keys:
 
-            ``grid_spacing_nm`` : float
-                Physical spacing (nm) used to anchor a design-file scale.
-            ``missing_sites_allowed`` : int
-                Max missing sites in a simulated origami, for the phase-space
-                simulation (default 2).
-            ``site_uncertainty_nm`` : float
-                Per-localization Gaussian spread around each site, for the
-                phase-space simulation (default 3).
-            ``kinetics`` : dict
-                ``{k_on, tau_b, concentration, exposure}`` -> mean locs per
-                site, driving the simulated pick window.
-            ``mean_locs_per_site`` : float
-                Explicit mean localizations per site (overrides ``kinetics``).
-            ``n_sim`` : int
-                Number of simulated realisations (default 1500).
-            ``sim_quantile`` : float
-                Per-axis tail fraction dropped when turning the simulated
-                cloud into the pick rectangle (default 0.01).
-            ``random_seed`` : int
-                Simulation seed (default 0).
             ``min_n_locs_per_frame``, ``max_n_locs_per_frame`` : float or str
-                Override the simulated nlocs window (quantile strings ok).
+                The nlocs pick window (per-frame, or a quantile string like
+                ``"q0.25"``). The "Preview phase space" GUI dialog simulates
+                the expected origami cloud to suggest these.
             ``min_rmsd``, ``max_rmsd`` : float
-                Override the simulated RMSD window (camera px).
+                The RMSD pick window (camera px), likewise suggested by the
+                preview dialog.
             ``footprint_diameter`` : float
                 Pick diameter (camera px) spanning one origami; overrides
                 ``pick_diameter_factor`` when set.

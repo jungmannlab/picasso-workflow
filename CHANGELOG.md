@@ -12,7 +12,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Removed
 
-- Trimmed the `pick_origami` parameter surface from 38 to 25 by dropping
+- Moved the phase-space **simulation** parameters out of the `pick_origami`
+  module into the "Preview phase space" GUI dialog, where they belong (they
+  only shape the *suggested* pick window; the module takes the resulting
+  `min/max_rmsd` + `min/max_n_locs_per_frame` explicitly). Gone from the
+  module: `mean_locs_per_site`, `kinetics`, `n_sim`, `sim_quantile`,
+  `random_seed`, `site_uncertainty_nm`, `missing_sites_allowed`. Also dropped
+  `grid_spacing_nm` - the design spacing comes from the `geometry` spec
+  (`spacing_nm` / the site list), so it was a redundant offset. The preview
+  dialog now has its own input fields for all of these.
+
+- Trimmed the `pick_origami` parameter surface (now 17 total) by dropping
   options the lattice workflow no longer needs. Gone: the superseded
   per-candidate geometry filter (`filter_by_geometry`, `spacing_tol`,
   `max_rmse_nm`); the pairwise-clustering knobs (`pattern_method`,
