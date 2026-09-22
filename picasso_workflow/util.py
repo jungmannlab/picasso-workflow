@@ -1939,7 +1939,9 @@ class AbstractModuleCollection(abc.ABC):
                 under-counted; raise if a single site splits.
             ``pattern_min_samples`` : int
                 DBSCAN ``min_samples`` for docking-site subclustering
-                (default 3; a site needs at least this many localizations).
+                (default 7; a site needs at least this many localizations).
+                A high floor suppresses spurious over-counted sites; drop it
+                only for dim samples with few locs per site.
             ``pattern_defect_grouping`` : {"completeness", "exact"}
                 Lattice method: group on-lattice picks by number of occupied
                 sites (default, a few robust classes) or by the exact defect

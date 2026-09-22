@@ -473,6 +473,30 @@ def _plot_pattern_phasespace(fp, nlocs, rmsds, labels, summary):
     return fp
 
 
+def _plot_lattice_fit_space(fp, n_matched, rmse_nm, labels, summary):
+    """Lattice method: accepted structures in (matched-site count, template
+    fit RMSE), per-cluster density contours.
+
+    Unlike the pick-window phase space (nlocs-per-frame, rmsd), these are the
+    registration observables the on-lattice gate actually decides on, so the
+    clean-origami island separates from the off-lattice cloud much more
+    sharply - the targeted view of where the candidates sit.
+    """
+    n_matched = np.asarray(n_matched, dtype=float)
+    rmse_nm = np.asarray(rmse_nm, dtype=float)
+    if not np.any(np.isfinite(n_matched) & np.isfinite(rmse_nm)):
+        return None
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(ax, n_matched, rmse_nm, labels, summary)
+    ax.set_xlabel("# docking sites matched to template")
+    ax.set_ylabel("template fit RMSE (nm)")
+    ax.set_title("Accepted structures by lattice fit quality")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
 def _plot_pattern_feature_space(fp, features, labels, summary):
     """PCA(2) of the standardized descriptor features, per-cluster density -
     shows how well the clustering separates in the full descriptor space."""
@@ -14825,8 +14849,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         sub_kwargs = {}
         if parameters.get("pattern_eps_frac"):
             sub_kwargs["eps_frac"] = float(parameters["pattern_eps_frac"])
-        if parameters.get("pattern_min_samples"):
-            sub_kwargs["min_samples"] = int(parameters["pattern_min_samples"])
+        # min_samples defaults to 7 (not the library floor of 3): bright
+        # DNA-PAINT origami sites carry enough locs that a higher DBSCAN floor
+        # suppresses spurious over-counted sites and recovers substantially
+        # more on-lattice structures (see CHANGELOG / pattern_min_samples).
+        sub_kwargs["min_samples"] = int(
+            parameters.get("pattern_min_samples") or 7
+        )
         if method == "lattice":
             lattice_kwargs = dict(sub_kwargs)
             if parameters.get("pattern_min_sites_frac"):
@@ -14962,6 +14991,23 @@ class AutoPicasso(util.AbstractModuleCollection):
             results["fp_pattern_pairdist"] = pd_fp
 
         if method == "lattice":
+            # targeted fit-quality phase space (matched-site count vs template
+            # fit RMSE) - the registration observables the gate decides on;
+            # aux is per-structure, aligned to labels.
+            aux = cl.get("aux") or []
+            if len(aux) == len(labels):
+                fit_fp = _plot_lattice_fit_space(
+                    os.path.join(
+                        results["folder"], f"pattern-fitspace-{rcode}.png"
+                    ),
+                    [a.get("n_matched", np.nan) for a in aux],
+                    [a.get("rmse_nm", np.nan) for a in aux],
+                    labels,
+                    summary,
+                )
+                if fit_fp:
+                    results["fp_pattern_fit_space"] = fit_fp
+
             # #locs-per-site histogram per cluster (site-resolution / tuning)
             hist_fp = _plot_site_nlocs_hist(
                 os.path.join(

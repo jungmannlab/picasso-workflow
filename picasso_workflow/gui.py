@@ -6102,7 +6102,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "below 2 are treated as 2)"
                 ),
                 "min": 2,
-                "default": 3,
+                "default": 7,
                 "required": False,
             },
             "pattern_defect_grouping": {
@@ -6250,6 +6250,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": (
                     "filepath to the phase-space figure coloured by "
                     "geometry pattern (cluster_patterns only)"
+                ),
+            },
+            "fp_pattern_fit_space": {
+                "type": "str",
+                "description": (
+                    "filepath to the lattice fit-quality phase space "
+                    "(matched-site count vs template fit RMSE), coloured by "
+                    "defect cluster (lattice method only)"
                 ),
             },
             "fp_pattern_feature_space": {

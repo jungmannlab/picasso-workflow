@@ -47,6 +47,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- The `pick_origami` docking-site subclustering default `pattern_min_samples`
+  is raised **3 -> 7**. On real bright cy3b data a DBSCAN floor of 3 lets a
+  single site fragment into spurious extra sites (median ~13-14 "sites" on a
+  12-node design), whose loc-count imbalance then trips the on-lattice
+  uniformity gate. Raising the floor to 7 suppresses the over-counting and
+  recovers ~2x more genuine on-lattice origami (a 4000-pick sweep: 62 -> 138
+  on-lattice, 37 -> 87 full-12-site) with the site count settling at the true
+  12. Drop it again only for dim samples with few locs per site.
+
 - The lattice-defect clustering is recalibrated against real data so it no
   longer fills the report with junk classes. On a real cy3b run (3930 picks,
   median 2 resolved sites each - i.e. mostly 1-2 spot blobs) the old settings
@@ -93,6 +102,14 @@ This file was started after v0.5.6; earlier history is in the git log.
   `phase_space_window_from_sim`.
 
 ### Added
+
+- A targeted **lattice fit-quality phase space** figure
+  (`fp_pattern_fit_space`) for the lattice method: accepted structures plotted
+  in (matched-site count, template fit RMSE), coloured by defect cluster.
+  These are the registration observables the on-lattice gate actually decides
+  on, so the clean-origami island separates from the off-lattice cloud far more
+  sharply than the pick-window phase space (nlocs-per-frame, rmsd), which is
+  still shown as the first-pass view.
 
 - Design-aware **lattice-defect** clustering primitives in `picasso_outpost`
   (`cluster_lattice_defects`, `lattice_defect_features`,
