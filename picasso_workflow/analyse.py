@@ -14579,7 +14579,6 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.info,
             template,
             pixelsize,
-            footprint_diameter=_opt("footprint_diameter", zero_is_unset=True),
             pick_diameter_factor=_opt("pick_diameter_factor", 1.5),
             min_n_locs_per_frame=_opt("min_n_locs_per_frame"),
             max_n_locs_per_frame=_opt("max_n_locs_per_frame"),

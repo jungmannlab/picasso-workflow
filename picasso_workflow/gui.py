@@ -5984,10 +5984,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     a grid {n_rows, n_cols, spacing_nm, angle} or an
                     explicit {sites_nm: [[x, y], ...]} layout
             and optional keys:
-                footprint_diameter, pick_diameter_factor,
-                min_n_locs_per_frame, max_n_locs_per_frame, min_rmsd,
-                max_rmsd, allow_mirror, n_plot_structures, display_pixelsize,
-                cluster_patterns and the pattern_* clustering parameters
+                pick_diameter_factor, min_n_locs_per_frame,
+                max_n_locs_per_frame, min_rmsd, max_rmsd, allow_mirror,
+                n_plot_structures, display_pixelsize, cluster_patterns and
+                the pattern_* clustering parameters
         results : dict
             the results this function generates. This is created
             in the decorator wrapper
@@ -6007,20 +6007,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 ),
                 "required": False,
             },
-            "footprint_diameter": {
-                "type": "float",
-                "description": (
-                    "Pick diameter (camera px) spanning one origami; "
-                    "overrides pick_diameter_factor when set"
-                ),
-                "min": 0.0,
-                "required": False,
-            },
             "pick_diameter_factor": {
                 "type": "float",
                 "description": (
-                    "Pick diameter as a multiple of the origami size when "
-                    "footprint_diameter is not set (1.5 = 150%)"
+                    "Pick diameter as a multiple of the origami size "
+                    "(1.5 = 150%)"
                 ),
                 "min": 0.0,
                 "default": 1.5,

@@ -22,7 +22,11 @@ This file was started after v0.5.6; earlier history is in the git log.
   (`spacing_nm` / the site list), so it was a redundant offset. The preview
   dialog now has its own input fields for all of these.
 
-- Trimmed the `pick_origami` parameter surface (now 17 total) by dropping
+- Dropped `pick_origami`'s `footprint_diameter` - it only overrode the
+  `pick_diameter_factor` x origami-size computation, which is what everyone
+  uses; the pick diameter is now always `pick_diameter_factor` x extent.
+
+- Trimmed the `pick_origami` parameter surface (now 16 total) by dropping
   options the lattice workflow no longer needs. Gone: the superseded
   per-candidate geometry filter (`filter_by_geometry`, `spacing_tol`,
   `max_rmse_nm`); the pairwise-clustering knobs (`pattern_method`,

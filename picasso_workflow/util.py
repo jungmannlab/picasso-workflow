@@ -1914,12 +1914,9 @@ class AbstractModuleCollection(abc.ABC):
             ``min_rmsd``, ``max_rmsd`` : float
                 The RMSD pick window (camera px), likewise suggested by the
                 preview dialog.
-            ``footprint_diameter`` : float
-                Pick diameter (camera px) spanning one origami; overrides
-                ``pick_diameter_factor`` when set.
             ``pick_diameter_factor`` : float
-                Pick diameter as a multiple of the origami size when
-                ``footprint_diameter`` is unset (default 1.5 = 150 %).
+                Pick diameter as a multiple of the origami size
+                (default 1.5 = 150 %).
             ``allow_mirror`` : bool
                 Allow a mirrored match when registering to the design
                 (default True).
