@@ -103,6 +103,26 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- A cheap, registration-free **lattice pair-score** first-layer discriminator
+  (`picasso_outpost.lattice_pair_score`): a windowed pair-correlation - the
+  fraction of intra-footprint localization pairs at the design spacing over a
+  short-range reference band. On a real cy3b run it separates genuine origami
+  from junk almost as well as full registration (rank-AUC 0.99 vs 1.00) at a
+  fraction of the cost, and far more specifically than brightness/rmsd because
+  it keys on lattice *periodicity*, not intensity. `cluster_lattice_defects`
+  now runs it on **every** pick as a pre-screen (`min_pair_score`, default
+  0.5): picks below the threshold are marked off-lattice without the expensive
+  template registration, so the fit only runs on genuine candidates. On real
+  data this reproduces the identical on-lattice set (zero recall loss) while
+  skipping ~85 % of the registrations. Each pick's score is kept in
+  `aux[i]["pair_score"]`; set `min_pair_score=None` to disable.
+
+- A registration-free **pair-score phase space** report figure
+  (`fp_pattern_pairscore_space`): accepted structures in (nlocs-per-frame,
+  lattice pair-score), coloured by defect cluster - the origami island sits at
+  high pair-score, cleanly separated from the junk cloud that brightness alone
+  cannot resolve.
+
 - A targeted **lattice fit-quality phase space** figure
   (`fp_pattern_fit_space`) for the lattice method: accepted structures plotted
   in (matched-site count, template fit RMSE), coloured by defect cluster.

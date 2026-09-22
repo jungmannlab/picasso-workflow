@@ -6260,6 +6260,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "defect cluster (lattice method only)"
                 ),
             },
+            "fp_pattern_pairscore_space": {
+                "type": "str",
+                "description": (
+                    "filepath to the registration-free pair-score phase "
+                    "space (nlocs-per-frame vs lattice pair-score), coloured "
+                    "by defect cluster (lattice method only)"
+                ),
+            },
             "fp_pattern_feature_space": {
                 "type": "str",
                 "description": (

@@ -1588,6 +1588,56 @@ def test_cluster_lattice_defects_two_stage_separation():
     assert len(on_classes) >= 2
 
 
+def test_lattice_pair_score_separates_lattice_from_blob():
+    """The registration-free pair-score is high for a genuine lattice pick
+    and near zero for an amorphous blob of the same extent/count."""
+    rng = np.random.default_rng(0)
+    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    lattice = _lattice_blob(range(12), tmpl, 20.0, rng)
+    # the dominant junk class is a single tight spot (one blinking site): all
+    # pairs sit at short range, so the design-spacing band is empty -> score ~0
+    tight = rng.normal(0, 2.5, size=(len(lattice), 2))
+    s_lat = picasso_outpost.lattice_pair_score(lattice, 20.0)
+    s_tight = picasso_outpost.lattice_pair_score(tight, 20.0)
+    assert s_lat > 1.0
+    assert s_tight < 0.5
+    assert s_lat > 3 * s_tight
+    # degenerate inputs are safe (score 0, no error)
+    assert picasso_outpost.lattice_pair_score(lattice[:2], 20.0) == 0.0
+    assert picasso_outpost.lattice_pair_score(lattice, 0.0) == 0.0
+
+
+def test_cluster_lattice_defects_prescreen_matches_and_annotates():
+    """The pair-score pre-screen leaves the on-lattice result unchanged
+    (real lattices pass), tags every pick with its ``pair_score``, and
+    disabling it (``min_pair_score=None``) is a no-op on the labels."""
+    rng = np.random.default_rng(1)
+    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    structs = []
+    for _ in range(30):
+        structs.append(_lattice_blob(range(12), tmpl, 20.0, rng))
+    for _ in range(30):
+        structs.append(rng.normal(0, 60, size=(int(rng.integers(3, 8)), 2)))
+
+    ref = picasso_outpost.cluster_lattice_defects(
+        structs, tmpl, 20.0, min_pair_score=None
+    )
+    scr = picasso_outpost.cluster_lattice_defects(
+        structs, tmpl, 20.0, min_pair_score=0.5
+    )
+    # same on-lattice set (the pre-screen only removes junk from the fit)
+    assert np.array_equal(
+        np.asarray(ref["labels"]) != -1, np.asarray(scr["labels"]) != -1
+    )
+    # every pick carries a pair_score; the real lattices score high
+    assert all("pair_score" in a for a in scr["aux"])
+    on = np.asarray(scr["labels"]) != -1
+    assert min(scr["aux"][i]["pair_score"] for i in np.where(on)[0]) >= 0.5
+    # a pick the pre-screen rejects never got registered (n_matched stays 0)
+    skipped = [a for a in scr["aux"] if a["pair_score"] < 0.5]
+    assert skipped and all(a["n_matched"] == 0 for a in skipped)
+
+
 def test_cluster_lattice_defects_uniformity_gate():
     """A structure with one anomalously bright site (non-uniform blinking)
     fails the on-lattice gate, while the same geometry with uniform blinking

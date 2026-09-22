@@ -2476,6 +2476,7 @@ class TestAnalyseModules(unittest.TestCase):
                 {
                     "n_matched": 12,
                     "rmse_nm": 1.0,
+                    "pair_score": 2.4,
                     "site_centers_nm": np.array(
                         [[1300.0, 1300.0], [1320.0, 1300.0]]
                     ),
@@ -2485,6 +2486,7 @@ class TestAnalyseModules(unittest.TestCase):
                 {
                     "n_matched": 11,
                     "rmse_nm": 1.5,
+                    "pair_score": 1.8,
                     "site_centers_nm": np.array([[2600.0, 2860.0]]),
                     "site_nodes": np.array([5]),
                     "site_nlocs_matched": np.array([48.0]),
@@ -2560,6 +2562,8 @@ class TestAnalyseModules(unittest.TestCase):
         assert os.path.exists(results["fp_pattern_site_nlocs_hist"])
         # targeted lattice fit-quality phase space (matched sites vs fit RMSE)
         assert os.path.exists(results["fp_pattern_fit_space"])
+        # registration-free pair-score phase space (nlocs/frame vs pair-score)
+        assert os.path.exists(results["fp_pattern_pairscore_space"])
         assert os.path.exists(results["fp_pattern_table"])
         # occupancy carried through to the summary
         by_label = {c["label"]: c for c in results["pattern_summary"]}

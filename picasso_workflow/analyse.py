@@ -497,6 +497,30 @@ def _plot_lattice_fit_space(fp, n_matched, rmse_nm, labels, summary):
     return fp
 
 
+def _plot_lattice_pairscore_space(fp, nlocs, pair_score, labels, summary):
+    """Registration-free view: structures in (nlocs-per-frame, lattice
+    pair-score).
+
+    The pair-score is the cheap first-layer origami discriminator (windowed
+    pair-correlation at the design spacing, computed on every pick before the
+    expensive registration). The origami island sits at high pair-score, well
+    separated from the junk cloud that brightness (nlocs) alone cannot
+    resolve.
+    """
+    ps = np.asarray(pair_score, dtype=float)
+    if not np.any(np.isfinite(ps)):
+        return None
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(ax, nlocs, ps, labels, summary)
+    ax.set_xlabel("# localizations per frame in footprint")
+    ax.set_ylabel("lattice pair-score at design spacing")
+    ax.set_title("Accepted structures by lattice pair-score")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
 def _plot_pattern_feature_space(fp, features, labels, summary):
     """PCA(2) of the standardized descriptor features, per-cluster density -
     shows how well the clustering separates in the full descriptor space."""
@@ -15007,6 +15031,25 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
                 if fit_fp:
                     results["fp_pattern_fit_space"] = fit_fp
+
+                # registration-free pair-score view (the cheap first-layer
+                # discriminator) vs brightness. accepted_nlocs is aligned to
+                # accepted_centers; gid_idx maps structures -> that index.
+                acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+                gid_idx = np.asarray(group_ids, dtype=int)
+                if len(acc_nlocs) and n_frames:
+                    ps_fp = _plot_lattice_pairscore_space(
+                        os.path.join(
+                            results["folder"],
+                            f"pattern-pairscore-{rcode}.png",
+                        ),
+                        acc_nlocs[gid_idx] / n_frames,
+                        [a.get("pair_score", np.nan) for a in aux],
+                        labels,
+                        summary,
+                    )
+                    if ps_fp:
+                        results["fp_pattern_pairscore_space"] = ps_fp
 
             # #locs-per-site histogram per cluster (site-resolution / tuning)
             hist_fp = _plot_site_nlocs_hist(

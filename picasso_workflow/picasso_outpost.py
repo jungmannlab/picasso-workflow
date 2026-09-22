@@ -6271,6 +6271,64 @@ def _canonical_occupancy(occ, perms):
     return best
 
 
+def lattice_pair_score(
+    xy_nm,
+    expected_spacing_nm,
+    band_nm=4.0,
+    ref_lo_nm=6.0,
+    ref_hi_nm=14.0,
+    max_locs=1500,
+    random_seed=0,
+):
+    """Cheap, registration-free 'is this a lattice?' score for one pick.
+
+    A windowed pair-correlation: the fraction of localization pairs
+    separated by the design spacing (``expected_spacing_nm`` +/- ``band_nm``)
+    over the fraction in a short-range reference band (``ref_lo_nm`` ..
+    ``ref_hi_nm``), each divided by its band centre so a structureless disk
+    scores ~1. A genuine lattice has a sharp excess at the design spacing and
+    scores well above 1; an amorphous blob or a 1-2 spot cluster scores near
+    0. Costs only the intra-footprint pairwise distances (no registration),
+    so it is the first-layer discriminator computed on every pick.
+
+    For very dense footprints the localizations are randomly subsampled to
+    ``max_locs`` to bound the pairwise cost (the ratio is unbiased by this).
+    """
+    p = np.asarray(xy_nm, dtype=float).reshape(-1, 2)
+    n = len(p)
+    if n < 4 or expected_spacing_nm <= 0:
+        return 0.0
+    if n > max_locs:
+        rng = np.random.default_rng(random_seed)
+        p = p[rng.choice(n, size=max_locs, replace=False)]
+    d = pdist(p)
+    sp = float(expected_spacing_nm)
+    peak = np.mean((d > sp - band_nm) & (d < sp + band_nm)) / sp
+    ref_c = 0.5 * (ref_lo_nm + ref_hi_nm)
+    ref = np.mean((d > ref_lo_nm) & (d < ref_hi_nm)) / ref_c
+    return float(peak / ref) if ref > 0 else 0.0
+
+
+def _empty_lattice_aux(n_nodes):
+    """Default off-lattice ``aux`` (no registration) - used for picks the
+    cheap pair-score pre-screen rejects before the expensive fit."""
+    occ = np.zeros(n_nodes, dtype=int)
+    return {
+        "n_sites": 0,
+        "n_matched": 0,
+        "frac_on_lattice": 0.0,
+        "rmse_nm": float("inf"),
+        "fitted_spacing_nm": 0.0,
+        "nlocs_cv": float("inf"),
+        "spread_cv": float("inf"),
+        "mean_site_spread_nm": float("inf"),
+        "occupancy": tuple(int(v) for v in occ),
+        "site_centers_nm": np.empty((0, 2)),
+        "site_nodes": np.empty(0, dtype=int),
+        "site_nlocs_matched": np.empty(0),
+    }
+
+
 def lattice_defect_features(
     xy_nm,
     template_nm,
@@ -6471,6 +6529,8 @@ def cluster_lattice_defects(
     defect_grouping="completeness",
     min_samples=3,
     eps_frac=_SITE_EPS_FRAC,
+    min_pair_score=0.5,
+    pair_score_band_nm=4.0,
 ):
     """Two-stage design-aware clustering of picks on a known lattice.
 
@@ -6488,8 +6548,17 @@ def cluster_lattice_defects(
     2-defect / ... - a handful of interpretable classes robust to the
     per-structure blinking noise that fragments exact patterns);
     ``"exact"`` groups by the canonical defect pattern (which specific nodes
-    are missing). Returns ``labels``, per-structure ``aux``,
-    ``cluster_summary``, ``n_nodes`` and the ``symmetry_perms``.
+    are missing).
+
+    A cheap **pair-score pre-screen** runs first (:func:`lattice_pair_score`,
+    computed on every pick like nlocs/rmsd): picks whose windowed
+    pair-correlation at the design spacing is below ``min_pair_score`` are
+    marked off-lattice without the expensive registration, so the fit only
+    runs on genuine lattice candidates (set ``min_pair_score=None`` to
+    disable). Every structure's score is kept in ``aux[i]["pair_score"]``.
+
+    Returns ``labels``, per-structure ``aux``, ``cluster_summary``,
+    ``n_nodes`` and the ``symmetry_perms``.
     """
     template = np.asarray(template_nm, dtype=float).reshape(-1, 2)
     template = template - template.mean(axis=0)
@@ -6501,18 +6570,27 @@ def cluster_lattice_defects(
     # design nodes, so junk that matches only a few nodes is rejected.
     floor = 4 if min_on_lattice_sites is None else int(min_on_lattice_sites)
     min_sites = max(floor, int(np.ceil(min_on_lattice_frac * n_nodes)))
-    aux = [
-        lattice_defect_features(
-            s,
-            template,
-            expected_spacing_nm,
-            allow_mirror=allow_mirror,
-            min_samples=min_samples,
-            eps_frac=eps_frac,
-            sym_perms=perms,
+    # first layer: cheap pair-correlation score on every pick; only picks that
+    # pass pay for the (expensive) registration below.
+    aux = []
+    for s in structures_xy_nm:
+        score = lattice_pair_score(
+            s, expected_spacing_nm, band_nm=pair_score_band_nm
         )
-        for s in structures_xy_nm
-    ]
+        if min_pair_score is not None and score < min_pair_score:
+            a = _empty_lattice_aux(n_nodes)
+        else:
+            a = lattice_defect_features(
+                s,
+                template,
+                expected_spacing_nm,
+                allow_mirror=allow_mirror,
+                min_samples=min_samples,
+                eps_frac=eps_frac,
+                sym_perms=perms,
+            )
+        a["pair_score"] = float(score)
+        aux.append(a)
     n = len(aux)
     labels = np.full(n, -1, dtype=int)
     on = np.zeros(n, dtype=bool)
