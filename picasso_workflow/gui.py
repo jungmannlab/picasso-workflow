@@ -6014,18 +6014,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 0.0,
                 "required": False,
             },
-            "candidate_method": {
-                "type": "str",
-                "description": "Coarse candidate detection strategy",
-                "options": ["footprint", "cluster_of_clusters"],
-                "default": "footprint",
-                "required": False,
-            },
             "missing_sites_allowed": {
                 "type": "int",
                 "description": (
-                    "Max missing sites in a simulated origami (and, with "
-                    "filter_by_geometry, tolerated per accepted structure)"
+                    "Max missing sites in a simulated origami (for the "
+                    "phase-space simulation)"
                 ),
                 "min": 0,
                 "default": 2,
@@ -6073,28 +6066,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Simulation random seed (reproducibility)",
                 "min": 0,
                 "default": 0,
-                "required": False,
-            },
-            "filter_by_geometry": {
-                "type": "bool",
-                "description": (
-                    "Also register each pick against the design and reject "
-                    "mismatches (emits docking-site picks); slower"
-                ),
-                "default": False,
-                "required": False,
-            },
-            "spacing_tol": {
-                "type": "float",
-                "description": "Relative spacing tolerance (geometry filter)",
-                "min": 0.0,
-                "default": 0.5,
-                "required": False,
-            },
-            "max_rmse_nm": {
-                "type": "float",
-                "description": "Max RMSE-vs-design (nm) for the geometry filter",
-                "min": 0.0,
                 "required": False,
             },
             "footprint_diameter": {
@@ -6162,15 +6133,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 0,
                 "required": False,
             },
-            "n_plot_columns": {
-                "type": "int",
-                "description": (
-                    "Columns in the representative-structure grid (rows wrap)"
-                ),
-                "min": 1,
-                "default": 8,
-                "required": False,
-            },
             "display_pixelsize": {
                 "type": "float",
                 "description": "Pixel size for display in nm, default: 1",
@@ -6186,27 +6148,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "emit per-pattern picks + a summary"
                 ),
                 "default": False,
-                "required": False,
-            },
-            "n_pattern_clusters": {
-                "type": "int",
-                "description": (
-                    "Number of geometry-pattern clusters: 0 = auto-discover "
-                    "(HDBSCAN, recommended); >=2 fixes the count (Gaussian "
-                    "mixture)"
-                ),
-                "min": 0,
-                "default": 0,
-                "required": False,
-            },
-            "pattern_min_cluster_size": {
-                "type": "int",
-                "description": (
-                    "Minimum structures per auto-discovered pattern cluster "
-                    "(HDBSCAN); ignored when n_pattern_clusters is set"
-                ),
-                "min": 2,
-                "default": 25,
                 "required": False,
             },
             "n_pattern_examples": {
@@ -6242,18 +6183,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": 3,
                 "required": False,
             },
-            "pattern_method": {
-                "type": "str",
-                "description": (
-                    "Pattern-clustering method: 'lattice' (register onto the "
-                    "design; cluster by lattice-fit + defect occupancy) or "
-                    "'pairwise' (template-agnostic descriptor). Default: "
-                    "lattice for multi-site designs, else pairwise"
-                ),
-                "options": ["lattice", "pairwise"],
-                "default": "lattice",
-                "required": False,
-            },
             "pattern_defect_grouping": {
                 "type": "str",
                 "description": (
@@ -6265,17 +6194,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "default": "completeness",
                 "required": False,
             },
-            "pattern_min_sites": {
-                "type": "int",
-                "description": (
-                    "Lattice method: absolute floor on matched sites for a "
-                    "pick to count as on-lattice (the effective minimum is "
-                    "max(this, min_sites_frac x n_nodes))"
-                ),
-                "min": 1,
-                "default": 4,
-                "required": False,
-            },
             "pattern_min_sites_frac": {
                 "type": "float",
                 "description": (
@@ -6285,49 +6203,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 0.0,
                 "max": 1.0,
                 "default": 0.66,
-                "required": False,
-            },
-            "pattern_rmse_gate_frac": {
-                "type": "float",
-                "description": (
-                    "Lattice method: max lattice-fit residual to be "
-                    "on-lattice, as a fraction of spacing"
-                ),
-                "min": 0.0,
-                "default": 0.2,
-                "required": False,
-            },
-            "pattern_frac_on_lattice": {
-                "type": "float",
-                "description": (
-                    "Lattice method: min fraction of resolved sites that must "
-                    "sit on lattice nodes"
-                ),
-                "min": 0.0,
-                "max": 1.0,
-                "default": 0.8,
-                "required": False,
-            },
-            "pattern_max_nlocs_cv": {
-                "type": "float",
-                "description": (
-                    "Lattice method: max coefficient of variation of the "
-                    "localizations per site to be on-lattice (uniform "
-                    "blinking)"
-                ),
-                "min": 0.0,
-                "default": 0.5,
-                "required": False,
-            },
-            "pattern_max_spread_cv": {
-                "type": "float",
-                "description": (
-                    "Lattice method: max coefficient of variation of the "
-                    "per-site localization spread to be on-lattice (uniform "
-                    "spread)"
-                ),
-                "min": 0.0,
-                "default": 0.3,
                 "required": False,
             },
         }

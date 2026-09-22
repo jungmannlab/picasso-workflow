@@ -14597,7 +14597,6 @@ class AutoPicasso(util.AbstractModuleCollection):
             self.info,
             template,
             pixelsize,
-            candidate_method=_opt("candidate_method", "footprint"),
             footprint_diameter=_opt("footprint_diameter", zero_is_unset=True),
             pick_diameter_factor=_opt("pick_diameter_factor", 1.5),
             missing_sites_allowed=missing_sites_allowed,
@@ -14610,10 +14609,6 @@ class AutoPicasso(util.AbstractModuleCollection):
             max_n_locs_per_frame=_opt("max_n_locs_per_frame"),
             min_rmsd=_opt("min_rmsd", zero_is_unset=True),
             max_rmsd=_opt("max_rmsd", zero_is_unset=True),
-            filter_by_geometry=parameters.get("filter_by_geometry", False),
-            spacing_tol=_opt("spacing_tol", 0.5),
-            max_rmse_nm=_opt("max_rmse_nm", zero_is_unset=True),
-            subcluster_min_samples=_opt("subcluster_min_samples", 3),
             allow_mirror=parameters.get("allow_mirror", True),
         )
         accepted_centers = pick_result["accepted_centers_px"]
@@ -14897,26 +14892,27 @@ class AutoPicasso(util.AbstractModuleCollection):
         ]
         # method: design-aware lattice-defect clustering (register each pick
         # onto the design lattice; cluster by fit quality + defect occupancy)
-        # is the default for multi-node lattice designs; the template-agnostic
-        # pairwise-distance descriptor is the fallback for arbitrary designs.
-        method = parameters.get("pattern_method") or (
-            "lattice" if template.n_sites_expected >= 3 else "pairwise"
-        )
+        # for multi-node lattice designs; the template-agnostic
+        # pairwise-distance descriptor is the automatic fallback for
+        # arbitrary (< 3 node) designs. The site-resolution knobs
+        # (pattern_eps_frac / pattern_min_samples) apply to both; the lattice
+        # on-lattice gate thresholds use the calibrated function defaults.
+        method = "lattice" if template.n_sites_expected >= 3 else "pairwise"
+        sub_kwargs = {}
+        if parameters.get("pattern_eps_frac"):
+            sub_kwargs["eps_frac"] = float(parameters["pattern_eps_frac"])
+        if parameters.get("pattern_min_samples"):
+            sub_kwargs["min_samples"] = int(parameters["pattern_min_samples"])
         if method == "lattice":
-            lattice_kwargs = {}
-            for pkey, akey, cast in (
-                ("pattern_eps_frac", "eps_frac", float),
-                ("pattern_min_samples", "min_samples", int),
-                ("pattern_min_sites", "min_on_lattice_sites", int),
-                ("pattern_min_sites_frac", "min_on_lattice_frac", float),
-                ("pattern_rmse_gate_frac", "rmse_gate_frac", float),
-                ("pattern_frac_on_lattice", "frac_on_lattice_gate", float),
-                ("pattern_max_nlocs_cv", "max_nlocs_cv", float),
-                ("pattern_max_spread_cv", "max_spread_cv", float),
-                ("pattern_defect_grouping", "defect_grouping", str),
-            ):
-                if parameters.get(pkey):
-                    lattice_kwargs[akey] = cast(parameters[pkey])
+            lattice_kwargs = dict(sub_kwargs)
+            if parameters.get("pattern_min_sites_frac"):
+                lattice_kwargs["min_on_lattice_frac"] = float(
+                    parameters["pattern_min_sites_frac"]
+                )
+            if parameters.get("pattern_defect_grouping"):
+                lattice_kwargs["defect_grouping"] = str(
+                    parameters["pattern_defect_grouping"]
+                )
             cl = picasso_outpost.cluster_lattice_defects(
                 structures_xy_nm,
                 template.sites_nm,
@@ -14925,28 +14921,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 **lattice_kwargs,
             )
         else:
-            # n_pattern_clusters: 0/1/unset -> auto-discover (HDBSCAN); >= 2
-            # fixes the count (GMM). pattern_eps_frac / pattern_min_samples
-            # tune the per-structure site subclustering.
-            k = parameters.get("n_pattern_clusters")
-            k = int(k) if k and int(k) >= 2 else None
-            cluster_kwargs = {}
-            if parameters.get("pattern_eps_frac"):
-                cluster_kwargs["eps_frac"] = float(
-                    parameters["pattern_eps_frac"]
-                )
-            if parameters.get("pattern_min_samples"):
-                cluster_kwargs["min_samples"] = int(
-                    parameters["pattern_min_samples"]
-                )
             cl = picasso_outpost.cluster_structure_patterns(
                 structures_xy_nm,
                 expected_spacing_nm=template.grid_spacing_nm,
-                k=k,
-                min_cluster_size=parameters.get(
-                    "pattern_min_cluster_size", 25
-                ),
-                **cluster_kwargs,
+                **sub_kwargs,
             )
         results["pattern_method"] = method
         labels = np.asarray(cl["labels"])

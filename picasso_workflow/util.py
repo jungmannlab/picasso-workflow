@@ -1907,9 +1907,8 @@ class AbstractModuleCollection(abc.ABC):
             ``grid_spacing_nm`` : float
                 Physical spacing (nm) used to anchor a design-file scale.
             ``missing_sites_allowed`` : int
-                Max missing sites in a simulated origami (and, with
-                ``filter_by_geometry``, tolerated per accepted structure)
-                (default 2).
+                Max missing sites in a simulated origami, for the phase-space
+                simulation (default 2).
             ``site_uncertainty_nm`` : float
                 Per-localization Gaussian spread around each site, for the
                 phase-space simulation (default 3).
@@ -1935,77 +1934,38 @@ class AbstractModuleCollection(abc.ABC):
             ``pick_diameter_factor`` : float
                 Pick diameter as a multiple of the origami size when
                 ``footprint_diameter`` is unset (default 1.5 = 150 %).
-            ``filter_by_geometry`` : bool
-                Also register each pick against the design and reject
-                mismatches (emits docking-site picks); default False.
-            ``spacing_tol`` : float
-                Relative spacing tolerance for the geometry filter
-                (default 0.5).
-            ``max_rmse_nm`` : float
-                Max RMSE-vs-design for the geometry filter (disabled if unset).
             ``allow_mirror`` : bool
-                Allow a mirrored match in the geometry filter (default True).
-            ``candidate_method`` : {"footprint", "cluster_of_clusters"}
-                Coarse candidate detection (default ``"footprint"``).
+                Allow a mirrored match when registering to the design
+                (default True).
             ``n_plot_structures`` : int
                 Number of representative structures to plot.
-            ``n_plot_columns`` : int
-                Columns in the representative-structure grid; rows wrap
-                (default 8).
             ``display_pixelsize`` : float
                 Pixel size for display in nm (default 1).
             ``cluster_patterns`` : bool
-                Cluster the accepted structures by their resolved geometry
-                (single spot / partial / full grid / aggregate) using an
-                invariant site-graph descriptor, and emit per-pattern picks
-                plus a summary (default False).
-            ``n_pattern_clusters`` : int
-                Number of pattern clusters: 0 (or unset) auto-discovers the
-                count with HDBSCAN; a value >= 2 fixes it (Gaussian mixture).
-            ``pattern_min_cluster_size`` : int
-                Minimum structures per auto-discovered pattern cluster
-                (HDBSCAN; ignored when ``n_pattern_clusters`` is set,
-                default 25).
+                Cluster the accepted structures by their resolved geometry and
+                emit per-cluster picks plus a summary (default False). For a
+                lattice design each pick is registered onto the design and
+                grouped by fit quality + defect occupancy; a non-lattice
+                design falls back to a template-agnostic site-graph descriptor.
             ``n_pattern_examples`` : int
-                Example structures rendered per pattern cluster for the
-                report, brightest first (default 8; 0 to skip).
+                Example structures rendered per cluster for the report
+                (default 8; 0 to skip).
             ``pattern_eps_frac`` : float
                 Docking-site subclustering neighbourhood as a fraction of the
                 site spacing (default 0.2). Lower if sites are merged /
                 under-counted; raise if a single site splits.
             ``pattern_min_samples`` : int
                 DBSCAN ``min_samples`` for docking-site subclustering
-                (default 3).
-            ``pattern_method`` : {"lattice", "pairwise"}
-                Clustering method. ``"lattice"`` (default for multi-site
-                designs) registers each pick onto the design lattice and
-                clusters by lattice-fit quality + defect occupancy;
-                ``"pairwise"`` uses the template-agnostic descriptor.
+                (default 3; a site needs at least this many localizations).
             ``pattern_defect_grouping`` : {"completeness", "exact"}
                 Lattice method: group on-lattice picks by number of occupied
                 sites (default, a few robust classes) or by the exact defect
                 pattern.
-            ``pattern_min_sites`` : int
-                Lattice method: absolute floor on matched sites to count as
-                on-lattice (default 4; effective minimum is
-                ``max(this, pattern_min_sites_frac * n_nodes)``).
             ``pattern_min_sites_frac`` : float
                 Lattice method: min matched sites as a fraction of the design
-                nodes (default 0.66).
-            ``pattern_rmse_gate_frac`` : float
-                Lattice method: max lattice-fit residual to be on-lattice, as
-                a fraction of spacing (default 0.3).
-            ``pattern_frac_on_lattice`` : float
-                Lattice method: min fraction of resolved sites that must sit
-                on lattice nodes (default 0.6).
-            ``pattern_max_nlocs_cv`` : float
-                Lattice method: max coefficient of variation of the
-                localizations per site to be on-lattice - a genuine origami
-                blinks similarly at every site (default 0.8).
-            ``pattern_max_spread_cv`` : float
-                Lattice method: max coefficient of variation of the per-site
-                localization spread to be on-lattice - every site's cloud
-                should spread by the same amount (default 0.4).
+                nodes to count as on-lattice (default 0.66). The remaining
+                on-lattice gate thresholds use calibrated defaults (tune via
+                :func:`picasso_outpost.cluster_lattice_defects`).
         results : dict
             Module results (see class docstring). With ``cluster_patterns``
             also ``n_pattern_clusters``, ``pattern_summary``,

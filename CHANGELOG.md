@@ -10,6 +10,22 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Removed
+
+- Trimmed the `pick_origami` parameter surface from 38 to 25 by dropping
+  options the lattice workflow no longer needs. Gone: the superseded
+  per-candidate geometry filter (`filter_by_geometry`, `spacing_tol`,
+  `max_rmse_nm`); the pairwise-clustering knobs (`pattern_method`,
+  `n_pattern_clusters`, `pattern_min_cluster_size`) - the pairwise descriptor
+  now runs automatically only as the fallback for non-lattice (< 3 node)
+  designs; the redundant `pattern_min_sites` (kept `pattern_min_sites_frac`);
+  and `candidate_method` / `n_plot_columns` (hardcoded to their defaults). The
+  four expert lattice on-lattice gate thresholds (`pattern_rmse_gate_frac`,
+  `pattern_frac_on_lattice`, `pattern_max_nlocs_cv`, `pattern_max_spread_cv`)
+  are demoted to calibrated code-defaults - still tunable via
+  `picasso_outpost.cluster_lattice_defects`, no longer generated into the
+  workflow. The underlying library functions keep all of these as parameters.
+
 ### Changed
 
 - The lattice-defect clustering is recalibrated against real data so it no

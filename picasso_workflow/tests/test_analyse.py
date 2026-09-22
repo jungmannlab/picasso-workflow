@@ -2371,11 +2371,10 @@ class TestAnalyseModules(unittest.TestCase):
             {"Width": 64, "Height": 64, "Frames": 1000, "Pixelsize": 130}
         ]
 
+        # a < 3-node design routes to the pairwise fallback automatically
         parameters = {
-            "geometry": {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0},
+            "geometry": {"sites_nm": [[0.0, 0.0], [20.0, 0.0]]},
             "cluster_patterns": True,
-            "pattern_method": "pairwise",
-            "pattern_min_cluster_size": 2,
             "n_plot_structures": 0,
             "display_pixelsize": 1.0,
         }
