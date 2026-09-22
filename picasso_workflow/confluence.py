@@ -4975,7 +4975,6 @@ class ConfluenceReporter(AbstractModuleCollection):
             _fp_all.extend([fp for fp in (_row or []) if fp])
         for _k in (
             "fp_pattern_phasespace",
-            "fp_pattern_defectmaps",
             "fp_pattern_site_nlocs_hist",
             "fp_pattern_feature_space",
             "fp_pattern_pairdist",
@@ -5046,7 +5045,6 @@ class ConfluenceReporter(AbstractModuleCollection):
             # (pairwise) - all coloured by / grouped by pattern cluster
             for _key in (
                 "fp_pattern_phasespace",
-                "fp_pattern_defectmaps",
                 "fp_pattern_site_nlocs_hist",
                 "fp_pattern_feature_space",
                 "fp_pattern_pairdist",

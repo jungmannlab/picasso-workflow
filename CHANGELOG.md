@@ -12,6 +12,11 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Removed
 
+- Dropped the lattice per-class **occupancy defect-map** figure
+  (`fp_pattern_defectmaps`) from the report - it was not adding useful signal.
+  The per-node occupancy is still carried in `pattern_summary` /
+  `pattern_table.csv` for anyone who wants it.
+
 - Moved the phase-space **simulation** parameters out of the `pick_origami`
   module into the "Preview phase space" GUI dialog, where they belong (they
   only shape the *suggested* pick window; the module takes the resulting

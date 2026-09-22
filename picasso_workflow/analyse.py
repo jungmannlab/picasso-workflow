@@ -541,57 +541,6 @@ def _plot_pattern_pairdist(
     return fp
 
 
-def _plot_defect_maps(fp, summary, nodes_nm, max_clusters=24):
-    """Defect-map diagram per lattice cluster: the design nodes shaded by
-    their occupancy *probability* over the cluster (solid green = always
-    present, faded/red = often missing) - each class's defect fingerprint.
-    Clusters are the on-lattice ones, most complete first."""
-    nodes = np.asarray(nodes_nm, dtype=float).reshape(-1, 2)
-    clusters = [c for c in summary if not c.get("is_offlattice")][
-        :max_clusters
-    ]
-    if not clusters or len(nodes) == 0:
-        return None
-    ncol = min(6, len(clusters))
-    nrow = int(np.ceil(len(clusters) / ncol))
-    fig, axes = plt.subplots(
-        nrow, ncol, figsize=(2.2 * ncol, 2.4 * nrow), squeeze=False
-    )
-    for ax in axes.flat:
-        ax.axis("off")
-    for idx, c in enumerate(clusters):
-        ax = axes[idx // ncol][idx % ncol]
-        ax.set_aspect("equal")
-        occ = np.asarray(c.get("occupancy", []), dtype=float)
-        for j, (x, y) in enumerate(nodes):
-            p = float(occ[j]) if j < len(occ) else 0.0
-            # green filled with alpha = occupancy probability; red ring when a
-            # node is often missing (p < 0.5) so defects read at a glance
-            ax.scatter(
-                [x],
-                [-y],  # y-down, image-like
-                s=90,
-                facecolors=(0.17, 0.63, 0.17, max(0.05, p)),
-                edgecolors="#2ca02c" if p >= 0.5 else "#d62728",
-                linewidths=1.5,
-            )
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_title(
-            f"{c.get('n_sites_occupied', '?')}/{len(nodes)} sites "
-            f"(n={c['n_structures']})",
-            fontsize=8,
-        )
-    fig.suptitle(
-        "Occupancy per class (green shade = fraction of structures "
-        "occupying the node)"
-    )
-    fig.tight_layout()
-    fig.savefig(fp)
-    plt.close(fig)
-    return fp
-
-
 def _plot_site_nlocs_hist(fp, labels, aux, summary):
     """Per-cluster histogram of localizations-per-(matched)-site.
 
@@ -15012,19 +14961,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if pd_fp:
             results["fp_pattern_pairdist"] = pd_fp
 
-        # lattice method: a defect-map diagram per cluster (which design nodes
-        # are occupied / missing - the defect fingerprint)
         if method == "lattice":
-            dm = _plot_defect_maps(
-                os.path.join(
-                    results["folder"], f"pattern-defectmaps-{rcode}.png"
-                ),
-                summary,
-                template.sites_nm,
-            )
-            if dm:
-                results["fp_pattern_defectmaps"] = dm
-
             # #locs-per-site histogram per cluster (site-resolution / tuning)
             hist_fp = _plot_site_nlocs_hist(
                 os.path.join(

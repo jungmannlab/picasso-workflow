@@ -6266,13 +6266,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "signature figure (pairwise method only)"
                 ),
             },
-            "fp_pattern_defectmaps": {
-                "type": "str",
-                "description": (
-                    "filepath to the per-cluster defect-map diagram "
-                    "(lattice method only)"
-                ),
-            },
             "fp_pattern_site_nlocs_hist": {
                 "type": "str",
                 "description": (

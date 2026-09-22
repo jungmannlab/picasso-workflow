@@ -2555,7 +2555,6 @@ class TestAnalyseModules(unittest.TestCase):
         assert mock_lattice.called
         assert results["pattern_method"] == "lattice"
         assert results["n_pattern_clusters"] == 2
-        assert os.path.exists(results["fp_pattern_defectmaps"])
         assert os.path.exists(results["fp_pattern_site_nlocs_hist"])
         assert os.path.exists(results["fp_pattern_table"])
         # occupancy carried through to the summary
