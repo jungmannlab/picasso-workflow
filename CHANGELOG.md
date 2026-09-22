@@ -147,6 +147,19 @@ This file was started after v0.5.6; earlier history is in the git log.
   (reused by the HTML reporter), `gui`, and the `modulespec` registry. Registry
   logging is intentionally deferred to WP-DYE-QC (single logging path).
 
+### Added
+
+- The lattice-defect report is easier to read and to tune. The "accepted
+  structures by geometry pattern" plot now uses a **distinct marker per
+  cluster** (the busy off-lattice cloud stays a density contour), so the
+  completeness tiers are legible where their colours overlap. A new
+  per-cluster **localizations-per-site histogram**
+  (`fp_pattern_site_nlocs_hist`) shows the site loc-count distribution of each
+  class - a spike of low-count sites near the `min_samples` floor flags
+  over-counting (raise `pattern_min_samples`), a clean well-populated peak
+  means the sites are real. `median_site_nlocs` is added to the per-class
+  summary / `pattern_table.csv`.
+
 ### Fixed
 
 - The lattice method no longer collapses to **zero on-lattice structures**

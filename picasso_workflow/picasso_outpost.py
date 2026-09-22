@@ -6316,6 +6316,7 @@ def lattice_defect_features(
         "occupancy": tuple(int(v) for v in occ),
         "site_centers_nm": sites,
         "site_nodes": site_nodes,
+        "site_nlocs_matched": np.empty(0),
     }
     if len(sites) < 3:
         return aux
@@ -6376,6 +6377,8 @@ def lattice_defect_features(
             "nlocs_cv": nlocs_cv,
             "spread_cv": spread_cv,
             "mean_site_spread_nm": mean_spread,
+            "median_site_nlocs": float(np.median(m_nlocs)),
+            "site_nlocs_matched": m_nlocs,
             "occupancy": _canonical_occupancy(occ, sym_perms),
         }
     )
@@ -6421,6 +6424,25 @@ def _summarize_lattice_clusters(labels, aux, n_nodes):
                 "median_nlocs_cv": _med("nlocs_cv"),
                 "median_spread_cv": _med("spread_cv"),
                 "median_site_spread_nm": _med("mean_site_spread_nm"),
+                "median_site_nlocs": (
+                    float(
+                        np.median(
+                            np.concatenate(
+                                [
+                                    np.asarray(
+                                        aux[i].get("site_nlocs_matched", [])
+                                    )
+                                    for i in idx
+                                ]
+                            )
+                        )
+                    )
+                    if not off
+                    and any(
+                        len(aux[i].get("site_nlocs_matched", [])) for i in idx
+                    )
+                    else float("nan")
+                ),
             }
         )
     # on-lattice first, then most complete (fewest defects), then most populous

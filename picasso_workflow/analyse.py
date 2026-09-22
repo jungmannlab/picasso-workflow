@@ -381,9 +381,15 @@ def _pattern_color_map(summary, labels):
     return order, color
 
 
+# distinct scatter markers cycled per cluster, so groups stay legible where
+# their colours overlap in a busy plot
+_PATTERN_MARKERS = ("o", "s", "^", "D", "v", "P", "X", "*", ">", "<", "h", "p")
+
+
 def _labelled_2d_axes(ax, x, y, labels, summary, min_contour=60):
-    """Draw per-cluster density on ``ax``: a smoothed contour when a cluster
-    has enough points (clearer than an overplotted scatter), else a scatter.
+    """Draw per-cluster points on ``ax``: a smoothed density contour when a
+    cluster has enough points (clearer than an overplotted scatter), else a
+    scatter with a distinct marker + colour per cluster.
 
     Axes are bounded by a Tukey fence on the pooled cloud so a few outliers
     cannot stretch them. Colours follow :func:`_pattern_color_map`.
@@ -412,9 +418,8 @@ def _labelled_2d_axes(ax, x, y, labels, summary, min_contour=60):
     x0, x1 = _fence(px)
     y0, y1 = _fence(py)
     hrange = [[x0, x1], [y0, y1]]
-    med = {c["label"]: c.get("median_n_sites", 0) for c in summary}
     order, color = _pattern_color_map(summary, labels)
-    for lbl in order:
+    for i, lbl in enumerate(order):
         m = labels == lbl
         cx, cy = x[m], y[m]
         f = np.isfinite(cx) & np.isfinite(cy)
@@ -422,14 +427,21 @@ def _labelled_2d_axes(ax, x, y, labels, summary, min_contour=60):
         if len(cx) == 0:
             continue
         col = color(lbl)
-        name = (
-            "unclustered"
-            if lbl == -1
-            else f"pattern {lbl} (~{med.get(lbl, 0):.0f} sites)"
-        )
-        lab = f"{name}, n={len(cx)}"
+        mk = "." if lbl == -1 else _PATTERN_MARKERS[i % len(_PATTERN_MARKERS)]
+        name = "unclustered" if lbl == -1 else str(lbl)
+        lab = f"{name} (n={len(cx)})"
         if len(cx) < min_contour or np.ptp(cx) == 0 or np.ptp(cy) == 0:
-            ax.scatter(cx, cy, s=8, alpha=0.5, color=[col], label=lab)
+            ax.scatter(
+                cx,
+                cy,
+                s=30,
+                marker=mk,
+                facecolor=[col],
+                edgecolor="k",
+                linewidths=0.4,
+                alpha=0.75,
+                label=lab,
+            )
             continue
         hist, xe, ye = np.histogram2d(cx, cy, bins=40, range=hrange)
         hist = gaussian_filter(hist, 1.0)
@@ -439,12 +451,12 @@ def _labelled_2d_axes(ax, x, y, labels, summary, min_contour=60):
         yc = 0.5 * (ye[:-1] + ye[1:])
         levels = np.linspace(hist.max() * 0.25, hist.max() * 0.9, 3)
         ax.contour(xc, yc, hist.T, levels=levels, colors=[col], linewidths=1.3)
-        ax.plot([], [], color=col, label=lab)  # legend proxy
+        ax.plot([], [], color=col, marker=mk, linestyle="none", label=lab)
     ax.set_xlim(x0, x1)
     ax.set_ylim(y0, y1)
     handles, _ = ax.get_legend_handles_labels()
     if handles:
-        ax.legend(fontsize="small")
+        ax.legend(fontsize="small", title="cluster")
 
 
 def _plot_pattern_phasespace(fp, nlocs, rmsds, labels, summary):
@@ -574,6 +586,64 @@ def _plot_defect_maps(fp, summary, nodes_nm, max_clusters=24):
         "Occupancy per class (green shade = fraction of structures "
         "occupying the node)"
     )
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_site_nlocs_hist(fp, labels, aux, summary):
+    """Per-cluster histogram of localizations-per-(matched)-site.
+
+    Helps judge site resolution and tune ``pattern_min_samples`` /
+    ``pattern_eps_frac``: spurious over-counted sites show up as a spike of
+    low-count sites near the ``min_samples`` floor, while a clean, well
+    populated peak means the sites are real.
+    """
+    if aux is None:
+        return None
+    labels = np.asarray(labels)
+    clusters = [c for c in summary if not c.get("is_offlattice")]
+    per = {}
+    pooled = []
+    for c in clusters:
+        lbl = c["label"]
+        idx = np.where(labels == lbl)[0]
+        cnts = (
+            np.concatenate(
+                [np.asarray(aux[i].get("site_nlocs_matched", [])) for i in idx]
+            )
+            if len(idx)
+            else np.empty(0)
+        )
+        per[lbl] = cnts
+        pooled.append(cnts)
+    pooled = np.concatenate(pooled) if pooled else np.empty(0)
+    if len(pooled) == 0:
+        return None
+    hi = float(np.percentile(pooled, 99))
+    bins = np.linspace(0, max(hi, 5.0), 30)
+    order, color = _pattern_color_map(summary, labels)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for lbl in order:
+        cnts = per.get(lbl)
+        if cnts is None or len(cnts) == 0:
+            continue
+        ax.hist(
+            cnts,
+            bins=bins,
+            histtype="step",
+            density=True,
+            linewidth=1.6,
+            color=color(lbl),
+            label=f"{lbl}-site ({len(cnts)} sites)",
+        )
+    ax.set_xlabel("localizations per site")
+    ax.set_ylabel("density")
+    ax.set_title("Localizations per docking site, by cluster")
+    handles, _ = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize="small", title="cluster")
     fig.tight_layout()
     fig.savefig(fp)
     plt.close(fig)
@@ -15001,6 +15071,18 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             if dm:
                 results["fp_pattern_defectmaps"] = dm
+
+            # #locs-per-site histogram per cluster (site-resolution / tuning)
+            hist_fp = _plot_site_nlocs_hist(
+                os.path.join(
+                    results["folder"], f"pattern-sitenlocs-{rcode}.png"
+                ),
+                labels,
+                cl.get("aux"),
+                summary,
+            )
+            if hist_fp:
+                results["fp_pattern_site_nlocs_hist"] = hist_fp
 
             # export the resolved single docking sites of the on-lattice
             # structures as a picasso pick set (registration already tags each

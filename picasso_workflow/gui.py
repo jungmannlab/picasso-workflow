@@ -6476,6 +6476,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "(lattice method only)"
                 ),
             },
+            "fp_pattern_site_nlocs_hist": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-cluster localizations-per-site "
+                    "histogram (lattice method only)"
+                ),
+            },
             "fp_pattern_site_picks": {
                 "type": "str",
                 "description": (

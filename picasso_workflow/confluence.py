@@ -4976,6 +4976,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         for _k in (
             "fp_pattern_phasespace",
             "fp_pattern_defectmaps",
+            "fp_pattern_site_nlocs_hist",
             "fp_pattern_feature_space",
             "fp_pattern_pairdist",
         ):
@@ -5046,6 +5047,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             for _key in (
                 "fp_pattern_phasespace",
                 "fp_pattern_defectmaps",
+                "fp_pattern_site_nlocs_hist",
                 "fp_pattern_feature_space",
                 "fp_pattern_pairdist",
             ):

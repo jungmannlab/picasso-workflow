@@ -2480,11 +2480,13 @@ class TestAnalyseModules(unittest.TestCase):
                         [[1300.0, 1300.0], [1320.0, 1300.0]]
                     ),
                     "site_nodes": np.array([0, 1]),
+                    "site_nlocs_matched": np.array([40.0, 55.0]),
                 },
                 {
                     "rmse_nm": 1.5,
                     "site_centers_nm": np.array([[2600.0, 2860.0]]),
                     "site_nodes": np.array([5]),
+                    "site_nlocs_matched": np.array([48.0]),
                 },
             ],
             "n_nodes": 12,
@@ -2555,6 +2557,7 @@ class TestAnalyseModules(unittest.TestCase):
         assert results["pattern_method"] == "lattice"
         assert results["n_pattern_clusters"] == 2
         assert os.path.exists(results["fp_pattern_defectmaps"])
+        assert os.path.exists(results["fp_pattern_site_nlocs_hist"])
         assert os.path.exists(results["fp_pattern_table"])
         # occupancy carried through to the summary
         by_label = {c["label"]: c for c in results["pattern_summary"]}
