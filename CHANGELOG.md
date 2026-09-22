@@ -149,6 +149,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- The lattice method no longer collapses to **zero on-lattice structures**
+  when the GUI generates `pattern_min_samples: 1`. `min_samples=1` is
+  degenerate for DBSCAN - every isolated localization becomes its own "site",
+  so `n_sites` explodes (median 13 on a real run) and every pick fails the
+  frac-on-lattice / count-uniformity gates. `subcluster_docking_sites` now
+  clamps `min_samples` to >= 2, and every `pick_origami` pattern parameter now
+  carries a proper `default` in the GUI spec so the generated workflow no
+  longer renders integer/float params at their `min` (the same footgun that
+  produced `n_pattern_clusters: 1` earlier). Regenerating the workflow now
+  yields the calibrated defaults (`min_samples 3`, `eps_frac 0.2`, the gate
+  thresholds) instead of pathological values.
+
 - `subcluster_docking_sites` no longer systematically **under**-counts docking
   sites. The DBSCAN neighbourhood was `0.35 x spacing` (7 nm at 20 nm design),
   large enough to *chain* adjacent sites together through their localization

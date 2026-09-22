@@ -1477,6 +1477,19 @@ def test_template_symmetry_permutations_3x4_grid():
         assert sorted(p.tolist()) == list(range(12))
 
 
+def test_subcluster_min_samples_1_is_clamped():
+    """min_samples=1 is degenerate for DBSCAN (every isolated localization
+    becomes its own site); it is clamped to >= 2 so a full grid still
+    resolves ~12 sites rather than one per localization."""
+    rng = np.random.default_rng(0)
+    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    cloud = _lattice_blob(range(12), tmpl, 20.0, rng)
+    c1 = picasso_outpost.subcluster_docking_sites(cloud, 20.0, min_samples=1)
+    c2 = picasso_outpost.subcluster_docking_sites(cloud, 20.0, min_samples=2)
+    assert len(c1) == len(c2)  # 1 behaves like 2
+    assert len(c1) <= 13  # not one cluster per localization
+
+
 def test_lattice_defect_features_reads_fit_and_occupancy():
     """A full grid registers with full occupancy, low residual and recovered
     spacing; a scaled grid recovers its spacing; a missing site shows up as a

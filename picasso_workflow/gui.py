@@ -6223,21 +6223,23 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": (
                     "Docking-site subclustering neighbourhood as a fraction "
-                    "of site spacing (default 0.2). Lower it if sites are "
-                    "merged / n_sites is under-counted; raise it if a single "
-                    "site splits"
+                    "of site spacing. Lower it if sites are merged / n_sites "
+                    "is under-counted; raise it if a single site splits"
                 ),
                 "min": 0.0,
                 "max": 0.5,
+                "default": 0.2,
                 "required": False,
             },
             "pattern_min_samples": {
                 "type": "int",
                 "description": (
-                    "DBSCAN min_samples for docking-site subclustering "
-                    "(default 3)"
+                    "DBSCAN min_samples for docking-site subclustering (a "
+                    "site needs at least this many localizations; values "
+                    "below 2 are treated as 2)"
                 ),
-                "min": 1,
+                "min": 2,
+                "default": 3,
                 "required": False,
             },
             "pattern_method": {
@@ -6249,6 +6251,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "lattice for multi-site designs, else pairwise"
                 ),
                 "options": ["lattice", "pairwise"],
+                "default": "lattice",
                 "required": False,
             },
             "pattern_defect_grouping": {
@@ -6256,49 +6259,53 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": (
                     "Lattice method: how to group on-lattice picks - "
                     "'completeness' (by number of occupied sites; a few "
-                    "robust classes) or 'exact' (by the exact defect "
-                    "pattern). Default completeness"
+                    "robust classes) or 'exact' (by the exact defect pattern)"
                 ),
                 "options": ["completeness", "exact"],
+                "default": "completeness",
                 "required": False,
             },
             "pattern_min_sites": {
                 "type": "int",
                 "description": (
                     "Lattice method: absolute floor on matched sites for a "
-                    "pick to count as on-lattice (default 4; the effective "
-                    "minimum is max(this, min_sites_frac x n_nodes))"
+                    "pick to count as on-lattice (the effective minimum is "
+                    "max(this, min_sites_frac x n_nodes))"
                 ),
                 "min": 1,
+                "default": 4,
                 "required": False,
             },
             "pattern_min_sites_frac": {
                 "type": "float",
                 "description": (
                     "Lattice method: min matched sites as a fraction of the "
-                    "design nodes to be on-lattice (default 0.66)"
+                    "design nodes to be on-lattice"
                 ),
                 "min": 0.0,
                 "max": 1.0,
+                "default": 0.66,
                 "required": False,
             },
             "pattern_rmse_gate_frac": {
                 "type": "float",
                 "description": (
                     "Lattice method: max lattice-fit residual to be "
-                    "on-lattice, as a fraction of spacing (default 0.3)"
+                    "on-lattice, as a fraction of spacing"
                 ),
                 "min": 0.0,
+                "default": 0.2,
                 "required": False,
             },
             "pattern_frac_on_lattice": {
                 "type": "float",
                 "description": (
                     "Lattice method: min fraction of resolved sites that must "
-                    "sit on lattice nodes (default 0.6)"
+                    "sit on lattice nodes"
                 ),
                 "min": 0.0,
                 "max": 1.0,
+                "default": 0.8,
                 "required": False,
             },
             "pattern_max_nlocs_cv": {
@@ -6306,9 +6313,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": (
                     "Lattice method: max coefficient of variation of the "
                     "localizations per site to be on-lattice (uniform "
-                    "blinking; default 0.8)"
+                    "blinking)"
                 ),
                 "min": 0.0,
+                "default": 0.5,
                 "required": False,
             },
             "pattern_max_spread_cv": {
@@ -6316,9 +6324,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": (
                     "Lattice method: max coefficient of variation of the "
                     "per-site localization spread to be on-lattice (uniform "
-                    "spread; default 0.4)"
+                    "spread)"
                 ),
                 "min": 0.0,
+                "default": 0.3,
                 "required": False,
             },
         }

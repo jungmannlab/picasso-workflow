@@ -5573,6 +5573,10 @@ def subcluster_docking_sites(
         none). If ``return_stats``, a ``(centers, site_nlocs, site_spread_nm)``
         tuple instead.
     """
+    # DBSCAN min_samples=1 is degenerate - every isolated localization becomes
+    # its own "site", grossly over-counting sites (and wrecking the lattice
+    # gate's frac-on-lattice / count-uniformity). A docking site needs >= 2.
+    min_samples = max(2, int(min_samples))
     xy = np.asarray(xy_nm, dtype=float).reshape(-1, 2)
     empty = np.empty((0, 2))
     if len(xy) == 0 or expected_spacing_nm <= 0:
