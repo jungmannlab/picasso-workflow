@@ -14724,9 +14724,13 @@ class Window(QtWidgets.QMainWindow):
             if pbc is not None:
                 pbc.setEnabled(False)
             if lbl is not None:
-                lbl.setText(f"{name}  (default: {dv})")
+                # the greyed value widget already shows the default, so keep
+                # the label to just the name and put the hint in the tooltip
+                lbl.setText(name)
                 lbl.setStyleSheet("color: gray; font-style: italic;")
-                lbl.setToolTip("Using the code default. Click to override.")
+                lbl.setToolTip(
+                    f"Using the code default ({dv}). Click to override."
+                )
         else:
             w.setEnabled(True)
             if cmd is not None:
@@ -14736,9 +14740,10 @@ class Window(QtWidgets.QMainWindow):
             if lbl is not None:
                 lbl.setText(name)
                 lbl.setStyleSheet("")
+                desc = widget_info.metadata.get("description", "")
                 lbl.setToolTip(
-                    widget_info.metadata.get("description", "")
-                    or "Click to use the code default."
+                    (desc + "\n" if desc else "")
+                    + f"Default: {dv}. Click to use it."
                 )
         if persist:
             self._on_parameter_changed()
