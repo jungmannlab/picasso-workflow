@@ -4895,71 +4895,37 @@ class ConfluenceReporter(AbstractModuleCollection):
         """
         logger.debug("Reporting pick_origami.")
         n_expected = results.get("n_sites_expected", "?")
+        method = results.get("pattern_method")
+        n_pat = results.get("n_pattern_clusters")
+        pattern_summary = results.get("pattern_summary")
+
+        # Compact header: the key numbers only. The verbose blocks (accepted
+        # overview, rejection funnel, parameters, results) are collapsed into
+        # expand macros at the bottom so the report leads with the figures.
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Pick Origami</strong></p>
-        Summary:
         <ul>
-        <li># Candidates found: {results.get("n_candidates", "?")}</li>
-        <li># Structures accepted: {results.get("n_accepted", "?")}</li>
-        <li># Sites expected per origami: {n_expected}</li>
-        <li>Grid spacing (design): {results.get("grid_spacing_nm", "?")} nm</li>
-        <li>Duration: {results["duration"] // 60:.0f} min
+        <li>{results.get("n_candidates", "?")} candidates &rarr;
+        <strong>{results.get("n_accepted", "?")}</strong> accepted
+        structures</li>
+        <li>{n_expected} sites per origami @
+        {results.get("grid_spacing_nm", "?")} nm design spacing</li>
+        """
+        if pattern_summary and method == "lattice":
+            n_on = sum(
+                c["n_structures"]
+                for c in pattern_summary
+                if not (c.get("is_offlattice") or c.get("is_noise"))
+            )
+            text += (
+                f"        <li><strong>{n_on}</strong> on-lattice origami in "
+                f"{n_pat} defect classes</li>\n"
+            )
+        elif pattern_summary:
+            text += f"        <li>{n_pat} geometry pattern clusters</li>\n"
+        text += f"""        <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.2f} s</li>
-        </ul>
-        """
-
-        # rejection funnel: how many candidates each stage removed
-        funnel = results.get("funnel")
-        if funnel:
-            text += f"""
-        Rejection funnel:
-        <ul>
-        <li>Candidates: {funnel.get("n_candidates", "?")}</li>
-        <li>Rejected - no localizations: {funnel.get("no_locs", "?")}</li>
-        <li>Rejected - too few resolved sites (pre-registration):
-        {funnel.get("too_few_sites", "?")}</li>
-        <li>Rejected - missing sites (post-registration):
-        {funnel.get("rejected_missing_sites", "?")}</li>
-        <li>Rejected - RMSE-vs-design too high:
-        {funnel.get("rejected_rmse", "?")}</li>
-        <li>Rejected - spacing off design:
-        {funnel.get("rejected_spacing", "?")}</li>
-        <li><strong>Accepted: {funnel.get("accepted", "?")}</strong></li>
-        </ul>
-        """
-
-        text += f"""
-        {parameter_text}
-        {result_text}
-        """
-
-        # Geometry overview: aggregate stats over the ACCEPTED structures
-        # only (the full per-structure table is saved to geometry_table.csv in
-        # the module results folder - a per-row dump here would swamp the
-        # report once filters are relaxed).
-        overview = results.get("accepted_overview")
-        if overview and overview.get("n_accepted"):
-
-            def _stat(key):
-                s = overview.get(key)
-                if not s:
-                    return "n/a"
-                return (
-                    f"{s['mean']:.2f} &plusmn; {s['std']:.2f} "
-                    f"(min {s['min']:.2f}, max {s['max']:.2f})"
-                )
-
-            n_acc = overview["n_accepted"]
-            text += f"""
-        Accepted structures overview ({n_acc} structures;
-        full per-structure table in <code>geometry_table.csv</code>):
-        <ul>
-        <li>Resolved sites: {_stat("n_resolved_sites")}</li>
-        <li>Spacing (nm): {_stat("mean_spacing_nm")}</li>
-        <li>RMSE-vs-design (nm): {_stat("rmse_nm")}</li>
-        <li>Orientation (deg): {_stat("orientation_deg")}</li>
-        <li>Mirrored: {overview.get("n_mirrored", 0)} / {n_acc}</li>
         </ul>
         """
 
@@ -4988,18 +4954,91 @@ class ConfluenceReporter(AbstractModuleCollection):
             _fp_all.extend([fp for fp in (_fps or []) if fp])
         self.ci.upload_attachments(self.report_page_id, _fp_all)
 
-        # phase-space figure
-        if fp_fig := results.get("fp_phasespace"):
-            fn_fig = os.path.split(fp_fig)[1]
-            text += f"""
-                <ac:image ac:height="450">
-                <ri:attachment ri:filename="{fn_fig}" />
-                </ac:image>"""
+        # ---- figure helpers: one image / a two-up row of images ----------
+        def _img(fp, height):
+            fn = os.path.split(fp)[1]
+            return (
+                f'<ac:image ac:height="{height}">'
+                f'<ri:attachment ri:filename="{fn}" /></ac:image>'
+            )
 
-        # representative accepted structures, as a grid: fp_renderings is a
-        # list of rows (each row up to n_plot_columns wide), rendered as one
-        # table with one <tr> per row.
+        def _fig_row(fps, height=320):
+            """Lay figures out two-per-row (skipping any that are absent), so
+            the report stays compact instead of one tall vertical stack."""
+            fps = [f for f in fps if f]
+            if not fps:
+                return ""
+            s = "<table>"
+            for j in range(0, len(fps), 2):
+                s += "<tr>"
+                for fp in fps[j : j + 2]:
+                    s += f"<td>{_img(fp, height)}</td>"
+                s += "</tr>"
+            s += "</table>"
+            return s
+
+        def _heading(t):
+            return f"<p><strong>{t}</strong></p>"
+
+        # per-cluster summary (collapsed) + the exported single-site note
+        if pattern_summary:
+            pattern_lines = _pattern_cluster_lines(
+                pattern_summary, method or "pairwise"
+            )
+            title = (
+                f"Defect classes ({n_pat} on-lattice clusters)"
+                if method == "lattice"
+                else f"Geometry patterns ({n_pat} clusters)"
+            )
+            text += _expand_macro(
+                f"{title} - picks in pattern_<label>_picks.yaml",
+                pattern_lines,
+            )
+            if results.get("fp_pattern_site_picks"):
+                n_sites = results.get("n_pattern_sites", "?")
+                text += (
+                    f"<p>{n_sites} resolved single docking sites exported as "
+                    "picks (<code>pattern_site_picks.yaml</code>).</p>"
+                )
+
+        # ---- figures, grouped by purpose and laid out two-up -------------
+        grp = _fig_row(
+            [
+                results.get("fp_phasespace"),
+                results.get("fp_pattern_phasespace"),
+            ]
+        )
+        if grp:
+            text += _heading("Phase space (pick window &amp; clusters)") + grp
+
+        grp = _fig_row(
+            [
+                results.get("fp_pattern_pairscore_space"),
+                results.get("fp_pattern_fit_space"),
+            ]
+        )
+        if grp:
+            text += _heading("Lattice identification") + grp
+
+        if results.get("fp_pattern_gate_panels"):
+            text += _heading("On-lattice gate transparency")
+            text += _img(results["fp_pattern_gate_panels"], 360)
+
+        grp = _fig_row(
+            [
+                results.get("fp_pattern_site_nlocs_hist"),
+                results.get("fp_pattern_feature_space"),
+                results.get("fp_pattern_pairdist"),
+            ]
+        )
+        if grp:
+            text += _heading("Per-site resolution &amp; descriptor") + grp
+
+        # ---- example structures (accepted grid + per-pattern examples) ---
         fig_fps = results.get("fp_renderings")  # list (row) of list of fps
+        pat_renders = results.get("fp_pattern_renderings") or {}
+        if (fig_fps and any(fig_fps)) or pat_renders:
+            text += _heading("Example structures")
         if fig_fps and any(fig_fps):
             text += "<table>"
             for row_fps in fig_fps:
@@ -5007,90 +5046,81 @@ class ConfluenceReporter(AbstractModuleCollection):
                     continue
                 text += "<tr>"
                 for fp in row_fps:
-                    fn = os.path.split(fp)[1]
-                    text += f"""
-                        <td>
-                              <ac:image ac:height="200">
-                              <ri:attachment ri:filename="{fn}" />
-                              </ac:image>
-                        </td>"""
+                    text += f"<td>{_img(fp, 180)}</td>"
+                text += "</tr>"
+            text += "</table>"
+        if pattern_summary and pat_renders:
+            text += "<table>"
+            for c in pattern_summary:
+                if c.get("is_noise"):
+                    continue
+                lbl = c["label"]
+                fps = pat_renders.get(lbl, pat_renders.get(str(lbl)))
+                if not fps:
+                    continue
+                text += (
+                    f"<tr><td><p><strong>pattern {lbl}</strong><br/>"
+                    f"~{c['median_n_sites']:.0f} sites, "
+                    f"{c['n_structures']} structures</p></td>"
+                )
+                for fp in fps:
+                    text += f"<td>{_img(fp, 150)}</td>"
                 text += "</tr>"
             text += "</table>"
 
-        # geometry-pattern clustering (optional): per-cluster counts +
-        # coloured phase-space + a representative structure per pattern
-        pattern_summary = results.get("pattern_summary")
-        if pattern_summary:
-            n_pat = results.get("n_pattern_clusters", "?")
-            method = results.get("pattern_method", "pairwise")
-            pattern_lines = _pattern_cluster_lines(pattern_summary, method)
-            title = (
-                f"Defect classes: {n_pat} on-lattice clusters"
-                if method == "lattice"
-                else f"Geometry patterns: {n_pat} clusters"
-            )
-            text += _expand_macro(
-                f"{title} (per-cluster picks in pattern_<label>_picks.yaml)",
-                pattern_lines,
-            )
+        # ---- collapsed details at the bottom -----------------------------
+        overview = results.get("accepted_overview")
+        if overview and overview.get("n_accepted"):
 
-            if results.get("fp_pattern_site_picks"):
-                n_sites = results.get("n_pattern_sites", "?")
-                text += (
-                    f"<p>{n_sites} resolved single docking sites exported as "
-                    "picks (<code>pattern_site_picks.yaml</code>; each tagged "
-                    "with its design-node index in "
-                    "<code>pattern_sites.csv</code>).</p>"
+            def _stat(key):
+                s = overview.get(key)
+                if not s:
+                    return "n/a"
+                return (
+                    f"{s['mean']:.2f} +/- {s['std']:.2f} "
+                    f"(min {s['min']:.2f}, max {s['max']:.2f})"
                 )
 
-            # phase-space (nlocs/frame vs rmsd), the defect-map diagram
-            # (lattice), and the descriptor-space / pairwise-distance views
-            # (pairwise) - all coloured by / grouped by pattern cluster
-            for _key in (
-                "fp_pattern_phasespace",
-                "fp_pattern_fit_space",
-                "fp_pattern_pairscore_space",
-                "fp_pattern_gate_panels",
-                "fp_pattern_site_nlocs_hist",
-                "fp_pattern_feature_space",
-                "fp_pattern_pairdist",
-            ):
-                if fp_pat := results.get(_key):
-                    fn_pat = os.path.split(fp_pat)[1]
-                    text += f"""
-                <ac:image ac:height="450">
-                <ri:attachment ri:filename="{fn_pat}" />
-                </ac:image>"""
+            n_acc = overview["n_accepted"]
+            text += _expand_macro(
+                f"Accepted structures overview ({n_acc}; full per-structure "
+                "table in geometry_table.csv)",
+                {
+                    "Resolved sites": _stat("n_resolved_sites"),
+                    "Spacing (nm)": _stat("mean_spacing_nm"),
+                    "RMSE-vs-design (nm)": _stat("rmse_nm"),
+                    "Orientation (deg)": _stat("orientation_deg"),
+                    "Mirrored": f"{overview.get('n_mirrored', 0)} / {n_acc}",
+                },
+            )
 
-            # example structures per pattern: one labelled row each, so the
-            # reader can see what each geometry cluster looks like. Keyed by
-            # cluster label -> list of render filepaths.
-            pat_renders = results.get("fp_pattern_renderings") or {}
-            if pat_renders:
-                text += "<table>"
-                for c in pattern_summary:
-                    if c.get("is_noise"):
-                        continue
-                    lbl = c["label"]
-                    fps = pat_renders.get(lbl, pat_renders.get(str(lbl)))
-                    if not fps:
-                        continue
-                    text += (
-                        f"""<tr><td><p><strong>pattern {lbl}</strong><br/>"""
-                        f"""~{c['median_n_sites']:.0f} sites, """
-                        f"""{c['n_structures']} structures</p></td>"""
-                    )
-                    for fp in fps:
-                        fn = os.path.split(fp)[1]
-                        text += f"""
-                        <td>
-                              <ac:image ac:height="150">
-                              <ri:attachment ri:filename="{fn}" />
-                              </ac:image>
-                        </td>"""
-                    text += "</tr>"
-                text += "</table>"
+        funnel = results.get("funnel")
+        if funnel:
+            text += _expand_macro(
+                "Rejection funnel",
+                {
+                    "Candidates": funnel.get("n_candidates", "?"),
+                    "Rejected: no localizations": funnel.get("no_locs", "?"),
+                    "Rejected: too few sites": funnel.get(
+                        "too_few_sites", "?"
+                    ),
+                    "Rejected: missing sites": funnel.get(
+                        "rejected_missing_sites", "?"
+                    ),
+                    "Rejected: RMSE too high": funnel.get(
+                        "rejected_rmse", "?"
+                    ),
+                    "Rejected: spacing off design": funnel.get(
+                        "rejected_spacing", "?"
+                    ),
+                    "Accepted": funnel.get("accepted", "?"),
+                },
+            )
 
+        text += f"""
+        {parameter_text}
+        {result_text}
+        """
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """

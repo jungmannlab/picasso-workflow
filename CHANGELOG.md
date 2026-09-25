@@ -12,6 +12,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- The `pick_origami` Confluence report is compacted and its figures reordered.
+  All graphs are kept, but instead of one tall vertical stack they are grouped
+  by purpose with headings and laid out two-up: *Phase space* (pick window +
+  clusters), *Lattice identification* (pair-score + fit quality), *On-lattice
+  gate transparency* (the gate panels), *Per-site resolution & descriptor*,
+  then *Example structures*. The verbose text blocks (accepted-structures
+  overview, rejection funnel, parameters, results) are collapsed into expand
+  macros at the bottom, so the report leads with a short summary and the
+  figures rather than screens of bullets.
+
 - The workflow-builder GUI now distinguishes **"use default"** from an explicit
   **override** for every parameter that has a spec default. Such a parameter
   starts with a clickable, greyed label showing its `default: <value>` and a
