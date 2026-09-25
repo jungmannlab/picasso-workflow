@@ -9262,6 +9262,10 @@ class ParameterWidgetInfo:
         toggle_function=None,
         summary_label=None,
         per_branch_checkbox=None,
+        label=None,
+        param_name=None,
+        has_default=False,
+        default_value=None,
     ):
         """Initialize parameter widget info.
 
@@ -9292,6 +9296,16 @@ class ParameterWidgetInfo:
         self.toggle_function = (
             toggle_function  # For dict parameters with checkboxes
         )
+        # Default/override toggle state (see _apply_param_default_state). A
+        # parameter with a spec default starts in the "use default" state:
+        # the widget is greyed/disabled and the value is omitted from the
+        # generated workflow, so the code default applies. Clicking the label
+        # switches to "override".
+        self.label = label
+        self.param_name = param_name
+        self.has_default = has_default
+        self.default_value = default_value
+        self.use_default = has_default
 
 
 class ParameterCmdDialog(QtWidgets.QDialog):
@@ -14674,6 +14688,61 @@ class Window(QtWidgets.QMainWindow):
             return
         row.setStyleSheet("background-color: #fff3cd;" if on else "")
 
+    def _apply_param_default_state(
+        self, widget_info, use_default, persist=True
+    ):
+        """Switch a parameter between "use default" and "override".
+
+        In the default state the input widget (and its cmd / per-branch
+        controls) is disabled and greyed and shows the spec default, and the
+        parameter is omitted from the generated workflow (``_get_widget_value``
+        returns ``None``), so the code default applies. In the override state
+        the widget is editable and the value is written. Clicking the label
+        toggles the two. No-op for parameters without a spec default.
+        """
+        if not getattr(widget_info, "has_default", False):
+            return
+        widget_info.use_default = bool(use_default)
+        w = widget_info.widget
+        lbl = getattr(widget_info, "label", None)
+        name = getattr(widget_info, "param_name", "") or ""
+        dv = widget_info.default_value
+        cmd = getattr(widget_info, "cmd_button", None)
+        pbc = getattr(widget_info, "per_branch_checkbox", None)
+        if use_default:
+            # show the default value, then grey + disable (block signals so
+            # setting the value does not trigger a premature auto-save while
+            # the form is still being built)
+            w.blockSignals(True)
+            self._set_widget_value(
+                w, dv, widget_info.original_type, widget_info
+            )
+            w.blockSignals(False)
+            w.setEnabled(False)
+            if cmd is not None:
+                cmd.setEnabled(False)
+            if pbc is not None:
+                pbc.setEnabled(False)
+            if lbl is not None:
+                lbl.setText(f"{name}  (default: {dv})")
+                lbl.setStyleSheet("color: gray; font-style: italic;")
+                lbl.setToolTip("Using the code default. Click to override.")
+        else:
+            w.setEnabled(True)
+            if cmd is not None:
+                cmd.setEnabled(True)
+            if pbc is not None:
+                pbc.setEnabled(True)
+            if lbl is not None:
+                lbl.setText(name)
+                lbl.setStyleSheet("")
+                lbl.setToolTip(
+                    widget_info.metadata.get("description", "")
+                    or "Click to use the code default."
+                )
+        if persist:
+            self._on_parameter_changed()
+
     def _sync_per_branch_controls(self):
         """Show/populate the per-branch checkboxes for the current form.
 
@@ -14738,6 +14807,10 @@ class Window(QtWidgets.QMainWindow):
                         per_value = per_branch[bid]
                     else:
                         per_value = per_branch[-1] if per_branch else None
+                    # a branch-specific value is an override, never a default
+                    self._apply_param_default_state(
+                        widget_info, False, persist=False
+                    )
                     self._set_widget_value(
                         widget_info.widget,
                         per_value,
@@ -14749,12 +14822,30 @@ class Window(QtWidgets.QMainWindow):
 
                 # Check if value is a command tuple (starts with $ or $$)
                 if self._is_command_value(value_data):
-                    # This is a command - convert widget to textbox
+                    # a command is an override; un-grey before converting
+                    self._apply_param_default_state(
+                        widget_info, False, persist=False
+                    )
                     self._convert_widget_to_textbox(
                         param_name, str(tuple(value_data))
                     )
                     continue
 
+                # A stored value equal to the spec default is treated as
+                # "use default" (greyed, omitted on re-save); a different
+                # value is an explicit override.
+                if getattr(widget_info, "has_default", False) and (
+                    value_data == widget_info.default_value
+                ):
+                    self._apply_param_default_state(
+                        widget_info, True, persist=False
+                    )
+                    self._highlight_override_row(widget_info, False)
+                    continue
+
+                self._apply_param_default_state(
+                    widget_info, False, persist=False
+                )
                 # Set value in widget
                 self._set_widget_value(
                     widget_info.widget,
@@ -14763,6 +14854,11 @@ class Window(QtWidgets.QMainWindow):
                     widget_info,
                 )
                 self._highlight_override_row(widget_info, False)
+            elif getattr(widget_info, "has_default", False):
+                # not in the workflow -> use the code default (greyed)
+                self._apply_param_default_state(
+                    widget_info, True, persist=False
+                )
 
         # Show/refresh the per-branch checkboxes for the current context.
         self._sync_per_branch_controls()
@@ -17123,6 +17219,12 @@ class Window(QtWidgets.QMainWindow):
         str or dict or tuple: String representation of the value, dict for nested parameters,
                               or tuple for command references
         """
+        # A parameter left in the "use default" state is omitted from the
+        # workflow so the code default applies (top-level and nested alike).
+        if widget_info is not None and getattr(
+            widget_info, "use_default", False
+        ):
+            return None
         if (
             original_type == "dict"
             and widget_info
@@ -17515,6 +17617,11 @@ class Window(QtWidgets.QMainWindow):
         # Update stored reference
         widget_info.widget = new_widget
 
+        # A command value is an explicit override, never the code default:
+        # clear the default state so the value is collected (and the label
+        # un-greys).
+        self._apply_param_default_state(widget_info, False, persist=False)
+
         # The new value may be a per-channel mapping - reflect it below
         # the row.
         self._update_param_summary(widget_info)
@@ -17701,6 +17808,12 @@ class Window(QtWidgets.QMainWindow):
             per_branch_checkbox.setVisible(False)
             row_layout.addWidget(per_branch_checkbox, stretch=0)
 
+            # A parameter with a spec default (and not required) gets a
+            # clickable label toggling default<->override (see
+            # _apply_param_default_state).
+            has_default = param_metadata.get(
+                "default"
+            ) is not None and not param_metadata.get("required", False)
             widget_info = ParameterWidgetInfo(
                 widget=widget,
                 cmd_button=cmd_button,
@@ -17709,6 +17822,10 @@ class Window(QtWidgets.QMainWindow):
                 original_type=original_type,
                 summary_label=summary_label,
                 per_branch_checkbox=per_branch_checkbox,
+                label=label,
+                param_name=param_name,
+                has_default=has_default,
+                default_value=param_metadata.get("default"),
             )
 
             # Capture the widget info itself, not just the name: nested
@@ -17724,6 +17841,22 @@ class Window(QtWidgets.QMainWindow):
                     self._on_per_branch_toggled(pn, checked)
                 )
             )
+            if has_default:
+                label.setCursor(
+                    QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                )
+
+                def _toggle_default(event, wi=widget_info):
+                    self._apply_param_default_state(
+                        wi, not wi.use_default, persist=True
+                    )
+
+                label.mousePressEvent = _toggle_default
+                # start greyed/disabled, using the code default (no save yet;
+                # the form is still being built)
+                self._apply_param_default_state(
+                    widget_info, True, persist=False
+                )
             return widget_info
 
     def _populate_parameter_widgets(self, module_params):

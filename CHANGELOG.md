@@ -10,6 +10,21 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+
+- The workflow-builder GUI now distinguishes **"use default"** from an explicit
+  **override** for every parameter that has a spec default. Such a parameter
+  starts with a clickable, greyed label showing its `default: <value>` and a
+  disabled input; clicking the label switches it to an editable override.
+  Parameters left in the default state are **omitted from the generated
+  `start_workflow.py`**, so the code default always applies (and can evolve
+  without stale copies in every saved workflow). On reload, a stored value that
+  equals the default is shown as default (greyed); only a differing value is an
+  override. This removes a class of footguns where a value typed to "match the
+  default" (e.g. `pattern_min_sites_frac: 0.0`) silently diverged from it - the
+  generated workflow now lists only the parameters you actually changed.
+  Command (`$$map`) and per-branch values always count as overrides.
+
 ### Fixed
 
 - `pick_origami` no longer silently ignores a `pattern_min_sites_frac` of
