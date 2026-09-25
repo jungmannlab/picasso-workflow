@@ -6625,6 +6625,7 @@ def cluster_lattice_defects(
         "n_nodes": n_nodes,
         "symmetry_perms": perms,
         "defect_grouping": defect_grouping,
+        "min_pair_score": min_pair_score,
     }
 
 

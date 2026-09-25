@@ -386,13 +386,18 @@ def _pattern_color_map(summary, labels):
 _PATTERN_MARKERS = ("o", "s", "^", "D", "v", "P", "X", "*", ">", "<", "h", "p")
 
 
-def _labelled_2d_axes(ax, x, y, labels, summary, min_contour=60):
+def _labelled_2d_axes(
+    ax, x, y, labels, summary, min_contour=60, xlim=None, ylim=None
+):
     """Draw per-cluster points on ``ax``: a smoothed density contour when a
     cluster has enough points (clearer than an overplotted scatter), else a
     scatter with a distinct marker + colour per cluster.
 
     Axes are bounded by a Tukey fence on the pooled cloud so a few outliers
-    cannot stretch them. Colours follow :func:`_pattern_color_map`.
+    cannot stretch them; pass ``xlim`` / ``ylim`` to override an axis when
+    the pooled cloud is bimodal (e.g. a large low-scoring background mode
+    that would otherwise clip the clusters of interest out of view). Colours
+    follow :func:`_pattern_color_map`.
     """
     from scipy.ndimage import gaussian_filter
 
@@ -415,8 +420,8 @@ def _labelled_2d_axes(ax, x, y, labels, summary, min_contour=60):
             hi = lo + 1.0
         return lo, hi
 
-    x0, x1 = _fence(px)
-    y0, y1 = _fence(py)
+    x0, x1 = xlim if xlim is not None else _fence(px)
+    y0, y1 = ylim if ylim is not None else _fence(py)
     hrange = [[x0, x1], [y0, y1]]
     order, color = _pattern_color_map(summary, labels)
     for i, lbl in enumerate(order):
@@ -497,7 +502,9 @@ def _plot_lattice_fit_space(fp, n_matched, rmse_nm, labels, summary):
     return fp
 
 
-def _plot_lattice_pairscore_space(fp, nlocs, pair_score, labels, summary):
+def _plot_lattice_pairscore_space(
+    fp, nlocs, pair_score, labels, summary, gate=None
+):
     """Registration-free view: structures in (nlocs-per-frame, lattice
     pair-score).
 
@@ -506,12 +513,54 @@ def _plot_lattice_pairscore_space(fp, nlocs, pair_score, labels, summary):
     expensive registration). The origami island sits at high pair-score, well
     separated from the junk cloud that brightness (nlocs) alone cannot
     resolve.
+
+    The pooled cloud is strongly bimodal - the large off-lattice mode sits
+    near zero while the accepted structures score ~1-3 - so the y-axis is
+    framed explicitly (0 .. just above the accepted range) rather than by the
+    default Tukey fence, which the background mode would otherwise collapse.
+    ``gate`` (the pre-screen ``min_pair_score``) is drawn as a reference line.
     """
     ps = np.asarray(pair_score, dtype=float)
-    if not np.any(np.isfinite(ps)):
+    nl = np.asarray(nlocs, dtype=float)
+    lab = np.asarray(labels)
+    # frame both axes on the accepted (on-lattice) cloud: the off-lattice
+    # background mode dominates a pooled fence and would clip the accepted
+    # structures off both axes. Fall back to all finite points if too few.
+    keep = (lab != -1) & np.isfinite(ps) & np.isfinite(nl)
+    if keep.sum() < 2:
+        keep = np.isfinite(ps) & np.isfinite(nl)
+    if keep.sum() < 2:
         return None
+
+    def _fence(v):
+        q1, q3 = np.quantile(v, [0.25, 0.75])
+        iqr = q3 - q1
+        lo = max(float(v.min()), float(q1 - 1.5 * iqr))
+        hi = min(float(v.max()), float(q3 + 1.5 * iqr))
+        if hi <= lo:
+            lo, hi = float(v.min()), float(v.max())
+        if hi <= lo:
+            hi = lo + 1.0
+        return lo, hi
+
+    x0, x1 = _fence(nl[keep])
+    _, ytop = _fence(ps[keep])
+    if gate is not None and np.isfinite(gate):
+        ytop = max(ytop, float(gate))
+    ytop = ytop * 1.05 if ytop > 0 else 1.0
     fig, ax = plt.subplots(figsize=(7, 6))
-    _labelled_2d_axes(ax, nlocs, ps, labels, summary)
+    _labelled_2d_axes(
+        ax, nl, ps, labels, summary, xlim=(x0, x1), ylim=(0.0, ytop)
+    )
+    if gate is not None and np.isfinite(gate):
+        ax.axhline(
+            float(gate),
+            color="0.4",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"pre-screen gate ({float(gate):.2f})",
+        )
+        ax.legend(fontsize="small", title="cluster")
     ax.set_xlabel("# localizations per frame in footprint")
     ax.set_ylabel("lattice pair-score at design spacing")
     ax.set_title("Accepted structures by lattice pair-score")
@@ -14882,10 +14931,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         if method == "lattice":
             lattice_kwargs = dict(sub_kwargs)
-            if parameters.get("pattern_min_sites_frac"):
-                lattice_kwargs["min_on_lattice_frac"] = float(
-                    parameters["pattern_min_sites_frac"]
-                )
+            # 0.0 is a meaningful value here (fall back to the absolute
+            # site-count floor), so test for unset explicitly - a truthiness
+            # check would silently drop a user-supplied 0.0.
+            _msf = parameters.get("pattern_min_sites_frac")
+            if _msf is not None and _msf != "":
+                lattice_kwargs["min_on_lattice_frac"] = float(_msf)
             if parameters.get("pattern_defect_grouping"):
                 lattice_kwargs["defect_grouping"] = str(
                     parameters["pattern_defect_grouping"]
@@ -15047,6 +15098,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         [a.get("pair_score", np.nan) for a in aux],
                         labels,
                         summary,
+                        gate=cl.get("min_pair_score"),
                     )
                     if ps_fp:
                         results["fp_pattern_pairscore_space"] = ps_fp

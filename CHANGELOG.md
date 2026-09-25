@@ -10,6 +10,24 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pick_origami` no longer silently ignores a `pattern_min_sites_frac` of
+  `0.0`. The parameter was threaded with a truthiness check, so `0.0` (a
+  meaningful value - fall back to the absolute site-count floor) was dropped
+  and the calibrated default (0.66 -> >=8 matched sites) used instead. It is
+  now tested for unset explicitly, so `0.0` reaches the clustering.
+
+- The **lattice pair-score phase space** figure no longer hides the accepted
+  structures. Its pooled cloud is strongly bimodal (a large off-lattice mode
+  near zero plus the accepted structures at pair-score ~1-3), and the default
+  Tukey axis fence, dominated by the background mode, collapsed both axes onto
+  the junk and clipped every accepted cluster out of view (contour clusters
+  vanished entirely; scatter clusters left only legend ghosts). Both axes are
+  now framed on the on-lattice cloud, and the pre-screen `min_pair_score` gate
+  is drawn as a reference line. `_labelled_2d_axes` gained optional
+  `xlim`/`ylim` overrides for bimodal data.
+
 ### Removed
 
 - Dropped the lattice per-class **occupancy defect-map** figure

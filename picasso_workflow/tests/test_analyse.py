@@ -2519,6 +2519,7 @@ class TestAnalyseModules(unittest.TestCase):
                     "median_n_sites": 11.0,
                 },
             ],
+            "min_pair_score": 0.5,
         }
 
         self.ap.locs = pd.DataFrame(
@@ -2552,11 +2553,16 @@ class TestAnalyseModules(unittest.TestCase):
             "cluster_patterns": True,
             "n_plot_structures": 0,
             "display_pixelsize": 1.0,
+            # 0.0 must reach the clustering (a truthiness check would drop it)
+            "pattern_min_sites_frac": 0.0,
         }
         parameters, results = self.ap.pick_origami(0, parameters)
 
         # lattice is the default for a grid design
         assert mock_lattice.called
+        # a user-supplied 0.0 min-sites fraction is threaded through, not
+        # silently dropped as falsy
+        assert mock_lattice.call_args.kwargs["min_on_lattice_frac"] == 0.0
         assert results["pattern_method"] == "lattice"
         assert results["n_pattern_clusters"] == 2
         assert os.path.exists(results["fp_pattern_site_nlocs_hist"])
