@@ -111,3 +111,35 @@ def test_explicit_nondefault_zero_is_kept(window):
     _build(window)
     window._populate_stored_parameters({"pattern_min_sites_frac": 0.0})
     assert _collect(window).get("pattern_min_sites_frac") == 0.0
+
+
+def test_nested_dict_subparams_are_not_omitted(window):
+    """The toggle applies only to top-level params. A module reads a dict
+    parameter's sub-schema as a whole (e.g. sample_movie["filename"]), so
+    defaulted sub-keys must NOT be dropped - otherwise the dict collapses to
+    {} and the module crashes (regression: KeyError 'filename')."""
+    spec = {
+        "sample_movie": {
+            "type": "dict",
+            "required": True,
+            "properties": {
+                "filename": {"type": "str", "default": "sample.ome.tiff"},
+                "n_frames": {"type": "int", "default": 7},
+            },
+        },
+    }
+    win = window
+    win.parameter_widgets = {}
+    win.parameter_widgets["sample_movie"] = win._create_parameter_row(
+        "sample_movie", spec["sample_movie"], 0
+    )
+    collected = _collect(win)
+    # the dict is present and complete - sub-params were written, not omitted
+    assert collected.get("sample_movie", {}).get("filename") == (
+        "sample.ome.tiff"
+    )
+    assert collected.get("sample_movie", {}).get("n_frames") == 7
+    # the sub-widgets carry no default-toggle (top-level only)
+    sub = win.parameter_widgets["sample_movie"].sub_parameters
+    assert sub["filename"].has_default is False
+    assert sub["n_frames"].has_default is False

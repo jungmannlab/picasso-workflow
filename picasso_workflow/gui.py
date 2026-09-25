@@ -17808,12 +17808,17 @@ class Window(QtWidgets.QMainWindow):
             per_branch_checkbox.setVisible(False)
             row_layout.addWidget(per_branch_checkbox, stretch=0)
 
-            # A parameter with a spec default (and not required) gets a
-            # clickable label toggling default<->override (see
-            # _apply_param_default_state).
-            has_default = param_metadata.get(
-                "default"
-            ) is not None and not param_metadata.get("required", False)
+            # A top-level parameter with a spec default (and not required)
+            # gets a clickable label toggling default<->override (see
+            # _apply_param_default_state). Nested dict sub-parameters are
+            # excluded: a module reads its dict sub-schema as a whole (e.g.
+            # load_dataset_movie's sample_movie["filename"]), so omitting a
+            # defaulted sub-key would leave an incomplete dict and crash.
+            has_default = (
+                indent_level == 0
+                and param_metadata.get("default") is not None
+                and not param_metadata.get("required", False)
+            )
             widget_info = ParameterWidgetInfo(
                 widget=widget,
                 cmd_button=cmd_button,
