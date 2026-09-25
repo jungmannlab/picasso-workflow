@@ -77,6 +77,7 @@ class Test_A_ConfluenceInterface(unittest.TestCase):
                 "confluence",
                 "testimg.png",
             ),
+            return_id=True,
         )
         ci.update_page_content_with_image_attachment(
             pgtitle, pgid, "testimg.png"
@@ -93,6 +94,7 @@ class Test_A_ConfluenceInterface(unittest.TestCase):
                 "confluence",
                 "testmov.mp4",
             ),
+            return_id=True,
         )
         ci.update_page_content_with_movie_attachment(
             pgtitle, pgid, "testmov.mp4"
@@ -850,6 +852,63 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "n_picks": [412, 501],
         }
         self.cr.find_structures(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def pick_origami(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "n_candidates": 5,
+            "n_registered": 3,
+            "n_accepted": 2,
+            "n_sites_expected": 12,
+            "grid_spacing_nm": 20.0,
+            "funnel": {
+                "n_candidates": 5,
+                "no_locs": 0,
+                "too_few_sites": 1,
+                "rejected_missing_sites": 1,
+                "rejected_rmse": 1,
+                "rejected_spacing": 0,
+                "accepted": 2,
+            },
+            "accepted_overview": {
+                "n_accepted": 2,
+                "n_mirrored": 0,
+                "n_resolved_sites": {
+                    "mean": 12.0,
+                    "std": 0.0,
+                    "min": 12.0,
+                    "max": 12.0,
+                },
+                "mean_spacing_nm": {
+                    "mean": 20.0,
+                    "std": 0.1,
+                    "min": 19.9,
+                    "max": 20.1,
+                },
+                "rmse_nm": {
+                    "mean": 1.2,
+                    "std": 0.2,
+                    "min": 1.0,
+                    "max": 1.4,
+                },
+                "orientation_deg": {
+                    "mean": 35.0,
+                    "std": 1.0,
+                    "min": 34.0,
+                    "max": 36.0,
+                },
+            },
+        }
+        self.cr.pick_origami(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -2178,3 +2237,70 @@ def test_expand_macro_formats_numpy_scalars_and_skips_keys():
 def test_code_macro_escapes_cdata_terminator():
     text = confluence._code_macro("before " + "]]" + "> after")
     assert "]]]]><" + "![CDATA[>" in text
+
+
+# ---------------------------------------------------------------------------
+# Attachment upload: lazy id-lookup + concurrent batch -- no network needed.
+# ---------------------------------------------------------------------------
+
+
+def _make_offline_ci(monkeypatch):
+    """A ConfluenceInterface with a mocked backend client (no network)."""
+    monkeypatch.setattr(
+        confluence.ConfluenceInterface, "connect", lambda self: None
+    )
+    ci = confluence.ConfluenceInterface(
+        "http://example/wiki",
+        "SPC",
+        "Parent",
+        token="tok",
+        parent_page_id="1",
+    )
+    ci.confluence = MagicMock()
+    ci.space_key = "SPC"
+    return ci
+
+
+def test_upload_attachment_skips_id_lookup_by_default(monkeypatch):
+    """Default upload does the single attach call and NOT the extra
+    attachment-listing round-trip (which report code does not need)."""
+    ci = _make_offline_ci(monkeypatch)
+    out = ci.upload_attachment("42", "/tmp/fig.png")
+    ci.confluence.attach_file.assert_called_once()
+    ci.confluence.get_attachments_from_content.assert_not_called()
+    assert out is None
+
+
+def test_upload_attachment_returns_id_when_requested(monkeypatch):
+    """return_id=True still resolves the attachment id via the listing."""
+    ci = _make_offline_ci(monkeypatch)
+    ci.confluence.get_attachments_from_content.return_value = {
+        "results": [{"title": "fig.png", "id": "999"}]
+    }
+    out = ci.upload_attachment("42", "/tmp/fig.png", return_id=True)
+    ci.confluence.attach_file.assert_called_once()
+    ci.confluence.get_attachments_from_content.assert_called_once()
+    assert out == "999"
+
+
+def test_upload_attachments_uploads_all_and_tolerates_failure(monkeypatch):
+    """The batch uploads every file and returns basenames; a file that
+    fails to upload is logged and skipped without aborting the batch."""
+    ci = _make_offline_ci(monkeypatch)
+    fps = [f"/tmp/a{i}.png" for i in range(5)]
+
+    def attach(filename, page_id, space):
+        if filename.endswith("a2.png"):
+            raise ValueError("boom")
+
+    ci.confluence.attach_file.side_effect = attach
+    names = ci.upload_attachments("42", fps, max_workers=3)
+    assert ci.confluence.attach_file.call_count == 5
+    assert set(names) == {"a0.png", "a1.png", "a3.png", "a4.png"}
+
+
+def test_upload_attachments_empty_is_noop(monkeypatch):
+    """No filepaths -> no upload calls, empty result."""
+    ci = _make_offline_ci(monkeypatch)
+    assert ci.upload_attachments("42", [None, ""]) == []
+    ci.confluence.attach_file.assert_not_called()

@@ -132,6 +132,705 @@ def generate_random_code(length):
     return random_code
 
 
+def _summarize_accepted_structures(geometry_table):
+    """Aggregate per-structure geometry over the accepted structures.
+
+    Reduces the (potentially large) per-candidate geometry table to a small,
+    serialisable overview for the report; the full table is kept only on disk
+    (``geometry_table.csv``).
+
+    Parameters
+    ----------
+    geometry_table : list of dict
+        Per-structure geometry rows (see ``picasso_outpost.pick_origami``).
+
+    Returns
+    -------
+    dict
+        ``n_accepted``, ``n_mirrored``, and ``mean``/``std``/``min``/``max``
+        for ``n_resolved_sites``, ``mean_spacing_nm``, ``rmse_nm`` and
+        ``orientation_deg`` over the accepted structures.
+    """
+    accepted = [row for row in (geometry_table or []) if row.get("accepted")]
+    overview = {
+        "n_accepted": len(accepted),
+        "n_mirrored": sum(1 for row in accepted if row.get("mirror")),
+    }
+    for key in (
+        "n_resolved_sites",
+        "mean_spacing_nm",
+        "rmse_nm",
+        "orientation_deg",
+    ):
+        vals = np.asarray(
+            [row.get(key, np.nan) for row in accepted], dtype=float
+        )
+        vals = vals[np.isfinite(vals)]
+        if len(vals):
+            overview[key] = {
+                "mean": float(np.mean(vals)),
+                "std": float(np.std(vals)),
+                "min": float(np.min(vals)),
+                "max": float(np.max(vals)),
+            }
+        else:
+            overview[key] = None
+    return overview
+
+
+def _finite_xy(x, y):
+    """Return the finite, equal-length ``(x, y)`` subset as float arrays."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x) != len(y):
+        return np.empty(0), np.empty(0)
+    ok = np.isfinite(x) & np.isfinite(y)
+    return x[ok], y[ok]
+
+
+def _scatter_or_contour(
+    ax, x, y, color, cmap, contour_threshold, hist_range=None
+):
+    """Plot ``(x, y)`` as points, or a filled density contour if there are
+    more than ``contour_threshold`` points (scatter gets unreadable).
+
+    ``hist_range`` (``[[x0, x1], [y0, y1]]``) bounds the contour histogram to
+    the visible region so its resolution is not wasted on far outliers.
+
+    Returns the number of finite points plotted.
+    """
+    x, y = _finite_xy(x, y)
+    if len(x) == 0:
+        return 0
+    if len(x) <= contour_threshold or np.ptp(x) == 0 or np.ptp(y) == 0:
+        ax.scatter(x, y, s=10, color=color, alpha=0.4)
+    else:
+        hist, xedges, yedges = np.histogram2d(x, y, bins=60, range=hist_range)
+        xc = 0.5 * (xedges[:-1] + xedges[1:])
+        yc = 0.5 * (yedges[:-1] + yedges[1:])
+        xg, yg = np.meshgrid(xc, yc)
+        ax.contourf(xg, yg, hist.T, levels=8, cmap=cmap)
+    return len(x)
+
+
+def _draw_pick_window(ax, pick_window):
+    """Outline the pick_similar active range (nlocs/rmsd rectangle) on ``ax``.
+
+    Open edges (unset/infinite bounds) extend to the current axis limits.
+    """
+    if not pick_window:
+        return
+    x0 = pick_window.get("min_nlocs_pf", np.nan)
+    x1 = pick_window.get("max_nlocs_pf", np.nan)
+    y0 = pick_window.get("min_rmsd", np.nan)
+    y1 = pick_window.get("max_rmsd", np.nan)
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    x0 = xlim[0] if not np.isfinite(x0) else x0
+    x1 = xlim[1] if not np.isfinite(x1) else x1
+    y0 = ylim[0] if not np.isfinite(y0) else y0
+    y1 = ylim[1] if not np.isfinite(y1) else y1
+    if x1 <= x0 or y1 <= y0:
+        return
+    from matplotlib.patches import Rectangle
+
+    ax.add_patch(
+        Rectangle(
+            (x0, y0),
+            x1 - x0,
+            y1 - y0,
+            fill=False,
+            edgecolor="g",
+            linestyle="--",
+            linewidth=1.5,
+            label="pick range",
+            zorder=4,
+        )
+    )
+
+
+def _plot_origami_phasespace(
+    fp,
+    nlocs,
+    rmsds,
+    sim_nlocs,
+    sim_rmsds,
+    acc_nlocs,
+    acc_rmsds,
+    title,
+    contour_threshold=2000,
+    pick_window=None,
+):
+    """Render the origami nlocs-per-frame / rmsd phase-space diagnostic.
+
+    Three panels sharing axes - all candidates, the simulated "expected
+    origami" cloud, and the accepted picks - each drawn as points, or a
+    density contour when there are more than ``contour_threshold`` points.
+    The pick_similar active range (``pick_window``) is outlined on each panel.
+
+    Returns
+    -------
+    str
+        The path the figure was saved to (``fp``).
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharex=True, sharey=True)
+
+    # Robust shared limits that include all three clouds AND the pick window,
+    # so the plot is a diagnostic even when nothing is accepted (you can see
+    # whether the window overlaps the candidates). The candidate cloud is
+    # bounded by a Tukey fence (Q3 + 1.5 IQR) so its long high-nlocs tail
+    # (dense/aggregated regions) cannot stretch the axis; the sim/accepted
+    # clouds and the pick-window edges are always fully included.
+    xlos, xhis, ylos, yhis = [], [], [], []
+    cand_x, cand_y = _finite_xy(nlocs, rmsds)
+    if len(cand_x):
+        qx1, qx3 = np.quantile(cand_x, [0.25, 0.75])
+        qy1, qy3 = np.quantile(cand_y, [0.25, 0.75])
+        xlos.append(float(np.quantile(cand_x, 0.01)))
+        xhis.append(float(min(cand_x.max(), qx3 + 1.5 * (qx3 - qx1))))
+        ylos.append(float(np.quantile(cand_y, 0.01)))
+        yhis.append(float(min(cand_y.max(), qy3 + 1.5 * (qy3 - qy1))))
+    for xv, yv in ((sim_nlocs, sim_rmsds), (acc_nlocs, acc_rmsds)):
+        fx, fy = _finite_xy(xv, yv)
+        if len(fx):
+            xlos.append(float(fx.min()))
+            xhis.append(float(fx.max()))
+            ylos.append(float(fy.min()))
+            yhis.append(float(fy.max()))
+    if pick_window:
+        for key, los, his in (
+            ("min_nlocs_pf", xlos, xhis),
+            ("max_nlocs_pf", xlos, xhis),
+            ("min_rmsd", ylos, yhis),
+            ("max_rmsd", ylos, yhis),
+        ):
+            val = pick_window.get(key)
+            if val is not None and np.isfinite(val):
+                los.append(float(val))
+                his.append(float(val))
+
+    hist_range = None
+    if xhis and yhis:
+        x_lo, x_hi = min(xlos), max(xhis)
+        y_lo, y_hi = min(ylos), max(yhis)
+        rx = (x_hi - x_lo) or 1.0
+        ry = (y_hi - y_lo) or 1.0
+        x0, x1 = x_lo - 0.05 * rx, x_hi + 0.05 * rx
+        y0, y1 = y_lo - 0.05 * ry, y_hi + 0.05 * ry
+        hist_range = [[x0, x1], [y0, y1]]
+        axes[0].set_xlim(x0, x1)
+        axes[0].set_ylim(y0, y1)
+
+    n_cand = _scatter_or_contour(
+        axes[0], nlocs, rmsds, "0.3", "Greys", contour_threshold, hist_range
+    )
+    axes[0].set_title(f"All candidates (n={n_cand})")
+    n_sim = _scatter_or_contour(
+        axes[1],
+        sim_nlocs,
+        sim_rmsds,
+        "b",
+        "Blues",
+        contour_threshold,
+        hist_range,
+    )
+    axes[1].set_title(f"Expected origami, simulated (n={n_sim})")
+    n_acc = _scatter_or_contour(
+        axes[2],
+        acc_nlocs,
+        acc_rmsds,
+        "r",
+        "Reds",
+        contour_threshold,
+        hist_range,
+    )
+    axes[2].set_title(f"Accepted picks (n={n_acc})")
+
+    # outline the pick_similar active range on each panel (after the axis
+    # limits are set, so open edges extend to the visible range)
+    for ax in axes:
+        _draw_pick_window(ax, pick_window)
+        ax.set_xlabel("# localizations per frame in footprint")
+        handles, _ = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(fontsize="small")
+    axes[0].set_ylabel("root mean square distance in footprint")
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(fp)
+    return fp
+
+
+def _pattern_color_map(summary, labels):
+    """A stable label -> colour mapping shared across the pattern figures.
+
+    Returns ``(order, color)`` where ``order`` is the label order (from the
+    summary) and ``color(label)`` gives that cluster's colour (grey for the
+    ``-1`` noise group), so a cluster keeps the same colour in every plot.
+    """
+    order = [c["label"] for c in summary] or sorted(
+        set(np.asarray(labels).tolist())
+    )
+    cmap = plt.get_cmap("tab10")
+
+    def color(lbl):
+        if lbl == -1:
+            return "0.6"
+        return cmap(order.index(lbl) % 10) if lbl in order else "0.4"
+
+    return order, color
+
+
+# distinct scatter markers cycled per cluster, so groups stay legible where
+# their colours overlap in a busy plot
+_PATTERN_MARKERS = ("o", "s", "^", "D", "v", "P", "X", "*", ">", "<", "h", "p")
+
+
+def _labelled_2d_axes(
+    ax, x, y, labels, summary, min_contour=60, xlim=None, ylim=None
+):
+    """Draw per-cluster points on ``ax``: a smoothed density contour when a
+    cluster has enough points (clearer than an overplotted scatter), else a
+    scatter with a distinct marker + colour per cluster.
+
+    Axes are bounded by a Tukey fence on the pooled cloud so a few outliers
+    cannot stretch them; pass ``xlim`` / ``ylim`` to override an axis when
+    the pooled cloud is bimodal (e.g. a large low-scoring background mode
+    that would otherwise clip the clusters of interest out of view). Colours
+    follow :func:`_pattern_color_map`.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    labels = np.asarray(labels)
+    fin = np.isfinite(x) & np.isfinite(y)
+    if not np.any(fin):
+        return
+    px, py = x[fin], y[fin]
+
+    def _fence(v):
+        q1, q3 = np.quantile(v, [0.25, 0.75])
+        iqr = q3 - q1
+        lo = max(float(v.min()), float(q1 - 1.5 * iqr))
+        hi = min(float(v.max()), float(q3 + 1.5 * iqr))
+        if hi <= lo:
+            lo, hi = float(v.min()), float(v.max())
+        if hi <= lo:
+            hi = lo + 1.0
+        return lo, hi
+
+    x0, x1 = xlim if xlim is not None else _fence(px)
+    y0, y1 = ylim if ylim is not None else _fence(py)
+    hrange = [[x0, x1], [y0, y1]]
+    order, color = _pattern_color_map(summary, labels)
+    for i, lbl in enumerate(order):
+        m = labels == lbl
+        cx, cy = x[m], y[m]
+        f = np.isfinite(cx) & np.isfinite(cy)
+        cx, cy = cx[f], cy[f]
+        if len(cx) == 0:
+            continue
+        col = color(lbl)
+        mk = "." if lbl == -1 else _PATTERN_MARKERS[i % len(_PATTERN_MARKERS)]
+        name = "unclustered" if lbl == -1 else str(lbl)
+        lab = f"{name} (n={len(cx)})"
+        if len(cx) < min_contour or np.ptp(cx) == 0 or np.ptp(cy) == 0:
+            ax.scatter(
+                cx,
+                cy,
+                s=30,
+                marker=mk,
+                facecolor=[col],
+                edgecolor="k",
+                linewidths=0.4,
+                alpha=0.75,
+                label=lab,
+            )
+            continue
+        hist, xe, ye = np.histogram2d(cx, cy, bins=40, range=hrange)
+        hist = gaussian_filter(hist, 1.0)
+        if hist.max() <= 0:
+            continue
+        xc = 0.5 * (xe[:-1] + xe[1:])
+        yc = 0.5 * (ye[:-1] + ye[1:])
+        levels = np.linspace(hist.max() * 0.25, hist.max() * 0.9, 3)
+        ax.contour(xc, yc, hist.T, levels=levels, colors=[col], linewidths=1.3)
+        ax.plot([], [], color=col, marker=mk, linestyle="none", label=lab)
+    ax.set_xlim(x0, x1)
+    ax.set_ylim(y0, y1)
+    handles, _ = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize="small", title="cluster")
+
+
+def _plot_pattern_phasespace(fp, nlocs, rmsds, labels, summary):
+    """Accepted structures in (nlocs-per-frame, rmsd), as per-cluster density
+    contours (clearer than a scatter of thousands of points)."""
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(ax, nlocs, rmsds, labels, summary)
+    ax.set_xlabel("# localizations per frame in footprint")
+    ax.set_ylabel("root mean square distance in footprint")
+    ax.set_title("Accepted structures by geometry pattern")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_lattice_fit_space(fp, n_matched, rmse_nm, labels, summary):
+    """Lattice method: accepted structures in (matched-site count, template
+    fit RMSE), per-cluster density contours.
+
+    Unlike the pick-window phase space (nlocs-per-frame, rmsd), these are the
+    registration observables the on-lattice gate actually decides on, so the
+    clean-origami island separates from the off-lattice cloud much more
+    sharply - the targeted view of where the candidates sit.
+    """
+    n_matched = np.asarray(n_matched, dtype=float)
+    rmse_nm = np.asarray(rmse_nm, dtype=float)
+    if not np.any(np.isfinite(n_matched) & np.isfinite(rmse_nm)):
+        return None
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(ax, n_matched, rmse_nm, labels, summary)
+    ax.set_xlabel("# docking sites matched to template")
+    ax.set_ylabel("template fit RMSE (nm)")
+    ax.set_title("Accepted structures by lattice fit quality")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_lattice_pairscore_space(
+    fp, nlocs, pair_score, labels, summary, gate=None
+):
+    """Registration-free view: structures in (nlocs-per-frame, lattice
+    pair-score).
+
+    The pair-score is the cheap first-layer origami discriminator (windowed
+    pair-correlation at the design spacing, computed on every pick before the
+    expensive registration). The origami island sits at high pair-score, well
+    separated from the junk cloud that brightness (nlocs) alone cannot
+    resolve.
+
+    The pooled cloud is strongly bimodal - the large off-lattice mode sits
+    near zero while the accepted structures score ~1-3 - so the y-axis is
+    framed explicitly (0 .. just above the accepted range) rather than by the
+    default Tukey fence, which the background mode would otherwise collapse.
+    ``gate`` (the pre-screen ``min_pair_score``) is drawn as a reference line.
+    """
+    ps = np.asarray(pair_score, dtype=float)
+    nl = np.asarray(nlocs, dtype=float)
+    lab = np.asarray(labels)
+    # frame both axes on the accepted (on-lattice) cloud: the off-lattice
+    # background mode dominates a pooled fence and would clip the accepted
+    # structures off both axes. Fall back to all finite points if too few.
+    keep = (lab != -1) & np.isfinite(ps) & np.isfinite(nl)
+    if keep.sum() < 2:
+        keep = np.isfinite(ps) & np.isfinite(nl)
+    if keep.sum() < 2:
+        return None
+
+    def _fence(v):
+        q1, q3 = np.quantile(v, [0.25, 0.75])
+        iqr = q3 - q1
+        lo = max(float(v.min()), float(q1 - 1.5 * iqr))
+        hi = min(float(v.max()), float(q3 + 1.5 * iqr))
+        if hi <= lo:
+            lo, hi = float(v.min()), float(v.max())
+        if hi <= lo:
+            hi = lo + 1.0
+        return lo, hi
+
+    x0, x1 = _fence(nl[keep])
+    _, ytop = _fence(ps[keep])
+    if gate is not None and np.isfinite(gate):
+        ytop = max(ytop, float(gate))
+    ytop = ytop * 1.05 if ytop > 0 else 1.0
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(
+        ax, nl, ps, labels, summary, xlim=(x0, x1), ylim=(0.0, ytop)
+    )
+    if gate is not None and np.isfinite(gate):
+        ax.axhline(
+            float(gate),
+            color="0.4",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"pre-screen gate ({float(gate):.2f})",
+        )
+        ax.legend(fontsize="small", title="cluster")
+    ax.set_xlabel("# localizations per frame in footprint")
+    ax.set_ylabel("lattice pair-score at design spacing")
+    ax.set_title("Accepted structures by lattice pair-score")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_lattice_gate_panels(fp, aux, labels, gates):
+    """One histogram per on-lattice gate, with its threshold(s), showing where
+    the accepted (on-lattice) structures sit relative to each cut.
+
+    Makes the acceptance decision fully transparent: a structure is
+    on-lattice only if it clears *every* gate, so any single gate can be the
+    limiting one. The pre-screen ``pair_score`` panel covers all picks; the
+    remaining panels cover only the registered picks (those that passed the
+    pre-screen). Each title reports how many of that panel's structures fail
+    that gate alone.
+    """
+    if not aux or not gates:
+        return None
+    labels = np.asarray(labels)
+    n = len(aux)
+
+    def _get(key):
+        return np.array([a.get(key, np.nan) for a in aux], dtype=float)
+
+    rmse = _get("rmse_nm")
+    registered = np.isfinite(rmse)  # passed the pre-screen -> got registered
+    onl = labels != -1
+    if not registered.any():
+        return None
+    nn = gates.get("design_nn_nm", 0.0)
+    tol = gates.get("spacing_tol", 0.3)
+    allmask = np.ones(n, dtype=bool)
+    # (title, values, subset, [(op, threshold), ...])
+    panels = [
+        (
+            "pair-score (pre-screen)",
+            _get("pair_score"),
+            allmask,
+            [(">=", gates.get("min_pair_score"))],
+        ),
+        (
+            "# matched sites",
+            _get("n_matched"),
+            registered,
+            [(">=", gates.get("min_sites"))],
+        ),
+        (
+            "fit RMSE (nm)",
+            rmse,
+            registered,
+            [("<=", gates.get("rmse_gate_nm"))],
+        ),
+        (
+            "frac on-lattice",
+            _get("frac_on_lattice"),
+            registered,
+            [(">=", gates.get("frac_on_lattice_gate"))],
+        ),
+        (
+            "fitted spacing (nm)",
+            _get("fitted_spacing_nm"),
+            registered,
+            [(">=", nn * (1.0 - tol)), ("<=", nn * (1.0 + tol))],
+        ),
+        (
+            "per-site nlocs CV",
+            _get("nlocs_cv"),
+            registered,
+            [("<=", gates.get("max_nlocs_cv"))],
+        ),
+        (
+            "per-site spread CV",
+            _get("spread_cv"),
+            registered,
+            [("<=", gates.get("max_spread_cv"))],
+        ),
+    ]
+    ncol = 4
+    nrow = int(np.ceil(len(panels) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4 * ncol, 3.2 * nrow))
+    axes = np.atleast_1d(axes).ravel()
+    for ax, (title, vals, subset, thr) in zip(axes, panels):
+        m = subset & np.isfinite(vals)
+        if not m.any():
+            ax.set_visible(False)
+            continue
+        v = vals[m]
+        lo, hi = np.percentile(v, [1, 99])
+        if hi <= lo:
+            lo, hi = float(v.min()), float(v.max()) + 1.0
+        bins = np.linspace(lo, hi, 30)
+        rej = m & ~onl
+        acc = m & onl
+        if rej.any():
+            ax.hist(
+                np.clip(vals[rej], lo, hi),
+                bins=bins,
+                color="0.7",
+                label="rejected",
+            )
+        if acc.any():
+            ax.hist(
+                np.clip(vals[acc], lo, hi),
+                bins=bins,
+                color="tab:green",
+                alpha=0.85,
+                label="on-lattice",
+            )
+        passmask = np.ones(int(m.sum()), dtype=bool)
+        for op, t in thr:
+            if t is None or not np.isfinite(t):
+                continue
+            ax.axvline(t, color="firebrick", linestyle="--", linewidth=1.2)
+            passmask &= (v >= t) if op == ">=" else (v <= t)
+        nfail = int((~passmask).sum())
+        ax.set_title(f"{title}\n{nfail}/{int(m.sum())} fail", fontsize=9)
+        ax.tick_params(labelsize=8)
+    for ax in axes[len(panels) :]:
+        ax.set_visible(False)
+    axes[0].legend(fontsize=8)
+    fig.suptitle(
+        "On-lattice gate transparency (per-gate metric distributions; "
+        "green = accepted)",
+        fontsize=12,
+    )
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_pattern_feature_space(fp, features, labels, summary):
+    """PCA(2) of the standardized descriptor features, per-cluster density -
+    shows how well the clustering separates in the full descriptor space."""
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+
+    feats = np.asarray(features, dtype=float)
+    if feats.ndim != 2 or len(feats) < 2:
+        return None
+    scaled = StandardScaler().fit_transform(feats)
+    if scaled.shape[1] > 2:
+        emb = PCA(n_components=2, random_state=0).fit_transform(scaled)
+    elif scaled.shape[1] == 2:
+        emb = scaled
+    else:
+        emb = np.column_stack([scaled[:, 0], np.zeros(len(scaled))])
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(ax, emb[:, 0], emb[:, 1], labels, summary)
+    ax.set_xlabel("descriptor PC 1")
+    ax.set_ylabel("descriptor PC 2")
+    ax.set_title("Pattern clusters in descriptor space (PCA)")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_pattern_pairdist(
+    fp, features, feature_names, labels, summary, max_pair_nm
+):
+    """Per-cluster mean pairwise site-distance histogram - the lattice
+    'signature' of each pattern (one line per cluster)."""
+    idx = [
+        i for i, n in enumerate(feature_names) if str(n).startswith("pdist_")
+    ]
+    if not idx:
+        return None
+    hist = np.asarray(features, dtype=float)[:, idx]
+    edges = np.linspace(0.0, float(max_pair_nm), len(idx) + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    labels = np.asarray(labels)
+    _, color = _pattern_color_map(summary, labels)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for c in summary:
+        lbl = c["label"]
+        if c.get("is_noise"):
+            continue
+        m = labels == lbl
+        if not np.any(m):
+            continue
+        ax.plot(
+            centers,
+            hist[m].mean(axis=0),
+            color=color(lbl),
+            label=f"pattern {lbl} (~{c.get('median_n_sites', 0):.0f} sites)",
+        )
+    ax.set_xlabel("pairwise site distance (nm)")
+    ax.set_ylabel("mean normalized count")
+    ax.set_title("Pairwise site-distance signature per pattern")
+    handles, _ = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize="small")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_site_nlocs_hist(fp, labels, aux, summary):
+    """Per-cluster histogram of localizations-per-(matched)-site.
+
+    Helps judge site resolution and tune ``pattern_min_samples`` /
+    ``pattern_eps_frac``: spurious over-counted sites show up as a spike of
+    low-count sites near the ``min_samples`` floor, while a clean, well
+    populated peak means the sites are real.
+    """
+    if aux is None:
+        return None
+    labels = np.asarray(labels)
+    clusters = [c for c in summary if not c.get("is_offlattice")]
+    per = {}
+    pooled = []
+    for c in clusters:
+        lbl = c["label"]
+        idx = np.where(labels == lbl)[0]
+        cnts = (
+            np.concatenate(
+                [np.asarray(aux[i].get("site_nlocs_matched", [])) for i in idx]
+            )
+            if len(idx)
+            else np.empty(0)
+        )
+        per[lbl] = cnts
+        pooled.append(cnts)
+    pooled = np.concatenate(pooled) if pooled else np.empty(0)
+    if len(pooled) == 0:
+        return None
+    hi = float(np.percentile(pooled, 99))
+    bins = np.linspace(0, max(hi, 5.0), 30)
+    order, color = _pattern_color_map(summary, labels)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for lbl in order:
+        cnts = per.get(lbl)
+        if cnts is None or len(cnts) == 0:
+            continue
+        ax.hist(
+            cnts,
+            bins=bins,
+            histtype="step",
+            density=True,
+            linewidth=1.6,
+            color=color(lbl),
+            label=f"{lbl}-site ({len(cnts)} sites)",
+        )
+    ax.set_xlabel("localizations per site")
+    ax.set_ylabel("density")
+    ax.set_title("Localizations per docking site, by cluster")
+    handles, _ = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize="small", title="cluster")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+# Hard ceiling on how many per-structure example images pick_origami renders
+# (and therefore uploads to the report). Rendering + uploading thousands of
+# structure PNGs one-by-one is the dominant cost and has wedged runs in the
+# Confluence reporter for tens of minutes; cap it and log when the cap bites.
+# Applies to the base representative renders and, in total, to the per-pattern
+# example renders.
+_MAX_STRUCTURE_RENDERS = 200
+
+
 # picasso 0.11 fitting methods whose base name has a plain ``-gpu`` variant.
 # GPU is orthogonal to the model choice, so when a GPU fitter is configured
 # these bases are routed to their ``-gpu`` counterpart (see ``localize``).
@@ -13992,6 +14691,739 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #    @profile_resource_usage
     @module_decorator
+    def pick_origami(self, i, parameters, results):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry, auto-detects and picks the
+        origami structures (tolerating a configurable number of missing
+        docking sites), and emits picasso-compatible picks plus a
+        per-structure geometry table. See
+        :meth:`~picasso_workflow.util.AbstractModuleCollection.pick_origami`
+        for the full parameter contract.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            The module parameters (see the contract method).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        logger.debug(f"# locs: {len(self.locs)}")
+        pixelsize = self.pixelsize
+
+        # The GUI-generated template emits unset optional parameters as
+        # placeholder sentinels ("" for strings, 0.0/0 for numbers). Treat
+        # those as "not provided" so they fall back to real defaults instead
+        # of being taken literally (e.g. max_rmsd=0 would pick nothing).
+        def _opt(key, default=None, zero_is_unset=False):
+            val = parameters.get(key, default)
+            if val == "" or val is None:
+                return default
+            if zero_is_unset and isinstance(val, (int, float)) and val == 0:
+                return default
+            return val
+
+        # --- 1. load the design template (expected geometry) -----------
+        # The design spacing comes from the geometry spec (grid ``spacing_nm``
+        # or the explicit site list); the picker works in that frame.
+        if _opt("design_file"):
+            template_spec = {"design_file": parameters["design_file"]}
+        elif _opt("geometry") is not None:
+            template_spec = parameters["geometry"]
+        else:
+            raise ValueError(
+                "pick_origami needs a 'design_file' or a 'geometry' spec"
+            )
+        template = picasso_outpost.load_origami_template(template_spec)
+        results["n_sites_expected"] = template.n_sites_expected
+        results["grid_spacing_nm"] = template.grid_spacing_nm
+
+        # --- 2. run the design-aware picker ----------------------------
+        # The pick window is set explicitly via min/max_rmsd and
+        # min/max_n_locs_per_frame (the "Preview phase space" GUI dialog
+        # simulates the expected origami cloud to suggest those bounds); the
+        # module itself no longer simulates.
+        pick_result = picasso_outpost.pick_origami(
+            self.locs,
+            self.info,
+            template,
+            pixelsize,
+            pick_diameter_factor=_opt("pick_diameter_factor", 1.5),
+            min_n_locs_per_frame=_opt("min_n_locs_per_frame"),
+            max_n_locs_per_frame=_opt("max_n_locs_per_frame"),
+            min_rmsd=_opt("min_rmsd", zero_is_unset=True),
+            max_rmsd=_opt("max_rmsd", zero_is_unset=True),
+            allow_mirror=parameters.get("allow_mirror", True),
+        )
+        accepted_centers = pick_result["accepted_centers_px"]
+        docking_centers = pick_result["docking_site_centers_px"]
+        geometry_table = pick_result["geometry_table"]
+        results["n_candidates"] = pick_result["n_candidates"]
+        results["n_registered"] = pick_result.get("n_registered")
+        results["n_accepted"] = pick_result["n_accepted"]
+        results["funnel"] = pick_result.get("funnel")
+        # Aggregate overview over the accepted structures (for the report).
+        # The full per-structure table is only written to disk (see
+        # fp_geometry_table below), not carried in results.
+        results["accepted_overview"] = _summarize_accepted_structures(
+            geometry_table
+        )
+
+        rcode = generate_random_code(6)
+
+        # footprint diameter actually used by the picker (for pick yaml +
+        # hdf5 picking), so the saved picks match the detection footprint.
+        footprint_diameter = pick_result["footprint_diameter"]
+        docking_diameter = parameters.get(
+            "docking_site_diameter",
+            max(template.grid_spacing_nm / pixelsize / 2, 1e-6),
+        )
+
+        # --- 4a. origami-footprint picks (Centers + Diameter yaml) -----
+        fp_picks_origami = os.path.join(results["folder"], "pick_origami.yaml")
+        with open(fp_picks_origami, "w") as f:
+            yaml.dump(
+                {
+                    "Centers": [
+                        [float(c[0]), float(c[1])] for c in accepted_centers
+                    ],
+                    "Diameter (nm)": float(footprint_diameter * pixelsize),
+                    "Shape": "Circle",
+                },
+                f,
+            )
+        results["fp_picks_origami"] = fp_picks_origami
+
+        # secondary: picasso picks for all resolved single docking sites
+        fp_picks_dockingsites = os.path.join(
+            results["folder"], "docking_sites.yaml"
+        )
+        with open(fp_picks_dockingsites, "w") as f:
+            yaml.dump(
+                {
+                    "Centers": [
+                        [float(c[0]), float(c[1])] for c in docking_centers
+                    ],
+                    "Diameter (nm)": float(docking_diameter * pixelsize),
+                    "Shape": "Circle",
+                },
+                f,
+            )
+        results["fp_picks_dockingsites"] = fp_picks_dockingsites
+
+        # --- 4b. grouped picked locs (one group per accepted origami) --
+        if len(accepted_centers) > 0:
+            picked_origami_locs = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                accepted_centers,
+                pick_diameter=footprint_diameter,
+                return_nonpicked=False,
+            )
+        else:
+            picked_origami_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
+            picked_origami_locs["group"] = pd.Series(dtype="int32")
+        results["n_picked_locs"] = len(picked_origami_locs)
+
+        if len(docking_centers) > 0:
+            docking_site_locs = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                docking_centers,
+                pick_diameter=docking_diameter,
+                return_nonpicked=False,
+            )
+        else:
+            docking_site_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
+            docking_site_locs["group"] = pd.Series(dtype="int32")
+
+        fp_picked_locs_origami = os.path.join(
+            results["folder"], "picked_origami_locs.hdf5"
+        )
+        origami_info = self.info + [
+            {
+                "Generated by": "picasso-workflow.analyse.pick_origami",
+                "data": "picked origami structures",
+            }
+        ]
+        io.save_locs(fp_picked_locs_origami, picked_origami_locs, origami_info)
+        results["fp_picked_locs_origami"] = fp_picked_locs_origami
+
+        fp_picked_locs_dockingsites = os.path.join(
+            results["folder"], "docking_site_locs.hdf5"
+        )
+        docking_info = self.info + [
+            {
+                "Generated by": "picasso-workflow.analyse.pick_origami",
+                "data": "resolved docking sites",
+            }
+        ]
+        io.save_locs(
+            fp_picked_locs_dockingsites, docking_site_locs, docking_info
+        )
+        results["fp_picked_locs_dockingsites"] = fp_picked_locs_dockingsites
+
+        # --- 4c. per-structure geometry table --------------------------
+        fp_geometry_table = os.path.join(
+            results["folder"], "geometry_table.csv"
+        )
+        pd.DataFrame(geometry_table).to_csv(fp_geometry_table, index=False)
+        results["fp_geometry_table"] = fp_geometry_table
+
+        # --- 5. phase-space diagnostic figure --------------------------
+        # nlocs-per-frame vs rmsd, matching the min/max_n_locs_per_frame
+        # parameters (pick_similar uses nlocs_per_frame = total / n_frames):
+        #   - all candidates as a background density contour
+        #   - the simulated "expected origami" phase space as a contour line
+        #     (the region picking targets)
+        #   - accepted picks as points
+        n_frames = self.info[0]["Frames"]
+        nlocs = np.asarray(pick_result["candidate_nlocs"]) / n_frames
+        rmsds = np.asarray(pick_result["candidate_rmsds"])
+        acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+        if len(acc_nlocs):
+            acc_nlocs = acc_nlocs / n_frames
+        acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
+        sim_nlocs = np.asarray(pick_result.get("sim_nlocs", [])) / n_frames
+        sim_rmsds = np.asarray(pick_result.get("sim_rmsds", []))
+        # the pick_similar active range (nlocs/rmsd rectangle), nlocs in
+        # per-frame units to match the axes
+        pw = pick_result.get("pick_window") or {}
+        pick_window_pf = {
+            "min_nlocs_pf": pw.get("min_nlocs", np.nan) / n_frames,
+            "max_nlocs_pf": pw.get("max_nlocs", np.nan) / n_frames,
+            "min_rmsd": pw.get("min_rmsd", np.nan),
+            "max_rmsd": pw.get("max_rmsd", np.nan),
+        }
+        results["fp_phasespace"] = _plot_origami_phasespace(
+            os.path.join(results["folder"], f"origami-phasespace-{rcode}.png"),
+            nlocs,
+            rmsds,
+            sim_nlocs,
+            sim_rmsds,
+            acc_nlocs,
+            acc_rmsds,
+            title=(
+                f"Origami: {results['n_accepted']}"
+                f" / {results['n_candidates']} accepted"
+            ),
+            contour_threshold=parameters.get("contour_threshold", 2000),
+            pick_window=pick_window_pf,
+        )
+
+        # --- 6. representative accepted structures ---------------------
+        n_plot = parameters.get("n_plot_structures")
+        fp_renderings = []
+        if n_plot is not None and len(accepted_centers) > 0:
+            pixelsize_display = parameters.get("display_pixelsize", 1)
+            n_show = min(n_plot, len(accepted_centers))
+            if n_show > _MAX_STRUCTURE_RENDERS:
+                logger.warning(
+                    "pick_origami: n_plot_structures=%s capped to %d renders "
+                    "(rendering + uploading thousands of structures wedges the "
+                    "report).",
+                    n_plot,
+                    _MAX_STRUCTURE_RENDERS,
+                )
+                n_show = _MAX_STRUCTURE_RENDERS
+            for idx, pick_i in enumerate(
+                np.random.choice(
+                    len(accepted_centers), size=n_show, replace=False
+                )
+            ):
+                cx, cy = accepted_centers[pick_i]
+                x_min = cx - footprint_diameter / 2
+                y_min = cy - footprint_diameter / 2
+                render_kwargs = {
+                    "oversampling": pixelsize / pixelsize_display,
+                    "viewport": [
+                        (y_min, x_min),
+                        (
+                            cy + footprint_diameter / 2,
+                            cx + footprint_diameter / 2,
+                        ),
+                    ],
+                }
+                fp_renderings.append(
+                    os.path.join(
+                        results["folder"],
+                        f"render_origami_{idx}_{pick_i}-{rcode}.png",
+                    )
+                )
+                render.plot_scene(
+                    picked_origami_locs,
+                    pixelsize_display,
+                    pixelsize,
+                    fp=fp_renderings[-1],
+                    render_kwargs=render_kwargs,
+                    title=f"origami {pick_i}",
+                )
+        # Lay the representative structures out in a grid: rows of up to
+        # 8 columns (fp_renderings is a list of rows for the reporter).
+        max_cols = parameters.get("n_plot_columns", 8)
+        results["fp_renderings"] = [
+            fp_renderings[i : i + max_cols]
+            for i in range(0, len(fp_renderings), max_cols)
+        ]
+
+        # --- 7. optional: cluster accepted structures by geometry ------
+        # Group the picked origami by their resolved site pattern (single
+        # spot / partial / full grid / aggregate) using an invariant
+        # site-graph descriptor, and emit per-pattern picks + a summary.
+        if (
+            _opt("cluster_patterns", False)
+            and len(accepted_centers) > 0
+            and template.grid_spacing_nm
+            and template.grid_spacing_nm > 0
+        ):
+            self._cluster_origami_patterns(
+                parameters,
+                results,
+                pick_result,
+                picked_origami_locs,
+                origami_info,
+                accepted_centers,
+                template,
+                pixelsize,
+                footprint_diameter,
+                n_frames,
+                rcode,
+            )
+        elif _opt("cluster_patterns", False):
+            logger.debug(
+                "pick_origami: cluster_patterns requested but skipped "
+                "(no accepted structures or single-site geometry)."
+            )
+
+        return parameters, results
+
+    def _cluster_origami_patterns(
+        self,
+        parameters,
+        results,
+        pick_result,
+        picked_origami_locs,
+        origami_info,
+        accepted_centers,
+        template,
+        pixelsize,
+        footprint_diameter,
+        n_frames,
+        rcode,
+    ):
+        """Cluster accepted origami by resolved geometry and emit outputs.
+
+        Builds the invariant site-graph descriptor for each accepted
+        structure (:func:`picasso_outpost.cluster_structure_patterns`) and
+        writes, per discovered pattern cluster, a picasso pick ``.yaml`` and
+        a grouped ``.hdf5``, plus a ``pattern_table.csv`` summary, a
+        representative render per cluster, and a phase-space scatter coloured
+        by pattern. Populates the ``fp_pattern_*`` / ``pattern_summary`` /
+        ``n_pattern_clusters`` result keys.
+        """
+        groups = {
+            int(g): sub for g, sub in picked_origami_locs.groupby("group")
+        }
+        group_ids = sorted(groups)
+        if not group_ids:
+            return
+        structures_xy_nm = [
+            np.column_stack(
+                [np.asarray(groups[g]["x"]), np.asarray(groups[g]["y"])]
+            )
+            * pixelsize
+            for g in group_ids
+        ]
+        # method: design-aware lattice-defect clustering (register each pick
+        # onto the design lattice; cluster by fit quality + defect occupancy)
+        # for multi-node lattice designs; the template-agnostic
+        # pairwise-distance descriptor is the automatic fallback for
+        # arbitrary (< 3 node) designs. The site-resolution knobs
+        # (pattern_eps_frac / pattern_min_samples) apply to both; the lattice
+        # on-lattice gate thresholds use the calibrated function defaults.
+        method = "lattice" if template.n_sites_expected >= 3 else "pairwise"
+        sub_kwargs = {}
+        if parameters.get("pattern_eps_frac"):
+            sub_kwargs["eps_frac"] = float(parameters["pattern_eps_frac"])
+        # min_samples defaults to 7 (not the library floor of 3): bright
+        # DNA-PAINT origami sites carry enough locs that a higher DBSCAN floor
+        # suppresses spurious over-counted sites and recovers substantially
+        # more on-lattice structures (see CHANGELOG / pattern_min_samples).
+        sub_kwargs["min_samples"] = int(
+            parameters.get("pattern_min_samples") or 7
+        )
+        if method == "lattice":
+            lattice_kwargs = dict(sub_kwargs)
+            # 0.0 is a meaningful value here (fall back to the absolute
+            # site-count floor), so test for unset explicitly - a truthiness
+            # check would silently drop a user-supplied 0.0.
+            _msf = parameters.get("pattern_min_sites_frac")
+            if _msf is not None and _msf != "":
+                lattice_kwargs["min_on_lattice_frac"] = float(_msf)
+            if parameters.get("pattern_defect_grouping"):
+                lattice_kwargs["defect_grouping"] = str(
+                    parameters["pattern_defect_grouping"]
+                )
+            cl = picasso_outpost.cluster_lattice_defects(
+                structures_xy_nm,
+                template.sites_nm,
+                template.grid_spacing_nm,
+                allow_mirror=parameters.get("allow_mirror", True),
+                **lattice_kwargs,
+            )
+        else:
+            cl = picasso_outpost.cluster_structure_patterns(
+                structures_xy_nm,
+                expected_spacing_nm=template.grid_spacing_nm,
+                **sub_kwargs,
+            )
+        results["pattern_method"] = method
+        labels = np.asarray(cl["labels"])
+        summary = cl["cluster_summary"]
+        # unify the noise / off-lattice flag so the shared code below and the
+        # reporter can stay method-agnostic
+        for c in summary:
+            c.setdefault("is_noise", bool(c.get("is_offlattice", False)))
+        # annotate each cluster with its median pick_similar rmsd (camera px)
+        # and median nlocs-per-frame - the phase-space axes the pick window is
+        # set in. accepted_rmsds/nlocs are aligned to accepted_centers;
+        # group_ids maps structures -> that index, in the same order as labels.
+        acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
+        acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+        gid_idx = np.asarray(group_ids, dtype=int)
+        for c in summary:
+            m = labels == c["label"]
+            if len(acc_rmsds):
+                rmsd_by_struct = acc_rmsds[gid_idx]
+                c["median_rmsd_px"] = (
+                    float(np.median(rmsd_by_struct[m]))
+                    if np.any(m)
+                    else float("nan")
+                )
+            if len(acc_nlocs) and n_frames:
+                nlpf_by_struct = acc_nlocs[gid_idx] / n_frames
+                c["median_nlocs_per_frame"] = (
+                    float(np.median(nlpf_by_struct[m]))
+                    if np.any(m)
+                    else float("nan")
+                )
+        results["pattern_summary"] = summary
+        results["n_pattern_clusters"] = int(len(set(labels.tolist()) - {-1}))
+
+        fp_pattern_table = os.path.join(results["folder"], "pattern_table.csv")
+        pd.DataFrame(summary).to_csv(fp_pattern_table, index=False)
+        results["fp_pattern_table"] = fp_pattern_table
+
+        # per-cluster picks (.yaml) + grouped locs (.hdf5)
+        fp_pattern_picks = {}
+        diameter_nm = float(footprint_diameter * pixelsize)
+        for lbl in sorted(set(labels.tolist())):
+            member_pos = np.where(labels == lbl)[0]
+            member_gids = [group_ids[i] for i in member_pos]
+            centers_lbl = [accepted_centers[g] for g in member_gids]
+            if lbl == -1:
+                tag = "offlattice" if method == "lattice" else "noise"
+            else:
+                tag = str(int(lbl))
+            fp_yaml = os.path.join(
+                results["folder"], f"pattern_{tag}_picks.yaml"
+            )
+            with open(fp_yaml, "w") as f:
+                yaml.dump(
+                    {
+                        "Centers": [
+                            [float(c[0]), float(c[1])] for c in centers_lbl
+                        ],
+                        "Diameter (nm)": diameter_nm,
+                        "Shape": "Circle",
+                    },
+                    f,
+                )
+            fp_pattern_picks[int(lbl)] = fp_yaml
+            sub = picked_origami_locs[
+                picked_origami_locs["group"].isin(member_gids)
+            ]
+            io.save_locs(
+                os.path.join(results["folder"], f"pattern_{tag}_locs.hdf5"),
+                sub,
+                origami_info,
+            )
+        results["fp_pattern_picks"] = fp_pattern_picks
+
+        # phase-space scatter coloured by pattern (aligned to group_ids)
+        gid_idx = np.asarray(group_ids, dtype=int)
+        acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+        acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
+        if len(acc_nlocs) and len(acc_rmsds):
+            nlocs_pf = acc_nlocs[gid_idx] / n_frames
+            rmsds_pf = acc_rmsds[gid_idx]
+            fp_pattern_ps = os.path.join(
+                results["folder"], f"pattern-phasespace-{rcode}.png"
+            )
+            results["fp_pattern_phasespace"] = _plot_pattern_phasespace(
+                fp_pattern_ps, nlocs_pf, rmsds_pf, labels, summary
+            )
+
+        # descriptor-space view (PCA of the site-graph features, coloured by
+        # cluster) - shows how the HDBSCAN/GMM clustering actually separated.
+        fs = _plot_pattern_feature_space(
+            os.path.join(
+                results["folder"], f"pattern-featurespace-{rcode}.png"
+            ),
+            cl.get("features"),
+            labels,
+            summary,
+        )
+        if fs:
+            results["fp_pattern_feature_space"] = fs
+        # per-cluster pairwise site-distance signature (the lattice fingerprint)
+        pd_fp = _plot_pattern_pairdist(
+            os.path.join(results["folder"], f"pattern-pairdist-{rcode}.png"),
+            cl.get("features"),
+            cl.get("feature_names", []),
+            labels,
+            summary,
+            cl.get("max_pair_nm", 0.0),
+        )
+        if pd_fp:
+            results["fp_pattern_pairdist"] = pd_fp
+
+        if method == "lattice":
+            # targeted fit-quality phase space (matched-site count vs template
+            # fit RMSE) - the registration observables the gate decides on;
+            # aux is per-structure, aligned to labels.
+            aux = cl.get("aux") or []
+            if len(aux) == len(labels):
+                fit_fp = _plot_lattice_fit_space(
+                    os.path.join(
+                        results["folder"], f"pattern-fitspace-{rcode}.png"
+                    ),
+                    [a.get("n_matched", np.nan) for a in aux],
+                    [a.get("rmse_nm", np.nan) for a in aux],
+                    labels,
+                    summary,
+                )
+                if fit_fp:
+                    results["fp_pattern_fit_space"] = fit_fp
+
+                # registration-free pair-score view (the cheap first-layer
+                # discriminator) vs brightness. accepted_nlocs is aligned to
+                # accepted_centers; gid_idx maps structures -> that index.
+                acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+                gid_idx = np.asarray(group_ids, dtype=int)
+                if len(acc_nlocs) and n_frames:
+                    ps_fp = _plot_lattice_pairscore_space(
+                        os.path.join(
+                            results["folder"],
+                            f"pattern-pairscore-{rcode}.png",
+                        ),
+                        acc_nlocs[gid_idx] / n_frames,
+                        [a.get("pair_score", np.nan) for a in aux],
+                        labels,
+                        summary,
+                        gate=cl.get("min_pair_score"),
+                    )
+                    if ps_fp:
+                        results["fp_pattern_pairscore_space"] = ps_fp
+
+                # per-gate transparency panels: where the accepted structures
+                # sit against every on-lattice gate threshold.
+                gate_fp = _plot_lattice_gate_panels(
+                    os.path.join(
+                        results["folder"], f"pattern-gates-{rcode}.png"
+                    ),
+                    aux,
+                    labels,
+                    cl.get("gates"),
+                )
+                if gate_fp:
+                    results["fp_pattern_gate_panels"] = gate_fp
+
+            # #locs-per-site histogram per cluster (site-resolution / tuning)
+            hist_fp = _plot_site_nlocs_hist(
+                os.path.join(
+                    results["folder"], f"pattern-sitenlocs-{rcode}.png"
+                ),
+                labels,
+                cl.get("aux"),
+                summary,
+            )
+            if hist_fp:
+                results["fp_pattern_site_nlocs_hist"] = hist_fp
+
+            # export the resolved single docking sites of the on-lattice
+            # structures as a picasso pick set (registration already tags each
+            # with its design-node index). Coordinates are absolute nm, so
+            # nm / pixelsize gives the camera-px pick centre.
+            self._export_lattice_site_picks(
+                results,
+                cl.get("aux"),
+                labels,
+                group_ids,
+                template,
+                pixelsize,
+                parameters,
+            )
+
+        # example renders per cluster: the members most *representative* of the
+        # cluster, NOT the brightest (brightness is deliberately not a
+        # clustering dimension, so the brightest are atypical aggregates). For
+        # the lattice method "typical" = cleanest lattice fit (lowest residual);
+        # for pairwise = nearest the descriptor centroid.
+        pixelsize_display = parameters.get("display_pixelsize", 1)
+        n_examples = int(parameters.get("n_pattern_examples", 8) or 0)
+        aux = cl.get("aux")
+        lattice_rmse = None
+        if method == "lattice" and aux:
+            lattice_rmse = np.array(
+                [a.get("rmse_nm", np.inf) for a in aux], dtype=float
+            )
+        feats_all = np.asarray(cl.get("features"))
+        have_feats = feats_all.ndim == 2 and len(feats_all) == len(labels)
+        if have_feats:
+            from sklearn.preprocessing import StandardScaler
+
+            feats_std = StandardScaler().fit_transform(feats_all)
+        # bound the total across all clusters (n_examples x #clusters can
+        # explode when many clusters are found); log if the budget bites.
+        render_budget = _MAX_STRUCTURE_RENDERS
+        n_nonoise = sum(1 for c in summary if c["label"] != -1)
+        if n_examples * n_nonoise > render_budget:
+            logger.warning(
+                "pick_origami: %d pattern example renders requested "
+                "(%d examples x %d clusters) capped to %d total.",
+                n_examples * n_nonoise,
+                n_examples,
+                n_nonoise,
+                render_budget,
+            )
+        fp_pattern_renderings = {}
+        for c in summary:
+            lbl = c["label"]
+            if lbl == -1 or n_examples <= 0 or render_budget <= 0:
+                continue
+            member_pos = np.where(labels == lbl)[0]
+            take = min(n_examples, render_budget)
+            if lattice_rmse is not None:
+                # cleanest lattice fit first (lowest residual)
+                member_pos = member_pos[np.argsort(lattice_rmse[member_pos])][
+                    :take
+                ]
+            elif have_feats and len(member_pos) > 1:
+                # most typical first: nearest the cluster feature centroid
+                centroid = feats_std[member_pos].mean(axis=0)
+                dist = np.linalg.norm(feats_std[member_pos] - centroid, axis=1)
+                member_pos = member_pos[np.argsort(dist)][:take]
+            else:
+                member_pos = member_pos[:take]
+            row = []
+            for rank, i in enumerate(member_pos):
+                gid = group_ids[i]
+                cx, cy = accepted_centers[gid]
+                x_min = cx - footprint_diameter / 2
+                y_min = cy - footprint_diameter / 2
+                fp = os.path.join(
+                    results["folder"],
+                    f"pattern_{int(lbl)}_ex{rank}_g{gid}-{rcode}.png",
+                )
+                render.plot_scene(
+                    picked_origami_locs[picked_origami_locs["group"] == gid],
+                    pixelsize_display,
+                    pixelsize,
+                    fp=fp,
+                    render_kwargs={
+                        "oversampling": pixelsize / pixelsize_display,
+                        "viewport": [
+                            (y_min, x_min),
+                            (
+                                cy + footprint_diameter / 2,
+                                cx + footprint_diameter / 2,
+                            ),
+                        ],
+                    },
+                    title=(
+                        f"pattern {int(lbl)} " f"({len(groups[gid])} locs)"
+                    ),
+                )
+                row.append(fp)
+            fp_pattern_renderings[int(lbl)] = row
+            render_budget -= len(row)
+        results["fp_pattern_renderings"] = fp_pattern_renderings
+
+    def _export_lattice_site_picks(
+        self,
+        results,
+        aux,
+        labels,
+        group_ids,
+        template,
+        pixelsize,
+        parameters,
+    ):
+        """Export the resolved single docking sites of the on-lattice
+        structures as a picasso pick set + a table tagging each with its
+        design-node index.
+
+        The lattice method already resolves each pick's sites and registers
+        them to the design; this surfaces those sites (matched to a node) as
+        directly usable single-site picks. Populates ``fp_pattern_site_picks``
+        (.yaml), ``fp_pattern_sites_table`` (.csv) and ``n_pattern_sites``.
+        """
+        if not aux:
+            return
+        centers_px, rows = [], []
+        for i, lbl in enumerate(labels):
+            if lbl == -1:
+                continue
+            a = aux[i]
+            sites = np.asarray(a.get("site_centers_nm"))
+            nodes = np.asarray(a.get("site_nodes"))
+            if sites.ndim != 2 or len(sites) != len(nodes):
+                continue
+            gid = int(group_ids[i])
+            rmse = float(a.get("rmse_nm", float("nan")))
+            for (cx_nm, cy_nm), node in zip(sites, nodes):
+                if node < 0:  # only sites matched to a design node
+                    continue
+                cx, cy = float(cx_nm / pixelsize), float(cy_nm / pixelsize)
+                centers_px.append([cx, cy])
+                rows.append(
+                    {
+                        "center_x_px": cx,
+                        "center_y_px": cy,
+                        "node_index": int(node),
+                        "cluster": int(lbl),
+                        "structure_group": gid,
+                        "rmse_nm": rmse,
+                    }
+                )
+        if not centers_px:
+            return
+        docking_diameter = parameters.get(
+            "docking_site_diameter",
+            max(template.grid_spacing_nm / pixelsize / 2, 1e-6),
+        )
+        fp_sites = os.path.join(results["folder"], "pattern_site_picks.yaml")
+        with open(fp_sites, "w") as f:
+            yaml.dump(
+                {
+                    "Centers": centers_px,
+                    "Diameter (nm)": float(docking_diameter * pixelsize),
+                    "Shape": "Circle",
+                },
+                f,
+            )
+        results["fp_pattern_site_picks"] = fp_sites
+        fp_tbl = os.path.join(results["folder"], "pattern_sites.csv")
+        pd.DataFrame(rows).to_csv(fp_tbl, index=False)
+        results["fp_pattern_sites_table"] = fp_tbl
+        results["n_pattern_sites"] = len(centers_px)
+
+    #    @profile_resource_usage
+    @module_decorator
     def undrift_from_picked(self, i, parameters, results):
         """Undrift using picked localizations.
 
@@ -14003,23 +15435,75 @@ class AutoPicasso(util.AbstractModuleCollection):
             Required keys:
 
             ``fp_picked_locs`` : str
-                Filepath to the picked locs to undrift from (an hdf5 file of
-                locs with a ``'group'`` column describing the picks).
+                Filepath to the picks to undrift from. Either an hdf5 file of
+                locs with a ``'group'`` column describing the picks (e.g.
+                ``pick_origami``'s ``fp_picked_locs_origami`` /
+                ``fp_picked_locs_dockingsites``), or a picasso pick-region
+                ``.yaml``
+                (``Centers`` + ``Diameter``, e.g. ``pick_origami``'s
+                ``fp_picks_origami`` / ``fp_picks_dockingsites``) which is
+                applied to ``self.locs`` to build the grouped picks.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         pixelsize = self.pixelsize
-        picked_locs, info = io.load_locs(parameters["fp_picked_locs"])
-        # with open(parameters["fp_picked_locs"], "rb") as f:
-        #     result = pickle.load(f)
+        fp_picked = parameters["fp_picked_locs"]
 
-        if not isinstance(picked_locs, list):
-            # picked locs are saved as one recarray, with the 'group' the pick
-            groups = np.unique(picked_locs["group"])
+        if str(fp_picked).lower().endswith((".yaml", ".yml")):
+            # A picasso pick-region file (Centers + Diameter). Apply it to the
+            # current locs to build grouped picked locs (one group per pick).
+            with open(fp_picked, "r") as f:
+                regions = yaml.safe_load(f)
+            centers = regions["Centers"]
+            if not centers:
+                raise ValueError(
+                    f"{fp_picked}: no pick centers to undrift from (the "
+                    "upstream picker accepted no structures)."
+                )
+            if "Diameter (nm)" in regions:
+                pick_diameter = regions["Diameter (nm)"] / pixelsize
+            elif "Diameter" in regions:
+                pick_diameter = regions["Diameter"]  # already in camera px
+            else:
+                raise ValueError(
+                    f"{fp_picked}: pick-region yaml needs a 'Diameter (nm)' "
+                    "or 'Diameter' entry"
+                )
+            picked_df = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                centers,
+                pick_diameter=pick_diameter,
+                add_group=True,
+            )
+            groups = np.unique(picked_df["group"])
             picked_locs = [
-                picked_locs[picked_locs["group"] == group] for group in groups
+                picked_df[picked_df["group"] == group] for group in groups
             ]
+        else:
+            picked_locs, info = io.load_locs(fp_picked)
+            if not isinstance(picked_locs, list):
+                # saved as one recarray, with 'group' identifying the pick
+                groups = np.unique(picked_locs["group"])
+                picked_locs = [
+                    picked_locs[picked_locs["group"] == group]
+                    for group in groups
+                ]
+        # Drift can only be estimated if the picks actually contain
+        # localizations. An empty/degenerate pick set (e.g. the upstream
+        # picker accepted no structures) would otherwise crash deep inside
+        # the drift interpolation with a cryptic "array of sample points is
+        # empty".
+        n_pick_locs = sum(len(p) for p in picked_locs)
+        if len(picked_locs) == 0 or n_pick_locs == 0:
+            raise ValueError(
+                f"undrift_from_picked: no localizations in the picks from "
+                f"'{fp_picked}' ({len(picked_locs)} picks, {n_pick_locs} "
+                "locs). The upstream picker likely accepted no structures - "
+                "check its parameters (e.g. an nlocs window that excludes "
+                "everything) and that it produced non-empty picks."
+            )
         # print(result)
         # picked_locs, picked_info = io.load_locs(parameters["fp_picked_locs"])
         self.locs, self.info, drift = picasso_outpost._undrift_from_picked(

@@ -21,6 +21,7 @@ from loguru import logger
 import os
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import yaml
@@ -104,6 +105,60 @@ def _expand_macro(title, mapping, skip_keys=()):
         )
     text += "</ul></ac:rich-text-body></ac:structured-macro>"
     return text
+
+
+def _pattern_cluster_lines(summary, method):
+    """One human-readable line per pattern / defect cluster for the report.
+
+    ``method`` is ``"lattice"`` (defect classes: occupancy / fit residual /
+    recovered spacing) or ``"pairwise"`` (generic descriptor: site count /
+    spacing / rmsd). Returns an ordered ``{name: description}`` mapping.
+    """
+    lines = {}
+    for c in summary:
+        off = c.get("is_offlattice") or c.get("is_noise")
+        nlpf = c.get("median_nlocs_per_frame")
+        nlocs_txt = (
+            f"{nlpf:.4f} locs/frame"
+            if nlpf is not None and np.isfinite(nlpf)
+            else None
+        )
+        if method == "lattice":
+            n_nodes = len(c.get("occupancy", []))
+            if off:
+                name = "off-lattice / sparse"
+            else:
+                name = f"{c.get('n_sites_occupied', '?')}/{n_nodes}-site"
+            parts = [f"{c['n_structures']} structures"]
+            if not off:
+                parts.append(f"{c.get('n_defects', '?')} defects")
+                rmse = c.get("median_rmse_nm")
+                if rmse is not None and np.isfinite(rmse):
+                    parts.append(f"fit rmse {rmse:.1f} nm")
+                sp = c.get("median_fitted_spacing_nm")
+                if sp is not None and np.isfinite(sp):
+                    parts.append(f"spacing {sp:.1f} nm")
+                ncv = c.get("median_nlocs_cv")
+                scv = c.get("median_spread_cv")
+                if ncv is not None and np.isfinite(ncv):
+                    parts.append(f"nlocs CV {ncv:.2f}")
+                if scv is not None and np.isfinite(scv):
+                    parts.append(f"spread CV {scv:.2f}")
+            if nlocs_txt:
+                parts.append(nlocs_txt)
+        else:
+            name = "unclustered" if off else f"pattern {c['label']}"
+            parts = [
+                f"{c['n_structures']} structures",
+                f"median {c.get('median_n_sites', 0):.0f} sites",
+                nlocs_txt or f"{c.get('median_n_locs', 0):.0f} locs",
+            ]
+            rmsd = c.get("median_rmsd_px")
+            if rmsd is not None and np.isfinite(rmsd):
+                parts.append(f"rmsd {rmsd:.3f} px")
+            parts.append(f"spacing {c.get('median_nn_nm', 0):.1f} nm")
+        lines[name] = ", ".join(parts)
+    return lines
 
 
 def _code_macro(text, language=None):
@@ -4809,6 +4864,269 @@ class ConfluenceReporter(AbstractModuleCollection):
         return self._emit(text, postpone_report)
 
     @module_decorator
+    def pick_origami(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Report the ``pick_origami`` module to Confluence.
+
+        Summarizes the design-aware picking (candidates, accepted
+        structures, expected/missing sites), renders the per-structure
+        geometry table, and uploads the phase-space + example-structure
+        figures.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default
+            is False.
+        """
+        logger.debug("Reporting pick_origami.")
+        n_expected = results.get("n_sites_expected", "?")
+        method = results.get("pattern_method")
+        n_pat = results.get("n_pattern_clusters")
+        pattern_summary = results.get("pattern_summary")
+
+        # Compact header: the key numbers only. The verbose blocks (accepted
+        # overview, rejection funnel, parameters, results) are collapsed into
+        # expand macros at the bottom so the report leads with the figures.
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Pick Origami</strong></p>
+        <ul>
+        <li>{results.get("n_candidates", "?")} candidates &rarr;
+        <strong>{results.get("n_accepted", "?")}</strong> accepted
+        structures</li>
+        <li>{n_expected} sites per origami @
+        {results.get("grid_spacing_nm", "?")} nm design spacing</li>
+        """
+        if pattern_summary and method == "lattice":
+            n_on = sum(
+                c["n_structures"]
+                for c in pattern_summary
+                if not (c.get("is_offlattice") or c.get("is_noise"))
+            )
+            text += (
+                f"        <li><strong>{n_on}</strong> on-lattice origami in "
+                f"{n_pat} defect classes</li>\n"
+            )
+        elif pattern_summary:
+            text += f"        <li>{n_pat} geometry pattern clusters</li>\n"
+        text += f"""        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        """
+
+        # Upload every figure this module references in one concurrent batch.
+        # Uploads are network round-trips; doing them sequentially per file
+        # was the dominant reporting cost (and the wedge risk for pattern
+        # reports with many renders). After this the sections below just
+        # reference the attachments by filename.
+        _fp_all = []
+        if results.get("fp_phasespace"):
+            _fp_all.append(results["fp_phasespace"])
+        for _row in results.get("fp_renderings") or []:
+            _fp_all.extend([fp for fp in (_row or []) if fp])
+        for _k in (
+            "fp_pattern_phasespace",
+            "fp_pattern_fit_space",
+            "fp_pattern_pairscore_space",
+            "fp_pattern_gate_panels",
+            "fp_pattern_site_nlocs_hist",
+            "fp_pattern_feature_space",
+            "fp_pattern_pairdist",
+        ):
+            if results.get(_k):
+                _fp_all.append(results[_k])
+        for _fps in (results.get("fp_pattern_renderings") or {}).values():
+            _fp_all.extend([fp for fp in (_fps or []) if fp])
+        self.ci.upload_attachments(self.report_page_id, _fp_all)
+
+        # ---- figure helpers: one image / a two-up row of images ----------
+        def _img(fp, height):
+            fn = os.path.split(fp)[1]
+            return (
+                f'<ac:image ac:height="{height}">'
+                f'<ri:attachment ri:filename="{fn}" /></ac:image>'
+            )
+
+        def _fig_row(fps, height=320):
+            """Lay figures out two-per-row (skipping any that are absent), so
+            the report stays compact instead of one tall vertical stack."""
+            fps = [f for f in fps if f]
+            if not fps:
+                return ""
+            s = "<table>"
+            for j in range(0, len(fps), 2):
+                s += "<tr>"
+                for fp in fps[j : j + 2]:
+                    s += f"<td>{_img(fp, height)}</td>"
+                s += "</tr>"
+            s += "</table>"
+            return s
+
+        def _heading(t):
+            return f"<p><strong>{t}</strong></p>"
+
+        # per-cluster summary (collapsed) + the exported single-site note
+        if pattern_summary:
+            pattern_lines = _pattern_cluster_lines(
+                pattern_summary, method or "pairwise"
+            )
+            title = (
+                f"Defect classes ({n_pat} on-lattice clusters)"
+                if method == "lattice"
+                else f"Geometry patterns ({n_pat} clusters)"
+            )
+            text += _expand_macro(
+                f"{title} - picks in pattern_<label>_picks.yaml",
+                pattern_lines,
+            )
+            if results.get("fp_pattern_site_picks"):
+                n_sites = results.get("n_pattern_sites", "?")
+                text += (
+                    f"<p>{n_sites} resolved single docking sites exported as "
+                    "picks (<code>pattern_site_picks.yaml</code>).</p>"
+                )
+
+        # ---- figures, grouped by purpose and laid out two-up -------------
+        grp = _fig_row(
+            [
+                results.get("fp_phasespace"),
+                results.get("fp_pattern_phasespace"),
+            ]
+        )
+        if grp:
+            text += _heading("Phase space (pick window &amp; clusters)") + grp
+
+        grp = _fig_row(
+            [
+                results.get("fp_pattern_pairscore_space"),
+                results.get("fp_pattern_fit_space"),
+            ]
+        )
+        if grp:
+            text += _heading("Lattice identification") + grp
+
+        if results.get("fp_pattern_gate_panels"):
+            text += _heading("On-lattice gate transparency")
+            text += _img(results["fp_pattern_gate_panels"], 360)
+
+        grp = _fig_row(
+            [
+                results.get("fp_pattern_site_nlocs_hist"),
+                results.get("fp_pattern_feature_space"),
+                results.get("fp_pattern_pairdist"),
+            ]
+        )
+        if grp:
+            text += _heading("Per-site resolution &amp; descriptor") + grp
+
+        # ---- example structures (accepted grid + per-pattern examples) ---
+        fig_fps = results.get("fp_renderings")  # list (row) of list of fps
+        pat_renders = results.get("fp_pattern_renderings") or {}
+        if (fig_fps and any(fig_fps)) or pat_renders:
+            text += _heading("Example structures")
+        if fig_fps and any(fig_fps):
+            text += "<table>"
+            for row_fps in fig_fps:
+                if not row_fps:
+                    continue
+                text += "<tr>"
+                for fp in row_fps:
+                    text += f"<td>{_img(fp, 180)}</td>"
+                text += "</tr>"
+            text += "</table>"
+        if pattern_summary and pat_renders:
+            text += "<table>"
+            for c in pattern_summary:
+                if c.get("is_noise"):
+                    continue
+                lbl = c["label"]
+                fps = pat_renders.get(lbl, pat_renders.get(str(lbl)))
+                if not fps:
+                    continue
+                text += (
+                    f"<tr><td><p><strong>pattern {lbl}</strong><br/>"
+                    f"~{c['median_n_sites']:.0f} sites, "
+                    f"{c['n_structures']} structures</p></td>"
+                )
+                for fp in fps:
+                    text += f"<td>{_img(fp, 150)}</td>"
+                text += "</tr>"
+            text += "</table>"
+
+        # ---- collapsed details at the bottom -----------------------------
+        overview = results.get("accepted_overview")
+        if overview and overview.get("n_accepted"):
+
+            def _stat(key):
+                s = overview.get(key)
+                if not s:
+                    return "n/a"
+                return (
+                    f"{s['mean']:.2f} +/- {s['std']:.2f} "
+                    f"(min {s['min']:.2f}, max {s['max']:.2f})"
+                )
+
+            n_acc = overview["n_accepted"]
+            text += _expand_macro(
+                f"Accepted structures overview ({n_acc}; full per-structure "
+                "table in geometry_table.csv)",
+                {
+                    "Resolved sites": _stat("n_resolved_sites"),
+                    "Spacing (nm)": _stat("mean_spacing_nm"),
+                    "RMSE-vs-design (nm)": _stat("rmse_nm"),
+                    "Orientation (deg)": _stat("orientation_deg"),
+                    "Mirrored": f"{overview.get('n_mirrored', 0)} / {n_acc}",
+                },
+            )
+
+        funnel = results.get("funnel")
+        if funnel:
+            text += _expand_macro(
+                "Rejection funnel",
+                {
+                    "Candidates": funnel.get("n_candidates", "?"),
+                    "Rejected: no localizations": funnel.get("no_locs", "?"),
+                    "Rejected: too few sites": funnel.get(
+                        "too_few_sites", "?"
+                    ),
+                    "Rejected: missing sites": funnel.get(
+                        "rejected_missing_sites", "?"
+                    ),
+                    "Rejected: RMSE too high": funnel.get(
+                        "rejected_rmse", "?"
+                    ),
+                    "Rejected: spacing off design": funnel.get(
+                        "rejected_spacing", "?"
+                    ),
+                    "Accepted": funnel.get("accepted", "?"),
+                },
+            )
+
+        text += f"""
+        {parameter_text}
+        {result_text}
+        """
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        return self._emit(text, postpone_report)
+
+    @module_decorator
     def undrift_from_picked(
         self,
         i,
@@ -5675,7 +5993,7 @@ class ConfluenceInterface:
         # implement logger
 
     @confluence_call
-    def upload_attachment(self, page_id, filename):
+    def upload_attachment(self, page_id, filename, return_id=False):
         """Upload an attachment to a page.
 
         Parameters
@@ -5684,15 +6002,23 @@ class ConfluenceInterface:
             The page id to attach the file to.
         filename : str
             The local filename of the file to attach.
+        return_id : bool, optional
+            Look the freshly uploaded attachment up and return its id. This
+            costs a second API round-trip (a full attachment listing whose
+            cost grows with the page's attachment count), so it is off by
+            default: report code references attachments by filename, not id.
+            Use :meth:`get_attachment_id` when the id is genuinely needed.
 
         Returns
         -------
-        attachment_id : str
-            The id of the attachment.
+        str or None
+            The attachment id if ``return_id`` is set, else ``None``.
         """
         self.confluence.attach_file(
             filename=filename, page_id=page_id, space=self.space_key
         )
+        if not return_id:
+            return None
 
         target_name = os.path.basename(str(filename))
         attachments_container = self.confluence.get_attachments_from_content(
@@ -5711,6 +6037,49 @@ class ConfluenceInterface:
             )
 
         return attachment_id
+
+    def upload_attachments(self, page_id, filenames, max_workers=4):
+        """Upload several attachments to a page concurrently.
+
+        Uploads are I/O-bound network round-trips, so a small thread pool
+        turns N sequential uploads into roughly N / ``max_workers`` wall
+        time. Each file is uploaded independently and tolerant of failure -
+        a file that raises is logged and skipped (mirroring the per-file
+        ``try/except`` at the call sites) so one bad upload does not abort
+        the batch.
+
+        Parameters
+        ----------
+        page_id : str
+            The page id to attach the files to.
+        filenames : iterable of str
+            Local filepaths to attach.
+        max_workers : int, optional
+            Thread-pool size. Kept modest (default 4) to avoid tripping
+            Confluence rate limits.
+
+        Returns
+        -------
+        list of str
+            Basenames of the files that uploaded successfully (the names to
+            reference in ``<ri:attachment>`` macros).
+        """
+        filenames = [f for f in filenames if f]
+        if not filenames:
+            return []
+
+        def _one(fp):
+            try:
+                self.upload_attachment(page_id, fp)
+                return os.path.basename(str(fp))
+            except Exception as e:  # noqa: BLE001 - keep the batch going
+                logger.warning(f"Failed to upload attachment '{fp}': {e}")
+                return None
+
+        workers = max(1, min(max_workers, len(filenames)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            uploaded = list(pool.map(_one, filenames))
+        return [name for name in uploaded if name]
 
     @confluence_call
     def get_attachment_id(self, page_id, filename):

@@ -1878,6 +1878,95 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
+    def pick_origami(self):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry (a picasso design file, a
+        regular grid, or an explicit site list), finds and picks the
+        origami structures automatically, and tolerates a configurable
+        number of missing docking sites. Emits picasso-compatible picks
+        (origami groups and all resolved single docking sites) plus a
+        per-structure geometry table (resolved/missing sites, spacing,
+        RMSE-vs-design, orientation).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys (exactly one design source):
+
+            ``design_file`` : str
+                Path to a picasso design ``.yaml`` file, OR
+            ``geometry`` : dict
+                A grid ``{n_rows, n_cols, spacing_nm, angle}`` or an
+                explicit ``{sites_nm: [[x, y], ...]}`` layout.
+
+            The design spacing comes from the ``geometry`` spec itself (the
+            grid ``spacing_nm`` or the explicit site list).
+
+            Optional keys:
+
+            ``min_n_locs_per_frame``, ``max_n_locs_per_frame`` : float or str
+                The nlocs pick window (per-frame, or a quantile string like
+                ``"q0.25"``). The "Preview phase space" GUI dialog simulates
+                the expected origami cloud to suggest these.
+            ``min_rmsd``, ``max_rmsd`` : float
+                The RMSD pick window (camera px), likewise suggested by the
+                preview dialog.
+            ``pick_diameter_factor`` : float
+                Pick diameter as a multiple of the origami size
+                (default 1.5 = 150 %).
+            ``allow_mirror`` : bool
+                Allow a mirrored match when registering to the design
+                (default True).
+            ``n_plot_structures`` : int
+                Number of representative structures to plot.
+            ``display_pixelsize`` : float
+                Pixel size for display in nm (default 1).
+            ``cluster_patterns`` : bool
+                Cluster the accepted structures by their resolved geometry and
+                emit per-cluster picks plus a summary (default False). For a
+                lattice design each pick is registered onto the design and
+                grouped by fit quality + defect occupancy; a non-lattice
+                design falls back to a template-agnostic site-graph descriptor.
+            ``n_pattern_examples`` : int
+                Example structures rendered per cluster for the report
+                (default 8; 0 to skip).
+            ``pattern_eps_frac`` : float
+                Docking-site subclustering neighbourhood as a fraction of the
+                site spacing (default 0.2). Lower if sites are merged /
+                under-counted; raise if a single site splits.
+            ``pattern_min_samples`` : int
+                DBSCAN ``min_samples`` for docking-site subclustering
+                (default 7; a site needs at least this many localizations).
+                A high floor suppresses spurious over-counted sites; drop it
+                only for dim samples with few locs per site.
+            ``pattern_defect_grouping`` : {"completeness", "exact"}
+                Lattice method: group on-lattice picks by number of occupied
+                sites (default, a few robust classes) or by the exact defect
+                pattern.
+            ``pattern_min_sites_frac`` : float
+                Lattice method: min matched sites as a fraction of the design
+                nodes to count as on-lattice (default 0.66). The remaining
+                on-lattice gate thresholds use calibrated defaults (tune via
+                :func:`picasso_outpost.cluster_lattice_defects`).
+        results : dict
+            Module results (see class docstring). With ``cluster_patterns``
+            also ``n_pattern_clusters``, ``pattern_summary``,
+            ``pattern_method``, ``fp_pattern_table`` (.csv),
+            ``fp_pattern_picks`` (label -> pick .yaml),
+            ``fp_pattern_phasespace``, the lattice-method
+            ``fp_pattern_site_nlocs_hist`` or the pairwise-method
+            ``fp_pattern_feature_space`` / ``fp_pattern_pairdist`` (.png), and
+            ``fp_pattern_renderings`` (label -> list of example renders). The
+            lattice method also exports the resolved single docking sites of
+            the on-lattice structures: ``fp_pattern_site_picks`` (a picasso
+            pick .yaml), ``fp_pattern_sites_table`` (.csv, each site tagged
+            with its design-node index) and ``n_pattern_sites``.
+        """
+
+    @abc.abstractmethod
     def undrift_from_picked(self):
         """Undrift using picked localizations.
 
@@ -1889,8 +1978,10 @@ class AbstractModuleCollection(abc.ABC):
             Required keys:
 
             ``fp_picked_locs`` : str
-                Filepath to the picked locs to undrift from (an hdf5 file of
-                locs with a ``'group'`` column describing the picks).
+                Filepath to the picks to undrift from. Either an hdf5 file of
+                locs with a ``'group'`` column describing the picks, or a
+                picasso pick-region ``.yaml`` (``Centers`` + ``Diameter``),
+                which is applied to ``self.locs`` to build the grouped picks.
         results : dict
             Module results (see class docstring).
         """

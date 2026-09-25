@@ -12,6 +12,440 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- The `pick_origami` Confluence report is compacted and its figures reordered.
+  All graphs are kept, but instead of one tall vertical stack they are grouped
+  by purpose with headings and laid out two-up: *Phase space* (pick window +
+  clusters), *Lattice identification* (pair-score + fit quality), *On-lattice
+  gate transparency* (the gate panels), *Per-site resolution & descriptor*,
+  then *Example structures*. The verbose text blocks (accepted-structures
+  overview, rejection funnel, parameters, results) are collapsed into expand
+  macros at the bottom, so the report leads with a short summary and the
+  figures rather than screens of bullets.
+
+- The workflow-builder GUI now distinguishes **"use default"** from an explicit
+  **override** for every parameter that has a spec default. Such a parameter
+  starts with a clickable, greyed label showing its `default: <value>` and a
+  disabled input; clicking the label switches it to an editable override.
+  Parameters left in the default state are **omitted from the generated
+  `start_workflow.py`**, so the code default always applies (and can evolve
+  without stale copies in every saved workflow). On reload, a stored value that
+  equals the default is shown as default (greyed); only a differing value is an
+  override. This removes a class of footguns where a value typed to "match the
+  default" (e.g. `pattern_min_sites_frac: 0.0`) silently diverged from it - the
+  generated workflow now lists only the parameters you actually changed.
+  Command (`$$map`) and per-branch values always count as overrides.
+
+### Fixed
+
+- `pick_origami` no longer silently ignores a `pattern_min_sites_frac` of
+  `0.0`. The parameter was threaded with a truthiness check, so `0.0` (a
+  meaningful value - fall back to the absolute site-count floor) was dropped
+  and the calibrated default (0.66 -> >=8 matched sites) used instead. It is
+  now tested for unset explicitly, so `0.0` reaches the clustering.
+
+- The **lattice pair-score phase space** figure no longer hides the accepted
+  structures. Its pooled cloud is strongly bimodal (a large off-lattice mode
+  near zero plus the accepted structures at pair-score ~1-3), and the default
+  Tukey axis fence, dominated by the background mode, collapsed both axes onto
+  the junk and clipped every accepted cluster out of view (contour clusters
+  vanished entirely; scatter clusters left only legend ghosts). Both axes are
+  now framed on the on-lattice cloud, and the pre-screen `min_pair_score` gate
+  is drawn as a reference line. `_labelled_2d_axes` gained optional
+  `xlim`/`ylim` overrides for bimodal data.
+
+### Removed
+
+- Dropped the lattice per-class **occupancy defect-map** figure
+  (`fp_pattern_defectmaps`) from the report - it was not adding useful signal.
+  The per-node occupancy is still carried in `pattern_summary` /
+  `pattern_table.csv` for anyone who wants it.
+
+- Moved the phase-space **simulation** parameters out of the `pick_origami`
+  module into the "Preview phase space" GUI dialog, where they belong (they
+  only shape the *suggested* pick window; the module takes the resulting
+  `min/max_rmsd` + `min/max_n_locs_per_frame` explicitly). Gone from the
+  module: `mean_locs_per_site`, `kinetics`, `n_sim`, `sim_quantile`,
+  `random_seed`, `site_uncertainty_nm`, `missing_sites_allowed`. Also dropped
+  `grid_spacing_nm` - the design spacing comes from the `geometry` spec
+  (`spacing_nm` / the site list), so it was a redundant offset. The preview
+  dialog now has its own input fields for all of these.
+
+- Dropped `pick_origami`'s `footprint_diameter` - it only overrode the
+  `pick_diameter_factor` x origami-size computation, which is what everyone
+  uses; the pick diameter is now always `pick_diameter_factor` x extent.
+
+- Trimmed the `pick_origami` parameter surface (now 16 total) by dropping
+  options the lattice workflow no longer needs. Gone: the superseded
+  per-candidate geometry filter (`filter_by_geometry`, `spacing_tol`,
+  `max_rmse_nm`); the pairwise-clustering knobs (`pattern_method`,
+  `n_pattern_clusters`, `pattern_min_cluster_size`) - the pairwise descriptor
+  now runs automatically only as the fallback for non-lattice (< 3 node)
+  designs; the redundant `pattern_min_sites` (kept `pattern_min_sites_frac`);
+  and `candidate_method` / `n_plot_columns` (hardcoded to their defaults). The
+  four expert lattice on-lattice gate thresholds (`pattern_rmse_gate_frac`,
+  `pattern_frac_on_lattice`, `pattern_max_nlocs_cv`, `pattern_max_spread_cv`)
+  are demoted to calibrated code-defaults - still tunable via
+  `picasso_outpost.cluster_lattice_defects`, no longer generated into the
+  workflow. The underlying library functions keep all of these as parameters.
+
+### Changed
+
+- The `pick_origami` docking-site subclustering default `pattern_min_samples`
+  is raised **3 -> 7**. On real bright cy3b data a DBSCAN floor of 3 lets a
+  single site fragment into spurious extra sites (median ~13-14 "sites" on a
+  12-node design), whose loc-count imbalance then trips the on-lattice
+  uniformity gate. Raising the floor to 7 suppresses the over-counting and
+  recovers ~2x more genuine on-lattice origami (a 4000-pick sweep: 62 -> 138
+  on-lattice, 37 -> 87 full-12-site) with the site count settling at the true
+  12. Drop it again only for dim samples with few locs per site.
+
+- The lattice-defect clustering is recalibrated against real data so it no
+  longer fills the report with junk classes. On a real cy3b run (3930 picks,
+  median 2 resolved sites each - i.e. mostly 1-2 spot blobs) the old settings
+  admitted ~500 picks fragmented into ~220 exact-defect classes, almost all
+  junk. Two changes fix it: (1) the on-lattice gate is stricter - a pick must
+  now match a **fraction of the design nodes** (`pattern_min_sites_frac`,
+  default 0.66 -> >=8 of 12) with tighter residual/uniformity thresholds
+  (`rmse_gate_frac` 0.3->0.2, `frac_on_lattice` 0.6->0.8, `max_nlocs_cv`
+  0.8->0.5, `max_spread_cv` 0.4->0.3); (2) on-lattice picks are grouped by
+  **completeness** (number of occupied sites), not exact pattern, giving a
+  handful of robust classes instead of one-per-noisy-pattern
+  (`pattern_defect_grouping`, `"completeness"` default or `"exact"`). Same
+  real run now yields 94 genuine origami in 5 tiers (37 full 12-site at rmse
+  ~2 nm, then 11/10/9/8-site) with the 3836 junk picks in the off-lattice
+  bucket. The per-class occupancy is now a per-node **probability** and the
+  defect-map figure shades nodes by it (revealing which nodes tend to be
+  missing).
+
+- Confluence attachment uploads are faster and no longer a reporting
+  bottleneck. `ConfluenceInterface.upload_attachment` no longer does a second
+  API round-trip (a full attachment listing) after every upload just to return
+  an id no report code used; the id lookup is now opt-in via `return_id=True`
+  (use `get_attachment_id` when needed). A new
+  `ConfluenceInterface.upload_attachments(page_id, filepaths)` uploads a page's
+  figures concurrently (small thread pool, per-file failure tolerant); the
+  `pick_origami` reporter now batch-uploads all its figures in one pass instead
+  of one blocking round-trip per image.
+
+- `pick_origami` now picks by a **simulation-derived phase-space window**
+  instead of a per-candidate geometry gate, which over-discarded structures and
+  was hard to tune. From the design geometry it simulates `n_sim` origami
+  realisations (random missing sites 0..`missing_sites_allowed`, Gaussian site
+  jitter `site_uncertainty_nm`, Poisson kinetics via `mean_locs_per_site` /
+  `kinetics`), takes the per-axis `sim_quantile` window of the resulting
+  (nlocs, rmsd) cloud, and picks with `pick_similar` in that window (pick
+  diameter = origami size × `pick_diameter_factor`). `min/max_n_locs_per_frame`
+  and `min/max_rmsd` override the simulated bounds. Matching each pick's
+  resolved sites against the design is now an **optional** post-filter
+  (`filter_by_geometry`, default off) that also emits the docking-site picks.
+  The phase-space report figure now shows all candidates as a background
+  density contour, the simulated "expected origami" cloud as a contour line,
+  and accepted picks as points. New result keys `sim_nlocs` / `sim_rmsds` /
+  `pick_window`; new `picasso_outpost.simulate_origami_nlocs_rmsd` and
+  `phase_space_window_from_sim`.
+
+### Added
+
+- A **gate-transparency** report figure (`fp_pattern_gate_panels`): one
+  histogram per on-lattice gate (pair-score pre-screen, matched-site count,
+  fit RMSE, on-lattice fraction, fitted spacing, per-site nlocs CV, per-site
+  spread CV), each with its threshold line and the accepted structures
+  overlaid in green, plus a per-panel count of how many structures fail that
+  gate. Makes the accept/reject decision fully transparent - you can see at a
+  glance which gate is limiting (e.g. per-site nlocs CV) instead of inferring
+  it from the two-axis fit-space plot. `cluster_lattice_defects` now returns
+  the exact `gates` thresholds it used.
+
+- A cheap, registration-free **lattice pair-score** first-layer discriminator
+  (`picasso_outpost.lattice_pair_score`): a windowed pair-correlation - the
+  fraction of intra-footprint localization pairs at the design spacing over a
+  short-range reference band. On a real cy3b run it separates genuine origami
+  from junk almost as well as full registration (rank-AUC 0.99 vs 1.00) at a
+  fraction of the cost, and far more specifically than brightness/rmsd because
+  it keys on lattice *periodicity*, not intensity. `cluster_lattice_defects`
+  now runs it on **every** pick as a pre-screen (`min_pair_score`, default
+  0.5): picks below the threshold are marked off-lattice without the expensive
+  template registration, so the fit only runs on genuine candidates. On real
+  data this reproduces the identical on-lattice set (zero recall loss) while
+  skipping ~85 % of the registrations. Each pick's score is kept in
+  `aux[i]["pair_score"]`; set `min_pair_score=None` to disable.
+
+- A registration-free **pair-score phase space** report figure
+  (`fp_pattern_pairscore_space`): accepted structures in (nlocs-per-frame,
+  lattice pair-score), coloured by defect cluster - the origami island sits at
+  high pair-score, cleanly separated from the junk cloud that brightness alone
+  cannot resolve.
+
+- A targeted **lattice fit-quality phase space** figure
+  (`fp_pattern_fit_space`) for the lattice method: accepted structures plotted
+  in (matched-site count, template fit RMSE), coloured by defect cluster.
+  These are the registration observables the on-lattice gate actually decides
+  on, so the clean-origami island separates from the off-lattice cloud far more
+  sharply than the pick-window phase space (nlocs-per-frame, rmsd), which is
+  still shown as the first-pass view.
+
+- Design-aware **lattice-defect** clustering primitives in `picasso_outpost`
+  (`cluster_lattice_defects`, `lattice_defect_features`,
+  `template_symmetry_permutations`). For a known lattice design, each pick is
+  registered onto the lattice and described in the lattice's own frame:
+  (a) lattice-fit quality - best-fit-similarity residual (local disorder),
+  recovered spacing, on-lattice fraction - and (b) its defect pattern - a
+  symmetry-canonical per-node occupancy vector. A two-stage clustering then
+  separates on-lattice picks from off-lattice/sparse ones and groups the
+  on-lattice picks by defect pattern. This sees lattice quality and defect
+  geometry that the template-agnostic pairwise-distance descriptor cannot.
+  This is now the **default** pattern-clustering method for multi-site designs
+  in `pick_origami` (`pattern_method`, else `pairwise`); gates are tunable via
+  `pattern_min_sites` / `pattern_rmse_gate_frac` / `pattern_frac_on_lattice`.
+  The report shows a per-cluster **defect-map** diagram (design nodes marked
+  occupied/missing) with the representative example renders, and lists each
+  defect class with its occupancy, fit residual and recovered spacing. Because
+  registration already assigns every resolved site to a design node, the
+  lattice method also **exports the on-lattice single docking sites directly**
+  as a picasso pick set (`fp_pattern_site_picks`) plus a node-tagged table
+  (`fp_pattern_sites_table`, each site labelled with its design-node index).
+  The on-lattice gate now also requires the localizations to be **uniformly
+  distributed across the sites** - similar counts per site
+  (`pattern_max_nlocs_cv`) and a similar spread at every site
+  (`pattern_max_spread_cv`) - which a genuine origami has but an aggregate,
+  bead or misregistered blob does not, so those are excluded from the defect
+  classes rather than polluting them.
+
+- `pick_origami` gains an optional **geometry-pattern clustering** pass
+  (`cluster_patterns`, default off): it groups the accepted structures by their
+  resolved arrangement — single spot / partial / full grid / aggregate — using
+  a rotation- and translation-invariant, scale-aware **site-graph descriptor**
+  (resolved docking-site count, localization & site-centre radii of gyration,
+  median nearest-neighbour spacing, elongation, and a normalized pairwise
+  site-distance histogram). The cluster count is auto-discovered with HDBSCAN,
+  or fixed via `n_pattern_clusters` (Gaussian mixture); `pattern_min_cluster_size`
+  tunes the auto mode. Emits, per pattern, a picasso pick `.yaml` and a grouped
+  `.hdf5`, plus a `pattern_table.csv` summary, a grid of example structure
+  renders per pattern (`n_pattern_examples`, brightest first) shown as labelled
+  rows in the report (the examples shown are the members most representative
+  of each cluster - nearest its descriptor centroid - not the brightest, which
+  are atypical/aggregates and misrepresent the cluster), and three figures
+  coloured by pattern: the
+  nlocs-per-frame/rmsd **phase space** (now smoothed per-cluster density
+  contours rather than an unreadable scatter), a **PCA descriptor-space** view
+  (how the clustering separates), and a per-cluster **pairwise site-distance
+  signature** (the lattice fingerprint). The report lists the clusters in a
+  collapsible (expand) block with each cluster's median site count,
+  nlocs-per-frame, rmsd (px) and spacing. New result keys
+  `n_pattern_clusters` / `pattern_summary` / `fp_pattern_table` /
+  `fp_pattern_picks` / `fp_pattern_phasespace` / `fp_pattern_renderings`; new
+  `picasso_outpost.structure_pattern_features` and
+  `cluster_structure_patterns`. Wired across `util`, `analyse`, `confluence`,
+  and `gui`.
+
+- `pick_origami` gains a `pick_diameter_factor` parameter (default **1.5**):
+  when `footprint_diameter` is not set explicitly, the pick diameter is now
+  `pick_diameter_factor * origami_size` (150 % of the origami extent) instead of
+  the tighter `extent + spacing`. A larger pick gives margin around the
+  structure and also speeds up detection (coarser `pick_similar` grid, fewer
+  overlapping candidates). The value actually used is returned/echoed so the
+  saved pick yaml/hdf5 match the detection footprint.
+
+- `undrift_from_picked` now accepts a picasso **pick-region `.yaml`**
+  (`Centers` + `Diameter`) in addition to an hdf5 of grouped picked locs: given
+  a yaml it applies the pick regions to the current `self.locs` to build the
+  grouped picks, then undrifts. This lets `pick_origami`'s pick outputs
+  (`fp_picks_origami` / `fp_picks_dockingsites`) feed straight into
+  `undrift_from_picked` (its grouped-hdf5 outputs `fp_picked_locs` /
+  `fp_docking_site_locs` continue to work as before). A clear error is raised
+  if the yaml has no pick centers.
+
+- New single-dataset workflow module `pick_origami`: design-aware picking of
+  DNA-origami structures. Given the designed geometry — a picasso design
+  `.yaml`, a regular grid (`{n_rows, n_cols, spacing_nm, angle}`), or an
+  explicit site list — it detects candidate footprints (reusing the
+  `pick_similar` family; `candidate_method` = `"footprint"` (default) or
+  `"cluster_of_clusters"`), sub-clusters each into docking sites, registers the
+  resolved constellation against the design template (rotation + translation,
+  optional mirror), and accepts structures that resolve enough sites within the
+  spacing/RMSE tolerances (`missing_sites_allowed`, default 2). Optional imager
+  kinetics (`k_on`, `tau_b`, concentration, exposure) auto-seed the nlocs
+  window, else the `pick_similar` quantile defaults are used. Emits
+  picasso-compatible picks (origami groups **and** all resolved single docking
+  sites) plus a per-structure geometry table (resolved/missing sites, spacing,
+  RMSE-vs-design, orientation). Wired across `util`, `analyse`, `confluence`
+  (reused by the HTML reporter), `gui`, and the `modulespec` registry. Registry
+  logging is intentionally deferred to WP-DYE-QC (single logging path).
+
+### Added
+
+- The lattice-defect report is easier to read and to tune. The "accepted
+  structures by geometry pattern" plot now uses a **distinct marker per
+  cluster** (the busy off-lattice cloud stays a density contour), so the
+  completeness tiers are legible where their colours overlap. A new
+  per-cluster **localizations-per-site histogram**
+  (`fp_pattern_site_nlocs_hist`) shows the site loc-count distribution of each
+  class - a spike of low-count sites near the `min_samples` floor flags
+  over-counting (raise `pattern_min_samples`), a clean well-populated peak
+  means the sites are real. `median_site_nlocs` is added to the per-class
+  summary / `pattern_table.csv`.
+
+### Fixed
+
+- The lattice method no longer collapses to **zero on-lattice structures**
+  when the GUI generates `pattern_min_samples: 1`. `min_samples=1` is
+  degenerate for DBSCAN - every isolated localization becomes its own "site",
+  so `n_sites` explodes (median 13 on a real run) and every pick fails the
+  frac-on-lattice / count-uniformity gates. `subcluster_docking_sites` now
+  clamps `min_samples` to >= 2, and every `pick_origami` pattern parameter now
+  carries a proper `default` in the GUI spec so the generated workflow no
+  longer renders integer/float params at their `min` (the same footgun that
+  produced `n_pattern_clusters: 1` earlier). Regenerating the workflow now
+  yields the calibrated defaults (`min_samples 3`, `eps_frac 0.2`, the gate
+  thresholds) instead of pathological values.
+
+- `subcluster_docking_sites` no longer systematically **under**-counts docking
+  sites. The DBSCAN neighbourhood was `0.35 x spacing` (7 nm at 20 nm design),
+  large enough to *chain* adjacent sites together through their localization
+  tails - and the more localizations a site had, the more likely the bridge -
+  so bright, well-resolved structures had their site count roughly halved (a
+  clearly-12-site origami reported as ~5). The neighbourhood is now a single
+  shared default `_SITE_EPS_FRAC = 0.2` (a fifth of the spacing) used
+  consistently by `subcluster_docking_sites`, `structure_pattern_features` and
+  `cluster_structure_patterns` (the last two previously re-defaulted to 0.35,
+  overriding the subcluster default), and is tunable per run via
+  `pick_origami`'s `pattern_eps_frac` / `pattern_min_samples`. This corrects
+  the per-structure site counts feeding the geometry-pattern clustering (and
+  the `filter_by_geometry` registration path).
+
+- `pick_origami` no longer wedges the report for tens of minutes when many
+  structures are accepted. A large `n_plot_structures` on a big accepted set
+  (e.g. a permissive window accepting ~16 000 structures) rendered thousands of
+  example images and then uploaded them to Confluence one-by-one in the
+  reporter. The number of per-structure example images rendered/uploaded is now
+  hard-capped at 200 (covering both the representative renders and, in total,
+  the per-pattern example renders), with a warning logged when the cap bites.
+  `cluster_structure_patterns` also logs a progress heartbeat so a long
+  per-structure descriptor pass is visibly advancing rather than looking hung.
+
+- `undrift_from_picked` now fails with a clear message instead of a cryptic
+  ``"array of sample points is empty"`` (from `np.interp`) when the picks are
+  empty or too sparse to estimate drift from. It guards the empty-pick case up
+  front, and `_undrift_from_picked_coordinate` now excludes degenerate
+  single-frame picks (whose `1/msd` weight was infinite and poisoned the
+  weighted average to NaN everywhere) and raises a descriptive error when no
+  pick spans more than one frame / covers any frame. Typical trigger: an
+  upstream picker that accepted no structures (e.g. `pick_origami` with an
+  impossible nlocs window), leaving an empty picked-locs file.
+
+- `pick_origami` now rejects an unusable `geometry` with a clear message and
+  tolerates the GUI's placeholder sentinels. `load_origami_template` raises a
+  descriptive `TypeError`/`ValueError` (naming the accepted forms) instead of a
+  cryptic `float() ... not 'set'` when handed a Python set literal like
+  `{0, 3, 4, 20}`, and the `pick_origami` module treats the GUI-generated
+  "unset" placeholders (`""` for strings, `0.0`/`0` for `max_rmsd`,
+  `max_rmse_nm`, `footprint_diameter`, `grid_spacing_nm`) as not-provided so
+  they fall back to real defaults instead of, e.g., `max_rmsd=0` picking
+  nothing. `picasso_outpost.pick_origami` additionally derives its own
+  template-based footprint whenever `footprint_diameter` is falsy/≤0 (not just
+  `None`) so a `0.0` reaching the function no longer divides by zero inside
+  picasso's `get_index_blocks`; a genuinely degenerate (single-site) template
+  now raises a clear error naming `footprint_diameter`.
+
+### Changed
+
+- `picasso_outpost.pick_origami` is much faster on datasets that yield many
+  candidate footprints (e.g. sub-pixel origamis at wide nlocs/rmsd windows):
+  it now picks all candidate footprints in a single `picked_locs` pass (the
+  spatial index is built once instead of rebuilt per candidate — `O(N_locs)`
+  vs `O(N_candidates * N_locs)`), and skips the expensive rotation-sweep
+  registration for any candidate that sub-clusters to fewer than
+  `n_sites_expected - missing_sites_allowed` docking sites (it can never be
+  accepted). Candidate/registration counts are logged, and the result now
+  reports `n_registered` alongside `n_candidates` / `n_accepted`.
+  `register_to_template` is now two-stage: every rotation seed is scored with a
+  single cheap gated assignment and only the best `n_refine` (default 4) seeds
+  get the full ICP, rather than ICP-ing all ~360 seeds — several times faster
+  per candidate with the same recovered geometry.
+
+- `pick_origami` accepted picks are now centred on each structure's
+  **centre of mass** (the centroid of its resolved docking sites) instead of the
+  off-centre coarse `pick_similar` seed, so origamis sit centred in their picks
+  (the reported `center_x_px` / `center_y_px` and the saved pick centres).
+
+- The `pick_origami` nlocs/rmsd phase-space figure now plots localizations
+  **per frame** (total nlocs / `n_frames`) so its x-axis matches the
+  `min/max_n_locs_per_frame` parameters (previously it showed total nlocs).
+
+- The `pick_origami` report now lays the representative accepted structures out
+  in a **grid** (rows of up to `n_plot_columns`, default 8) instead of a single
+  long row, so many structures stay legible.
+
+- The `pick_origami` phase-space figure is now **three side-by-side panels**
+  (all candidates / simulated expected origami / accepted picks) sharing axes,
+  each drawn as points or, above `contour_threshold` points (default 2000), a
+  density contour - the single overlaid plot was too crowded to read. The axis
+  limits now focus on the useful region: the upper bound is driven by the
+  simulated + accepted clouds (or a Tukey fence over the candidates when there
+  is no simulation), instead of the candidate cloud's far high-nlocs tail
+  (dense/aggregated regions) that previously stretched the x-axis ~8x too wide.
+  Each panel now also outlines the **pick_similar active range** (the
+  nlocs/rmsd rectangle actually applied, with quantile bounds resolved against
+  the candidate nlocs and open edges extending to the axis), so it is clear
+  which candidates the window admits. `pick_window` in the result now reports
+  those resolved bounds rather than the raw simulated window. The phase-space
+  axes now always include both the candidate cloud (Tukey-fenced) and the pick
+  window, so a run that picks nothing still shows *why* - e.g. the window not
+  overlapping the candidates. `pick_origami` also logs the resolved window
+  against the candidate nlocs/rmsd percentiles for the same reason.
+
+- New `picasso_outpost.origami_phase_space_preview`: a cheap (~0.1 s) one-call
+  helper that simulates the expected origami phase space for a geometry +
+  kinetics and returns the suggested `min/max_n_locs_per_frame` window, so a
+  GUI can preview the cloud and let the user set the nlocs range interactively.
+
+- GUI: a **"Preview phase space …"** button appears under the `pick_origami`
+  module parameters. It opens a dialog (`PhaseSpacePreviewDialog`) that
+  simulates the expected origami nlocs/rmsd cloud from the current geometry +
+  kinetics (asking for the movie's frame count and pixel size), plots it with
+  the suggested pick window, and can write the suggested
+  `min/max_n_locs_per_frame` (and RMSD) straight back into the parameter fields.
+
+- `pick_origami` now reports a rejection **funnel** so it is clear which filter
+  removed how many candidates: counts for no-localizations, too-few-sites
+  (pre-registration prefilter), and post-registration rejections split by
+  missing-sites / RMSE / spacing, down to accepted (the buckets sum to the
+  candidate count). Exposed as `results["funnel"]`, logged, and rendered in the
+  Confluence/HTML report. The nlocs/rmsd phase-space diagnostic figure now
+  overlays the accepted structures (red) on the candidate cloud, and the
+  geometry table gains per-structure `nlocs` and `rejection_reason` columns. A
+  new `classify_candidate` helper returns the first failing criterion;
+  `accept_candidate` is now a thin boolean wrapper over it.
+
+- The `pick_origami` Confluence/HTML report no longer dumps a per-structure row
+  for every candidate (which swamped the report once filters were relaxed). It
+  now shows an aggregate overview over the accepted structures only
+  (mean&plusmn;std / min / max of resolved sites, spacing, RMSE, orientation,
+  and the mirrored count); the full per-structure table remains available as
+  `geometry_table.csv` in the module results folder.
+
+- `pick_origami` result keys tidied: the full per-structure `geometry_table` is
+  no longer carried in the module results (it lives only in
+  `geometry_table.csv`); results now expose a compact `accepted_overview`
+  instead. The pick-region yaml result keys were renamed for clarity and to be
+  referenced by downstream modules: `fp_picks_yaml` &rarr; `fp_picks_origami`
+  (accepted origami footprints) and `fp_docking_yaml` &rarr;
+  `fp_picks_dockingsites` (all resolved single docking sites). The grouped
+  picked-locs hdf5 keys were renamed to match:
+  `fp_picked_locs` &rarr; `fp_picked_locs_origami` and
+  `fp_docking_site_locs` &rarr; `fp_picked_locs_dockingsites` (so the scheme is
+  `fp_picks_*` for pick-region yamls and `fp_picked_locs_*` for the hdf5s).
+
+- The GUI `pick_origami` results spec now lists every result the module
+  produces (`n_registered`, `grid_spacing_nm`, `n_picked_locs`, and all
+  `fp_picks_*` / `fp_picked_locs_*` / `fp_geometry_table` / `fp_phasespace` /
+  `fp_renderings` file paths), so they are selectable as
+  `$get_previous_module_result` targets in the workflow-builder command box.
+  (The `modulespec.py` `ModuleSpec` is unchanged - it declares capability
+  tokens, not result keys.)
+
+### Changed
+
 - Every Confluence module reporter now routes its final output through a single
   `ConfluenceReporter._emit(text, postpone_report)` helper instead of repeating
   the `if postpone_report: return text` / `update_page_content(...)` guard in
