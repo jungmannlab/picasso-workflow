@@ -6268,6 +6268,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "by defect cluster (lattice method only)"
                 ),
             },
+            "fp_pattern_gate_panels": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-gate transparency panels (one "
+                    "histogram per on-lattice gate with its threshold; "
+                    "green = accepted) (lattice method only)"
+                ),
+            },
             "fp_pattern_feature_space": {
                 "type": "str",
                 "description": (

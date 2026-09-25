@@ -6626,6 +6626,19 @@ def cluster_lattice_defects(
         "symmetry_perms": perms,
         "defect_grouping": defect_grouping,
         "min_pair_score": min_pair_score,
+        # the exact thresholds every on-lattice gate decided on, so the
+        # report can show them against the per-structure metric distributions
+        # (see analyse._plot_lattice_gate_panels).
+        "gates": {
+            "min_pair_score": min_pair_score,
+            "min_sites": int(min_sites),
+            "rmse_gate_nm": float(rmse_gate),
+            "frac_on_lattice_gate": float(frac_on_lattice_gate),
+            "design_nn_nm": float(design_nn),
+            "spacing_tol": float(spacing_tol),
+            "max_nlocs_cv": float(max_nlocs_cv),
+            "max_spread_cv": float(max_spread_cv),
+        },
     }
 
 

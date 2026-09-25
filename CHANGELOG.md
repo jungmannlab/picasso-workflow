@@ -121,6 +121,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- A **gate-transparency** report figure (`fp_pattern_gate_panels`): one
+  histogram per on-lattice gate (pair-score pre-screen, matched-site count,
+  fit RMSE, on-lattice fraction, fitted spacing, per-site nlocs CV, per-site
+  spread CV), each with its threshold line and the accepted structures
+  overlaid in green, plus a per-panel count of how many structures fail that
+  gate. Makes the accept/reject decision fully transparent - you can see at a
+  glance which gate is limiting (e.g. per-site nlocs CV) instead of inferring
+  it from the two-axis fit-space plot. `cluster_lattice_defects` now returns
+  the exact `gates` thresholds it used.
+
 - A cheap, registration-free **lattice pair-score** first-layer discriminator
   (`picasso_outpost.lattice_pair_score`): a windowed pair-correlation - the
   fraction of intra-footprint localization pairs at the design spacing over a

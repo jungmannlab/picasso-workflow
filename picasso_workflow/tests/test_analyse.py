@@ -2520,6 +2520,16 @@ class TestAnalyseModules(unittest.TestCase):
                 },
             ],
             "min_pair_score": 0.5,
+            "gates": {
+                "min_pair_score": 0.5,
+                "min_sites": 8,
+                "rmse_gate_nm": 4.0,
+                "frac_on_lattice_gate": 0.8,
+                "design_nn_nm": 20.0,
+                "spacing_tol": 0.3,
+                "max_nlocs_cv": 0.5,
+                "max_spread_cv": 0.3,
+            },
         }
 
         self.ap.locs = pd.DataFrame(
@@ -2570,6 +2580,8 @@ class TestAnalyseModules(unittest.TestCase):
         assert os.path.exists(results["fp_pattern_fit_space"])
         # registration-free pair-score phase space (nlocs/frame vs pair-score)
         assert os.path.exists(results["fp_pattern_pairscore_space"])
+        # per-gate transparency panels
+        assert os.path.exists(results["fp_pattern_gate_panels"])
         assert os.path.exists(results["fp_pattern_table"])
         # occupancy carried through to the summary
         by_label = {c["label"]: c for c in results["pattern_summary"]}

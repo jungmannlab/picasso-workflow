@@ -570,6 +570,132 @@ def _plot_lattice_pairscore_space(
     return fp
 
 
+def _plot_lattice_gate_panels(fp, aux, labels, gates):
+    """One histogram per on-lattice gate, with its threshold(s), showing where
+    the accepted (on-lattice) structures sit relative to each cut.
+
+    Makes the acceptance decision fully transparent: a structure is
+    on-lattice only if it clears *every* gate, so any single gate can be the
+    limiting one. The pre-screen ``pair_score`` panel covers all picks; the
+    remaining panels cover only the registered picks (those that passed the
+    pre-screen). Each title reports how many of that panel's structures fail
+    that gate alone.
+    """
+    if not aux or not gates:
+        return None
+    labels = np.asarray(labels)
+    n = len(aux)
+
+    def _get(key):
+        return np.array([a.get(key, np.nan) for a in aux], dtype=float)
+
+    rmse = _get("rmse_nm")
+    registered = np.isfinite(rmse)  # passed the pre-screen -> got registered
+    onl = labels != -1
+    if not registered.any():
+        return None
+    nn = gates.get("design_nn_nm", 0.0)
+    tol = gates.get("spacing_tol", 0.3)
+    allmask = np.ones(n, dtype=bool)
+    # (title, values, subset, [(op, threshold), ...])
+    panels = [
+        (
+            "pair-score (pre-screen)",
+            _get("pair_score"),
+            allmask,
+            [(">=", gates.get("min_pair_score"))],
+        ),
+        (
+            "# matched sites",
+            _get("n_matched"),
+            registered,
+            [(">=", gates.get("min_sites"))],
+        ),
+        (
+            "fit RMSE (nm)",
+            rmse,
+            registered,
+            [("<=", gates.get("rmse_gate_nm"))],
+        ),
+        (
+            "frac on-lattice",
+            _get("frac_on_lattice"),
+            registered,
+            [(">=", gates.get("frac_on_lattice_gate"))],
+        ),
+        (
+            "fitted spacing (nm)",
+            _get("fitted_spacing_nm"),
+            registered,
+            [(">=", nn * (1.0 - tol)), ("<=", nn * (1.0 + tol))],
+        ),
+        (
+            "per-site nlocs CV",
+            _get("nlocs_cv"),
+            registered,
+            [("<=", gates.get("max_nlocs_cv"))],
+        ),
+        (
+            "per-site spread CV",
+            _get("spread_cv"),
+            registered,
+            [("<=", gates.get("max_spread_cv"))],
+        ),
+    ]
+    ncol = 4
+    nrow = int(np.ceil(len(panels) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4 * ncol, 3.2 * nrow))
+    axes = np.atleast_1d(axes).ravel()
+    for ax, (title, vals, subset, thr) in zip(axes, panels):
+        m = subset & np.isfinite(vals)
+        if not m.any():
+            ax.set_visible(False)
+            continue
+        v = vals[m]
+        lo, hi = np.percentile(v, [1, 99])
+        if hi <= lo:
+            lo, hi = float(v.min()), float(v.max()) + 1.0
+        bins = np.linspace(lo, hi, 30)
+        rej = m & ~onl
+        acc = m & onl
+        if rej.any():
+            ax.hist(
+                np.clip(vals[rej], lo, hi),
+                bins=bins,
+                color="0.7",
+                label="rejected",
+            )
+        if acc.any():
+            ax.hist(
+                np.clip(vals[acc], lo, hi),
+                bins=bins,
+                color="tab:green",
+                alpha=0.85,
+                label="on-lattice",
+            )
+        passmask = np.ones(int(m.sum()), dtype=bool)
+        for op, t in thr:
+            if t is None or not np.isfinite(t):
+                continue
+            ax.axvline(t, color="firebrick", linestyle="--", linewidth=1.2)
+            passmask &= (v >= t) if op == ">=" else (v <= t)
+        nfail = int((~passmask).sum())
+        ax.set_title(f"{title}\n{nfail}/{int(m.sum())} fail", fontsize=9)
+        ax.tick_params(labelsize=8)
+    for ax in axes[len(panels) :]:
+        ax.set_visible(False)
+    axes[0].legend(fontsize=8)
+    fig.suptitle(
+        "On-lattice gate transparency (per-gate metric distributions; "
+        "green = accepted)",
+        fontsize=12,
+    )
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
 def _plot_pattern_feature_space(fp, features, labels, summary):
     """PCA(2) of the standardized descriptor features, per-cluster density -
     shows how well the clustering separates in the full descriptor space."""
@@ -15102,6 +15228,19 @@ class AutoPicasso(util.AbstractModuleCollection):
                     )
                     if ps_fp:
                         results["fp_pattern_pairscore_space"] = ps_fp
+
+                # per-gate transparency panels: where the accepted structures
+                # sit against every on-lattice gate threshold.
+                gate_fp = _plot_lattice_gate_panels(
+                    os.path.join(
+                        results["folder"], f"pattern-gates-{rcode}.png"
+                    ),
+                    aux,
+                    labels,
+                    cl.get("gates"),
+                )
+                if gate_fp:
+                    results["fp_pattern_gate_panels"] = gate_fp
 
             # #locs-per-site histogram per cluster (site-resolution / tuning)
             hist_fp = _plot_site_nlocs_hist(
