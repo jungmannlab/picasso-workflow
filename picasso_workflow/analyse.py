@@ -1180,15 +1180,23 @@ def module_decorator(method):
             if parameters.get("save_locs") is True or self.analysis_config.get(
                 "always_save"
             ):
+                # record what was written as a restore point ("checkpoint")
+                # for resumed runs
                 if hasattr(self, "locs") and self.locs is not None:
-                    self._save_locs(
-                        os.path.join(results["folder"], "locs.hdf5")
-                    )
+                    fp = os.path.join(results["folder"], "locs.hdf5")
+                    self._save_locs(fp)
+                    results.setdefault("checkpoint", {})["single"] = {
+                        "filepath": fp
+                    }
                 if (
                     hasattr(self, "channel_locs")
                     and self.channel_locs is not None
                 ):
-                    self._save_datasets_agg(results["folder"])
+                    allfps = self._save_datasets_agg(results["folder"])
+                    results.setdefault("checkpoint", {})["channels"] = {
+                        "filepaths": allfps,
+                        "tags": list(self.channel_tags),
+                    }
         results["end time"] = datetime.now().strftime("%y-%m-%d %H:%M:%S")
         td = datetime.strptime(
             results["end time"], "%y-%m-%d %H:%M:%S"
@@ -2750,6 +2758,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["picasso version"] = picassoversion
         self.locs, self.info = io.load_locs(parameters["filename"])
         results["nlocs"] = len(self.locs)
+        # the loaded file doubles as a restore point for resumed runs
+        results["filepath"] = parameters["filename"]
+        results["checkpoint"] = {
+            "single": {"filepath": parameters["filename"]}
+        }
 
         return parameters, results
 
@@ -10273,6 +10286,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         res = self._save_locs(results["filepath"])
         for k, v in res.items():
             results[k] = v
+        results["checkpoint"] = {"single": {"filepath": results["filepath"]}}
         return parameters, results
 
     def _save_locs(self, filename):
@@ -10339,6 +10353,58 @@ class AutoPicasso(util.AbstractModuleCollection):
                 f"{error_dir} after a module error: {save_exc}"
             )
 
+    def load_checkpoint(self, checkpoint):
+        """Restore locs state from a checkpoint descriptor on resume.
+
+        Counterpart to the ``checkpoint`` entries the modules record in
+        their results: re-populates the in-memory localization state that a
+        resumed run (fresh :class:`AutoPicasso`) has lost, so the modules
+        after the checkpoint can re-run.
+
+        Parameters
+        ----------
+        checkpoint : dict
+            Descriptor with one or both of:
+
+            ``single`` : dict
+                With key ``filepath`` (hdf5 file); loaded into ``self.locs``
+                and ``self.info``.
+            ``channels`` : dict
+                With keys ``filepaths`` and optionally ``tags``; loaded into
+                ``self.channel_locs``, ``self.channel_info`` and
+                ``self.channel_tags``.
+
+        Raises
+        ------
+        Exception
+            Whatever ``picasso.io.load_locs`` raises on unreadable files;
+            the caller falls back to running from scratch.
+        """
+        restored = []
+        if checkpoint.get("single"):
+            fp = checkpoint["single"]["filepath"]
+            self.locs, self.info = io.load_locs(fp)
+            restored.append(f"{len(self.locs)} locs from {fp}")
+        if checkpoint.get("channels"):
+            part = checkpoint["channels"]
+            self._load_channels_from_filepaths(
+                part["filepaths"], tags=part.get("tags")
+            )
+            for i, locs in enumerate(self.channel_locs):
+                # stamp the channel column as load_datasets_to_aggregate
+                # does; files saved by _save_datasets_agg already carry it,
+                # making this an idempotent overwrite. Best-effort: files
+                # from other sources may lack the column.
+                try:
+                    locs["channel"] = i * np.ones(len(locs), dtype=np.int8)
+                except (KeyError, ValueError):
+                    pass
+            nlocs = [len(locs) for locs in self.channel_locs]
+            restored.append(
+                f"{len(self.channel_locs)} channels with {nlocs} locs"
+            )
+        logger.info(f"Restored checkpoint: {'; '.join(restored)}")
+
     ##########################################################################
     # Aggregation workflow modules
     ##########################################################################
@@ -10384,29 +10450,39 @@ class AutoPicasso(util.AbstractModuleCollection):
         print(self.channel_info)
         results["filepaths"] = parameters["filepaths"]
         results["tags"] = parameters["tags"]
+        results["checkpoint"] = {
+            "channels": {
+                "filepaths": list(parameters["filepaths"]),
+                "tags": list(parameters["tags"]),
+            }
+        }
         return parameters, results
 
-    def _load_channels_from_filepaths(self, filepaths):
+    def _load_channels_from_filepaths(self, filepaths, tags=None):
         """Load per-channel localizations from hdf5 files into channel state.
 
         Populates ``self.channel_locs``, ``self.channel_info`` and
         ``self.channel_tags`` from the given files, one entry per channel.
         Shared by the channel aggregation modules (``align_channels``,
-        ``register_channels``).
+        ``register_channels``) and by :meth:`load_checkpoint`.
 
         Parameters
         ----------
         filepaths : list of str
             hdf5 localization files, one per channel, in channel order.
+        tags : list of str, optional
+            The tags naming the channels. If None, the filenames are used.
         """
+        if tags is None:
+            tags = [os.path.split(fp)[1] for fp in filepaths]
         self.channel_locs = []
         self.channel_info = []
         self.channel_tags = []
-        for fp in filepaths:
+        for fp, tag in zip(filepaths, tags):
             locs, info = io.load_locs(fp)
             self.channel_locs.append(locs)
             self.channel_info.append(info)
-            self.channel_tags.append(os.path.split(fp)[1])
+            self.channel_tags.append(tag)
 
     #    @profile_resource_usage
     @module_decorator
@@ -10798,10 +10874,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         parameters : dict
             Input parameters, unchanged.
         results : dict
-            Results updated with ``filepaths`` (all saved file paths).
+            Results updated with ``filepaths`` (all saved file paths),
+            ``tags`` and a ``checkpoint`` descriptor.
         """
         allfps = self._save_datasets_agg(results["folder"])
         results["filepaths"] = allfps
+        results["tags"] = list(self.channel_tags)
+        results["checkpoint"] = {
+            "channels": {
+                "filepaths": allfps,
+                "tags": list(self.channel_tags),
+            }
+        }
 
         return parameters, results
 
