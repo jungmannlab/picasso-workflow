@@ -12,6 +12,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- The `pick_origami` phase-space diagnostic figure drops its now-empty
+  "Expected origami, simulated" panel (the simulation moved entirely into the
+  GUI preview), leaving two panels: all candidates and accepted picks.
+
+- The `pick_origami` Confluence report figures are regrouped: **Phase space**
+  (the pick window) &rarr; **Lattice filter** (the on-lattice gate panels,
+  renamed from "On-lattice gate transparency") &rarr; **Lattice
+  identification** (pair-score, fit quality, accepted-by-geometry-pattern, and
+  localizations-per-docking-site). The generic accepted-structures example
+  grid is omitted when per-pattern example renders are present (they supersede
+  it).
+
 - The `pick_origami` Confluence report is compacted and its figures reordered.
   All graphs are kept, but instead of one tall vertical stack they are grouped
   by purpose with headings and laid out two-up: *Phase space* (pick window +

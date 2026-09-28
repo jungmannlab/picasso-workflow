@@ -5002,44 +5002,39 @@ class ConfluenceReporter(AbstractModuleCollection):
                 )
 
         # ---- figures, grouped by purpose and laid out two-up -------------
-        grp = _fig_row(
-            [
-                results.get("fp_phasespace"),
-                results.get("fp_pattern_phasespace"),
-            ]
-        )
+        # 1) phase space: the pick window (candidates vs accepted picks)
+        grp = _fig_row([results.get("fp_phasespace")])
         if grp:
-            text += _heading("Phase space (pick window &amp; clusters)") + grp
+            text += _heading("Phase space") + grp
 
+        # 2) lattice filter: the on-lattice gate-transparency panels
+        if results.get("fp_pattern_gate_panels"):
+            text += _heading("Lattice filter")
+            text += _img(results["fp_pattern_gate_panels"], 360)
+
+        # 3) lattice identification: how the accepted picks split by geometry
         grp = _fig_row(
             [
                 results.get("fp_pattern_pairscore_space"),
                 results.get("fp_pattern_fit_space"),
-            ]
-        )
-        if grp:
-            text += _heading("Lattice identification") + grp
-
-        if results.get("fp_pattern_gate_panels"):
-            text += _heading("On-lattice gate transparency")
-            text += _img(results["fp_pattern_gate_panels"], 360)
-
-        grp = _fig_row(
-            [
+                results.get("fp_pattern_phasespace"),
                 results.get("fp_pattern_site_nlocs_hist"),
                 results.get("fp_pattern_feature_space"),
                 results.get("fp_pattern_pairdist"),
             ]
         )
         if grp:
-            text += _heading("Per-site resolution &amp; descriptor") + grp
+            text += _heading("Lattice identification") + grp
 
-        # ---- example structures (accepted grid + per-pattern examples) ---
+        # ---- example structures ------------------------------------------
+        # per-pattern examples supersede the generic accepted grid, so drop
+        # the grid whenever per-pattern renders are present.
         fig_fps = results.get("fp_renderings")  # list (row) of list of fps
         pat_renders = results.get("fp_pattern_renderings") or {}
-        if (fig_fps and any(fig_fps)) or pat_renders:
+        show_grid = bool(fig_fps and any(fig_fps)) and not pat_renders
+        if show_grid or pat_renders:
             text += _heading("Example structures")
-        if fig_fps and any(fig_fps):
+        if show_grid:
             text += "<table>"
             for row_fps in fig_fps:
                 if not row_fps:
