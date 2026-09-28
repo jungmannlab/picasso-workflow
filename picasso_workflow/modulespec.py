@@ -199,7 +199,7 @@ N = PicassoRelation.NATIVE
 
 
 # ---------------------------------------------------------------------------
-# The registry. One entry per module in AbstractModuleCollection (58 total).
+# The registry. One entry per module in AbstractModuleCollection (59 total).
 # ---------------------------------------------------------------------------
 _SPECS = [
     # --- plumbing / control flow -------------------------------------------
@@ -646,6 +646,16 @@ _SPECS = [
         relation=E,
         scopes=_SINGLE,
         summary="Pick-similar on clusters in nlocs/rmsd space.",
+    ),
+    _s(
+        "pick_origami",
+        requires=["locs_undrifted"],
+        provides=["picks"],
+        relation=E,
+        outpost=True,
+        scopes=_SINGLE,
+        summary="Design-aware picking of origami structures, tolerant of "
+        "missing sites.",
     ),
     # --- SPINNA / labeling efficiency --------------------------------------
     _s(

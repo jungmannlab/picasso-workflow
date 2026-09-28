@@ -5964,6 +5964,379 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def pick_origami(self):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry (a picasso design file, a
+        regular grid, or an explicit site list), finds and picks the
+        origami structures automatically, and tolerates a configurable
+        number of missing docking sites.
+
+        Parameters
+        ----------
+        i : int
+            the index of the module
+        parameters : dict
+            with a design source (one of):
+                design_file : str
+                    path to a picasso design .yaml file
+                geometry : dict
+                    a grid {n_rows, n_cols, spacing_nm, angle} or an
+                    explicit {sites_nm: [[x, y], ...]} layout
+            and optional keys:
+                pick_diameter_factor, min_n_locs_per_frame,
+                max_n_locs_per_frame, min_rmsd, max_rmsd, allow_mirror,
+                n_plot_structures, display_pixelsize, cluster_patterns and
+                the pattern_* clustering parameters
+        results : dict
+            the results this function generates. This is created
+            in the decorator wrapper
+        """
+        parameters_spec = {
+            "design_file": {
+                "type": "str",
+                "description": "Path to a picasso design .yaml file",
+                "extensions": [".yaml"],
+                "required": False,
+            },
+            "geometry": {
+                "type": "dict",
+                "description": (
+                    "Grid {n_rows, n_cols, spacing_nm, angle} or explicit "
+                    "{sites_nm: [[x, y], ...]} layout"
+                ),
+                "required": False,
+            },
+            "pick_diameter_factor": {
+                "type": "float",
+                "description": (
+                    "Pick diameter as a multiple of the origami size "
+                    "(1.5 = 150%)"
+                ),
+                "min": 0.0,
+                "default": 1.5,
+                "required": False,
+            },
+            "min_n_locs_per_frame": {
+                "type": ["float", "str"],
+                "description": (
+                    "Override the simulated min nlocs window (per-frame, or "
+                    "quantile 'q..')"
+                ),
+                "required": False,
+            },
+            "max_n_locs_per_frame": {
+                "type": ["float", "str"],
+                "description": (
+                    "Override the simulated max nlocs window (per-frame, or "
+                    "quantile 'q..')"
+                ),
+                "required": False,
+            },
+            "min_rmsd": {
+                "type": "float",
+                "description": "Override the simulated min RMSD (camera px)",
+                "required": False,
+            },
+            "max_rmsd": {
+                "type": "float",
+                "description": "Override the simulated max RMSD (camera px)",
+                "required": False,
+            },
+            "allow_mirror": {
+                "type": "bool",
+                "description": "Allow a mirrored match to the design",
+                "default": True,
+                "required": False,
+            },
+            "n_plot_structures": {
+                "type": "int",
+                "description": "Number of representative structures to plot",
+                "min": 0,
+                "required": False,
+            },
+            "display_pixelsize": {
+                "type": "float",
+                "description": "Pixel size for display in nm, default: 1",
+                "min": 0.0,
+                "default": 1.0,
+                "required": False,
+            },
+            "cluster_patterns": {
+                "type": "bool",
+                "description": (
+                    "Cluster accepted structures by resolved geometry "
+                    "(single spot / partial / full grid / aggregate) and "
+                    "emit per-pattern picks + a summary"
+                ),
+                "default": False,
+                "required": False,
+            },
+            "n_pattern_examples": {
+                "type": "int",
+                "description": (
+                    "Representative structures rendered per pattern cluster "
+                    "for the report (nearest the cluster centroid); 0 to skip"
+                ),
+                "min": 0,
+                "default": 8,
+                "required": False,
+            },
+            "pattern_eps_frac": {
+                "type": "float",
+                "description": (
+                    "Docking-site subclustering neighbourhood as a fraction "
+                    "of site spacing. Lower it if sites are merged / n_sites "
+                    "is under-counted; raise it if a single site splits"
+                ),
+                "min": 0.0,
+                "max": 0.5,
+                "default": 0.2,
+                "required": False,
+            },
+            "pattern_min_samples": {
+                "type": "int",
+                "description": (
+                    "DBSCAN min_samples for docking-site subclustering (a "
+                    "site needs at least this many localizations; values "
+                    "below 2 are treated as 2)"
+                ),
+                "min": 2,
+                "default": 7,
+                "required": False,
+            },
+            "pattern_defect_grouping": {
+                "type": "str",
+                "description": (
+                    "Lattice method: how to group on-lattice picks - "
+                    "'completeness' (by number of occupied sites; a few "
+                    "robust classes) or 'exact' (by the exact defect pattern)"
+                ),
+                "options": ["completeness", "exact"],
+                "default": "completeness",
+                "required": False,
+            },
+            "pattern_min_sites_frac": {
+                "type": "float",
+                "description": (
+                    "Lattice method: min matched sites as a fraction of the "
+                    "design nodes to be on-lattice"
+                ),
+                "min": 0.0,
+                "max": 1.0,
+                "default": 0.66,
+                "required": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "n_candidates": {
+                "type": "int",
+                "description": "Number of candidate origami footprints found",
+            },
+            "n_registered": {
+                "type": "int",
+                "description": (
+                    "Candidates that passed the site-count prefilter and were "
+                    "registered against the design template"
+                ),
+            },
+            "n_accepted": {
+                "type": "int",
+                "description": "Number of accepted origami structures",
+            },
+            "n_sites_expected": {
+                "type": "int",
+                "description": "Expected docking sites per origami",
+            },
+            "grid_spacing_nm": {
+                "type": "float",
+                "description": "Design inter-site spacing used (nm)",
+            },
+            "n_picked_locs": {
+                "type": "int",
+                "description": "Number of localizations in accepted origamis",
+            },
+            "fp_picks_origami": {
+                "type": "str",
+                "description": (
+                    "filepath to the picasso pick-region .yaml for accepted "
+                    "origami footprints (Centers + Diameter)"
+                ),
+            },
+            "fp_picks_dockingsites": {
+                "type": "str",
+                "description": (
+                    "filepath to the picasso pick-region .yaml for all "
+                    "resolved single docking sites (Centers + Diameter)"
+                ),
+            },
+            "fp_picked_locs_origami": {
+                "type": "str",
+                "description": (
+                    "filepath to the .hdf5 of picked localizations grouped "
+                    "per accepted origami (one 'group' per origami)"
+                ),
+            },
+            "fp_picked_locs_dockingsites": {
+                "type": "str",
+                "description": (
+                    "filepath to the .hdf5 of picked localizations grouped "
+                    "per resolved docking site (one 'group' per site)"
+                ),
+            },
+            "fp_geometry_table": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-structure geometry table (.csv)"
+                ),
+            },
+            "fp_phasespace": {
+                "type": "str",
+                "description": (
+                    "filepath to the nlocs/rmsd candidate phase-space figure"
+                ),
+            },
+            "fp_renderings": {
+                "type": "list",
+                "description": "filepaths to representative structure renders",
+            },
+            "n_pattern_clusters": {
+                "type": "int",
+                "description": (
+                    "Number of geometry-pattern clusters discovered "
+                    "(cluster_patterns only)"
+                ),
+            },
+            "pattern_summary": {
+                "type": "list",
+                "description": (
+                    "Per-pattern summary (label, n_structures, median "
+                    "n_sites/n_locs/spacing); cluster_patterns only"
+                ),
+            },
+            "fp_pattern_table": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-pattern summary table (.csv)"
+                ),
+            },
+            "fp_pattern_picks": {
+                "type": "dict",
+                "description": (
+                    "map of pattern label -> picasso pick-region .yaml for "
+                    "that pattern's structures (cluster_patterns only)"
+                ),
+            },
+            "fp_pattern_phasespace": {
+                "type": "str",
+                "description": (
+                    "filepath to the phase-space figure coloured by "
+                    "geometry pattern (cluster_patterns only)"
+                ),
+            },
+            "fp_pattern_fit_space": {
+                "type": "str",
+                "description": (
+                    "filepath to the lattice fit-quality phase space "
+                    "(matched-site count vs template fit RMSE), coloured by "
+                    "defect cluster (lattice method only)"
+                ),
+            },
+            "fp_pattern_pairscore_space": {
+                "type": "str",
+                "description": (
+                    "filepath to the registration-free pair-score phase "
+                    "space (nlocs-per-frame vs lattice pair-score), coloured "
+                    "by defect cluster (lattice method only)"
+                ),
+            },
+            "fp_pattern_gate_panels": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-gate transparency panels (one "
+                    "histogram per on-lattice gate with its threshold; "
+                    "green = accepted) (lattice method only)"
+                ),
+            },
+            "fp_pattern_feature_space": {
+                "type": "str",
+                "description": (
+                    "filepath to the PCA descriptor-space figure coloured by "
+                    "pattern cluster (cluster_patterns only)"
+                ),
+            },
+            "fp_pattern_pairdist": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-cluster pairwise site-distance "
+                    "signature figure (pairwise method only)"
+                ),
+            },
+            "fp_pattern_site_nlocs_hist": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-cluster localizations-per-site "
+                    "histogram (lattice method only)"
+                ),
+            },
+            "fp_pattern_site_picks": {
+                "type": "str",
+                "description": (
+                    "filepath to the picasso pick .yaml of the resolved "
+                    "single docking sites of on-lattice structures "
+                    "(lattice method only)"
+                ),
+            },
+            "fp_pattern_sites_table": {
+                "type": "str",
+                "description": (
+                    "filepath to the .csv of resolved single sites with their "
+                    "design-node index / cluster / structure (lattice only)"
+                ),
+            },
+            "n_pattern_sites": {
+                "type": "int",
+                "description": (
+                    "number of resolved single docking sites exported "
+                    "(lattice method only)"
+                ),
+            },
+            "pattern_method": {
+                "type": "str",
+                "description": (
+                    "which pattern-clustering method ran ('lattice' or "
+                    "'pairwise')"
+                ),
+            },
+            "fp_pattern_renderings": {
+                "type": "dict",
+                "description": (
+                    "map of pattern label -> list of example structure "
+                    "render filepaths (cluster_patterns only)"
+                ),
+            },
+        }
+
+        return parameters_spec, results_spec
+
     def undrift_from_picked(self):
         """Performs undrift from piced locs.
 
@@ -5985,8 +6358,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "fp_picked_locs": {
                 "type": ["numpy.ndarray", "str"],
-                "description": "Picked localization coordinates or file path",
-                "extensions": [".hdf5", ".txt"],
+                "description": (
+                    "Picks to undrift from: an hdf5 of grouped picked locs, "
+                    "or a picasso pick-region .yaml (Centers + Diameter) "
+                    "applied to the current locs"
+                ),
+                "extensions": [".hdf5", ".yaml", ".txt"],
                 "required": True,
             },
             "interpolation_method": {
@@ -8885,6 +9262,10 @@ class ParameterWidgetInfo:
         toggle_function=None,
         summary_label=None,
         per_branch_checkbox=None,
+        label=None,
+        param_name=None,
+        has_default=False,
+        default_value=None,
     ):
         """Initialize parameter widget info.
 
@@ -8915,6 +9296,16 @@ class ParameterWidgetInfo:
         self.toggle_function = (
             toggle_function  # For dict parameters with checkboxes
         )
+        # Default/override toggle state (see _apply_param_default_state). A
+        # parameter with a spec default starts in the "use default" state:
+        # the widget is greyed/disabled and the value is omitted from the
+        # generated workflow, so the code default applies. Clicking the label
+        # switches to "override".
+        self.label = label
+        self.param_name = param_name
+        self.has_default = has_default
+        self.default_value = default_value
+        self.use_default = has_default
 
 
 class ParameterCmdDialog(QtWidgets.QDialog):
@@ -9995,6 +10386,246 @@ class TileParametersDialog(QtWidgets.QDialog):
             self.window.set_tile_param_value(
                 name, self._coerce(item.text()), channel, dataset=dataset
             )
+
+
+class PhaseSpacePreviewDialog(QtWidgets.QDialog):
+    """Preview the simulated origami nlocs/rmsd phase space.
+
+    Simulates the expected ``(nlocs, rmsd)`` cloud for the current
+    ``pick_origami`` geometry + kinetics (via
+    :func:`picasso_workflow.picasso_outpost.origami_phase_space_preview`),
+    shows it with the suggested pick window, and lets the user write the
+    suggested ``min/max_n_locs_per_frame`` (and RMSD) back into the module's
+    parameter fields. The simulation is cheap (order 0.1 s), so this is
+    interactive.
+    """
+
+    def __init__(self, parent, param_values, apply_callback):
+        super().__init__(parent)
+        self.setWindowTitle("Origami phase-space preview")
+        self.resize(760, 680)
+        self._params = param_values or {}
+        self._apply_callback = apply_callback
+        self._preview = None
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Acquisition inputs that are not part of the module parameters
+        # (they come from the movie/camera at run time).
+        form = QtWidgets.QFormLayout()
+        self.n_frames_spin = QtWidgets.QSpinBox()
+        self.n_frames_spin.setRange(1, 100_000_000)
+        self.n_frames_spin.setValue(40000)
+        form.addRow("Number of frames:", self.n_frames_spin)
+        self.pixelsize_spin = QtWidgets.QDoubleSpinBox()
+        self.pixelsize_spin.setRange(1.0, 100000.0)
+        self.pixelsize_spin.setValue(130.0)
+        self.pixelsize_spin.setSuffix(" nm")
+        form.addRow("Pixel size:", self.pixelsize_spin)
+
+        # Simulation inputs. These used to be pick_origami parameters, but they
+        # only shape the *suggested* window - the module takes the resulting
+        # min/max_rmsd + min/max_n_locs_per_frame explicitly - so they live
+        # here in the (design-time) preview instead.
+        self.mean_locs_spin = QtWidgets.QDoubleSpinBox()
+        self.mean_locs_spin.setRange(0.0, 1e6)
+        self.mean_locs_spin.setDecimals(1)
+        self.mean_locs_spin.setValue(20.0)
+        self.mean_locs_spin.setToolTip(
+            "Mean localizations per docking site (0 = derive from kinetics)"
+        )
+        form.addRow("Mean locs / site:", self.mean_locs_spin)
+
+        self.missing_sites_spin = QtWidgets.QSpinBox()
+        self.missing_sites_spin.setRange(0, 1000)
+        self.missing_sites_spin.setValue(2)
+        form.addRow("Missing sites allowed:", self.missing_sites_spin)
+
+        self.site_uncertainty_spin = QtWidgets.QDoubleSpinBox()
+        self.site_uncertainty_spin.setRange(0.0, 1000.0)
+        self.site_uncertainty_spin.setValue(3.0)
+        self.site_uncertainty_spin.setSuffix(" nm")
+        form.addRow("Site uncertainty:", self.site_uncertainty_spin)
+
+        self.n_sim_spin = QtWidgets.QSpinBox()
+        self.n_sim_spin.setRange(1, 1_000_000)
+        self.n_sim_spin.setValue(1500)
+        form.addRow("# simulations:", self.n_sim_spin)
+
+        self.sim_quantile_spin = QtWidgets.QDoubleSpinBox()
+        self.sim_quantile_spin.setRange(0.0, 0.5)
+        self.sim_quantile_spin.setDecimals(4)
+        self.sim_quantile_spin.setValue(0.01)
+        form.addRow("Window tail quantile:", self.sim_quantile_spin)
+
+        self.random_seed_spin = QtWidgets.QSpinBox()
+        self.random_seed_spin.setRange(0, 1_000_000_000)
+        self.random_seed_spin.setValue(0)
+        form.addRow("Random seed:", self.random_seed_spin)
+
+        # kinetics (used only when 'Mean locs / site' is 0); free-text so
+        # scientific notation is natural (k_on 1e6, concentration 5e-9, ...)
+        self.kinetics_edits = {}
+        for key, placeholder in (
+            ("k_on", "1e6"),
+            ("tau_b", "0.5"),
+            ("concentration", "5e-9"),
+            ("exposure", "0.1"),
+        ):
+            edit = QtWidgets.QLineEdit()
+            edit.setPlaceholderText(placeholder)
+            self.kinetics_edits[key] = edit
+            form.addRow(f"kinetics {key}:", edit)
+        layout.addLayout(form)
+
+        self.sim_button = QtWidgets.QPushButton("Simulate && preview")
+        self.sim_button.clicked.connect(self._simulate)
+        layout.addWidget(self.sim_button)
+
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+
+        self._figure = Figure(figsize=(6, 4))
+        self._canvas = FigureCanvasQTAgg(self._figure)
+        layout.addWidget(self._canvas, 1)
+
+        self.result_label = QtWidgets.QLabel(
+            "Set the acquisition parameters and click " "'Simulate & preview'."
+        )
+        self.result_label.setWordWrap(True)
+        layout.addWidget(self.result_label)
+
+        buttons = QtWidgets.QDialogButtonBox()
+        self.apply_button = buttons.addButton(
+            "Apply window to parameters",
+            QtWidgets.QDialogButtonBox.ButtonRole.ApplyRole,
+        )
+        self.apply_button.setEnabled(False)
+        self.apply_button.clicked.connect(self._apply)
+        close_button = buttons.addButton(
+            QtWidgets.QDialogButtonBox.StandardButton.Close
+        )
+        close_button.clicked.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def _as_float(value, default):
+        try:
+            if value is None or value == "":
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _as_int(value, default):
+        try:
+            if value is None or value == "":
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _simulate(self):
+        from picasso_workflow import picasso_outpost
+
+        p = self._params
+        geometry = p.get("geometry")
+        if not geometry:
+            self.result_label.setText(
+                "No geometry set - fill in the 'geometry' parameter "
+                "(e.g. {'n_rows': 3, 'n_cols': 4, 'spacing_nm': 20}) first."
+            )
+            return
+        mean_locs = self.mean_locs_spin.value() or None
+        kinetics = None
+        if mean_locs is None:
+            vals = {
+                k: self._as_float(e.text(), None)
+                for k, e in self.kinetics_edits.items()
+            }
+            if all(v is not None for v in vals.values()):
+                kinetics = vals
+        if kinetics is None and mean_locs is None:
+            self.result_label.setText(
+                "Set 'Mean locs / site', or fill all four kinetics fields "
+                "(k_on, tau_b, concentration, exposure), to simulate."
+            )
+            return
+        try:
+            preview = picasso_outpost.origami_phase_space_preview(
+                geometry,
+                n_frames=self.n_frames_spin.value(),
+                kinetics=kinetics,
+                mean_locs_per_site=mean_locs,
+                missing_sites_allowed=self.missing_sites_spin.value(),
+                site_uncertainty_nm=self.site_uncertainty_spin.value(),
+                pixelsize=self.pixelsize_spin.value(),
+                n_sim=self.n_sim_spin.value(),
+                sim_quantile=self.sim_quantile_spin.value(),
+                random_seed=self.random_seed_spin.value(),
+            )
+        except Exception as exc:
+            self.result_label.setText(f"Simulation failed: {exc}")
+            return
+
+        self._preview = preview
+        self._plot(preview)
+        self.result_label.setText(
+            "Suggested window:  min_n_locs_per_frame = "
+            f"{preview['min_n_locs_per_frame']:.4g},  "
+            f"max_n_locs_per_frame = {preview['max_n_locs_per_frame']:.4g}  "
+            f"(RMSD {preview['min_rmsd']:.3g}-{preview['max_rmsd']:.3g} px).  "
+            f"{preview['n_sites_expected']} sites, "
+            f"{preview['mean_locs_per_site']:.1f} locs/site."
+        )
+        self.apply_button.setEnabled(True)
+
+    def _plot(self, preview):
+        from matplotlib.patches import Rectangle
+
+        self._figure.clear()
+        ax = self._figure.add_subplot(111)
+        ax.scatter(
+            preview["sim_nlocs_per_frame"],
+            preview["sim_rmsd_px"],
+            s=8,
+            alpha=0.3,
+            color="b",
+            label="expected origami",
+        )
+        x0 = preview["min_n_locs_per_frame"]
+        x1 = preview["max_n_locs_per_frame"]
+        y0 = preview["min_rmsd"]
+        y1 = preview["max_rmsd"]
+        ax.add_patch(
+            Rectangle(
+                (x0, y0),
+                x1 - x0,
+                y1 - y0,
+                fill=False,
+                edgecolor="r",
+                lw=2,
+                label="pick window",
+            )
+        )
+        ax.set_xlabel("# localizations per frame in footprint")
+        ax.set_ylabel("root mean square distance (camera px)")
+        ax.legend()
+        self._figure.tight_layout()
+        self._canvas.draw()
+
+    def _apply(self):
+        if not self._preview:
+            return
+        w = self._preview
+        self._apply_callback(
+            w["min_n_locs_per_frame"],
+            w["max_n_locs_per_frame"],
+            w["min_rmsd"],
+            w["max_rmsd"],
+        )
+        self.accept()
 
 
 class Window(QtWidgets.QMainWindow):
@@ -14057,6 +14688,66 @@ class Window(QtWidgets.QMainWindow):
             return
         row.setStyleSheet("background-color: #fff3cd;" if on else "")
 
+    def _apply_param_default_state(
+        self, widget_info, use_default, persist=True
+    ):
+        """Switch a parameter between "use default" and "override".
+
+        In the default state the input widget (and its cmd / per-branch
+        controls) is disabled and greyed and shows the spec default, and the
+        parameter is omitted from the generated workflow (``_get_widget_value``
+        returns ``None``), so the code default applies. In the override state
+        the widget is editable and the value is written. Clicking the label
+        toggles the two. No-op for parameters without a spec default.
+        """
+        if not getattr(widget_info, "has_default", False):
+            return
+        widget_info.use_default = bool(use_default)
+        w = widget_info.widget
+        lbl = getattr(widget_info, "label", None)
+        name = getattr(widget_info, "param_name", "") or ""
+        dv = widget_info.default_value
+        cmd = getattr(widget_info, "cmd_button", None)
+        pbc = getattr(widget_info, "per_branch_checkbox", None)
+        if use_default:
+            # show the default value, then grey + disable (block signals so
+            # setting the value does not trigger a premature auto-save while
+            # the form is still being built)
+            w.blockSignals(True)
+            self._set_widget_value(
+                w, dv, widget_info.original_type, widget_info
+            )
+            w.blockSignals(False)
+            w.setEnabled(False)
+            if cmd is not None:
+                cmd.setEnabled(False)
+            if pbc is not None:
+                pbc.setEnabled(False)
+            if lbl is not None:
+                # the greyed value widget already shows the default, so keep
+                # the label to just the name and put the hint in the tooltip
+                lbl.setText(name)
+                lbl.setStyleSheet("color: gray; font-style: italic;")
+                lbl.setToolTip(
+                    f"Using the code default ({dv}). Click to override."
+                )
+        else:
+            w.setEnabled(True)
+            if cmd is not None:
+                cmd.setEnabled(True)
+            if pbc is not None:
+                pbc.setEnabled(True)
+            if lbl is not None:
+                lbl.setText(name)
+                lbl.setStyleSheet("")
+                desc = widget_info.metadata.get("description", "")
+                lbl.setToolTip(
+                    (desc + "\n" if desc else "")
+                    + f"Default: {dv}. Click to use it."
+                )
+        if persist:
+            self._on_parameter_changed()
+
     def _sync_per_branch_controls(self):
         """Show/populate the per-branch checkboxes for the current form.
 
@@ -14121,6 +14812,10 @@ class Window(QtWidgets.QMainWindow):
                         per_value = per_branch[bid]
                     else:
                         per_value = per_branch[-1] if per_branch else None
+                    # a branch-specific value is an override, never a default
+                    self._apply_param_default_state(
+                        widget_info, False, persist=False
+                    )
                     self._set_widget_value(
                         widget_info.widget,
                         per_value,
@@ -14132,12 +14827,30 @@ class Window(QtWidgets.QMainWindow):
 
                 # Check if value is a command tuple (starts with $ or $$)
                 if self._is_command_value(value_data):
-                    # This is a command - convert widget to textbox
+                    # a command is an override; un-grey before converting
+                    self._apply_param_default_state(
+                        widget_info, False, persist=False
+                    )
                     self._convert_widget_to_textbox(
                         param_name, str(tuple(value_data))
                     )
                     continue
 
+                # A stored value equal to the spec default is treated as
+                # "use default" (greyed, omitted on re-save); a different
+                # value is an explicit override.
+                if getattr(widget_info, "has_default", False) and (
+                    value_data == widget_info.default_value
+                ):
+                    self._apply_param_default_state(
+                        widget_info, True, persist=False
+                    )
+                    self._highlight_override_row(widget_info, False)
+                    continue
+
+                self._apply_param_default_state(
+                    widget_info, False, persist=False
+                )
                 # Set value in widget
                 self._set_widget_value(
                     widget_info.widget,
@@ -14146,6 +14859,11 @@ class Window(QtWidgets.QMainWindow):
                     widget_info,
                 )
                 self._highlight_override_row(widget_info, False)
+            elif getattr(widget_info, "has_default", False):
+                # not in the workflow -> use the code default (greyed)
+                self._apply_param_default_state(
+                    widget_info, True, persist=False
+                )
 
         # Show/refresh the per-branch checkboxes for the current context.
         self._sync_per_branch_controls()
@@ -16506,6 +17224,12 @@ class Window(QtWidgets.QMainWindow):
         str or dict or tuple: String representation of the value, dict for nested parameters,
                               or tuple for command references
         """
+        # A parameter left in the "use default" state is omitted from the
+        # workflow so the code default applies (top-level and nested alike).
+        if widget_info is not None and getattr(
+            widget_info, "use_default", False
+        ):
+            return None
         if (
             original_type == "dict"
             and widget_info
@@ -16898,6 +17622,11 @@ class Window(QtWidgets.QMainWindow):
         # Update stored reference
         widget_info.widget = new_widget
 
+        # A command value is an explicit override, never the code default:
+        # clear the default state so the value is collected (and the label
+        # un-greys).
+        self._apply_param_default_state(widget_info, False, persist=False)
+
         # The new value may be a per-channel mapping - reflect it below
         # the row.
         self._update_param_summary(widget_info)
@@ -17084,6 +17813,17 @@ class Window(QtWidgets.QMainWindow):
             per_branch_checkbox.setVisible(False)
             row_layout.addWidget(per_branch_checkbox, stretch=0)
 
+            # A top-level parameter with a spec default (and not required)
+            # gets a clickable label toggling default<->override (see
+            # _apply_param_default_state). Nested dict sub-parameters are
+            # excluded: a module reads its dict sub-schema as a whole (e.g.
+            # load_dataset_movie's sample_movie["filename"]), so omitting a
+            # defaulted sub-key would leave an incomplete dict and crash.
+            has_default = (
+                indent_level == 0
+                and param_metadata.get("default") is not None
+                and not param_metadata.get("required", False)
+            )
             widget_info = ParameterWidgetInfo(
                 widget=widget,
                 cmd_button=cmd_button,
@@ -17092,6 +17832,10 @@ class Window(QtWidgets.QMainWindow):
                 original_type=original_type,
                 summary_label=summary_label,
                 per_branch_checkbox=per_branch_checkbox,
+                label=label,
+                param_name=param_name,
+                has_default=has_default,
+                default_value=param_metadata.get("default"),
             )
 
             # Capture the widget info itself, not just the name: nested
@@ -17107,6 +17851,22 @@ class Window(QtWidgets.QMainWindow):
                     self._on_per_branch_toggled(pn, checked)
                 )
             )
+            if has_default:
+                label.setCursor(
+                    QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                )
+
+                def _toggle_default(event, wi=widget_info):
+                    self._apply_param_default_state(
+                        wi, not wi.use_default, persist=True
+                    )
+
+                label.mousePressEvent = _toggle_default
+                # start greyed/disabled, using the code default (no save yet;
+                # the form is still being built)
+                self._apply_param_default_state(
+                    widget_info, True, persist=False
+                )
             return widget_info
 
     def _populate_parameter_widgets(self, module_params):
@@ -17454,8 +18214,70 @@ class Window(QtWidgets.QMainWindow):
             # Populate new parameter widgets
             self._populate_parameter_widgets(module_params)
 
+            # pick_origami: offer an interactive phase-space preview to set
+            # the localizations-per-frame window from the geometry + kinetics.
+            if text == "pick_origami":
+                self._add_phasespace_preview_button()
+
             # Validate parameters and update button state
             self._validate_parameters()
+
+    def _add_phasespace_preview_button(self):
+        """Add the pick_origami 'Preview phase space' button below its params."""
+        btn = QtWidgets.QPushButton("Preview phase space …")
+        btn.setToolTip(
+            "Simulate the expected origami nlocs/rmsd phase space from the "
+            "geometry + kinetics and set the localizations-per-frame window."
+        )
+        btn.clicked.connect(self._open_phasespace_preview)
+        self.module_parameters_layout.addWidget(btn)
+
+    def _current_module_parameter_values(self):
+        """Collect the current parameter values from the entry widgets."""
+        param_values = {}
+        for name, widget_info in self.parameter_widgets.items():
+            try:
+                value = self._get_widget_value(
+                    widget_info.widget,
+                    widget_info.original_type,
+                    widget_info,
+                )
+            except Exception:
+                value = None
+            if value is not None:
+                param_values[name] = value
+        return param_values
+
+    def _open_phasespace_preview(self):
+        """Open the origami phase-space preview dialog."""
+        dialog = PhaseSpacePreviewDialog(
+            self,
+            self._current_module_parameter_values(),
+            self._apply_phasespace_window,
+        )
+        dialog.exec()
+
+    def _apply_phasespace_window(
+        self, min_n_locs_per_frame, max_n_locs_per_frame, min_rmsd, max_rmsd
+    ):
+        """Write the previewed pick window into the parameter widgets."""
+        updates = (
+            ("min_n_locs_per_frame", min_n_locs_per_frame),
+            ("max_n_locs_per_frame", max_n_locs_per_frame),
+            ("min_rmsd", min_rmsd),
+            ("max_rmsd", max_rmsd),
+        )
+        for name, value in updates:
+            widget_info = self.parameter_widgets.get(name)
+            if widget_info is None:
+                continue
+            widget = widget_info.widget
+            if isinstance(widget, QtWidgets.QLineEdit):
+                widget.setText(f"{value:.6g}")
+            elif isinstance(widget, QtWidgets.QDoubleSpinBox):
+                widget.setValue(float(value))
+            elif isinstance(widget, QtWidgets.QSpinBox):
+                widget.setValue(int(round(value)))
 
 
 def _app_icon():
