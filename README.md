@@ -191,6 +191,43 @@ the bundled `picasso_workflow/config.yaml` for a worked `hpcl8XXX` example.
 - see examples in the folder "examples".
 - if you have access, see examples in "/Volumes/pool-miblab/users/grabmayr/picasso-workflow_testdata"
 
+### Resuming a failed or interrupted run
+
+When a workflow fails (typically because of a wrongly set module argument),
+fix the argument and re-run with resume instead of starting from scratch:
+
+- **GUI**: tick *Continue previous run (resume)* next to the *always save*
+  option before generating/launching the script.
+- **API**: pass `continue_previous_runner=True` to
+  `WorkflowRunner.config_from_dicts` /
+  `AggregationWorkflowRunner.config_from_dicts` (the coordinators in
+  `metaworkflow.py` expose it as `continue_previous_runners`).
+
+On resume, the runner loads the previous run's `WorkflowRunner.yaml` and
+decides where to restart:
+
+1. The **frontier** is the first module that must re-run: the first one
+   that did not previously succeed, *or* the first one whose parameters you
+   changed since the previous run (so fixing an argument of an
+   already-succeeded module re-runs it too).
+2. Walking back from the frontier, the latest module that saved
+   localizations to disk becomes the **checkpoint**: its locs are loaded
+   back into memory, everything up to it is skipped, and the modules after
+   it re-run. Checkpoints are created by `save_single_dataset`,
+   `load_dataset_localizations`, `load_datasets_to_aggregate`,
+   `save_datasets_aggregated`, and by any module run with
+   `save_locs: True` (or the *always save* option / `always_save` config).
+3. Without any checkpoint before the frontier, the workflow re-runs from
+   scratch — so consider adding `save_locs: True` to expensive modules
+   (localize, undrift, clustering) to keep resumes cheap.
+
+Some state only lives in memory and cannot be restored from saved locs:
+the raw movie, spot identifications, the drift trace and a loaded picasso
+config. A checkpoint that would strand such a dependency (e.g. resuming
+directly at `localize`, which needs the movie and identifications) is
+rejected automatically and the run falls back to an earlier checkpoint or
+to scratch.
+
 ### One-click installers
 
 Three installer scripts handle the full setup (find conda → create

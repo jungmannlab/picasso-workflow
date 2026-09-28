@@ -10,6 +10,25 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- **Checkpoint-aware resume.** Resuming a run (`continue_previous_runner=True`)
+  now works even when the in-memory localizations are gone: modules that save
+  or load locs (`save_single_dataset`, `load_dataset_localizations`,
+  `load_datasets_to_aggregate`, `save_datasets_aggregated`, and any module run
+  with `save_locs: True` / `always_save`) record a `checkpoint` descriptor in
+  their results, and on resume the runner restores the latest checkpoint
+  before the re-run frontier and re-runs everything after it. Checkpoints
+  that would strand memory-only state (raw movie, identifications, drift,
+  picasso config — per the new `modulespec.restart_conflicts` check) are
+  rejected in favour of an earlier restart point; without any checkpoint the
+  run falls back to scratch (the previous behaviour). Note resume may now
+  re-run previously-succeeded modules between the checkpoint and the failure
+  point, since their in-memory effects cannot be restored otherwise.
+
+- The GUI exposes resume as a *Continue previous run (resume)* option, baked
+  into the generated `start_workflow.py` as `continue_previous_runners=True`.
+
 ### Changed
 
 - `pick_origami` now re-centres every accepted pick on its localizations'
@@ -63,6 +82,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   Command (`$$map`) and per-branch values always count as overrides.
 
 ### Fixed
+
+- Resuming no longer silently discards the caller's edited workflow modules:
+  `config_from_dicts(continue_previous_runner=True)` (and the aggregation
+  resume paths) now adopt the passed parameters when the module-name sequence
+  matches the previous run's, so "fix a parameter and re-run" actually applies
+  the fix. A changed argument on a previously-succeeded module moves the
+  re-run frontier up to that module, instead of keeping its stale result.
 
 - `pick_origami` accepted-structure renders now pass only that structure's
   localizations (`sel`) to the renderer instead of the full multi-group set,
