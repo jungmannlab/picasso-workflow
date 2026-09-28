@@ -12,6 +12,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Stack-wide dependency harmonization (decision C41, picasso is the anchor).**
+  The shared numeric/IO libs were previously **unpinned**; pinned them to picasso
+  0.11.3's shared-lib ranges so picasso-workflow resolves to the same numpy-2
+  stack as picasso / PycroFlow / monet when co-installed: `numpy` →
+  `numpy>=2.2.6,<3`, `pandas` → `pandas>=2.3.3,<3`, `tables` → `tables>=3.10.1,<4`,
+  `numba` → `numba>=0.62.1,<1`, `h5py` → `h5py>=3.15.1,<4`, `matplotlib` →
+  `matplotlib>=3.10.7,<4`. `PyQt6` / `PyQt6-WebEngine` were already synced to the
+  anchor and the `picassosr` line is untouched. Full test suite green under
+  numpy 2.
 - `pick_origami` now re-centres every accepted pick on its localizations'
   centre of mass right after identification and re-picks once around the new
   centre. `pick_similar` returns grid positions offset from the structure by
