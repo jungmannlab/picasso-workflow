@@ -7449,15 +7449,17 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         i : int
             the index of the module
         parameters : dict
-            with required keys:
+            with optional keys:
                 values : list or dict
                     one numeric value per branch (list), or a dict of
                     series-name -> list for several metrics on one figure.
                     Usually a ("$get_prior_result", "results, NN_branch,
-                    branches, $all, MM_module, key") command.
-            with optional keys:
+                    branches, $all, MM_module, key") command. Omit it as a
+                    branch join module to auto-summarize every numeric
+                    per-branch result (small multiples, one metric each).
                 labels : list
-                    per-branch labels for x ticks / annotations
+                    per-branch labels for x ticks / annotations (default: the
+                    branch labels when auto-summarizing)
                 x : list
                     per-branch argument values; enables "screen" mode
                 mode : one of "auto", "replicates", "screen"
@@ -7476,11 +7478,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "values": {
                 "type": "str",
                 "description": (
-                    "One numeric value per branch (a list), or a dict of "
-                    "series-name -> list. Usually a $get_prior_result over "
-                    '"results, NN_branch, branches, $all, MM_module, key".'
+                    "Optional. Leave empty as a branch join module: it then "
+                    "auto-summarizes every numeric per-branch result (labels "
+                    "come from the branch labels). Otherwise: one numeric value "
+                    "per branch (a list), a dict of series-name -> list, or a "
+                    '$get_prior_result over "results, NN_branch, branches, '
+                    '$all, MM_module, key".'
                 ),
-                "required": True,
+                "required": False,
             },
             "labels": {
                 "type": "str",
@@ -14139,6 +14144,14 @@ class Window(QtWidgets.QMainWindow):
             # Skip None values (from unchecked optional dicts)
             if value is not None:
                 param_values[param_name] = value
+
+        # A new branch comes with a summarize_branches join by default: it
+        # auto-summarizes the branches' numeric results (no arguments needed).
+        # It appears as an indented join row the user can edit or delete.
+        if module_name == "branch":
+            param_values.setdefault(
+                "join_modules", [("summarize_branches", {})]
+            )
 
         # Add to the appropriate workflow list based on selected tab.
         current_tab_index = self.workflow_tabs.currentIndex()

@@ -1873,6 +1873,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # pool the per-branch results, so they resolve against the
                 # trunk runner's results (which now include this branch step).
                 jp = copy.deepcopy(module_parameters)
+                # A summarize_branches join with no explicit values defaults to
+                # auto-summarizing this branch's per-branch results: hand it the
+                # branches list (it flattens the numeric metrics) and the branch
+                # labels. This is what makes it a zero-config default join.
+                if module_name == "summarize_branches" and "values" not in jp:
+                    jp["values"] = results["branches"]
+                    jp.setdefault("labels", results["labels"])
                 if pce is not None:
                     original_rootidx = getattr(pce, "curr_rootidx", None)
                     pce.curr_rootidx = i
@@ -2102,7 +2109,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         metric across branches (``"replicates"`` mode) or the metric against a
         per-branch argument (``"screen"`` mode), and records summary stats.
         """
-        raw_values = parameters["values"]
+        raw_values = parameters.get("values")
+        labels = parameters.get("labels")
+        x_values = parameters.get("x")
+        ylabel = parameters.get("ylabel", "value")
+        title = parameters.get("title", "branch summary")
+        plot_type = parameters.get("plot_type", "box")
 
         def _num_list(seq):
             """Coerce a sequence to floats, skipping non-numeric entries.
@@ -2123,7 +2135,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                     )
             return out
 
-        if isinstance(raw_values, dict):
+        # Build the series to plot: metric-name -> list of per-branch values.
+        autodetected = False
+        if self._is_branch_result_list(raw_values):
+            # A branch module's raw per-branch results list: flatten each
+            # branch to its numeric scalar metrics and pivot into one series
+            # per metric. Labels default to the branch labels. This is what a
+            # zero-argument summarize_branches join receives.
+            series = self._autodetect_branch_metrics(raw_values, _num_list)
+            autodetected = True
+            if labels is None:
+                labels = [
+                    str(pb.get("label", k)) for k, pb in enumerate(raw_values)
+                ]
+        elif isinstance(raw_values, dict):
             series = {
                 str(name): _num_list(vals) for name, vals in raw_values.items()
             }
@@ -2132,7 +2157,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             and raw_values
             and all(isinstance(v, dict) for v in raw_values)
         ):
-            # One dict per branch (e.g. labeling_efficiency is
+            # One flat dict per branch (e.g. labeling_efficiency is
             # {target: .., reference: ..}) -> pivot into one series per key.
             keys = []
             for per_branch in raw_values:
@@ -2144,20 +2169,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 for key in keys
             }
         else:
-            series = {
-                str(parameters.get("ylabel", "value")): _num_list(raw_values)
-            }
-        labels = parameters.get("labels")
-        x_values = parameters.get("x")
+            series = {str(ylabel): _num_list(raw_values)}
+
         mode = parameters.get("mode", "auto")
         if mode == "auto":
             mode = "screen" if x_values is not None else "replicates"
-        ylabel = parameters.get("ylabel", "value")
-        title = parameters.get("title", "branch summary")
 
-        fig, ax = plt.subplots()
         has_data = any(len(v) for v in series.values())
+        nonempty_metrics = [k for k, v in series.items() if v]
         if not has_data:
+            fig, ax = plt.subplots()
             ax.text(
                 0.5,
                 0.5,
@@ -2167,17 +2188,35 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             ax.set_axis_off()
         elif mode == "screen" and x_values is not None:
+            fig, ax = plt.subplots()
             xv = [float(x) for x in x_values]
             for name, vals in series.items():
                 n = min(len(xv), len(vals))
                 ax.plot(xv[:n], vals[:n], marker="o", label=name)
             ax.set_xlabel(parameters.get("xlabel", "argument"))
+            ax.set_ylabel(ylabel)
             if len(series) > 1:
                 ax.legend()
+            ax.set_title(title)
+        elif autodetected and len(nonempty_metrics) > 1:
+            # Autodetected metrics can have very different scales, so give each
+            # its own subplot (small multiples) rather than mixing them on one
+            # y-axis.
+            fig, axes = plt.subplots(
+                len(nonempty_metrics),
+                1,
+                figsize=(6.4, max(2.2, 2.0 * len(nonempty_metrics))),
+                squeeze=False,
+            )
+            for ax, name in zip(axes[:, 0], nonempty_metrics):
+                self._draw_replicates_axis(ax, series[name], labels, plot_type)
+                ax.set_ylabel(name)
+            axes[-1, 0].set_xlabel(parameters.get("xlabel", "branch"))
+            fig.suptitle(title)
         else:  # replicates: distribution of the metric across branches
+            fig, ax = plt.subplots()
             names = list(series.keys())
             data = [series[name] for name in names]
-            plot_type = parameters.get("plot_type", "box")
             nonempty = [(k, d) for k, d in enumerate(data) if d]
             positions = [k for k, _ in nonempty]
             datasets = [d for _, d in nonempty]
@@ -2228,8 +2267,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                         xytext=(6, 0),
                         fontsize=8,
                     )
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
         fig.tight_layout()
         results["fp_fig"] = os.path.join(
             results["folder"], parameters.get("filename", "branch_summary.png")
@@ -2253,6 +2292,121 @@ class AutoPicasso(util.AbstractModuleCollection):
                 stats[name] = {"n": 0}
         results["stats"] = stats
         return parameters, results
+
+    # bookkeeping keys present in every module's results -- never plotted as a
+    # branch metric when auto-summarizing.
+    _BRANCH_METRIC_SKIP = {
+        "duration",
+        "start time",
+        "end time",
+        "folder",
+        "label",
+        "success",
+    }
+
+    @staticmethod
+    def _is_branch_result_list(value):
+        """Whether ``value`` looks like a branch module's per-branch results.
+
+        That is, a non-empty list of dicts where a dict carries a ``"label"``
+        key or a nested dict value (a sub-module's results). This is what a
+        zero-argument ``summarize_branches`` join is handed; it is
+        distinguished from a plain list of flat scalar dicts (e.g. one
+        ``{target, reference}`` per branch), which keeps the flat-pivot path.
+        """
+        if not (isinstance(value, (list, tuple)) and value):
+            return False
+        if not all(isinstance(v, dict) for v in value):
+            return False
+        return any(
+            ("label" in pb) or any(isinstance(vv, dict) for vv in pb.values())
+            for pb in value
+        )
+
+    @classmethod
+    def _autodetect_branch_metrics(cls, branches, num_list):
+        """Flatten per-branch results into one series per numeric metric.
+
+        Each branch dict is ``{"label": .., "NN_module": {..results..}, ..}``;
+        every numeric scalar leaf (skipping bookkeeping keys and booleans)
+        becomes a metric named ``"NN_module: key"`` (or ``"key"`` for a
+        top-level scalar), pivoted across branches. Metric order follows first
+        appearance.
+        """
+
+        def flat(pb):
+            out = {}
+            for k, v in pb.items():
+                if k in cls._BRANCH_METRIC_SKIP:
+                    continue
+                if isinstance(v, dict):
+                    for kk, vv in v.items():
+                        if kk in cls._BRANCH_METRIC_SKIP:
+                            continue
+                        if isinstance(vv, bool):
+                            continue
+                        if isinstance(vv, (int, float)):
+                            out[f"{k}: {kk}"] = vv
+                elif isinstance(v, bool):
+                    continue
+                elif isinstance(v, (int, float)):
+                    out[k] = v
+            return out
+
+        flats = [flat(pb) for pb in branches]
+        metrics = []
+        for fb in flats:
+            for k in fb:
+                if k not in metrics:
+                    metrics.append(k)
+        return {m: num_list([fb.get(m) for fb in flats]) for m in metrics}
+
+    @staticmethod
+    def _draw_replicates_axis(ax, vals, labels, plot_type="box"):
+        """Draw one metric's per-branch values as a box/violin + labeled strip.
+
+        Used for the small-multiples layout when several metrics are
+        auto-summarized: each branch contributes one point, annotated with its
+        branch label.
+        """
+        if not vals:
+            ax.text(0.5, 0.5, "no data", ha="center", va="center")
+            ax.set_axis_off()
+            return
+        drawn = False
+        if plot_type == "violin" and len(vals) >= 2 and len(set(vals)) > 1:
+            try:
+                parts = ax.violinplot(
+                    [vals],
+                    positions=[0],
+                    widths=0.6,
+                    showmeans=True,
+                    showextrema=True,
+                )
+                for body in parts["bodies"]:
+                    body.set_alpha(0.4)
+                drawn = True
+            except (ValueError, np.linalg.LinAlgError):
+                pass
+        if not drawn:
+            ax.boxplot([vals], positions=[0], widths=0.5)
+        jitter = (np.random.rand(len(vals)) - 0.5) * 0.15
+        ax.scatter(jitter, vals, color="k", alpha=0.7, zorder=3)
+        ax.set_xticks([0])
+        ax.set_xticklabels([""])
+        for k, val in enumerate(vals):
+            lbl = (
+                str(labels[k])
+                if labels is not None and k < len(labels)
+                else str(k)
+            )
+            ax.annotate(
+                lbl,
+                (0, val),
+                textcoords="offset points",
+                xytext=(6, 0),
+                fontsize=8,
+            )
 
     ##########################################################################
     # Single dataset modules

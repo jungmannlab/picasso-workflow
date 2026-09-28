@@ -12,6 +12,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- `summarize_branches` works as a zero-argument branch join module. When
+  `values` is omitted, the `branch` module hands it the per-branch results
+  list and it auto-summarizes every numeric per-branch metric (one
+  small-multiple subplot per metric, to avoid mixing scales), with `labels`
+  defaulting to the branch labels. The GUI seeds a `summarize_branches` join
+  when you add a branch (visible as an indented join row, editable/deletable),
+  so a branch produces an overview figure with no configuration. `values` is
+  now optional.
+
 - The `branch` module is simplified to two `branch_type`s: **`explicit`**
   (unchanged: a fixed `n_branches` with per-branch `("$branch", [...])`
   overrides) and **`runtime`**, which replaces both the old mask-component

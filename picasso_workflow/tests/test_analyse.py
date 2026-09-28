@@ -3150,6 +3150,55 @@ class TestAnalyseModules(unittest.TestCase):
         del self.ap.skipper
         shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
 
+    def test_branch_default_summarize_join(self):
+        """A summarize_branches join with no explicit values auto-summarizes
+        the branch module's per-branch numeric results."""
+
+        def metric(sub_idx, params, calling_module_dir=None, suffix=""):
+            return params, {"val": float(params.get("v", 0))}
+
+        self.ap.metric = metric
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 3,
+            "branch_labels": ["a", "b", "c"],
+            "branch_modules": [("metric", {"v": ("$branch", [1, 2, 3])})],
+            "join_modules": [("summarize_branches", {})],
+        }
+        _, results = self.ap.branch(2, parameters)
+        summ = results["join"]["00_summarize_branches"]
+        assert summ["mode"] == "replicates"
+        assert "00_metric: val" in summ["stats"]
+        assert abs(summ["stats"]["00_metric: val"]["mean"] - 2.0) < 1e-9
+        assert os.path.isfile(summ["fp_fig"])
+        del self.ap.metric
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_summarize_branches_autodetects_metrics(self):
+        """Given a per-branch results list, summarize_branches flattens the
+        numeric metrics (skipping bookkeeping keys) and labels by branch."""
+        branches = [
+            {
+                "label": "a",
+                "00_nn": {"nn": 1.0, "duration": 5.0},
+                "01_x": {"m": 10.0},
+            },
+            {
+                "label": "b",
+                "00_nn": {"nn": 3.0, "duration": 6.0},
+                "01_x": {"m": 20.0},
+            },
+        ]
+        _, results = self.ap.summarize_branches(0, {"values": branches})
+        stats = results["stats"]
+        assert set(stats) == {"00_nn: nn", "01_x: m"}  # duration skipped
+        assert abs(stats["00_nn: nn"]["mean"] - 2.0) < 1e-9
+        assert stats["01_x: m"]["n"] == 2
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_summarize_branches")
+        )
+
     def summarize_branches(self):
         """Test the summarize_branches plotting module."""
         # replicates mode: a metric across branches

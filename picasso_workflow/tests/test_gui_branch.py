@@ -447,6 +447,23 @@ def test_branch_form_hides_inline_managed_params(window):
     assert "n_branches" in window.parameter_widgets
 
 
+def test_adding_branch_seeds_summarize_join(window):
+    """Adding a branch module seeds a summarize_branches join by default."""
+    modules, lw = _seed(window, [("align_channels", {})])
+    _select(window, lw, 0)
+    window.module_combobox.setCurrentText("branch")
+    window.add_module()
+    branch = next(m for m in modules if m[0] == "branch")
+    assert branch[1].get("join_modules") == [("summarize_branches", {})]
+    # it renders as an indented join sub-row
+    join_subs = [
+        window._row_node(lw, r)
+        for r in range(lw.count())
+        if (window._row_node(lw, r) or {}).get("section") == "join"
+    ]
+    assert any(n["kind"] == "sub" for n in join_subs)
+
+
 def test_branch_type_is_dropdown_with_conditional_params(window):
     """branch_type is a dropdown; runtime/explicit params toggle with it."""
     from PyQt6 import QtWidgets as _Qtw

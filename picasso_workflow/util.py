@@ -206,7 +206,7 @@ class AbstractModuleCollection(abc.ABC):
         A general-purpose plotting/summary module, typically used as a
         ``branch`` join module: it renders a scalar result collected across
         branches (via ``("$get_prior_result", "results, NN_branch, branches,
-        $all, MM_module, key")``) into a single figure. Two display modes:
+        $all, MM_module, key")``) into a figure. Two display modes:
 
         - ``"replicates"``: branches are repeats of the same analysis (e.g.
           different cells) -- draw a box/strip plot of the metric across
@@ -214,18 +214,24 @@ class AbstractModuleCollection(abc.ABC):
         - ``"screen"``: branches vary a parameter -- plot the metric against
           the per-branch argument values (``x``).
 
+        As a branch join module it needs **no arguments**: when ``values`` is
+        omitted the ``branch`` module hands it the per-branch results list, and
+        it auto-summarizes every numeric per-branch metric (one small-multiple
+        subplot each), with ``labels`` defaulting to the branch labels.
+
         Parameters
         ----------
         i : int
             Index of the module in the workflow.
         parameters : dict
-            Required keys:
+            Optional keys:
 
             ``values`` : list or dict
                 One numeric value per branch (a list), or a dict mapping series
-                names to such lists (several metrics on one figure).
-
-            Optional keys:
+                names to such lists (several metrics on one figure). Omit it as
+                a branch join module to auto-summarize all numeric per-branch
+                results (the branch module injects its per-branch results
+                list).
 
             ``labels`` : list
                 Per-branch labels for the x ticks / point annotations.
