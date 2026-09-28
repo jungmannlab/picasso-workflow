@@ -1889,6 +1889,39 @@ class AbstractModuleCollection(abc.ABC):
         per-structure geometry table (resolved/missing sites, spacing,
         RMSE-vs-design, orientation).
 
+        Identification proceeds in stages, cheapest first, so the expensive
+        geometry fit runs only on genuine candidates (stages 2-5 are the
+        design-aware classification enabled by ``cluster_patterns`` for a
+        lattice design):
+
+        1. Coarse pick - ``pick_similar`` finds footprints whose per-frame
+           localization count and RMS spread fall in the pick window
+           (``min/max_n_locs_per_frame``, ``min/max_rmsd``). This alone is a
+           weak filter: most candidates are junk (1-2 spot blobs).
+        2. Pair-score pre-screen - each candidate gets a cheap,
+           registration-free lattice score (the fraction of intra-footprint
+           localization pairs separated by the design spacing); candidates
+           below the score threshold are set aside as off-lattice without a
+           fit. This keys on lattice *periodicity*, not brightness.
+        3. Registration - survivors are sub-clustered into docking sites
+           (DBSCAN; ``pattern_eps_frac`` / ``pattern_min_samples``) and
+           best-fit registered onto the design template (similarity
+           transform, optional mirror).
+        4. On-lattice gate - a pick is accepted only if it matches enough
+           design nodes (``pattern_min_sites_frac``) with a low fit residual,
+           near-design spacing, few off-lattice extras, and uniform per-site
+           localization counts and spread - the checks a genuine origami
+           passes but an aggregate or misregistered blob does not.
+        5. Defect grouping - accepted picks are grouped by
+           ``pattern_defect_grouping`` (completeness or exact defect pattern).
+
+        Non-lattice (<3-node) designs skip registration and fall back to a
+        template-agnostic site-graph / pairwise-distance descriptor. The
+        report's "Lattice filter" panels show each gate's metric distribution
+        and threshold; thresholds beyond the exposed knobs are calibrated
+        defaults, tunable via
+        :func:`picasso_outpost.cluster_lattice_defects`.
+
         Parameters
         ----------
         i : int

@@ -12,6 +12,12 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- The `pick_origami` docstrings now document the staged structure-
+  identification strategy (coarse `pick_similar` window &rarr; registration-
+  free pair-score pre-screen &rarr; per-candidate registration &rarr;
+  on-lattice gate &rarr; defect grouping), not just the individual
+  parameters - so the pipeline is discoverable without reading the code.
+
 - The `pick_origami` phase-space diagnostic figure drops its now-empty
   "Expected origami, simulated" panel (the simulation moved entirely into the
   GUI preview), leaving two panels: all candidates and accepted picks.

@@ -14685,9 +14685,16 @@ class AutoPicasso(util.AbstractModuleCollection):
         Loads an origami's designed geometry, auto-detects and picks the
         origami structures (tolerating a configurable number of missing
         docking sites), and emits picasso-compatible picks plus a
-        per-structure geometry table. See
+        per-structure geometry table.
+
+        Structures are identified in stages, cheapest first: a coarse
+        ``pick_similar`` pick in the nlocs/rmsd window, a cheap
+        registration-free pair-score pre-screen (lattice periodicity at the
+        design spacing), then per-candidate registration onto the design and
+        an on-lattice gate (matched-site fraction, fit residual, spacing,
+        per-site count/spread uniformity), and finally defect grouping. See
         :meth:`~picasso_workflow.util.AbstractModuleCollection.pick_origami`
-        for the full parameter contract.
+        for the full strategy and parameter contract.
 
         Parameters
         ----------
