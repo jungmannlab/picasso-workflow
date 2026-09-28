@@ -9,12 +9,16 @@ description = "Automation and documentation of DNA-PAINT analysis workflows"
 license = {'file' = "LICENSE"}
 requires-python = ">=3.10"
 dependencies = [
-    "matplotlib",
+    # Shared numeric/IO libs pinned to the stack-wide C41 harmonization ranges
+    # (picasso 0.11.3 is the anchor), so picasso-workflow resolves to the same
+    # numpy-2 stack as picasso / PycroFlow / monet when co-installed. These were
+    # previously unpinned.
+    "matplotlib>=3.10.7,<4",
     "seaborn",
-    "numpy",
-    "pandas",
-    "tables",
-    "numba",
+    "numpy>=2.2.6,<3",
+    "pandas>=2.3.3,<3",
+    "tables>=3.10.1,<4",
+    "numba>=0.62.1,<1",
     "openpyxl==3.1.2",
     "picassosr>=0.11.1",
     # GUI uses PyQt6 directly; keep in sync with picasso's constraint
@@ -39,7 +43,8 @@ dependencies = [
     "atlassian-python-api>=3.41,<5",
     "memory-profiler>=0.61.0",
     "loguru>=0.7.3",
-    "h5py",
+    # C41 anchor range (was unpinned).
+    "h5py>=3.15.1,<4",
     "memory_profiler",
     # "mpi4py",
     # "openmpi"
