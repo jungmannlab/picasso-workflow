@@ -18,7 +18,12 @@ from unittest.mock import patch, MagicMock
 import yaml
 
 from picasso_workflow.analyse import AutoPicassoError
-from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
+from picasso_workflow.workflow import (
+    WorkflowRunner,
+    AggregationWorkflowRunner,
+    _checkpoint_from_module_results,
+    _module_parameters_changed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -527,6 +532,293 @@ class Test_E_AggregationFailureTraceability(unittest.TestCase):
         awr.reporter_config = {"report_name": "r", "ConfluenceReporter": {}}
         awr._report_aggregation_abort([(0, "t", "/f", "d")], 1)
         awr.ci.update_page_content.assert_not_called()
+
+
+# --- checkpoint-aware resume -------------------------------------------------
+
+
+class Test_F_CheckpointResume(unittest.TestCase):
+    """Resume planning: frontier, checkpoint restore, param-change re-run."""
+
+    MODULES = [
+        ("load_dataset_localizations", {"filename": "in.hdf5"}),
+        ("dbscan", {"radius": 2, "min_density": 10}),
+        ("nneighbor", {"dims": ["x", "y"]}),
+        ("save_single_dataset", {"filename": "out.hdf5"}),
+    ]
+
+    def setUp(self):
+        self.results_folder = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
+        )
+
+    def _make_runner(self, workflow_modules, succeeded, warm=False):
+        """Build a runner simulating a resumed run.
+
+        succeeded: number of leading modules recorded as previously
+        succeeded (results entry + module folder). warm: keep the
+        MagicMock autopicasso attributes (in-memory state present).
+        """
+        reporter_config = {"report_name": "resumereport"}
+        analysis_config = {"result_location": self.results_folder}
+        wr = WorkflowRunner.config_from_dicts(
+            reporter_config, analysis_config, workflow_modules
+        )
+        # the class-level patch specs the mock to the constructor args;
+        # use a plain MagicMock whose attributes are freely accessible
+        wr.autopicasso = MagicMock()
+        if not warm:
+            # simulate the fresh AutoPicasso of a loaded runner
+            wr.autopicasso.locs = None
+            wr.autopicasso.movie = None
+            wr.autopicasso.identifications = None
+            wr.autopicasso.channel_locs = None
+        wr.results = {}
+        for i in range(succeeded):
+            module_name = workflow_modules[i][0]
+            module_id = f"{i:02d}_{module_name}"
+            folder = os.path.join(wr.result_folder, module_id)
+            os.makedirs(folder, exist_ok=True)
+            wr.results[module_id] = {"success": True, "folder": folder}
+        return wr
+
+    def _touch(self, *path):
+        fp = os.path.join(*path)
+        with open(fp, "w") as f:
+            f.write("x")
+        return fp
+
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_restore_from_checkpoint(self, mock_call_module):
+        """Cold resume restores the latest checkpoint and re-runs after it."""
+        mock_call_module.return_value = True
+        wr = self._make_runner(self.MODULES, succeeded=3)
+        # module 1 saved locs (save_locs / always_save auto-save)
+        ckpt_fp = self._touch(wr.results["01_dbscan"]["folder"], "locs.hdf5")
+        try:
+            success = wr.run()
+            self.assertTrue(success)
+            wr.autopicasso.load_checkpoint.assert_called_once()
+            descriptor = wr.autopicasso.load_checkpoint.call_args[0][0]
+            self.assertEqual(ckpt_fp, descriptor["single"]["filepath"])
+            self.assertEqual("01_dbscan", descriptor["module_id"])
+            # module 0 and 1 skipped, 2 and 3 executed
+            ran = [c.args[1] for c in mock_call_module.call_args_list]
+            self.assertEqual([2, 3], ran)
+        finally:
+            shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_no_checkpoint_reruns_from_scratch(self, mock_call_module):
+        """Cold resume without any saved locs re-runs everything."""
+        mock_call_module.return_value = True
+        wr = self._make_runner(self.MODULES, succeeded=3)
+        try:
+            wr.run()
+            wr.autopicasso.load_checkpoint.assert_not_called()
+            ran = [c.args[1] for c in mock_call_module.call_args_list]
+            self.assertEqual([0, 1, 2, 3], ran)
+        finally:
+            shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_all_succeeded_skips_everything(self, mock_call_module):
+        """A fully-successful previous run skips all modules, no restore."""
+        wr = self._make_runner(self.MODULES, succeeded=len(self.MODULES))
+        try:
+            success = wr.run()
+            self.assertTrue(success)
+            self.assertEqual(0, mock_call_module.call_count)
+            wr.autopicasso.load_checkpoint.assert_not_called()
+        finally:
+            shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_warm_memory_skips_to_frontier(self, mock_call_module):
+        """A live re-run (state in memory) skips straight to the frontier."""
+        mock_call_module.return_value = True
+        wr = self._make_runner(self.MODULES, succeeded=3, warm=True)
+        try:
+            wr.run()
+            wr.autopicasso.load_checkpoint.assert_not_called()
+            ran = [c.args[1] for c in mock_call_module.call_args_list]
+            self.assertEqual([3], ran)
+        finally:
+            shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_hard_memory_conflict_rejects_checkpoint(self, mock_call_module):
+        """A checkpoint stranding a memory-only dependency is rejected."""
+        mock_call_module.return_value = True
+        modules = [
+            ("load_dataset_movie", {"filename": "a.tiff"}),
+            ("identify", {"min_gradient": 5000}),
+            ("localize", {"fit_method": "lsq"}),
+        ]
+        wr = self._make_runner(modules, succeeded=2)
+        # a checkpoint at module 0 exists, but identify/localize need the
+        # memory-only raw_movie produced by module 0 -> must run scratch
+        self._touch(wr.results["00_load_dataset_movie"]["folder"], "locs.hdf5")
+        try:
+            wr.run()
+            wr.autopicasso.load_checkpoint.assert_not_called()
+            ran = [c.args[1] for c in mock_call_module.call_args_list]
+            self.assertEqual([0, 1, 2], ran)
+        finally:
+            shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_restore_failure_falls_back_to_scratch(self, mock_call_module):
+        """An unreadable checkpoint file downgrades to a scratch re-run."""
+        mock_call_module.return_value = True
+        wr = self._make_runner(self.MODULES, succeeded=3)
+        self._touch(wr.results["01_dbscan"]["folder"], "locs.hdf5")
+        wr.autopicasso.load_checkpoint.side_effect = OSError("corrupt")
+        try:
+            wr.run()
+            ran = [c.args[1] for c in mock_call_module.call_args_list]
+            self.assertEqual([0, 1, 2, 3], ran)
+        finally:
+            shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_changed_parameter_moves_frontier(self, mock_call_module):
+        """A changed argument on a succeeded module forces re-run from it."""
+        mock_call_module.return_value = True
+        wr = self._make_runner(self.MODULES, succeeded=len(self.MODULES))
+        ckpt_fp = self._touch(
+            wr.results["00_load_dataset_localizations"]["folder"],
+            "locs.hdf5",
+        )
+        previous = [(name, dict(params)) for name, params in self.MODULES]
+        previous[1] = ("dbscan", {"radius": 5, "min_density": 10})
+        wr._previous_workflow_modules = previous
+        try:
+            wr.run()
+            descriptor = wr.autopicasso.load_checkpoint.call_args[0][0]
+            self.assertEqual(ckpt_fp, descriptor["single"]["filepath"])
+            ran = [c.args[1] for c in mock_call_module.call_args_list]
+            self.assertEqual([1, 2, 3], ran)
+        finally:
+            shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_adopt_workflow_modules(self):
+        """Edited parameters are adopted; a changed sequence is not."""
+        wr = self._make_runner(self.MODULES, succeeded=0)
+        try:
+            edited = [(name, dict(params)) for name, params in self.MODULES]
+            edited[1] = ("dbscan", {"radius": 7, "min_density": 10})
+            wr.adopt_workflow_modules(edited)
+            self.assertEqual(edited, wr.workflow_modules)
+            self.assertEqual(
+                dict(self.MODULES[1][1]),
+                dict(wr._previous_workflow_modules[1][1]),
+            )
+            # sequence mismatch: keep the previous modules
+            wr.adopt_workflow_modules([("dbscan", {})])
+            self.assertEqual(edited, wr.workflow_modules)
+        finally:
+            shutil.rmtree(wr.result_folder)
+
+
+def test_module_parameters_changed_detects_value_change():
+    prev = {"radius": 2, "nested": {"a": [1, 2]}}
+    new = {"radius": 2, "nested": {"a": [1, 2]}}
+    assert not _module_parameters_changed(prev, new)
+    assert _module_parameters_changed(prev, {**new, "radius": 3})
+
+
+def test_module_parameters_changed_ignores_command_resolution():
+    """A resolved command (+ its _originalnocmd companion) equals the raw
+    command it came from."""
+    prev = {
+        "filepath": "/resolved/path.hdf5",
+        "filepath_originalnocmd": (
+            "$get_prior_result",
+            "results, 00_load, filepath",
+        ),
+    }
+    new = {"filepath": ("$get_prior_result", "results, 00_load, filepath")}
+    assert not _module_parameters_changed(prev, new)
+    changed = {
+        "filepath": ("$get_prior_result", "results, 01_other, filepath")
+    }
+    assert _module_parameters_changed(prev, changed)
+
+
+def test_checkpoint_detection_explicit_descriptor(tmp_path):
+    fp = tmp_path / "locs.hdf5"
+    fp.write_text("x")
+    results = {"checkpoint": {"single": {"filepath": str(fp)}}}
+    assert _checkpoint_from_module_results("any_module", results) == {
+        "single": {"filepath": str(fp)}
+    }
+    # missing file: rejected
+    results = {"checkpoint": {"single": {"filepath": str(tmp_path / "n")}}}
+    assert _checkpoint_from_module_results("any_module", results) is None
+
+
+def test_checkpoint_detection_legacy_channels(tmp_path):
+    fps = []
+    for tag in ("ch_a", "ch_b"):
+        fp = tmp_path / f"{tag}.hdf5"
+        fp.write_text("x")
+        fps.append(str(fp))
+    results = {"filepaths": fps}
+    ckpt = _checkpoint_from_module_results("save_datasets_aggregated", results)
+    assert ckpt == {"channels": {"filepaths": fps, "tags": ["ch_a", "ch_b"]}}
+    # recorded tags win over derived ones
+    results = {"filepaths": fps, "tags": ["t1", "t2"]}
+    ckpt = _checkpoint_from_module_results(
+        "load_datasets_to_aggregate", results
+    )
+    assert ckpt["channels"]["tags"] == ["t1", "t2"]
+
+
+def test_checkpoint_detection_legacy_filepath_is_name_gated(tmp_path):
+    fp = tmp_path / "out.hdf5"
+    fp.write_text("x")
+    results = {"filepath": str(fp)}
+    assert _checkpoint_from_module_results("save_single_dataset", results) == {
+        "single": {"filepath": str(fp)}
+    }
+    # the manual module records an unrelated filepath: not a checkpoint
+    assert _checkpoint_from_module_results("manual", results) is None
+
+
+def test_checkpoint_detection_folder_autosave(tmp_path):
+    folder = tmp_path / "03_dbscan"
+    folder.mkdir()
+    results = {"folder": str(folder)}
+    assert _checkpoint_from_module_results("dbscan", results) is None
+    (folder / "locs.hdf5").write_text("x")
+    assert _checkpoint_from_module_results("dbscan", results) == {
+        "single": {"filepath": str(folder / "locs.hdf5")}
+    }
 
 
 # --- dynamic single-dataset scheduling (atomic filesystem claims) -----------
