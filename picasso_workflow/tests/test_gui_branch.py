@@ -340,6 +340,146 @@ def test_add_into_branch(window):
     ]
 
 
+def test_empty_sections_render_add_placeholders(window):
+    """An empty branch/join section shows a '+ add ...' placeholder row."""
+    modules = [
+        ("align_channels", {}),
+        ("branch", {"branch_type": "explicit", "n_branches": 2}),
+        ("save_datasets_aggregated", {}),
+    ]
+    _, lw = _seed(window, modules)
+    # 3 top modules + 1 branch placeholder + 1 join placeholder = 5 rows
+    assert lw.count() == 5
+    placeholders = [
+        window._row_node(lw, r)
+        for r in range(lw.count())
+        if window._row_node(lw, r)["kind"] == "sub_add"
+    ]
+    sections = sorted(p["section"] for p in placeholders)
+    assert sections == ["branch", "join"]
+    assert all(p["top"] == 1 for p in placeholders)
+
+
+def _select_placeholder(win, lw, top, section):
+    for row in range(lw.count()):
+        node = win._row_node(lw, row)
+        if (
+            node is not None
+            and node["kind"] == "sub_add"
+            and node["top"] == top
+            and node["section"] == section
+        ):
+            lw.setCurrentRow(row)
+            return
+    raise AssertionError(f"placeholder not found: {top} {section}")
+
+
+def test_add_into_empty_branch_via_placeholder(window):
+    """Selecting the placeholder and adding builds up an empty branch inline."""
+    modules = [
+        ("align_channels", {}),
+        ("branch", {"branch_type": "explicit", "n_branches": 2}),
+        ("save_datasets_aggregated", {}),
+    ]
+    _, lw = _seed(window, modules)
+    _select_placeholder(window, lw, 1, "branch")
+    # Selecting a placeholder puts the editor in Add mode (not "Save module").
+    assert not window._editing_existing_module()
+    window.module_combobox.setCurrentText("nneighbor")
+    window.add_module()
+    assert _branch_module_names(modules) == ["nneighbor"]
+    # A second add lands after the first sub-module, not back at the front.
+    _select(window, lw, 1, "branch", 0)
+    window.module_combobox.setCurrentText("fit_csr")
+    window.add_module()
+    assert _branch_module_names(modules) == ["nneighbor", "fit_csr"]
+
+
+def test_add_into_empty_join_via_placeholder(window):
+    """The join placeholder adds the first join module inline."""
+    modules = [
+        ("align_channels", {}),
+        (
+            "branch",
+            {
+                "branch_type": "explicit",
+                "n_branches": 2,
+                "branch_modules": [("nneighbor", {})],
+            },
+        ),
+    ]
+    _, lw = _seed(window, modules)
+    _select_placeholder(window, lw, 1, "join")
+    window.module_combobox.setCurrentText("dummy_module")
+    window.add_module()
+    assert [s[0] for s in modules[1][1].get("join_modules", [])] == [
+        "dummy_module"
+    ]
+
+
+def test_placeholder_remove_and_move_are_noops(window):
+    """Remove / move on a placeholder must not touch the branch module."""
+    modules = [
+        ("align_channels", {}),
+        ("branch", {"branch_type": "explicit", "n_branches": 2}),
+        ("save_datasets_aggregated", {}),
+    ]
+    _, lw = _seed(window, modules)
+    _select_placeholder(window, lw, 1, "branch")
+    window.remove_selected()
+    window._move_selected(-1)
+    window._move_selected(1)
+    assert [n for n, _ in modules] == [
+        "align_channels",
+        "branch",
+        "save_datasets_aggregated",
+    ]
+
+
+def test_branch_form_hides_inline_managed_params(window):
+    """The branch parameter form omits branch_modules / join_modules."""
+    modules, lw = _seed(window)
+    _select(window, lw, 1)  # the branch module itself
+    assert "branch_modules" not in window.parameter_widgets
+    assert "join_modules" not in window.parameter_widgets
+    assert "parameter_command_executor" not in window.parameter_widgets
+    # ordinary branch params are still editable
+    assert "n_branches" in window.parameter_widgets
+
+
+def test_branch_type_is_dropdown_with_conditional_params(window):
+    """branch_type is a dropdown; runtime/explicit params toggle with it."""
+    from PyQt6 import QtWidgets as _Qtw
+
+    modules, lw = _seed(window)
+    _select(window, lw, 1)  # the branch module itself
+
+    bt = window.parameter_widgets["branch_type"]
+    assert bt.original_type == "options"
+    assert isinstance(bt.widget, _Qtw.QComboBox)
+    assert [bt.widget.itemText(i) for i in range(bt.widget.count())] == [
+        "explicit",
+        "runtime",
+    ]
+
+    def hidden(name):
+        return window.parameter_widgets[name].row_widget.isHidden()
+
+    # explicit: n_branches / branch_labels shown, runtime params hidden
+    bt.widget.setCurrentText("explicit")
+    assert not hidden("n_branches")
+    assert not hidden("branch_labels")
+    assert hidden("branch_over")
+    assert hidden("label_template")
+
+    # runtime: branch_over / label_template shown, explicit params hidden
+    bt.widget.setCurrentText("runtime")
+    assert not hidden("branch_over")
+    assert not hidden("label_template")
+    assert hidden("n_branches")
+    assert hidden("branch_labels")
+
+
 def test_editing_branch_module_preserves_submodules(window):
     """Editing the branch module's own params must not wipe its sub-modules."""
     modules, lw = _seed(window)

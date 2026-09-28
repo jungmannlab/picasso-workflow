@@ -2974,80 +2974,36 @@ class TestAnalyseModules(unittest.TestCase):
         )
 
     def branch(self):
-        """Test the branch module (screen and runtime types)."""
-        from picasso_workflow.outpost_modules import mask as maskmod
+        """Test the branch module (explicit and runtime types)."""
 
-        # --- screen type: two branches over a parameter grid ----------------
+        # --- runtime type: branch count + per-branch item from a list -------
         parameters = {
-            "branch_type": "screen",
-            "screen": {"val": [1, 2, 3], "#tags": ["a", "b", "c"]},
+            "branch_type": "runtime",
+            "branch_over": [1, 2, 3],
+            "label_template": "cell{n:02d}",
             "branch_modules": [("dummy_module", {})],
             "join_modules": [("dummy_module", {})],
         }
         parameters, results = self.ap.branch(0, parameters)
-        assert results["branch_type"] == "screen"
-        assert results["labels"] == ["a", "b", "c"]
+        assert results["branch_type"] == "runtime"
+        assert results["labels"] == ["cell00", "cell01", "cell02"]
         assert len(results["branches"]) == 3
-        assert results["branches"][0]["label"] == "a"
+        assert results["branches"][0]["label"] == "cell00"
         assert "00_dummy_module" in results["branches"][0]
         assert "00_dummy_module" in results["join"]
-        assert results["topology"]["type"] == "screen"
+        assert results["topology"]["type"] == "runtime"
         assert len(results["topology"]["branches"]) == 3
+        assert results["skipped"] == []
         # per-branch and join folders exist
         assert os.path.isdir(
             os.path.join(
-                self.results_folder, "00_branch", "a", "00_dummy_module"
+                self.results_folder, "00_branch", "cell00", "00_dummy_module"
             )
         )
         assert os.path.isdir(
             os.path.join(self.results_folder, "00_branch", "join")
         )
         shutil.rmtree(os.path.join(self.results_folder, "00_branch"))
-
-        # --- runtime type: one branch per mask component --------------------
-        # Build a trivial single-component CellMask and save it.
-        cell_mask = maskmod.CellMask()
-        cell_mask._pixelsize = 1
-        cell_mask._binsize = 1
-        cell_mask._upsample = 1
-        cell_mask._offset = (0.0, 0.0)
-        cell_mask._blursize = 1
-        cell_mask._threshold = 1 / 3
-        binary = np.ones((20, 20), dtype=bool)
-        cell_mask._initial_density = binary.astype(float)
-        cell_mask._binary_mask = binary
-        cell_mask._recalc_density_mask_from_binary()
-        fp_mask = os.path.join(self.results_folder, "test_mask.pkl")
-        cell_mask.save(fp_mask)
-
-        locs = np.rec.array(
-            [(0, 3.0, 3.0), (1, 5.0, 5.0), (2, 2.0, 8.0)],
-            dtype=[("frame", "u4"), ("x", "f4"), ("y", "f4")],
-        )
-        self.ap.channel_locs = [locs]
-        self.ap.channel_info = [[{"Pixelsize": 1}]]
-        self.ap.channel_tags = ["ch0"]
-
-        parameters = {
-            "branch_type": "runtime",
-            "split": {
-                "method": "mask_components",
-                "mask": fp_mask,
-                "label_template": "cell{n:02d}",
-            },
-            "branch_modules": [("dummy_module", {})],
-        }
-        parameters, results = self.ap.branch(1, parameters)
-        assert results["branch_type"] == "runtime"
-        assert results["labels"] == ["cell00"]
-        assert len(results["branches"]) == 1
-        assert "00_dummy_module" in results["branches"][0]
-        assert results["join"] == {}
-        # prefix channel_locs restored (not left as a branch subset)
-        assert len(self.ap.channel_locs[0]) == 3
-
-        os.remove(fp_mask)
-        shutil.rmtree(os.path.join(self.results_folder, "01_branch"))
 
         # --- explicit type: fixed n_branches with a per-branch override -----
         parameters = {
@@ -3062,7 +3018,7 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap._progress_callback = lambda frac, msg=None: progress.append(
             (frac, msg)
         )
-        parameters, results = self.ap.branch(2, parameters)
+        parameters, results = self.ap.branch(1, parameters)
         # restore the default (None) rather than deleting the attribute:
         # test_modules reuses one self.ap across every module test, so a
         # deleted _progress_callback would break later modules (e.g. identify).
@@ -3077,13 +3033,20 @@ class TestAnalyseModules(unittest.TestCase):
         assert fracs == sorted(fracs)
         assert any("a:" in (m or "") for _, m in progress)
         assert any("join:" in (m or "") for _, m in progress)
-        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+        shutil.rmtree(os.path.join(self.results_folder, "01_branch"))
 
         # $branch overrides resolve to the branch id's value
         resolved = analyse.AutoPicasso._resolve_branch_overrides(
             {"k": ("$branch", [10, 20, 30]), "s": 1}, 1
         )
         assert resolved == {"k": 20, "s": 1}
+
+        # $branch_item resolves to this branch's runtime item -- the whole
+        # item, or a key/index into it
+        item = {"nth": 7, "name": "x"}
+        assert analyse.AutoPicasso._resolve_branch_overrides(
+            {"a": ("$branch_item",), "b": ("$branch_item", "nth")}, 0, item
+        ) == {"a": item, "b": 7}
 
     def test_branch_streams_submodules_live(self):
         """A reporter with the live hooks gets one open_branch_page per branch
@@ -3156,6 +3119,35 @@ class TestAnalyseModules(unittest.TestCase):
         }
         self.ap.branch(2, parameters)
         assert calls == []  # opted-out reporter never streamed to
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_branch_skips_empty_branches(self):
+        """A sub-module raising SkipBranch drops that branch; the join and the
+        remaining branches proceed and the pipeline is not failed."""
+        from picasso_workflow.analyse import SkipBranch
+
+        def skipper(sub_idx, params, calling_module_dir=None, suffix=""):
+            if params.get("boom"):
+                raise SkipBranch("no data here")
+            return params, {"ok": True}
+
+        self.ap.skipper = skipper
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 3,
+            "branch_labels": ["a", "b", "c"],
+            "branch_modules": [
+                ("skipper", {"boom": ("$branch", [False, True, False])})
+            ],
+            "join_modules": [],
+        }
+        _, results = self.ap.branch(2, parameters)
+        # branch "b" is dropped; only a and c produce results
+        assert results["labels"] == ["a", "c"]
+        assert len(results["branches"]) == 2
+        assert [s["label"] for s in results["skipped"]] == ["b"]
+        assert results["topology"]["skipped"] == ["b"]
+        del self.ap.skipper
         shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
 
     def summarize_branches(self):

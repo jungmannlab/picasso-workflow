@@ -1634,34 +1634,35 @@ class AutoPicasso(util.AbstractModuleCollection):
         """Fan out into per-branch sub-workflows, then optionally re-join.
 
         See :meth:`picasso_workflow.util.AbstractModuleCollection.branch` for
-        the full parameter contract. Supports two ``branch_type``s:
-        ``"runtime"`` (one branch per connected component of a prior mask) and
-        ``"screen"`` (one branch per row of a config-time parameter grid).
+        the full parameter contract. Two ``branch_type``s: ``"explicit"`` (a
+        fixed ``n_branches`` with per-branch ``("$branch", [...])`` overrides)
+        and ``"runtime"`` (the branch count *and* per-branch item come from a
+        ``branch_over`` value/command that resolves to a list at run time; each
+        branch's sub-modules read their item via the ``("$branch_item", ...)``
+        token). A branch whose sub-module raises :class:`SkipBranch` (e.g. the
+        requested cell does not exist) is dropped: the join and the overall
+        pipeline proceed with the remaining branches.
         """
         pce = parameters.get("parameter_command_executor", None)
         branch_type = parameters["branch_type"]
         branch_modules = parameters["branch_modules"]
         join_modules = parameters.get("join_modules") or []
 
-        # 1. Determine the branches: a list of (label, tile_map, branch_state).
-        #    tile_map is the per-branch $$map dict for screens (else None);
-        #    branch_state is the per-branch analyzer state for runtime splits
-        #    (else None).
+        # 1. Determine the branches: a list of (label, branch_item). The item
+        #    is None for an explicit branch (per-branch differences come from
+        #    ("$branch", [...]) overrides) and this branch's element of the
+        #    resolved branch_over list for a runtime branch.
         if branch_type == "explicit":
             splits = self._make_explicit_branches(parameters)
-        elif branch_type == "screen":
-            splits = self._make_screen_branches(parameters)
         elif branch_type == "runtime":
             splits = self._make_runtime_branches(i, parameters, pce)
         else:
             raise ValueError(
                 f"Unknown branch_type '{branch_type}'. "
-                "Expected 'explicit', 'runtime' or 'screen'."
+                "Expected 'explicit' or 'runtime'."
             )
 
-        labels = [branch_label for branch_label, _, _ in splits]
         results["branch_type"] = branch_type
-        results["labels"] = labels
         if not splits:
             logger.warning(
                 f"branch (module {i:02d}): no branches produced "
@@ -1687,7 +1688,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if nested:
             groups = [
                 (label, "branch", [name for name, _ in branch_modules])
-                for label, _, _ in splits
+                for label, _ in splits
             ]
             if join_modules:
                 groups.append(
@@ -1750,13 +1751,9 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         branch_results = []
         topology_branches = []
-        for branch_id, (branch_label, tile_map, branch_state) in enumerate(
-            splits
-        ):
+        skipped = []
+        for branch_id, (branch_label, branch_item) in enumerate(splits):
             util.BranchStateManager.restore(self, prefix_snapshot)
-            if branch_state is not None:
-                for attr, value in branch_state.items():
-                    setattr(self, attr, value)
 
             branch_dir = os.path.join(results["folder"], branch_label)
             os.makedirs(branch_dir, exist_ok=True)
@@ -1783,6 +1780,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # $get_previous_module_result / $get_prior_result.
             branch_local = {}
             executed = []
+            skip_reason = None
             for sub_idx, (module_name, module_parameters) in enumerate(
                 branch_modules
             ):
@@ -1791,7 +1789,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     module_parameters,
                     pce,
                     sub_idx,
-                    tile_map,
+                    branch_item,
                     branch_local,
                     branch_id,
                 )
@@ -1799,6 +1797,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                     sub_results = self._run_branch_submodule(
                         module_name, sub_idx, sub_params, branch_dir
                     )
+                except SkipBranch as e:
+                    # This branch has no data to analyse (e.g. the requested
+                    # cell does not exist). Drop it and let the join / overall
+                    # pipeline continue with the remaining branches. Advance
+                    # the remaining sub-module units so progress still finishes.
+                    skip_reason = str(e) or module_name
+                    _branch_step_end(branch_id, sub_idx, "skipped")
+                    for rem in range(sub_idx + 1, len(branch_modules)):
+                        if nested:
+                            progress_mgr.branch_submodule_end(
+                                module_index, branch_id, rem, "skipped"
+                            )
+                        done_units[0] += 1
+                    break
                 except BaseException:
                     _branch_step_end(branch_id, sub_idx, "failed")
                     raise
@@ -1821,12 +1833,23 @@ class AutoPicasso(util.AbstractModuleCollection):
                             f"live branch report: {key} failed: {e}"
                         )
                 _branch_step_end(branch_id, sub_idx, "done")
+            if skip_reason is not None:
+                skipped.append({"label": branch_label, "reason": skip_reason})
+                logger.info(
+                    f"branch (module {i:02d}): skipped branch "
+                    f"'{branch_label}' ({skip_reason})."
+                )
+                continue
             branch_results.append(one_branch)
             topology_branches.append(
                 {"label": branch_label, "modules": executed}
             )
 
         results["branches"] = branch_results
+        # labels / skipped reflect only the branches that actually produced
+        # results, so the join's ("$all") pooling never sees a dropped branch.
+        results["labels"] = [b["label"] for b in branch_results]
+        results["skipped"] = skipped
 
         # 3. Restore the prefix state, then run the join/fan-in modules with
         #    the per-branch results pooled back together.
@@ -1875,10 +1898,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["topology"] = {
             "type": branch_type,
             "prefix_index": i,
-            "labels": labels,
+            "labels": results["labels"],
             "branch_modules": [name for name, _ in branch_modules],
             "join_modules": [name for name, _ in join_modules],
             "branches": topology_branches,
+            "skipped": [s["label"] for s in skipped],
         }
 
         logger.info(
@@ -1887,72 +1911,47 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         return parameters, results
 
-    def _make_screen_branches(self, parameters):
-        """Build config-time screen branches from a parameter grid.
-
-        Returns a list of ``(label, tile_map, None)``; ``tile_map`` is the
-        per-branch ``$$map`` lookup dict (one row of the grid).
-        """
-        screen = parameters["screen"]
-        tags = screen.get("#tags")
-        columns = [v for k, v in screen.items()]
-        if not columns:
-            return []
-        ntiles = len(columns[0])
-        splits = []
-        for j in range(ntiles):
-            tile_map = {k: v[j] for k, v in screen.items()}
-            branch_label = (
-                str(tags[j]) if tags is not None else f"screen{j:02d}"
-            )
-            splits.append((branch_label, tile_map, None))
-        return splits
-
     def _make_runtime_branches(self, i, parameters, pce):
-        """Build runtime branches by splitting a prior mask into components.
+        """Build runtime branches from a list resolved at run time.
 
-        Returns a list of ``(label, None, branch_state)``; ``branch_state``
-        injects the per-cell ``channel_locs`` (prefix locs filtered to the
-        component).
+        ``branch_over`` is a value (or ``$``/``$$map`` command) that resolves
+        to a list ``L``; there is one branch per element, and each branch's
+        sub-modules read their element ``L[branch_id]`` via the
+        ``("$branch_item", ...)`` token. Labels come from ``branch_labels``,
+        else ``label_template`` (``{n}`` / ``{item}``), else ``branch{n:02d}``.
+
+        Returns a list of ``(label, item)``.
         """
-        split = parameters["split"]
-        method = split.get("method", "mask_components")
-        if method != "mask_components":
-            raise NotImplementedError(
-                f"branch split method '{method}' is not supported "
-                "(only 'mask_components')."
-            )
-
-        fp_mask = split["mask"]
-        if pce is not None and isinstance(fp_mask, (tuple, list)):
-            fp_mask = pce.run(
-                {"mask": copy.deepcopy(fp_mask)}, curr_rootidx=i
-            )["mask"]
-
-        cell_mask = outpost_modules.mask.CellMask.load(fp_mask)
-        components = cell_mask.component_masks(
-            min_area_um2=split.get("min_area_um2", 0.0)
-        )
-        if (max_branches := split.get("max_branches")) is not None:
-            components = components[:max_branches]
-
-        label_template = split.get("label_template", "cell{n:02d}")
-        prefix_channel_locs = self.channel_locs
-        if prefix_channel_locs is None:
+        over = parameters.get("branch_over")
+        if over is None:
             raise AutoPicassoError(
-                "branch runtime split requires channel_locs; run "
-                "aggregation/mask modules before branching."
+                "branch_type 'runtime' needs 'branch_over' (a value or "
+                "command resolving to a list)."
+            )
+        if pce is not None:
+            over = pce.run(
+                {"branch_over": copy.deepcopy(over)}, curr_rootidx=i
+            )["branch_over"]
+        if not isinstance(over, (list, tuple)):
+            raise AutoPicassoError(
+                "branch_type 'runtime': 'branch_over' resolved to "
+                f"{type(over).__name__}, expected a list."
             )
 
+        labels = parameters.get("branch_labels")
+        label_template = parameters.get("label_template")
         splits = []
-        for n, component_mask in enumerate(components):
-            branch_label = label_template.format(n=n)
-            branch_channel_locs = [
-                component_mask.apply_to_locs(locs)
-                for locs in prefix_channel_locs
-            ]
-            branch_state = {"channel_locs": branch_channel_locs}
-            splits.append((branch_label, None, branch_state))
+        for n, item in enumerate(over):
+            if labels is not None and n < len(labels):
+                label = str(labels[n])
+            elif label_template is not None:
+                try:
+                    label = label_template.format(n=n, item=item)
+                except (KeyError, IndexError, ValueError):
+                    label = f"branch{n:02d}"
+            else:
+                label = f"branch{n:02d}"
+            splits.append((label, item))
         return splits
 
     def _make_explicit_branches(self, parameters):
@@ -1962,8 +1961,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         ``branch_labels``); each branch runs the same modules and differs only
         through ``("$branch", [v0, v1, ...])`` per-branch parameter overrides
         (e.g. ``create_mask2`` selecting the ``branch_id``-th largest cell).
-        Returns a list of ``(label, None, None)`` -- each branch starts from
-        the shared-prefix state.
+        Returns a list of ``(label, None)`` -- each branch starts from the
+        shared-prefix state and carries no runtime item.
         """
         labels = parameters.get("branch_labels")
         n = parameters.get("n_branches")
@@ -1980,27 +1979,50 @@ class AutoPicasso(util.AbstractModuleCollection):
             label = (
                 str(labels[j])
                 if labels is not None and j < len(labels)
-                else f"cell{j:02d}"
+                else f"branch{j:02d}"
             )
-            splits.append((label, None, None))
+            splits.append((label, None))
         return splits
 
     @staticmethod
-    def _resolve_branch_overrides(obj, branch_id):
-        """Replace ``("$branch", [v0, v1, ...])`` with ``values[branch_id]``.
+    def _resolve_branch_overrides(obj, branch_id, branch_item=None):
+        """Resolve per-branch markers to this branch's value.
 
-        Walks a (possibly nested) parameter structure and resolves per-branch
-        override markers to this branch's value. If the branch index is past
-        the end of the list, the last value is reused. Runs *before* the ``$``
-        command resolution so the resolved value is a plain value (or a further
-        ``$``/``$$`` command to resolve next).
+        Two markers are handled while walking a (possibly nested) parameter
+        structure:
+
+        - ``("$branch", [v0, v1, ...])`` -> ``values[branch_id]`` (the last
+          value is reused if ``branch_id`` is past the end); used by explicit
+          branches.
+        - ``("$branch_item",)`` -> this branch's runtime item; ``("$branch_item",
+          key)`` -> ``item[key]``; the bare string ``"$branch_item"`` is also
+          accepted. Used by runtime branches to read their element of the
+          resolved ``branch_over`` list.
+
+        Runs *before* the ``$`` command resolution so the result is a plain
+        value (or a further ``$``/``$$`` command to resolve next).
         """
+        if obj == "$branch_item":
+            return branch_item
         if isinstance(obj, dict):
             return {
-                k: AutoPicasso._resolve_branch_overrides(v, branch_id)
+                k: AutoPicasso._resolve_branch_overrides(
+                    v, branch_id, branch_item
+                )
                 for k, v in obj.items()
             }
         if isinstance(obj, (tuple, list)):
+            if (
+                isinstance(obj, tuple)
+                and len(obj) >= 1
+                and obj[0] == "$branch_item"
+            ):
+                if len(obj) >= 2 and branch_item is not None:
+                    try:
+                        return branch_item[obj[1]]
+                    except (KeyError, IndexError, TypeError):
+                        return branch_item
+                return branch_item
             if (
                 isinstance(obj, tuple)
                 and len(obj) >= 2
@@ -2012,7 +2034,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 idx = branch_id if branch_id < len(values) else -1
                 return values[idx]
             resolved = [
-                AutoPicasso._resolve_branch_overrides(v, branch_id)
+                AutoPicasso._resolve_branch_overrides(
+                    v, branch_id, branch_item
+                )
                 for v in obj
             ]
             return tuple(resolved) if isinstance(obj, tuple) else resolved
@@ -2023,21 +2047,19 @@ class AutoPicasso(util.AbstractModuleCollection):
         module_parameters,
         pce,
         sub_idx,
-        tile_map,
+        branch_item,
         branch_local,
         branch_id,
     ):
         """Resolve a branch sub-module's parameters.
 
-        Resolution happens in up to three passes:
+        Resolution happens in two passes:
 
-        1. Per-branch overrides: ``("$branch", [...])`` -> this branch's value
-           (see :meth:`_resolve_branch_overrides`). Run first so the result is
-           a plain value or a further command.
-        2. For screens, resolve ``$$map`` commands from the branch's row of the
-           grid (``tile_map``). (In aggregation workflows the ``$$`` commands
-           are already resolved one level up, so ``tile_map`` is ``None``.)
-        3. Resolve ordinary ``$`` commands against a *branch-local* results
+        1. Per-branch markers: ``("$branch", [...])`` -> this branch's value
+           and ``("$branch_item", ...)`` -> this branch's runtime item (see
+           :meth:`_resolve_branch_overrides`). Run first so the result is a
+           plain value or a further command.
+        2. Resolve ordinary ``$`` commands against a *branch-local* results
            view: ``branch_local`` (this branch's completed sub-modules, keyed
            ``NN_name``) shadowing the trunk runner's results. ``curr_rootidx``
            is the sub-module index, so ``$get_previous_module_result`` refers
@@ -2045,13 +2067,7 @@ class AutoPicasso(util.AbstractModuleCollection):
            ``$get_prior_result`` keys can still reach shared-prefix modules.
         """
         params = copy.deepcopy(module_parameters)
-        params = self._resolve_branch_overrides(params, branch_id)
-        if tile_map is not None:
-            parent = pce.parent_object if pce is not None else None
-            tiler_pce = util.ParameterCommandExecutor(
-                parent, dict(tile_map), command_sign="$$"
-            )
-            params = tiler_pce.run(params)
+        params = self._resolve_branch_overrides(params, branch_id, branch_item)
         if pce is not None:
             trunk_results = getattr(pce.parent_object, "results", {})
             proxy = util.ResultsProxy.merged(branch_local, trunk_results)
@@ -13111,6 +13127,16 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             Optional keys:
 
+            ``nth_largest_cell`` : int
+                With ``select_cell``, keep the ``nth`` largest connected
+                component (1 = largest). Default keeps the largest.
+            ``skip_if_missing_cell`` : bool
+                With ``select_cell`` + ``nth_largest_cell``, raise
+                :class:`SkipBranch` when the requested cell does not exist
+                (fewer components than ``nth_largest_cell``) instead of reusing
+                the smallest. Lets a ``branch`` over-request cells and drop the
+                empty branches. Default False.
+
             ``fp_combined_locs`` : str
                 Filepath to the locs combined in the ``combine_channels``
                 module. If None or ``''``, the loaded ``channel_locs`` is used.
@@ -13185,7 +13211,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # nth_largest_cell is 1-based (1 = largest); filter_mask
                 # uses a 0-based rank internally.
                 kwargs["nth_largest"] = nth - 1
-            cell_mask.filter_mask(**kwargs)
+            if parameters.get("skip_if_missing_cell"):
+                # Used inside a ``branch``: turn "requested cell absent" into a
+                # SkipBranch so this branch is dropped instead of failing (or
+                # silently reusing another cell).
+                kwargs["raise_if_missing"] = True
+                try:
+                    cell_mask.filter_mask(**kwargs)
+                except IndexError as e:
+                    raise SkipBranch(f"create_mask2: {e}")
+            else:
+                cell_mask.filter_mask(**kwargs)
         if dilate_nm := parameters.get("dilate_nm"):
             cell_mask.dilate(dilate_nm)
         if parameters.get("apply_to_locs"):
@@ -16330,3 +16366,16 @@ class ManualInputLackingError(AutoPicassoError):
 
 class PicassoConfigError(AutoPicassoError):
     """Raised when the picasso configuration is missing or invalid."""
+
+
+class SkipBranch(Exception):
+    """Signal that the current ``branch`` sub-workflow has no data to run.
+
+    A branch sub-module raises this (rather than a hard error) when the branch
+    is legitimately empty -- e.g. ``create_mask2`` was asked for a cell that
+    does not exist. The :meth:`AutoPicasso.branch` module catches it, drops the
+    branch (so the join and the overall pipeline proceed with the remaining
+    branches) and records it under ``results["skipped"]``. It deliberately does
+    *not* subclass :class:`AutoPicassoError`, so genuine analysis errors are
+    never mistaken for an empty branch.
+    """

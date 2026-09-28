@@ -4839,6 +4839,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 1,
                 "required": True,
             },
+            "skip_if_missing_cell": {
+                "type": "bool",
+                "description": "If select_cell + nth_largest_cell: when the \
+                    requested cell does not exist (fewer cells than \
+                    nth_largest_cell), skip this branch instead of reusing the \
+                    smallest cell. Use inside a branch that over-requests \
+                    cells.",
+                "default": False,
+                "required": False,
+            },
             "fill_holes": {
                 "type": "bool",
                 "description": "Whether to fill holes in the cell mask",
@@ -7253,9 +7263,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         Runs a shared prefix once, then runs ``branch_modules`` once per
         branch and finally ``join_modules`` once with the per-branch results
-        pooled back together. ``branch_type="runtime"`` makes one branch per
-        connected component of a prior mask (one cell each); ``"screen"``
-        makes one branch per row of a config-time parameter grid.
+        pooled back together. ``branch_type="explicit"`` runs a fixed
+        ``n_branches`` (per-branch differences via ("$branch", [...])
+        overrides); ``"runtime"`` runs one branch per element of the list that
+        ``branch_over`` resolves to at run time, exposing each element to the
+        branch via the ("$branch_item", ...) token.
 
         Parameters
         ----------
@@ -7264,19 +7276,22 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters : dict
             with required keys:
                 branch_type : str
-                    "runtime" (split a prior mask into cells) or "screen"
-                    (one branch per parameter-grid row).
+                    "explicit" (fixed n_branches) or "runtime" (count from a
+                    resolved list).
                 branch_modules : list of tuples
                     (module_name, module_parameters) run once per branch.
             with keys required by branch_type:
-                split : dict
-                    for "runtime": {"method": "mask_components", "mask": <fp
-                    or command>, "min_area_um2": float, "max_branches": int,
-                    "label_template": str}
-                screen : dict
-                    for "screen": equal-length lists keyed by the $$map names
-                    used in branch_modules; optional "#tags" gives labels.
+                n_branches : int
+                    for "explicit": the number of branches.
+                branch_over : value or command
+                    for "runtime": resolves to a list L; one branch per
+                    element; each branch reads L[branch_id] via
+                    ("$branch_item", ...).
             with optional keys:
+                branch_labels : list
+                    explicit names for the branches.
+                label_template : str
+                    for "runtime": label format with {n} / {item}.
                 join_modules : list of tuples
                     (module_name, module_parameters) run once after all
                     branches; may pool per-branch results via
@@ -7302,10 +7317,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "branch_type": {
                 "type": "str",
+                "options": ["explicit", "runtime"],
+                "default": "explicit",
                 "description": (
                     'Either "explicit" (fixed n_branches with per-branch '
-                    '("$branch",[...]) overrides), "runtime" (one branch per '
-                    'mask component) or "screen" (one branch per grid row).'
+                    '("$branch",[...]) overrides) or "runtime" (one branch per '
+                    "element of the list branch_over resolves to)."
                 ),
                 "required": True,
             },
@@ -7318,6 +7335,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 ),
                 "required": False,
                 "min": 1,
+                "visible_if": {"branch_type": ["explicit"]},
             },
             "branch_labels": {
                 "type": "list",
@@ -7326,6 +7344,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     '"explicit"), e.g. ["cell0", "cell1", "cell2"].'
                 ),
                 "required": False,
+                "visible_if": {"branch_type": ["explicit"]},
             },
             "branch_modules": {
                 "type": "list",
@@ -7335,23 +7354,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 ),
                 "required": True,
             },
-            "split": {
-                "type": "dict",
+            "branch_over": {
+                "type": "list",
                 "description": (
-                    'Runtime split spec (branch_type="runtime"): method '
-                    '("mask_components"), mask (filepath or command), '
-                    "min_area_um2, max_branches, label_template."
+                    'For branch_type="runtime": a value or command (build one '
+                    "with cmd) that resolves to a list at run time. The list "
+                    "length sets the number of branches; each branch reads its "
+                    'element via ("$branch_item",) in a sub-module parameter.'
                 ),
                 "required": False,
+                "visible_if": {"branch_type": ["runtime"]},
             },
-            "screen": {
-                "type": "dict",
+            "label_template": {
+                "type": "str",
                 "description": (
-                    'Parameter grid (branch_type="screen"): equal-length '
-                    "lists keyed by the $$map names used in branch_modules; "
-                    'optional "#tags" provides the branch labels.'
+                    'For branch_type="runtime": optional label format string, '
+                    'e.g. "cell{n:02d}" ({n} = branch index, {item} = the '
+                    "resolved element)."
                 ),
                 "required": False,
+                "visible_if": {"branch_type": ["runtime"]},
             },
             "join_modules": {
                 "type": "list",
@@ -7390,7 +7412,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "branch_type": {
                 "type": "str",
-                "description": 'The branch type ("runtime" or "screen").',
+                "description": 'The branch type ("explicit" or "runtime").',
             },
             "labels": {
                 "type": "list",
@@ -9399,7 +9421,13 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         layout.addWidget(QtWidgets.QLabel("Command type:"))
         self.command_combo = QtWidgets.QComboBox()
         self.command_combo.addItems(
-            ["map", "index", "Previous Module Result", "Prior Result"]
+            [
+                "map",
+                "index",
+                "Previous Module Result",
+                "Prior Result",
+                "Branch item",
+            ]
         )  # , "sum", "max", "min"])
         self.command_combo.setItemDelegate(ToolTipDelegate(self.command_combo))
         self.command_combo.currentIndexChanged.connect(
@@ -9415,6 +9443,8 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             "immediately before this one.",
             3: "Prior Result: reuse a result of any earlier module, or "
             "collect it across all single-dataset runs as a list.",
+            4: "Branch item: inside a runtime branch, insert this branch's "
+            "element of the branch_over list.",
         }
         _cmd_model = self.command_combo.model()
         for _i, _tip in _cmd_tips.items():
@@ -9554,6 +9584,20 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         )
         self.index_spin.valueChanged.connect(self._on_index_spin)
 
+        # Branch-item command widgets (runtime branches).
+        self.branch_item_label = QtWidgets.QLabel(
+            "Key/index into the branch item (optional):"
+        )
+        self.branch_item_key = QtWidgets.QLineEdit()
+        self.branch_item_key.setPlaceholderText(
+            "empty = whole item; else a dict key or list index"
+        )
+        self.branch_item_key.setToolTip(
+            "Leave empty to use this branch's whole item. Give a dict key or "
+            "a list index to read one field of it."
+        )
+        self.branch_item_key.textChanged.connect(self._refresh_command)
+
         layout.addWidget(QtWidgets.QLabel("Assembled Command:"))
         self.command_result = QtWidgets.QLineEdit()
         layout.addSpacing(10)
@@ -9640,6 +9684,20 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         command type and timing.
         """
         val = self.current_value
+        # $branch_item is a per-branch marker (not a $/$$ timing command) and
+        # may be a length-1 tuple, so handle it before the generic parse.
+        if (
+            isinstance(val, tuple)
+            and len(val) >= 1
+            and val[0] == "$branch_item"
+        ):
+            self._select_command("Branch item")
+            if len(val) >= 2:
+                self.branch_item_key.blockSignals(True)
+                self.branch_item_key.setText(str(val[1]))
+                self.branch_item_key.blockSignals(False)
+            self._refresh_command()
+            return
         if not (
             isinstance(val, tuple)
             and len(val) >= 2
@@ -9906,6 +9964,9 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             # Populate results for previous module
             if self.current_module_index > 0:
                 self._on_module_selected(self.current_module_index - 1)
+        elif command_type == "Branch item":
+            self.dynamic_layout.addWidget(self.branch_item_label)
+            self.dynamic_layout.addWidget(self.branch_item_key)
         # For sum, max, min commands, also show module/result selection
         elif command_type in ["sum", "max", "min"]:
             self.dynamic_layout.addWidget(self.module_label)
@@ -10012,6 +10073,18 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             if self.param_name
             else "this parameter"
         )
+        if command_type == "Branch item":
+            self.help_label.setText(
+                "<b>Branch item</b> inserts, for each branch of a "
+                '<code>branch_type="runtime"</code> branch, that branch\'s '
+                "element of the <code>branch_over</code> list. Leave the key "
+                "empty for the whole item, or give a dict key / list index to "
+                "read one field.<br><br>Example: "
+                "<code>('$branch_item',)</code> or "
+                "<code>('$branch_item', 'nth')</code><br>"
+                "Timing does not apply: it is resolved per branch."
+            )
+            return
         if command_type == "map":
             body = (
                 f"<b>Map</b> gives each channel its own value for {target}, "
@@ -10199,6 +10272,18 @@ class ParameterCmdDialog(QtWidgets.QDialog):
                 mod_str = ""
 
             command_string = f"('{timing_cmd}get_previous_module_result{mod_str}', '{result_name}')"
+        elif command_type == "Branch item":
+            # $branch_item is resolved by the branch module (per branch),
+            # independent of the $ / $$ timing, so it is not prefixed with one.
+            key = self.branch_item_key.text().strip()
+            if not key:
+                command_string = "('$branch_item',)"
+            else:
+                try:
+                    int(key)
+                    command_string = f"('$branch_item', {key})"
+                except ValueError:
+                    command_string = f"('$branch_item', '{key}')"
         return command_string
 
 
@@ -14072,7 +14157,7 @@ class Window(QtWidgets.QMainWindow):
         # branch's section (after the selected sub-module) instead of at the
         # top level.
         sel_node = self._selected_node(list_widget)
-        if sel_node is not None and sel_node.get("kind") == "sub":
+        if sel_node is not None and sel_node.get("kind") in ("sub", "sub_add"):
             self._add_into_branch(
                 list_widget, modules, sel_node, module_name, param_values, tab
             )
@@ -14284,6 +14369,24 @@ class Window(QtWidgets.QMainWindow):
                             },
                         )
                         list_widget.addItem(sitem)
+                    if not submods:
+                        # Placeholder for an empty section so it can be built
+                        # up inline: selecting this row and adding a module
+                        # inserts the first sub-module here (sub=-1 -> at 0).
+                        label = f"        {idx:02d}.{tag}    + add {section} "
+                        label += "module"
+                        pitem = QtWidgets.QListWidgetItem(label)
+                        pitem.setData(
+                            role,
+                            {
+                                "kind": "sub_add",
+                                "top": idx,
+                                "section": section,
+                                "sub": -1,
+                            },
+                        )
+                        pitem.setForeground(QtGui.QColor("gray"))
+                        list_widget.addItem(pitem)
         list_widget.blockSignals(was_blocked)
 
     def _row_node(self, list_widget, row):
@@ -14374,6 +14477,18 @@ class Window(QtWidgets.QMainWindow):
         # Resolve the selected row to a top-level module index and, if it is a
         # branch sub-row, to that sub-module within the branch.
         node = self._row_node(list_widget, current_row)
+
+        # A branch "+ add ... module" placeholder is an insertion affordance,
+        # not an editable item: put the editor in Add mode (so the action
+        # button adds into that branch section) and leave the row selected.
+        if node is not None and node.get("kind") == "sub_add":
+            self.editing_workflow_index = -1
+            self.editing_workflow_tab = -1
+            self.editing_workflow_subnode = None
+            self._clear_branch_context()
+            self._refresh_module_palette()
+            return
+
         top_index = node["top"] if node is not None else current_row
 
         modules = None
@@ -15028,6 +15143,9 @@ class Window(QtWidgets.QMainWindow):
             return
 
         node = self._selected_node(list_widget)
+        # A branch "+ add ..." placeholder is not a real module.
+        if node is not None and node.get("kind") == "sub_add":
+            return
         # Remove a branch sub-module from its section.
         if node is not None and node.get("kind") == "sub":
             self._remove_from_branch(list_widget, modules, node, tabname)
@@ -15044,7 +15162,11 @@ class Window(QtWidgets.QMainWindow):
     def _add_into_branch(
         self, list_widget, modules, node, module_name, param_values, tabname
     ):
-        """Insert a new module into a branch's section after the selected sub."""
+        """Insert a new module into a branch's section after the selected sub.
+
+        ``node`` may be a ``"sub_add"`` placeholder (``sub == -1``), in which
+        case the module becomes the section's first sub-module.
+        """
         top = node["top"]
         section = node["section"]
         key = "branch_modules" if section == "branch" else "join_modules"
@@ -15233,6 +15355,9 @@ class Window(QtWidgets.QMainWindow):
 
         node = self._selected_node(list_widget)
         if node is None:
+            return
+        # A branch "+ add ..." placeholder is not a real module.
+        if node.get("kind") == "sub_add":
             return
 
         # Flush pending edits before restructuring the data model.
@@ -18207,12 +18332,32 @@ class Window(QtWidgets.QMainWindow):
             desc_fun = getattr(self.module_descriptor, text)
             module_params, _ = desc_fun()
 
+            # The branch module's sub-workflows (branch_modules / join_modules)
+            # are built as indented rows in the workflow list, not typed as raw
+            # argument text; hide them from the parameter form. The runner
+            # injects parameter_command_executor, so it is never user-set.
+            if text == "branch":
+                module_params = {
+                    k: v
+                    for k, v in module_params.items()
+                    if k
+                    not in (
+                        "branch_modules",
+                        "join_modules",
+                        "parameter_command_executor",
+                    )
+                }
+
             # Clear existing parameter widgets
             self._clear_parameter_layout()
             self.parameter_widgets.clear()
 
             # Populate new parameter widgets
             self._populate_parameter_widgets(module_params)
+
+            # branch: sub-workflows are edited inline as indented rows.
+            if text == "branch":
+                self._add_branch_inline_hint()
 
             # pick_origami: offer an interactive phase-space preview to set
             # the localizations-per-frame window from the geometry + kinetics.
@@ -18231,6 +18376,17 @@ class Window(QtWidgets.QMainWindow):
         )
         btn.clicked.connect(self._open_phasespace_preview)
         self.module_parameters_layout.addWidget(btn)
+
+    def _add_branch_inline_hint(self):
+        """Note that branch/join sub-modules are edited as indented rows."""
+        hint = QtWidgets.QLabel(
+            "Branch and join sub-modules are edited as indented rows in the "
+            "workflow list below: select a '+ add ... module' row and pick a "
+            "module to add it, just like a top-level module."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray; font-style: italic;")
+        self.module_parameters_layout.addWidget(hint)
 
     def _current_module_parameter_values(self):
         """Collect the current parameter values from the entry widgets."""

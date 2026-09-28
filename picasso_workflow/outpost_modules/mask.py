@@ -246,7 +246,9 @@ class CellMask:
         area = area / 1e6  # convert from nm^2 to um^2
         return area
 
-    def filter_mask(self, nth_largest=0, fill_holes=True):
+    def filter_mask(
+        self, nth_largest=0, fill_holes=True, raise_if_missing=False
+    ):
         """Select the nth-largest connected area and fill its holes.
 
         Parameters
@@ -256,6 +258,13 @@ class CellMask:
             etc. Default is 0.
         fill_holes : bool, optional
             Whether to fill holes in the mask. Default is True.
+        raise_if_missing : bool, optional
+            When True, raise :class:`IndexError` if the requested component
+            does not exist (fewer than ``nth_largest + 1`` components, or none
+            at all) instead of clamping to the smallest available / returning
+            an empty mask. The ``branch`` module uses this to skip a branch
+            whose cell is absent. Default False (clamp, the historical
+            behaviour).
         """
         binary_mask = self.binary_mask
         # print('binary mask shape in', binary_mask.shape)
@@ -265,6 +274,10 @@ class CellMask:
         feature, counts = np.unique(labeled_nobkg, return_counts=True)
         # sizes = np.bincount(labeled_nobkg)
         if feature.size == 0:
+            if raise_if_missing:
+                raise IndexError(
+                    "filter_mask: no connected components in the mask."
+                )
             # No connected components (e.g. the mask was eroded to nothing
             # during smoothing). Keep the empty mask rather than crashing.
             logger.warning(
@@ -275,6 +288,11 @@ class CellMask:
             self._recalc_density_mask_from_binary()
             return
         if nth_largest >= feature.size:
+            if raise_if_missing:
+                raise IndexError(
+                    f"filter_mask: requested cell rank {nth_largest} "
+                    f"(0-based) but only {feature.size} component(s) exist."
+                )
             logger.warning(
                 f"filter_mask: requested {nth_largest} largest cell "
                 f"(starting 0) but only {feature.size} components exist; "

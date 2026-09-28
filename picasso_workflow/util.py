@@ -145,7 +145,7 @@ class AbstractModuleCollection(abc.ABC):
         N-way fan-out. The shared prefix (all modules before this one) is run
         once; this module then runs ``branch_modules`` once per branch on a
         snapshot of the prefix state, and finally runs ``join_modules`` once
-        with the per-branch results pooled back together. Three branch types:
+        with the per-branch results pooled back together. Two branch types:
 
         - ``"explicit"``: a fixed number of branches (``n_branches`` or
           ``branch_labels``). All branches run the same modules and differ only
@@ -153,34 +153,36 @@ class AbstractModuleCollection(abc.ABC):
           ``("$branch", [v0, v1, ...])``, resolved to ``values[branch_id]``
           (e.g. ``create_mask2`` with ``nth_largest_cell=("$branch",[1,2,3])``
           to select a different cell per branch).
-        - ``"runtime"``: the number of branches is discovered at run time by
-          splitting a prior mask into its connected components (one branch per
-          cell). Each branch's ``channel_locs`` are the prefix localizations
-          filtered to that component.
-        - ``"screen"``: the number of branches is fixed at config time by a
-          parameter grid; each branch resolves ``$$map`` commands from its row
-          of the grid (reusing :class:`ParameterTiler` semantics).
+        - ``"runtime"``: the number of branches is discovered at run time. A
+          ``branch_over`` value or command resolves to a list ``L``; there is
+          one branch per element and the branch count is ``len(L)``. Each
+          branch's sub-modules read their element ``L[branch_id]`` via the
+          ``("$branch_item",)`` token (``("$branch_item", key)`` indexes into
+          the element). E.g. ``branch_over`` = a list of cell ranks, and each
+          branch's ``create_mask2`` uses ``nth_largest_cell=("$branch_item",)``.
 
-        In all types, ``("$branch", [...])`` per-branch overrides are resolved
-        first, so any branch type can vary a parameter by branch id.
+        A branch whose sub-module raises
+        :class:`~picasso_workflow.analyse.SkipBranch` (e.g. the requested cell
+        does not exist) is dropped: it is excluded from ``branches`` /
+        ``labels`` (so the join's ``("$all")`` pooling never sees it) and the
+        overall pipeline is not failed. Both types resolve ``("$branch", [...])``
+        overrides, so either can vary a parameter by branch id.
 
         Parameters
         ----------
         i : int
             Index of the module in the workflow.
         parameters : dict
-            Required keys: ``branch_type`` (``"runtime"`` or ``"screen"``) and
-            ``branch_modules`` (list of ``(module_name, module_parameters)``
-            tuples run once per branch). For ``"runtime"``, a ``split`` dict
-            (``method`` -- only ``"mask_components"`` --, ``mask`` filepath or
-            command, optional ``min_area_um2``, ``max_branches``,
-            ``label_template``). For ``"screen"``, a ``screen`` dict of
-            equal-length lists keyed by the ``$$map`` names used in
-            ``branch_modules`` (optional ``"#tags"`` gives branch labels).
-            Optional ``join_modules`` (run once after all branches, may pool
-            per-branch results via ``("$get_prior_result", "results,
-            NN_branch, branches, $all, MM_module, key")``) and
-            ``parameter_command_executor`` (injected by the runner).
+            Required keys: ``branch_type`` (``"explicit"`` or ``"runtime"``)
+            and ``branch_modules`` (list of ``(module_name, module_parameters)``
+            tuples run once per branch). For ``"explicit"``, ``n_branches`` (or
+            ``branch_labels``). For ``"runtime"``, ``branch_over`` (a value or
+            ``$``/``$$map`` command resolving to a list; optional
+            ``label_template`` with ``{n}`` / ``{item}``). Optional
+            ``join_modules`` (run once after all branches, may pool per-branch
+            results via ``("$get_prior_result", "results, NN_branch, branches,
+            $all, MM_module, key")``) and ``parameter_command_executor``
+            (injected by the runner).
         results : dict
             Module results (see class docstring).
 
@@ -189,10 +191,12 @@ class AbstractModuleCollection(abc.ABC):
         parameters : dict
             Input parameters, possibly updated for consistency.
         results : dict
-            Results updated with ``branch_type`` (str), ``labels`` (list),
-            ``branches`` (list of per-branch result dicts, each keyed
-            ``MM_module``), ``join`` (dict of join-module results) and
-            ``topology`` (the executed module-path tree).
+            Results updated with ``branch_type`` (str), ``labels`` (list of the
+            branches that produced results), ``branches`` (list of per-branch
+            result dicts, each keyed ``MM_module``), ``skipped`` (list of
+            ``{"label", "reason"}`` for dropped branches), ``join`` (dict of
+            join-module results) and ``topology`` (the executed module-path
+            tree).
         """
 
     @abc.abstractmethod
