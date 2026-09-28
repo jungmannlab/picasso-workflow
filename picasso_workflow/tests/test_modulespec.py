@@ -12,10 +12,12 @@ import unittest
 
 from picasso_workflow.modulespec import (
     CAPABILITIES,
+    MEMORY_ONLY_CAPABILITIES,
     MODULE_REGISTRY,
     ModuleSpec,
     PicassoRelation,
     Scope,
+    restart_conflicts,
     validate_workflow,
 )
 from picasso_workflow.util import AbstractModuleCollection
@@ -224,6 +226,65 @@ class TestValidateWorkflow(unittest.TestCase):
                 f"{spec.name}: unsatisfiable requires "
                 f"{sorted(spec.requires)}",
             )
+
+
+class TestRestartConflicts(unittest.TestCase):
+    """restart_conflicts: memory-only state lost by a mid-workflow restart."""
+
+    STEPS = [
+        ("load_dataset_movie", {}),
+        ("identify", {}),
+        ("localize", {}),
+        ("undrift_rcc", {}),
+    ]
+
+    def test_memory_only_is_subset_of_vocabulary(self):
+        self.assertEqual(set(), MEMORY_ONLY_CAPABILITIES - CAPABILITIES)
+
+    def test_restart_at_zero_never_conflicts(self):
+        hard, soft = restart_conflicts(self.STEPS, 0, 2)
+        self.assertEqual([], hard)
+        self.assertEqual([], soft)
+
+    def test_hard_conflict_before_frontier(self):
+        # restarting at localize: identifications (from identify at [1]) and
+        # raw_movie (from load at [0]) are memory-only and lost.
+        hard, soft = restart_conflicts(self.STEPS, 2, 2)
+        self.assertTrue(any("identifications" in msg for msg in hard))
+        self.assertTrue(any("raw_movie" in msg for msg in hard))
+
+    def test_soft_conflict_beyond_frontier(self):
+        # restarting at identify (frontier 1): identify's raw_movie need is
+        # hard; localize (beyond the frontier) still misses raw_movie, but
+        # only as an advisory.
+        hard, soft = restart_conflicts(self.STEPS, 1, 1)
+        self.assertTrue(any("[1] identify" in msg for msg in hard))
+        self.assertTrue(any("[2] localize" in msg for msg in soft))
+        self.assertFalse(any("[2]" in msg for msg in hard))
+
+    def test_producer_inside_rerun_range_is_fine(self):
+        # restarting at identify with frontier 3: identifications for
+        # localize are re-produced by identify inside the re-run range.
+        hard, soft = restart_conflicts(self.STEPS, 1, 3)
+        self.assertFalse(any("identifications" in msg for msg in hard + soft))
+
+    def test_unknown_module_is_soft(self):
+        steps = self.STEPS + [("not_a_module", {})]
+        hard, soft = restart_conflicts(steps, 4, 4)
+        self.assertEqual([], hard)
+        self.assertTrue(any("cannot verify" in msg for msg in soft))
+
+    def test_optional_memory_only_is_soft(self):
+        steps = [
+            ("load_picassoconfig", {}),
+            ("load_dataset_movie", {}),
+            ("identify", {}),
+        ]
+        # restart at load_dataset_movie: identify's optional picasso_config
+        # (from [0]) is lost, but only advisory; raw_movie is re-produced.
+        hard, soft = restart_conflicts(steps, 1, 2)
+        self.assertEqual([], hard)
+        self.assertTrue(any("picasso_config" in msg for msg in soft))
 
 
 if __name__ == "__main__":

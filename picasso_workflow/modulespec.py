@@ -93,6 +93,23 @@ CAPABILITIES: frozenset[str] = frozenset(
 )
 
 
+# ---------------------------------------------------------------------------
+# Capabilities that live only in process memory. Everything else is either
+# encoded in the localizations themselves (and thus restored when a saved
+# locs file is re-loaded on resume) or exchanged between modules via file
+# paths recorded in the results dict, which survive in WorkflowRunner.yaml.
+# These do not: restarting from a saved-locs checkpoint cannot restore them.
+# ---------------------------------------------------------------------------
+MEMORY_ONLY_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "raw_movie",  # AutoPicasso.movie: the loaded image stack
+        "identifications",  # AutoPicasso.identifications: pre-fit spots
+        "drift",  # AutoPicasso.drift: estimated drift trace
+        "picasso_config",  # process-global picasso CONFIG set at load time
+    }
+)
+
+
 @dataclass(frozen=True)
 class ModuleSpec:
     """Declarative metadata for one analysis module.
@@ -907,3 +924,76 @@ def _validate_branch_step(i, params, scope, registry, available):
     errors.extend(e.replace("[", f"[{i}.join.", 1) for e in join_errors)
 
     return errors
+
+
+def restart_conflicts(steps, restart_index, frontier, registry=None):
+    """Check whether restarting a workflow mid-way loses memory-only state.
+
+    Used by the checkpoint-aware resume: when a workflow is restarted at
+    ``restart_index`` with only the localizations restored from disk, any
+    module at or after the restart point that requires a capability from
+    :data:`MEMORY_ONLY_CAPABILITIES` produced *before* the restart point
+    would run against lost state.
+
+    Parameters
+    ----------
+    steps : iterable
+        Ordered workflow steps in any format accepted by
+        :func:`validate_workflow`.
+    restart_index : int
+        Index of the first module that will be executed; everything before
+        it is skipped, with only saved locs restored.
+    frontier : int
+        Index of the first module that failed (or was never run) in the
+        previous run. Modules in ``[restart_index, frontier]`` run
+        unconditionally on resume; conflicts there are certain crashes.
+    registry : dict[str, ModuleSpec], optional
+        Registry to check against. Defaults to :data:`MODULE_REGISTRY`.
+
+    Returns
+    -------
+    hard : list[str]
+        Conflicts for modules in ``[restart_index, frontier]`` -- the
+        restart point is not viable and must move further back.
+    soft : list[str]
+        Advisory messages: conflicts beyond ``frontier`` (those modules only
+        run after the re-run reaches them, and a later resume self-heals by
+        making them the frontier), memory-only ``optional`` inputs, and
+        modules unknown to the registry (best-effort specs).
+    """
+    if registry is None:
+        registry = MODULE_REGISTRY
+    producers: dict[str, int] = {}
+    hard: list[str] = []
+    soft: list[str] = []
+    for i, step in enumerate(steps):
+        name = _step_name(step)
+        spec = registry.get(name)
+        if i >= restart_index:
+            if spec is None:
+                soft.append(
+                    f"[{i}] unknown module '{name}': cannot verify "
+                    "memory-only requirements"
+                )
+            else:
+                for cap in sorted(spec.requires & MEMORY_ONLY_CAPABILITIES):
+                    p = producers.get(cap)
+                    if p is not None and p < restart_index:
+                        msg = (
+                            f"[{i}] {name} requires memory-only '{cap}' "
+                            f"produced at [{p}], before the restart point "
+                            f"[{restart_index}]"
+                        )
+                        (hard if i <= frontier else soft).append(msg)
+                for cap in sorted(spec.optional & MEMORY_ONLY_CAPABILITIES):
+                    p = producers.get(cap)
+                    if p is not None and p < restart_index:
+                        soft.append(
+                            f"[{i}] {name} optionally uses memory-only "
+                            f"'{cap}' produced at [{p}], before the restart "
+                            f"point [{restart_index}]"
+                        )
+        if spec is not None:
+            for cap in spec.provides & MEMORY_ONLY_CAPABILITIES:
+                producers[cap] = i
+    return hard, soft
