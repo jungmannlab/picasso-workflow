@@ -1006,12 +1006,26 @@ class ConfluenceReporter(AbstractModuleCollection):
         join_results = results.get("join", {})
         branch_modules = parameters.get("branch_modules", [])
         join_modules = parameters.get("join_modules", []) or []
+        skipped = results.get("skipped", []) or []
+        skipped_text = (
+            "<li><strong>Skipped branches:</strong> "
+            + html.escape(
+                ", ".join(
+                    f"{s.get('label', '?')} ({s.get('reason', '')})"
+                    for s in skipped
+                )
+            )
+            + "</li>"
+            if skipped
+            else ""
+        )
 
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Branch ({html.escape(str(branch_type))})</strong></p>
         <ul>
         <li><strong>Branches:</strong> {len(labels)} ({html.escape(', '.join(map(str, labels)) or 'none')})</li>
+        {skipped_text}
         <li><strong>Join modules:</strong> {html.escape(', '.join(m for m, _ in join_modules) if join_modules else 'None')}</li>
         <li><strong>Start Time:</strong> {html.escape(str(results.get('start time', 'N/A')))}</li>
         <li><strong>Total Duration:</strong> {results.get("duration", 0) // 60:.0f} min {(results.get("duration", 0) % 60):.02f} s</li>
