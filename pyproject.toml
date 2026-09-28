@@ -95,7 +95,7 @@ gpu = [
 ]
 
 [tool.setuptools]
-packages = ["picasso_workflow"]
+packages = ["picasso_workflow", "picasso_workflow.qc_advisor"]
 
 [tool.setuptools_scm]
 # Writes the version into a file that is importable at runtime, even when
