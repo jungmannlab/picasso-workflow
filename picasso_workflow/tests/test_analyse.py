@@ -3937,3 +3937,30 @@ def test_footprint_viewport_falls_back_to_pick_centre():
     )
     assert (xmin + xmax) / 2 == 5.0
     assert (ymin + ymax) / 2 == 7.0
+
+
+def test_recenter_on_com_moves_centres_to_group_com():
+    """Each pick centre is relocated to the centre of mass of its group's
+    localizations (group id == index into centers); an empty group keeps its
+    original centre."""
+    picked = pd.DataFrame(
+        {
+            "x": [10.0, 12.0, 30.0, 30.0],
+            "y": [20.0, 22.0, 5.0, 7.0],
+            "group": [0, 0, 2, 2],
+        }
+    )
+    # group 1 has no locs -> keeps its original centre
+    centers = [(0.0, 0.0), (99.0, 88.0), (0.0, 0.0)]
+    out = analyse._recenter_on_com(picked, centers)
+    assert out[0] == [11.0, 21.0]  # COM of group 0
+    assert out[1] == [99.0, 88.0]  # untouched (no locs)
+    assert out[2] == [30.0, 6.0]  # COM of group 2
+
+
+def test_recenter_on_com_empty_is_noop():
+    """No localizations at all -> centres are returned unchanged."""
+    empty = pd.DataFrame({"x": [], "y": [], "group": []})
+    centers = [(1.0, 2.0), (3.0, 4.0)]
+    out = analyse._recenter_on_com(empty, centers)
+    assert out == [[1.0, 2.0], [3.0, 4.0]]

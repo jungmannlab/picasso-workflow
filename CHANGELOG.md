@@ -12,6 +12,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- `pick_origami` now re-centres every accepted pick on its localizations'
+  centre of mass right after identification and re-picks once around the new
+  centre. `pick_similar` returns grid positions offset from the structure by
+  up to half a grid step; re-centring makes the exported picks
+  (`pick_origami.yaml`), the saved locs (`picked_origami_locs.hdf5`), the
+  geometry table, the pattern clustering and the example renders all
+  consistent with the actual structures (previously only the render viewport
+  was COM-centred and the exported picks stayed on the grid).
+
 - The `pick_origami` docstrings now document the staged structure-
   identification strategy (coarse `pick_similar` window &rarr; registration-
   free pair-score pre-screen &rarr; per-candidate registration &rarr;
@@ -56,10 +65,10 @@ This file was started after v0.5.6; earlier history is in the git log.
 ### Fixed
 
 - `pick_origami` example-structure renders (both the accepted grid and the
-  per-pattern examples) are now centred on the localizations' centre of mass
-  instead of the `pick_similar` grid centre, which is a grid position offset
-  from the structure by up to half a grid step - so the origami no longer
-  appears off-centre in the render. The exported pick centres are unchanged.
+  per-pattern examples) are centred on the localizations' centre of mass
+  instead of the `pick_similar` grid centre, so the origami no longer appears
+  off-centre in the render (the picks themselves are now COM-centred too - see
+  the re-centring entry under Changed).
 
 - `pick_origami` no longer silently ignores a `pattern_min_sites_frac` of
   `0.0`. The parameter was threaded with a truthiness check, so `0.0` (a

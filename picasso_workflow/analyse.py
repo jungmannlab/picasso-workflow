@@ -249,6 +249,30 @@ def _draw_pick_window(ax, pick_window):
     )
 
 
+def _recenter_on_com(picked_locs, centers):
+    """Relocate each pick centre to the centre of mass of its localizations.
+
+    ``picked_locs`` is grouped by ``group`` (the group id is the index into
+    ``centers``, as :func:`picasso_outpost.picked_locs` assigns them). Returns
+    a new list of ``[x, y]`` centres; a group with no localizations keeps its
+    original centre. ``pick_similar`` returns grid positions offset from the
+    structure by up to half a grid step, so re-centring on the COM (and
+    re-picking once around the new centre) makes the exported picks and every
+    downstream footprint consistent with the actual structure.
+    """
+    centers = [[float(c[0]), float(c[1])] for c in centers]
+    if len(picked_locs) == 0:
+        return centers
+    g = np.asarray(picked_locs["group"])
+    x = np.asarray(picked_locs["x"], dtype=float)
+    y = np.asarray(picked_locs["y"], dtype=float)
+    for gid in np.unique(g):
+        m = g == gid
+        if 0 <= gid < len(centers) and np.any(m):
+            centers[int(gid)] = [float(x[m].mean()), float(y[m].mean())]
+    return centers
+
+
 def _footprint_viewport(x, y, cx, cy, footprint_diameter):
     """A square viewport of side ``footprint_diameter`` centred on the
     localizations' centre of mass.
@@ -14796,7 +14820,38 @@ class AutoPicasso(util.AbstractModuleCollection):
             max(template.grid_spacing_nm / pixelsize / 2, 1e-6),
         )
 
-        # --- 4a. origami-footprint picks (Centers + Diameter yaml) -----
+        # --- 4a. grouped picked locs, re-centred on the centre of mass -
+        # pick the grid-centred footprints, relocate each pick to its locs'
+        # centre of mass, then re-pick once around the new centres so the
+        # saved picks and locs are all consistent with the actual structures.
+        if len(accepted_centers) > 0:
+            picked_origami_locs = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                accepted_centers,
+                pick_diameter=footprint_diameter,
+                return_nonpicked=False,
+            )
+            accepted_centers = _recenter_on_com(
+                picked_origami_locs, accepted_centers
+            )
+            picked_origami_locs = picasso_outpost.picked_locs(
+                self.locs,
+                self.info,
+                accepted_centers,
+                pick_diameter=footprint_diameter,
+                return_nonpicked=False,
+            )
+        else:
+            picked_origami_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
+            picked_origami_locs["group"] = pd.Series(dtype="int32")
+        results["n_picked_locs"] = len(picked_origami_locs)
+        # the geometry-table centres follow the re-centred picks
+        for row, c in zip(geometry_table, accepted_centers):
+            row["center_x_px"] = float(c[0])
+            row["center_y_px"] = float(c[1])
+
+        # --- 4b. origami-footprint picks (Centers + Diameter yaml) -----
         fp_picks_origami = os.path.join(results["folder"], "pick_origami.yaml")
         with open(fp_picks_origami, "w") as f:
             yaml.dump(
@@ -14827,20 +14882,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 f,
             )
         results["fp_picks_dockingsites"] = fp_picks_dockingsites
-
-        # --- 4b. grouped picked locs (one group per accepted origami) --
-        if len(accepted_centers) > 0:
-            picked_origami_locs = picasso_outpost.picked_locs(
-                self.locs,
-                self.info,
-                accepted_centers,
-                pick_diameter=footprint_diameter,
-                return_nonpicked=False,
-            )
-        else:
-            picked_origami_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
-            picked_origami_locs["group"] = pd.Series(dtype="int32")
-        results["n_picked_locs"] = len(picked_origami_locs)
 
         if len(docking_centers) > 0:
             docking_site_locs = picasso_outpost.picked_locs(
