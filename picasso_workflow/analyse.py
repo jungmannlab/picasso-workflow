@@ -316,12 +316,12 @@ def _plot_origami_phasespace(
     """
     fig, axes = plt.subplots(1, 2, figsize=(12, 6), sharex=True, sharey=True)
 
-    # Robust shared limits that include all three clouds AND the pick window,
+    # Robust shared limits that include both clouds AND the pick window,
     # so the plot is a diagnostic even when nothing is accepted (you can see
     # whether the window overlaps the candidates). The candidate cloud is
     # bounded by a Tukey fence (Q3 + 1.5 IQR) so its long high-nlocs tail
-    # (dense/aggregated regions) cannot stretch the axis; the sim/accepted
-    # clouds and the pick-window edges are always fully included.
+    # (dense/aggregated regions) cannot stretch the axis; the accepted cloud
+    # and the pick-window edges are always fully included.
     xlos, xhis, ylos, yhis = [], [], [], []
     cand_x, cand_y = _finite_xy(nlocs, rmsds)
     if len(cand_x):
@@ -14846,8 +14846,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             picked_origami_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
             picked_origami_locs["group"] = pd.Series(dtype="int32")
         results["n_picked_locs"] = len(picked_origami_locs)
-        # the geometry-table centres follow the re-centred picks
-        for row, c in zip(geometry_table, accepted_centers):
+        # the geometry-table centres follow the re-centred picks. Only the
+        # accepted rows correspond to accepted_centers (in order); guard
+        # against a geometry_table that also carries rejected rows so the
+        # centres are never written onto the wrong row.
+        accepted_rows = [
+            row for row in geometry_table if row.get("accepted", True)
+        ]
+        for row, c in zip(accepted_rows, accepted_centers):
             row["center_x_px"] = float(c[0])
             row["center_y_px"] = float(c[1])
 
@@ -15000,7 +15006,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     )
                 )
                 render.plot_scene(
-                    picked_origami_locs,
+                    sel,
                     pixelsize_display,
                     pixelsize,
                     fp=fp_renderings[-1],

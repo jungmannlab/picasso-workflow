@@ -64,6 +64,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `pick_origami` accepted-structure renders now pass only that structure's
+  localizations (`sel`) to the renderer instead of the full multi-group set,
+  so a neighbouring pick overlapping the footprint viewport is no longer drawn
+  into the "origami N" image (matching the per-pattern render path).
+
+- The `pick_origami` geometry-table centre-overwrite only updates the accepted
+  rows, guarding against a `geometry_table` that could also carry rejected
+  rows (defensive: the reachable path is accepted-only, but the loop no longer
+  silently depends on that).
+
 - `pick_origami` example-structure renders (both the accepted grid and the
   per-pattern examples) are centred on the localizations' centre of mass
   instead of the `pick_similar` grid centre, so the origami no longer appears

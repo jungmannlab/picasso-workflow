@@ -2304,3 +2304,186 @@ def test_upload_attachments_empty_is_noop(monkeypatch):
     ci = _make_offline_ci(monkeypatch)
     assert ci.upload_attachments("42", [None, ""]) == []
     ci.confluence.attach_file.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# pick_origami report (offline: build the storage-format text via
+# postpone_report and validate it, no live Confluence needed)
+# ---------------------------------------------------------------------------
+
+
+def _pick_origami_report(results, parameters=None):
+    """Build the pick_origami report text with a mocked interface."""
+    cr = confluence.ConfluenceReporter.__new__(confluence.ConfluenceReporter)
+    cr.ci = MagicMock()
+    cr.report_page_id = "123"
+    cr._emit = lambda text, postpone_report: text  # capture, never post
+    return cr.pick_origami(0, parameters or {}, results, postpone_report=True)
+
+
+def _assert_well_formed(text):
+    """The report is a valid Confluence storage-format fragment (well-formed
+    XHTML once its named entities are declared)."""
+    import xml.etree.ElementTree as ET
+
+    wrapped = (
+        "<!DOCTYPE root ["
+        '<!ENTITY rarr "&#8594;"><!ENTITY nbsp "&#160;">'
+        '<!ENTITY plusmn "&#177;">]>'
+        '<root xmlns:ac="a" xmlns:ri="r">' + text + "</root>"
+    )
+    ET.fromstring(wrapped)  # raises ParseError if malformed
+
+
+def _lattice_results():
+    summary = [
+        {
+            "label": 12,
+            "n_structures": 262,
+            "is_offlattice": False,
+            "occupancy": [1] * 12,
+            "n_sites_occupied": 12,
+            "n_defects": 0,
+            "median_rmse_nm": 2.0,
+            "median_fitted_spacing_nm": 20.0,
+            "median_n_sites": 12.0,
+            "median_nlocs_cv": 0.3,
+            "median_spread_cv": 0.15,
+            "median_nlocs_per_frame": 0.003,
+        },
+        {
+            "label": -1,
+            "n_structures": 890,
+            "is_offlattice": True,
+            "occupancy": [0] * 12,
+            "n_sites_occupied": 0,
+            "n_defects": None,
+            "median_n_sites": 4.0,
+        },
+    ]
+    return {
+        "start time": "now",
+        "duration": 74.3,
+        "success": True,
+        "n_candidates": 15697,
+        "n_accepted": 15697,
+        "n_sites_expected": 12,
+        "grid_spacing_nm": 20.0,
+        "pattern_method": "lattice",
+        "n_pattern_clusters": 1,
+        "pattern_summary": summary,
+        "n_pattern_sites": 7300,
+        "funnel": {"n_candidates": 15697, "accepted": 15697},
+        "accepted_overview": {
+            "n_accepted": 262,
+            "n_mirrored": 3,
+            "n_resolved_sites": {"mean": 11, "std": 1, "min": 8, "max": 12},
+            "mean_spacing_nm": {"mean": 20, "std": 0.2, "min": 19, "max": 21},
+            "rmse_nm": {"mean": 2, "std": 0.5, "min": 1, "max": 4},
+            "orientation_deg": {"mean": 35, "std": 20, "min": 0, "max": 90},
+        },
+        "fp_phasespace": "/x/phase.png",
+        "fp_pattern_phasespace": "/x/pat_phase.png",
+        "fp_pattern_pairscore_space": "/x/pairscore.png",
+        "fp_pattern_fit_space": "/x/fit.png",
+        "fp_pattern_gate_panels": "/x/gates.png",
+        "fp_pattern_site_nlocs_hist": "/x/sitehist.png",
+        "fp_pattern_site_picks": "/x/sitepicks.yaml",
+        "fp_renderings": [["/x/a.png", "/x/b.png"], ["/x/c.png"]],
+        "fp_pattern_renderings": {12: ["/x/e12a.png", "/x/e12b.png"]},
+    }
+
+
+def test_pick_origami_report_lattice_is_well_formed():
+    """The lattice report builds valid storage format with the regrouped
+    headings and every figure embedded."""
+    text = _pick_origami_report(_lattice_results())
+    _assert_well_formed(text)
+    for heading in (
+        "Phase space",
+        "Lattice filter",
+        "Lattice identification",
+        "Example structures",
+    ):
+        assert f"<strong>{heading}</strong>" in text
+    # the gate panels are the "Lattice filter"; renamed from the old title
+    assert "On-lattice gate transparency" not in text
+    # every figure is embedded
+    for fn in (
+        "phase.png",
+        "gates.png",
+        "pairscore.png",
+        "fit.png",
+        "pat_phase.png",
+        "sitehist.png",
+        "e12a.png",
+    ):
+        assert fn in text
+    # per-pattern examples supersede the generic accepted grid
+    assert 'ri:filename="a.png"' not in text
+    # verbose detail is collapsed into expand macros
+    assert 'ac:name="expand"' in text
+    assert "Rejection funnel" in text
+
+
+def test_pick_origami_report_shows_grid_without_pattern_renders():
+    """Without per-pattern renders the generic accepted-structure grid is
+    shown."""
+    results = _lattice_results()
+    del results["fp_pattern_renderings"]
+    text = _pick_origami_report(results)
+    _assert_well_formed(text)
+    assert 'ri:filename="a.png"' in text  # accepted grid now shown
+
+
+def test_pick_origami_report_pairwise_is_well_formed():
+    """The pairwise (non-lattice) path builds valid storage format with its
+    descriptor figures and no lattice-only figures."""
+    results = {
+        "start time": "now",
+        "duration": 5.0,
+        "success": True,
+        "n_candidates": 100,
+        "n_accepted": 40,
+        "n_sites_expected": 2,
+        "grid_spacing_nm": 20.0,
+        "pattern_method": "pairwise",
+        "n_pattern_clusters": 3,
+        "pattern_summary": [
+            {
+                "label": 0,
+                "n_structures": 20,
+                "is_noise": False,
+                "median_n_sites": 2,
+                "median_n_locs": 50,
+                "median_nn_nm": 20.0,
+            }
+        ],
+        "fp_phasespace": "/x/p.png",
+        "fp_pattern_phasespace": "/x/pp.png",
+        "fp_pattern_feature_space": "/x/feat.png",
+        "fp_pattern_pairdist": "/x/pd.png",
+    }
+    text = _pick_origami_report(results)
+    _assert_well_formed(text)
+    assert "feat.png" in text and "pd.png" in text
+    # no lattice filter section when there are no gate panels
+    assert "<strong>Lattice filter</strong>" not in text
+
+
+def test_pick_origami_report_no_clustering_is_well_formed():
+    """With clustering disabled the report still builds (just the pick-window
+    phase space and, if any, the accepted grid)."""
+    results = {
+        "start time": "now",
+        "duration": 5.0,
+        "success": True,
+        "n_candidates": 100,
+        "n_accepted": 40,
+        "n_sites_expected": 12,
+        "grid_spacing_nm": 20.0,
+        "fp_phasespace": "/x/p.png",
+    }
+    text = _pick_origami_report(results)
+    _assert_well_formed(text)
+    assert "p.png" in text
