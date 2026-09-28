@@ -10,6 +10,70 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- **WP-ADVISOR — shared, deterministic, LLM-free QC advisor + Materials &
+  Methods (`picasso_workflow.qc_advisor`).** Ported from LiveLocalization V0.8
+  (`qc_advisor.py` / `materials_methods.py` and the filter/min-net-gradient
+  helpers) into a clean, unit-testable subpackage that the live GUI (WP-GUI),
+  the dashboard, the notifier, and later the agent (WP-14) all import as ONE
+  rule engine (C31/C39: no `paint-util` leaf — import `qc_advisor` directly).
+  - **`Finding` structured contract** (`findings.py`): a dataclass with
+    `metric / severity / message / cause / action / value / source / detail`
+    plus `.as_dict()` — the explicit, documented type WP-GUI consumes.
+  - **`diagnose` / `focus` / `summary`** — prioritised, explainable findings over
+    the A1/C19 metric keys (byte-identical to the V0.8 reference on shared
+    fixtures).
+  - **`frc_trend`** — the net-new "keep acquiring vs you can stop" signal: fits
+    `FRC ≈ a·N^(-b)` on the recent series and returns
+    improving / plateau / plateau_check (pre-undrift) / plateau_early /
+    degrading, with the V0.8 guards (never stops on a number alone, before
+    undrift, or while early).
+  - **`center_edge_trend`** — centre-vs-edge density trend → docking-strand
+    photodamage vs a static illumination profile.
+  - **`cohort_stats` + `db_anomalies`** — live cohort-outlier early warning in
+    robust p20↔p80 spread units; `cohort_stats` bridges the picasso-registry
+    client's `cohort(taxon_id)` run list to the stats `db_anomalies` consumes,
+    keeping the rule engine hermetic (registry is injected, not imported).
+  - **Filter-settings advisor** (`filter_advisor.py`): `filter_suggestions`
+    (data-driven Picasso photons/sx/sy/ellipticity/precision thresholds),
+    `filter_keep_mask`, `filter_preview_counts` (kept/removed payload for
+    WP-GUI), a bimodal-histogram **`estimate_min_net_gradient`** (picasso
+    imported lazily; a picasso-free numeric core), the **clustering guide**
+    (`suggest_clustering`, eps ≈ 2.5·NeNA), and `qc.json` sidecar writers
+    (`write_filter_suggestions_to_qc` / `write_clustering_to_qc` /
+    `write_min_net_gradient_to_qc`).
+  - **Deterministic Materials & Methods** (`materials_methods.py`):
+    `materials_and_methods(qc, setup_name=, config_path=)` renders a paragraph
+    from qc.json + an optional hardware-profile YAML; missing fields degrade to
+    "not specified".
+  - **C35 deterministic notifier** (`notifier.py`): a `run_id`-keyed
+    `NotifierEngine` driven by `RegistryEvent`s that spans the live AND
+    cluster-analysis phases, with the deterministic half only (no LLM
+    narration, no actuation buttons). Anti-noise built in: per-user/per-run
+    subscription, per-event severity thresholds, ONE thread per `run_id`, and
+    dedup; the delivery transport is an injected `sink` (Slack never runs on the
+    cluster). Read-only `status` / `quality` query surface answered from
+    registry-derived state.
+  - Tier-2 known-answer + property tests in `tests/test_qc_advisor.py`
+    (hermetic; registry mocked for db-anomalies; no Qt), incl. a golden
+    full-list assertion locking the exact ordering + count of the composed
+    findings against the V0.8 reference.
+  - **Robustness fixes from adversarial code review** (deviations from the V0.8
+    port, deliberate): (a) `frc_trend` no longer emits the confident "you can
+    stop" plateau when the guard context is absent — the actionable stop needs
+    both `undrift_done=True` and a `progress_frac`; otherwise it returns
+    `plateau_unconfirmed` (a false stop is a costly re-acquisition).
+    (b) `db_anomalies` guards a degenerate / collapsed-spread cohort (all-equal
+    or zero-median runs) — insufficient spread is skipped instead of over-
+    flagging a tiny deviation as `bad` with a nonsensical `p20–p80 0–0` band.
+    (c) The notifier broadcasts an always-deliver critical
+    (`analysis_failed` / `early_abort`) to a `fallback_sink` when a run has zero
+    subscribers, so a cluster-side failure before/after anyone subscribed is
+    never silently dropped. (d) A seq-less `qc_update` now dedups on its
+    escalated severity + a rounded metric fingerprint instead of the kind alone,
+    so a worsening live update (e.g. NeNA 3→9 nm) is delivered, not swallowed.
+
 ### Changed
 
 - **Stack-wide dependency harmonization (decision C41, picasso is the anchor).**
