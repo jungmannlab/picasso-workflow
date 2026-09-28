@@ -249,6 +249,25 @@ def _draw_pick_window(ax, pick_window):
     )
 
 
+def _footprint_viewport(x, y, cx, cy, footprint_diameter):
+    """A square viewport of side ``footprint_diameter`` centred on the
+    localizations' centre of mass.
+
+    Returned in picasso ``[(y_min, x_min), (y_max, x_max)]`` order. The
+    pick_similar centre ``(cx, cy)`` is a grid position, offset from the
+    structure by up to half a grid step, so a viewport centred on it renders
+    the origami off-centre; centring on the COM of the picked localizations
+    puts it in the middle. Falls back to ``(cx, cy)`` when there are no locs.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x):
+        cx = float(np.mean(x))
+        cy = float(np.mean(y))
+    h = footprint_diameter / 2
+    return [(cy - h, cx - h), (cy + h, cx + h)]
+
+
 def _plot_origami_phasespace(
     fp,
     nlocs,
@@ -14924,17 +14943,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
             ):
                 cx, cy = accepted_centers[pick_i]
-                x_min = cx - footprint_diameter / 2
-                y_min = cy - footprint_diameter / 2
+                sel = picked_origami_locs[
+                    picked_origami_locs["group"] == pick_i
+                ]
                 render_kwargs = {
                     "oversampling": pixelsize / pixelsize_display,
-                    "viewport": [
-                        (y_min, x_min),
-                        (
-                            cy + footprint_diameter / 2,
-                            cx + footprint_diameter / 2,
-                        ),
-                    ],
+                    "viewport": _footprint_viewport(
+                        sel["x"], sel["y"], cx, cy, footprint_diameter
+                    ),
                 }
                 fp_renderings.append(
                     os.path.join(
@@ -15312,26 +15328,21 @@ class AutoPicasso(util.AbstractModuleCollection):
             for rank, i in enumerate(member_pos):
                 gid = group_ids[i]
                 cx, cy = accepted_centers[gid]
-                x_min = cx - footprint_diameter / 2
-                y_min = cy - footprint_diameter / 2
+                sel = picked_origami_locs[picked_origami_locs["group"] == gid]
                 fp = os.path.join(
                     results["folder"],
                     f"pattern_{int(lbl)}_ex{rank}_g{gid}-{rcode}.png",
                 )
                 render.plot_scene(
-                    picked_origami_locs[picked_origami_locs["group"] == gid],
+                    sel,
                     pixelsize_display,
                     pixelsize,
                     fp=fp,
                     render_kwargs={
                         "oversampling": pixelsize / pixelsize_display,
-                        "viewport": [
-                            (y_min, x_min),
-                            (
-                                cy + footprint_diameter / 2,
-                                cx + footprint_diameter / 2,
-                            ),
-                        ],
+                        "viewport": _footprint_viewport(
+                            sel["x"], sel["y"], cx, cy, footprint_diameter
+                        ),
                     },
                     title=(
                         f"pattern {int(lbl)} " f"({len(groups[gid])} locs)"

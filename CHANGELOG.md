@@ -55,6 +55,12 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- `pick_origami` example-structure renders (both the accepted grid and the
+  per-pattern examples) are now centred on the localizations' centre of mass
+  instead of the `pick_similar` grid centre, which is a grid position offset
+  from the structure by up to half a grid step - so the origami no longer
+  appears off-centre in the render. The exported pick centres are unchanged.
+
 - `pick_origami` no longer silently ignores a `pattern_min_sites_frac` of
   `0.0`. The parameter was threaded with a truthiness check, so `0.0` (a
   meaningful value - fall back to the absolute site-count floor) was dropped

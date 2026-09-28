@@ -3910,3 +3910,30 @@ class TestAnalyse(unittest.TestCase):
         shutil.rmtree(
             os.path.join(self.results_folder, "03_conditional_branch")
         )
+
+
+def test_footprint_viewport_centres_on_com():
+    """The render viewport is centred on the localizations' centre of mass,
+    not the (off-centre) pick_similar grid centre, and a fixed footprint
+    size is preserved."""
+    # locs clustered around (10, 20); pick centre offset to (12, 18)
+    x = np.array([9.0, 10.0, 11.0])
+    y = np.array([19.0, 20.0, 21.0])
+    (ymin, xmin), (ymax, xmax) = analyse._footprint_viewport(
+        x, y, cx=12.0, cy=18.0, footprint_diameter=6.0
+    )
+    # centred on the COM (10, 20), NOT the pick centre (12, 18)
+    assert (xmin + xmax) / 2 == 10.0
+    assert (ymin + ymax) / 2 == 20.0
+    # side equals the footprint diameter
+    assert xmax - xmin == 6.0
+    assert ymax - ymin == 6.0
+
+
+def test_footprint_viewport_falls_back_to_pick_centre():
+    """With no localizations the viewport falls back to the pick centre."""
+    (ymin, xmin), (ymax, xmax) = analyse._footprint_viewport(
+        [], [], cx=5.0, cy=7.0, footprint_diameter=4.0
+    )
+    assert (xmin + xmax) / 2 == 5.0
+    assert (ymin + ymax) / 2 == 7.0
