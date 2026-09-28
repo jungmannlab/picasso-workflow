@@ -131,8 +131,24 @@ class NotifierEngine:
     keys, the subscription table, and a dedup ledger (so re-fed events don't
     re-notify)."""
 
-    def __init__(self, sink: Optional[Callable[[Notification], Any]] = None):
+    # sentinel "user" for a fallback/broadcast notification (a critical with no
+    # per-run subscribers). Distinct from any real user id.
+    FALLBACK_USER = "*"
+
+    def __init__(
+        self,
+        sink: Optional[Callable[[Notification], Any]] = None,
+        fallback_sink: Optional[Callable[[Notification], Any]] = None,
+    ):
+        """``sink`` delivers per-subscriber notifications. ``fallback_sink``
+        (defaulting to ``sink``) receives always-deliver criticals for a run
+        with ZERO subscribers, so an ``analysis_failed`` on the cluster before /
+        after anyone subscribed still reaches someone (e.g. an ops channel) and
+        is never silently dropped."""
         self._sink = sink
+        self._fallback_sink = (
+            fallback_sink if fallback_sink is not None else sink
+        )
         self._subs: Dict[str, List[Subscription]] = {}
         # dedup ledger: run_id -> set of already-emitted (user, dedup_key)
         self._seen: Dict[str, set] = {}
@@ -178,7 +194,8 @@ class NotifierEngine:
         seen = self._seen.setdefault(event.run_id, set())
 
         out: List[Notification] = []
-        for sub in self._subs.get(event.run_id, []):
+        subs = self._subs.get(event.run_id, [])
+        for sub in subs:
             gate = event.kind in _ALWAYS_DELIVER or _sev_at_least(
                 severity, sub.min_severity
             )
@@ -188,19 +205,49 @@ class NotifierEngine:
             if key in seen:
                 continue
             seen.add(key)
-            note = Notification(
-                run_id=event.run_id,
-                user=sub.user,
-                kind=event.kind,
-                severity=severity,
-                message=message,
-                thread_key=self.thread_key(event.run_id),
-                detail=detail,
+            note = self._make_notification(
+                event, sub.user, severity, message, detail
             )
             out.append(note)
             if self._sink is not None:
                 self._sink(note)
+
+        # Fallback/broadcast: an always-deliver critical must reach SOMEONE even
+        # with ZERO per-run subscribers (e.g. it fails on the cluster before or
+        # after anyone subscribed). Gate on the absence of SUBSCRIBERS, not on an
+        # empty `out` -- if subscribers exist, an empty `out` just means the event
+        # was already delivered to them and deduped on replay, which must NOT
+        # trigger a broadcast. Deduped under the sentinel FALLBACK_USER too, so a
+        # replay with no subscribers doesn't re-broadcast either.
+        if event.kind in _ALWAYS_DELIVER and not subs:
+            key = (self.FALLBACK_USER, dedup_key)
+            if key not in seen:
+                seen.add(key)
+                note = self._make_notification(
+                    event, self.FALLBACK_USER, severity, message, detail
+                )
+                out.append(note)
+                if self._fallback_sink is not None:
+                    self._fallback_sink(note)
         return out
+
+    def _make_notification(
+        self,
+        event: RegistryEvent,
+        user: str,
+        severity: str,
+        message: str,
+        detail: Dict[str, Any],
+    ) -> Notification:
+        return Notification(
+            run_id=event.run_id,
+            user=user,
+            kind=event.kind,
+            severity=severity,
+            message=message,
+            thread_key=self.thread_key(event.run_id),
+            detail=detail,
+        )
 
     def _event_severity(self, event: RegistryEvent) -> str:
         """The severity to attach to this event. Metric-bearing events escalate
@@ -222,14 +269,39 @@ class NotifierEngine:
             findings += db_anomalies(event.metrics, event.cohort_stats)
         return _worst_finding_severity(findings)
 
+    def _dedup_key(self, event: RegistryEvent) -> str:
+        """A stable key so the SAME event fed twice notifies once. Terminal /
+        one-shot kinds (done, failed, handoff, ...) dedup on the kind alone -- one
+        per run. Periodic ``qc_update`` events must NOT collapse to the kind, or
+        every update after the first (including a WORSENING one) is swallowed:
+          * with a ``seq`` -> key on the sequence number (each update distinct);
+          * without a ``seq`` -> key on the escalated severity + a rounded metric
+            fingerprint, so an update that changes the picture (e.g. NeNA 3->9 nm,
+            info->bad) is delivered while an identical repeat is still deduped.
+        """
+        if event.kind != "qc_update":
+            return event.kind
+        if event.seq is not None:
+            return f"qc_update#{event.seq}"
+        severity = self._event_severity(event)
+        fp = self._metrics_fingerprint(event.metrics)
+        return f"qc_update@{severity}|{fp}"
+
     @staticmethod
-    def _dedup_key(event: RegistryEvent) -> str:
-        """A stable key so the SAME event fed twice notifies once. For periodic
-        ``qc_update`` events the sequence number distinguishes updates; other
-        kinds dedup on the kind alone (one 'done' per run)."""
-        if event.seq is not None and event.kind == "qc_update":
-            return f"{event.kind}#{event.seq}"
-        return event.kind
+    def _metrics_fingerprint(metrics: Optional[Dict[str, Any]]) -> str:
+        """A stable, order-independent fingerprint of the metric values that
+        drive severity, rounded so noise doesn't defeat dedup but a real change
+        does. Empty when no metrics."""
+        if not metrics:
+            return ""
+        parts = []
+        for k in sorted(metrics):
+            v = metrics[k]
+            try:
+                parts.append(f"{k}={round(float(v), 3)}")
+            except (TypeError, ValueError):
+                continue
+        return ",".join(parts)
 
     def _render_event(
         self, event: RegistryEvent, severity: str

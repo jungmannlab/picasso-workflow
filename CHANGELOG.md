@@ -56,7 +56,23 @@ This file was started after v0.5.6; earlier history is in the git log.
     cluster). Read-only `status` / `quality` query surface answered from
     registry-derived state.
   - Tier-2 known-answer + property tests in `tests/test_qc_advisor.py`
-    (hermetic; registry mocked for db-anomalies; no Qt).
+    (hermetic; registry mocked for db-anomalies; no Qt), incl. a golden
+    full-list assertion locking the exact ordering + count of the composed
+    findings against the V0.8 reference.
+  - **Robustness fixes from adversarial code review** (deviations from the V0.8
+    port, deliberate): (a) `frc_trend` no longer emits the confident "you can
+    stop" plateau when the guard context is absent — the actionable stop needs
+    both `undrift_done=True` and a `progress_frac`; otherwise it returns
+    `plateau_unconfirmed` (a false stop is a costly re-acquisition).
+    (b) `db_anomalies` guards a degenerate / collapsed-spread cohort (all-equal
+    or zero-median runs) — insufficient spread is skipped instead of over-
+    flagging a tiny deviation as `bad` with a nonsensical `p20–p80 0–0` band.
+    (c) The notifier broadcasts an always-deliver critical
+    (`analysis_failed` / `early_abort`) to a `fallback_sink` when a run has zero
+    subscribers, so a cluster-side failure before/after anyone subscribed is
+    never silently dropped. (d) A seq-less `qc_update` now dedups on its
+    escalated severity + a rounded metric fingerprint instead of the kind alone,
+    so a worsening live update (e.g. NeNA 3→9 nm) is delivered, not swallowed.
 
 ### Changed
 

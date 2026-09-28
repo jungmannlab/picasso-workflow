@@ -465,7 +465,10 @@ def frc_trend(
 
     Returns a dict (status, message, action, ...) or ``None`` if the inputs are
     unusable. status in {'insufficient','improving','plateau','plateau_check',
-    'plateau_early','degrading'}.
+    'plateau_early','plateau_unconfirmed','degrading'}. The confident 'plateau'
+    ("you can stop") is emitted only when BOTH guards confirm it
+    (``undrift_done=True`` and a ``progress_frac``); absent that context a flat
+    curve returns 'plateau_unconfirmed' (see the DEVIATION note below).
 
     NET-NEW to the plan: the positive complement to early-abort. Reaching a
     resolution NUMBER is deliberately NOT a stop signal (the structure can still
@@ -569,13 +572,37 @@ def frc_trend(
                 "structure-rich zoom, then re-check later.",
             )
             return out
+        # DEVIATION from V0.8: V0.8 emitted the confident "you can stop" plateau
+        # whenever the guard context was ABSENT (undrift_done=None,
+        # progress_frac=None). A stop is a high-cost action (a false stop wastes
+        # a re-acquisition), and a flat FRC without confirmation is far more
+        # often drift-limited or measured on a sparse region than a finished
+        # reconstruction. So we only emit the actionable stop when BOTH guards
+        # confirm it (undrift_done is True AND progress_frac is late enough);
+        # otherwise we return a clearly-unconfirmed status that does NOT say
+        # "stop", nudging the caller to wire the context.
+        if undrift_done is True and progress_frac is not None:
+            out.update(
+                status="plateau",
+                message=f"FRC has plateaued at ≈{cur_frc:.1f} nm — doubling the "
+                f"frames would improve it by only ~{max(gain, 0.0):.0f}%.",
+                cause="resolution now limited by precision/drift, not by "
+                "sampling",
+                action="you can stop acquiring — more frames won't sharpen the "
+                "image much.",
+            )
+            return out
         out.update(
-            status="plateau",
-            message=f"FRC has plateaued at ≈{cur_frc:.1f} nm — doubling the "
-            f"frames would improve it by only ~{max(gain, 0.0):.0f}%.",
-            cause="resolution now limited by precision/drift, not by sampling",
-            action="you can stop acquiring — more frames won't sharpen the "
-            "image much.",
+            status="plateau_unconfirmed",
+            message=f"FRC looks flat at ≈{cur_frc:.1f} nm, but the stop signal "
+            f"is unconfirmed (drift-correction / progress context not "
+            f"provided).",
+            cause="a flat FRC without confirmed undrift and run progress is "
+            "usually drift-limited or measured on a sparse region, not a "
+            "finished reconstruction",
+            action="confirm the run is drift-corrected and well underway (pass "
+            "undrift_done=True and progress_frac); only then treat a flat FRC "
+            "as a stop signal.",
         )
         return out
 
@@ -869,12 +896,26 @@ def db_anomalies(
         val = _g(m, met)
         if val is None:
             continue
+        # Guard a degenerate / collapsed-spread cohort: if the robust band has
+        # essentially no width (all-equal runs, or a zero median), the eps floor
+        # below would make ANY deviation look like a huge outlier and over-flag a
+        # tiny difference as "bad" with a nonsensical "median 0, p20-p80 0-0"
+        # message. Treat that as insufficient spread and skip the metric -- we
+        # cannot judge an anomaly without a real reference distribution. (This is
+        # a deliberate improvement over the V0.8 port, which only floored eps and
+        # so mis-fired on collapsed cohorts.)
+        half_low = median - p20
+        half_high = p80 - median
+        real_spread = max(half_low, half_high)
+        scale = max(abs(median), abs(p20), abs(p80))
+        if real_spread <= max(scale * 0.02, 1e-9):
+            continue
         eps = max(abs(median) * 0.02, 1e-9)
         if val >= median:
-            spread = max(p80 - median, eps)
+            spread = max(half_high, eps)
             dev = (val - median) / spread  # >= 0
         else:
-            spread = max(median - p20, eps)
+            spread = max(half_low, eps)
             dev = (val - median) / spread  # <= 0
         mag = abs(dev)
         if mag < z_flag:

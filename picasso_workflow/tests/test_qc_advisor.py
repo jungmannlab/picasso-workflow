@@ -97,6 +97,22 @@ class TestDiagnose:
         assert "low photon count" in by_metric["nena"].cause
         assert "high spot overlap" in by_metric["nena"].cause
 
+    def test_overconc_golden_full_list(self):
+        # GOLDEN: lock the EXACT (metric, severity) sequence + count of the
+        # composed findings for the overconcentrated fixture against the V0.8
+        # reference output, so a dropped/added/re-ordered finding anywhere is
+        # caught -- not just the individually-asserted metrics.
+        golden = [
+            ("nena", "bad"),
+            ("overlap", "bad"),
+            ("photons_per_loc", "bad"),
+            ("background", "warn"),
+            ("duty_cycle", "warn"),
+            ("sbr", "warn"),
+        ]
+        got = [(f.metric, f.severity) for f in diagnose(OVERCONC)]
+        assert got == golden
+
     def test_good_run_reports_ok(self):
         good = dict(
             nena_zoom_nm=3.1,
@@ -200,6 +216,30 @@ class TestFrcTrend:
         frc = [10.1, 10.05, 10.02, 10.0]
         out = frc_trend(frames, frc, undrift_done=False)
         assert out["status"] == "plateau_check"
+
+    def test_flat_with_default_args_does_not_say_stop(self):
+        # DEVIATION from V0.8: with no guard context (default undrift_done=None,
+        # progress_frac=None) a flat curve must NOT emit the confident stop
+        # signal -- a false stop is a high-cost re-acquisition.
+        frames = [1000, 2000, 4000, 8000, 16000, 32000]
+        frc = [10.2, 10.1, 10.05, 10.02, 10.01, 10.0]
+        out = frc_trend(frames, frc)  # default args
+        assert out["status"] == "plateau_unconfirmed"
+        assert "stop" not in out["action"].lower() or "only then" in (
+            out["action"].lower()
+        )
+        assert "you can stop" not in out["action"].lower()
+
+    def test_flat_needs_both_guards_for_plateau(self):
+        frames = [1000, 2000, 4000, 8000]
+        frc = [10.1, 10.05, 10.02, 10.0]
+        # undrift confirmed but no progress -> still unconfirmed
+        out = frc_trend(frames, frc, undrift_done=True)
+        assert out["status"] == "plateau_unconfirmed"
+        # both guards -> the confident stop
+        out2 = frc_trend(frames, frc, undrift_done=True, progress_frac=0.9)
+        assert out2["status"] == "plateau"
+        assert "you can stop" in out2["action"]
 
     def test_flat_but_early_is_plateau_early(self):
         frames = [1000, 2000, 4000, 8000]
@@ -349,6 +389,22 @@ class TestCohortAndAnomalies:
         stats = cohort_stats(self._mock_cohort_runs()[:2])
         # n=2 < min_n=5 -> no anomaly even if the value is extreme
         assert db_anomalies({"photons_per_loc": 100}, stats) == []
+
+    def test_collapsed_spread_cohort_not_over_flagged(self):
+        # an all-equal cohort collapses the p20<->p80 band; a deviation must NOT
+        # be reported as `bad` off a nonsensical "median X, p20-p80 X-X" band.
+        allequal = [{"photons_per_loc": 8000} for _ in range(8)]
+        stats = cohort_stats(allequal)
+        assert (
+            stats["photons_per_loc"]["p20"] == stats["photons_per_loc"]["p80"]
+        )
+        # even a large nominal deviation is skipped (insufficient spread)
+        assert db_anomalies({"photons_per_loc": 2000}, stats) == []
+
+    def test_zero_median_cohort_not_over_flagged(self):
+        stats = cohort_stats([{"background": 0.0} for _ in range(8)])
+        # a zero-median / zero-spread band must not fire a bad anomaly
+        assert db_anomalies({"background": 5.0}, stats) == []
 
     def test_lower_better_metric_direction(self):
         # a NeNA far ABOVE the cohort (worse for a lower-better metric) is bad.
@@ -638,12 +694,79 @@ class TestNotifier:
         assert fail and fail[0].severity == "bad"
         assert "OOM" in fail[0].message
 
-    def test_unsubscribed_user_gets_nothing(self):
+    def test_unsubscribed_user_gets_nothing_for_routine_event(self):
         sent = []
         eng = NotifierEngine(sink=sent.append)
-        # no subscriptions at all
-        out = eng.handle_event(RegistryEvent("run3", "analysis_done"))
+        # a routine info event with no subscribers -> nobody, no broadcast
+        out = eng.handle_event(RegistryEvent("run3", "acquisition_started"))
         assert out == [] and sent == []
+
+    def test_critical_with_no_subscribers_hits_fallback_sink(self):
+        # a critical (analysis_failed) for a run NOBODY subscribed to must not be
+        # silently dropped -- it broadcasts to the fallback sink exactly once.
+        broadcast = []
+        eng = NotifierEngine(fallback_sink=broadcast.append)
+        out = eng.handle_event(
+            RegistryEvent(
+                "runX", "analysis_failed", detail={"error": "node died"}
+            )
+        )
+        assert len(out) == 1
+        assert out[0].user == NotifierEngine.FALLBACK_USER
+        assert out[0].severity == "bad"
+        assert len(broadcast) == 1
+        # replay does not re-broadcast (deduped under the sentinel user)
+        again = eng.handle_event(
+            RegistryEvent(
+                "runX", "analysis_failed", detail={"error": "node died"}
+            )
+        )
+        assert again == [] and len(broadcast) == 1
+
+    def test_fallback_defaults_to_main_sink(self):
+        sent = []
+        eng = NotifierEngine(sink=sent.append)  # no explicit fallback
+        eng.handle_event(RegistryEvent("runY", "analysis_failed"))
+        assert len(sent) == 1  # main sink used as the fallback
+
+    def test_subscribed_critical_does_not_also_broadcast(self):
+        sent, broadcast = [], []
+        eng = NotifierEngine(sink=sent.append, fallback_sink=broadcast.append)
+        eng.subscribe("alice", "runZ")
+        out = eng.handle_event(RegistryEvent("runZ", "analysis_failed"))
+        # delivered to the subscriber only; no redundant broadcast
+        assert len(out) == 1 and out[0].user == "alice"
+        assert broadcast == []
+
+    def test_seqless_qc_updates_worsening_both_delivered(self):
+        # two seq-less qc_updates whose picture worsens (healthy -> bad) must
+        # BOTH be delivered; the 2nd must not be deduped away on `kind` alone.
+        sent = []
+        eng = NotifierEngine(sink=sent.append)
+        eng.subscribe("alice", "runW", min_severity="info")
+        n1 = eng.handle_event(
+            RegistryEvent("runW", "qc_update", metrics={"nena_zoom_nm": 3.0})
+        )
+        n2 = eng.handle_event(
+            RegistryEvent(
+                "runW",
+                "qc_update",
+                metrics={"nena_zoom_nm": 9.0, "photons_per_loc": 1500},
+            )
+        )
+        assert len(n1) == 1 and len(n2) == 1
+        # the escalation is visible
+        assert n2[0].severity in ("warn", "bad")
+
+    def test_seqless_qc_update_identical_repeat_deduped(self):
+        eng = NotifierEngine()
+        eng.subscribe("alice", "runV")
+        m = {"nena_zoom_nm": 3.0}
+        first = eng.handle_event(RegistryEvent("runV", "qc_update", metrics=m))
+        repeat = eng.handle_event(
+            RegistryEvent("runV", "qc_update", metrics=dict(m))
+        )
+        assert len(first) == 1 and repeat == []
 
     def test_dedup_same_event_notifies_once(self):
         eng = NotifierEngine()
