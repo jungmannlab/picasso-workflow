@@ -11496,6 +11496,17 @@ class Window(QtWidgets.QMainWindow):
         )
         self.addl_options_layout.addWidget(self.always_save)
 
+        self.continue_previous = QtWidgets.QCheckBox(
+            "Continue previous run (resume)."
+        )
+        self.continue_previous.setToolTip(
+            "Resume the latest run in the results folder instead of "
+            "starting from scratch: previously succeeded modules are "
+            "skipped, saved localizations are restored from the last "
+            "checkpoint, and modules with changed parameters re-run."
+        )
+        self.addl_options_layout.addWidget(self.continue_previous)
+
         # resize the widgets
         # Keep a sensible minimum width, but let the splitters drive height.
         self.current_module.setMinimumWidth(500)
@@ -15715,6 +15726,7 @@ class Window(QtWidgets.QMainWindow):
 
         # Add coordinator creation based on workflow type
         always_save = self.always_save.isChecked()
+        continue_previous = self.continue_previous.isChecked()
         document_confluence = self.document_confluence_checkbox.isChecked()
         document_html = self.document_html_checkbox.isChecked()
         if workflow_type_index == 0:  # Single Workflow
@@ -15755,7 +15767,10 @@ class Window(QtWidgets.QMainWindow):
                     "    )",
                     "",
                     "    # Run workflow",
-                    "    coordinator.run_analysis(workflow_modules_sgl)",
+                    "    coordinator.run_analysis(",
+                    "        workflow_modules_sgl,",
+                    f"        continue_previous_runners={continue_previous},",
+                    "    )",
                 ]
             )
         elif workflow_type_index == 1:  # Aggregation Workflow
@@ -15774,7 +15789,11 @@ class Window(QtWidgets.QMainWindow):
                     "    )",
                     "",
                     "    # Run analysis",
-                    "    coordinator.run_analysis(workflow_modules_sgl, workflow_modules_agg)",
+                    "    coordinator.run_analysis(",
+                    "        workflow_modules_sgl,",
+                    "        workflow_modules_agg,",
+                    f"        continue_previous_runners={continue_previous},",
+                    "    )",
                 ]
             )
         elif workflow_type_index == 2:  # Investigation Workflow
