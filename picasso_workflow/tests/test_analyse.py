@@ -3174,6 +3174,57 @@ class TestAnalyseModules(unittest.TestCase):
         del self.ap.metric
         shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
 
+    def test_branch_item_resolution_tolerates_array_params(self):
+        """_resolve_branch_overrides must not choke on array-valued params
+        (a bare ``obj == "$branch_item"`` would raise on an ndarray)."""
+        params = {
+            "roi": np.array([1.0, 2.0, 3.0]),
+            "nth": ("$branch_item",),
+            "keyed": ("$branch_item", "k"),
+        }
+        out = analyse.AutoPicasso._resolve_branch_overrides(
+            params, 0, {"k": 7}
+        )
+        assert np.array_equal(out["roi"], np.array([1.0, 2.0, 3.0]))
+        assert out["nth"] == {"k": 7}
+        assert out["keyed"] == 7
+
+    def test_summarize_branches_autodetect_label_alignment(self):
+        """A metric present in only some branches keeps its values aligned to
+        the correct branch labels (no positional mislabel)."""
+        branches = [
+            {"label": "a", "00_m": {"only_bc": None}},
+            {"label": "b", "00_m": {"only_bc": 2.0}},
+            {"label": "c", "00_m": {"only_bc": 3.0}},
+        ]
+        series, series_labels = analyse.AutoPicasso._autodetect_branch_metrics(
+            branches
+        )
+        # branch "a" has no numeric value -> dropped from both, b/c kept aligned
+        assert series["00_m: only_bc"] == [2.0, 3.0]
+        assert series_labels["00_m: only_bc"] == ["b", "c"]
+
+    def test_branch_skips_join_module_on_skipbranch(self):
+        """A join module raising SkipBranch is dropped, the run continues."""
+        from picasso_workflow.analyse import SkipBranch
+
+        def joinskip(sub_idx, params, calling_module_dir=None, suffix=""):
+            raise SkipBranch("empty join")
+
+        self.ap.joinskip = joinskip
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 2,
+            "branch_labels": ["a", "b"],
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [("joinskip", {})],
+        }
+        _, results = self.ap.branch(2, parameters)
+        assert results["join"] == {}  # skipped, not fatal
+        assert len(results["branches"]) == 2
+        del self.ap.joinskip
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
     def test_summarize_branches_autodetects_metrics(self):
         """Given a per-branch results list, summarize_branches flattens the
         numeric metrics (skipping bookkeeping keys) and labels by branch."""

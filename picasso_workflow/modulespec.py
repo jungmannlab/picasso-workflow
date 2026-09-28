@@ -884,14 +884,23 @@ def _validate_branch_step(i, params, scope, registry, available):
     """
     errors = []
 
-    branch_type = params.get("branch_type", "explicit")
-    if branch_type == "runtime" and params.get("branch_over") is None:
+    branch_type = params.get("branch_type")
+    if branch_type not in ("explicit", "runtime"):
+        # Missing or unknown (e.g. the removed "screen"): AutoPicasso.branch
+        # would KeyError / ValueError at run time after the prefix ran, so
+        # reject it here instead.
+        errors.append(
+            f"[{i}.branch] branch_type must be 'explicit' or 'runtime' "
+            f"(got {branch_type!r})"
+        )
+    elif branch_type == "runtime" and params.get("branch_over") is None:
         errors.append(
             f"[{i}.branch] runtime branch requires 'branch_over' (a value or "
             "command that resolves to a list; its length sets the branch count)"
         )
-    elif branch_type == "explicit" and not (
-        params.get("n_branches") or params.get("branch_labels")
+    elif branch_type == "explicit" and (
+        params.get("n_branches") is None
+        and params.get("branch_labels") is None
     ):
         errors.append(
             f"[{i}.branch] explicit branch requires 'n_branches' or "

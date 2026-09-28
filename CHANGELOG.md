@@ -51,10 +51,10 @@ This file was started after v0.5.6; earlier history is in the git log.
   first sub-module exactly like a top-level module. The parameter form shows a
   hint pointing at the inline rows. This makes a freshly added branch usable
   without hand-typing nested module tuples (previously the indented editing
-  only worked once a branch already had sub-modules). `branch_type` now renders
-  as a dropdown (`explicit` / `runtime` / `screen`), and the type-specific
-  parameters are only shown for the matching type: `n_branches` / `branch_labels`
-  for `explicit`, `split` for `runtime`, and `screen` for `screen`.
+  only worked once a branch already had sub-modules). `branch_type` renders as
+  a dropdown, and the type-specific parameters are only shown for the matching
+  type: `n_branches` / `branch_labels` for `explicit`, `branch_over` /
+  `label_template` for `runtime` (see the branch simplification entry above).
 
 - `pick_origami` now re-centres every accepted pick on its localizations'
   centre of mass right after identification and re-picks once around the new

@@ -287,12 +287,14 @@ class CellMask:
             self._binary_mask = np.zeros_like(binary_mask, dtype=np.bool_)
             self._recalc_density_mask_from_binary()
             return
+        if raise_if_missing and (
+            nth_largest < 0 or nth_largest >= feature.size
+        ):
+            raise IndexError(
+                f"filter_mask: requested cell rank {nth_largest} "
+                f"(0-based) but only {feature.size} component(s) exist."
+            )
         if nth_largest >= feature.size:
-            if raise_if_missing:
-                raise IndexError(
-                    f"filter_mask: requested cell rank {nth_largest} "
-                    f"(0-based) but only {feature.size} component(s) exist."
-                )
             logger.warning(
                 f"filter_mask: requested {nth_largest} largest cell "
                 f"(starting 0) but only {feature.size} components exist; "

@@ -1889,6 +1889,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                     sub_results = self._run_branch_submodule(
                         module_name, sub_idx, jp, join_dir
                     )
+                except SkipBranch as e:
+                    # A join module with no data (e.g. all branches skipped)
+                    # is dropped rather than failing the run, mirroring the
+                    # per-branch skip contract.
+                    logger.info(
+                        f"branch (module {i:02d}): skipped join module "
+                        f"'{module_name}' ({e})."
+                    )
+                    _branch_step_end(join_group, sub_idx, "skipped")
+                    continue
                 except BaseException:
                     _branch_step_end(join_group, sub_idx, "failed")
                     raise
@@ -2009,7 +2019,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         Runs *before* the ``$`` command resolution so the result is a plain
         value (or a further ``$``/``$$`` command to resolve next).
         """
-        if obj == "$branch_item":
+        if isinstance(obj, str) and obj == "$branch_item":
             return branch_item
         if isinstance(obj, dict):
             return {
@@ -2136,18 +2146,18 @@ class AutoPicasso(util.AbstractModuleCollection):
             return out
 
         # Build the series to plot: metric-name -> list of per-branch values.
+        # For the autodetected path, series_labels[metric] holds the branch
+        # label for each *kept* value, so a metric missing in some branch stays
+        # correctly labelled (see _autodetect_branch_metrics).
         autodetected = False
+        series_labels = {}
         if self._is_branch_result_list(raw_values):
             # A branch module's raw per-branch results list: flatten each
             # branch to its numeric scalar metrics and pivot into one series
-            # per metric. Labels default to the branch labels. This is what a
-            # zero-argument summarize_branches join receives.
-            series = self._autodetect_branch_metrics(raw_values, _num_list)
+            # per metric. This is what a zero-argument summarize_branches join
+            # receives.
+            series, series_labels = self._autodetect_branch_metrics(raw_values)
             autodetected = True
-            if labels is None:
-                labels = [
-                    str(pb.get("label", k)) for k, pb in enumerate(raw_values)
-                ]
         elif isinstance(raw_values, dict):
             series = {
                 str(name): _num_list(vals) for name, vals in raw_values.items()
@@ -2198,10 +2208,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             if len(series) > 1:
                 ax.legend()
             ax.set_title(title)
-        elif autodetected and len(nonempty_metrics) > 1:
+        elif autodetected:
             # Autodetected metrics can have very different scales, so give each
             # its own subplot (small multiples) rather than mixing them on one
-            # y-axis.
+            # y-axis. Each metric is drawn with its own kept-branch labels so a
+            # metric missing in some branch stays correctly labelled.
             fig, axes = plt.subplots(
                 len(nonempty_metrics),
                 1,
@@ -2209,7 +2220,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 squeeze=False,
             )
             for ax, name in zip(axes[:, 0], nonempty_metrics):
-                self._draw_replicates_axis(ax, series[name], labels, plot_type)
+                self._draw_replicates_axis(
+                    ax, series[name], series_labels.get(name), plot_type
+                )
                 ax.set_ylabel(name)
             axes[-1, 0].set_xlabel(parameters.get("xlabel", "branch"))
             fig.suptitle(title)
@@ -2308,9 +2321,9 @@ class AutoPicasso(util.AbstractModuleCollection):
     def _is_branch_result_list(value):
         """Whether ``value`` looks like a branch module's per-branch results.
 
-        That is, a non-empty list of dicts where a dict carries a ``"label"``
-        key or a nested dict value (a sub-module's results). This is what a
-        zero-argument ``summarize_branches`` join is handed; it is
+        That is, a non-empty list of dicts that each carry a ``"label"`` key
+        (which the branch module always stamps on a per-branch result). This is
+        what a zero-argument ``summarize_branches`` join is handed; it is
         distinguished from a plain list of flat scalar dicts (e.g. one
         ``{target, reference}`` per branch), which keeps the flat-pivot path.
         """
@@ -2318,13 +2331,14 @@ class AutoPicasso(util.AbstractModuleCollection):
             return False
         if not all(isinstance(v, dict) for v in value):
             return False
-        return any(
-            ("label" in pb) or any(isinstance(vv, dict) for vv in pb.values())
-            for pb in value
-        )
+        # A branch module always stamps each per-branch dict with a "label"
+        # key; a plain list of flat metric dicts (e.g. one {target, reference}
+        # per branch) never does. Require it so explicitly-supplied values are
+        # not misrouted into the auto-summary path.
+        return all("label" in pb for pb in value)
 
     @classmethod
-    def _autodetect_branch_metrics(cls, branches, num_list):
+    def _autodetect_branch_metrics(cls, branches):
         """Flatten per-branch results into one series per numeric metric.
 
         Each branch dict is ``{"label": .., "NN_module": {..results..}, ..}``;
@@ -2332,6 +2346,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         becomes a metric named ``"NN_module: key"`` (or ``"key"`` for a
         top-level scalar), pivoted across branches. Metric order follows first
         appearance.
+
+        Returns ``(series, series_labels)`` where ``series[metric]`` is the list
+        of numeric values (branches lacking the metric are omitted) and
+        ``series_labels[metric]`` is the matching branch label for each kept
+        value, so a metric present in only some branches stays correctly
+        labelled.
         """
 
         def flat(pb):
@@ -2354,12 +2374,30 @@ class AutoPicasso(util.AbstractModuleCollection):
             return out
 
         flats = [flat(pb) for pb in branches]
+        branch_labels = [
+            str(pb.get("label", k)) for k, pb in enumerate(branches)
+        ]
         metrics = []
         for fb in flats:
             for k in fb:
                 if k not in metrics:
                     metrics.append(k)
-        return {m: num_list([fb.get(m) for fb in flats]) for m in metrics}
+        series = {}
+        series_labels = {}
+        for m in metrics:
+            vals = []
+            labs = []
+            for fb, lab in zip(flats, branch_labels):
+                if m not in fb:
+                    continue
+                try:
+                    vals.append(float(fb[m]))
+                    labs.append(lab)
+                except (TypeError, ValueError):
+                    continue
+            series[m] = vals
+            series_labels[m] = labs
+        return series, series_labels
 
     @staticmethod
     def _draw_replicates_axis(ax, vals, labels, plot_type="box"):
