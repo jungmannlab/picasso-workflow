@@ -38,6 +38,10 @@ from picasso_workflow.html_reporter import (
     write_aggregation_index,
 )
 from picasso_workflow.modulespec import (
+    CHANNEL_LOCS_CAPABILITIES,
+    LOCS_STATE_CAPABILITIES,
+    MEMORY_ONLY_CAPABILITIES,
+    SINGLE_LOCS_CAPABILITIES,
     Scope,
     restart_conflicts,
     validate_workflow,
@@ -47,6 +51,7 @@ from picasso_workflow.util import (
     ParameterCommandExecutor,
     ParameterTiler,
     DictSimpleTyper,
+    convert_filepath_for_machine,
 )
 from picasso_workflow import progress as pwprogress
 from picasso_workflow.progress import (
@@ -147,33 +152,83 @@ _LEGACY_CHANNEL_CHECKPOINT_MODULES = {
 }
 
 
-def _valid_checkpoint_part(part, kind):
-    """Validate one part of a checkpoint descriptor against the filesystem.
+def _existing_file(fp) -> str | None:
+    """Resolve a persisted file path against the current machine.
+
+    Paths in ``WorkflowRunner.yaml`` were written on the machine that ran
+    the analysis; :func:`~picasso_workflow.util.convert_filepath_for_machine`
+    translates known drive roots (``Drivepaths`` config) so a run can be
+    resumed on another machine.
 
     Parameters
     ----------
-    part : dict or None
-        The ``single`` or ``channels`` part of a checkpoint descriptor.
-    kind : str
-        ``"single"`` or ``"channels"``.
+    fp : object
+        The persisted path (any type; non-strings are rejected).
 
     Returns
     -------
-    bool
-        Whether the part is well-formed and all referenced files exist.
+    str or None
+        The (possibly translated) path if the file exists, else None.
+    """
+    if not isinstance(fp, str) or not fp:
+        return None
+    fp = convert_filepath_for_machine(fp)
+    return fp if os.path.isfile(fp) else None
+
+
+def _valid_single_part(part) -> dict | None:
+    """Validate the ``single`` part of a checkpoint descriptor.
+
+    Parameters
+    ----------
+    part : object
+        The candidate part.
+
+    Returns
+    -------
+    dict or None
+        The part with a machine-resolved file path, or None if malformed
+        or the file is missing.
     """
     if not isinstance(part, dict):
-        return False
-    if kind == "single":
-        fp = part.get("filepath")
-        return isinstance(fp, str) and os.path.isfile(fp)
+        return None
+    fp = _existing_file(part.get("filepath"))
+    return {"filepath": fp} if fp is not None else None
+
+
+def _valid_channels_part(part) -> dict | None:
+    """Validate the ``channels`` part of a checkpoint descriptor.
+
+    Parameters
+    ----------
+    part : object
+        The candidate part.
+
+    Returns
+    -------
+    dict or None
+        The part with machine-resolved file paths (and tags derived from
+        the filenames when absent or malformed), or None if malformed or
+        any referenced file is missing.
+    """
+    if not isinstance(part, dict):
+        return None
     fps = part.get("filepaths")
-    if not isinstance(fps, list) or not fps:
-        return False
-    return all(isinstance(fp, str) and os.path.isfile(fp) for fp in fps)
+    if not isinstance(fps, (list, tuple)) or not fps:
+        return None
+    resolved = [_existing_file(fp) for fp in fps]
+    if any(fp is None for fp in resolved):
+        return None
+    tags = part.get("tags")
+    if not isinstance(tags, (list, tuple)) or len(tags) != len(resolved):
+        # files are named {tag}.hdf5 by _save_datasets_agg
+        tags = [os.path.splitext(os.path.basename(fp))[0] for fp in resolved]
+    return {"filepaths": resolved, "tags": list(tags)}
 
 
-def _checkpoint_from_module_results(module_name, module_results):
+def _checkpoint_from_module_results(
+    module_name: str, module_results: dict
+) -> dict | None:
     """Extract a restorable checkpoint from a module's saved results.
 
     Parameters
@@ -189,89 +244,91 @@ def _checkpoint_from_module_results(module_name, module_results):
     dict or None
         A checkpoint descriptor (``single`` and/or ``channels`` parts, see
         :meth:`AutoPicasso.load_checkpoint`), or None if the module results
-        reference no restorable locs on disk.
+        reference no restorable locs on disk. A descriptor may cover only
+        part of the recorded state (e.g. its channel files were deleted);
+        the resume planner checks whether the unrestored state is actually
+        needed before accepting it (see ``_checkpoint_lost_capabilities``).
     """
     # 1) explicit descriptor recorded by the module / module_decorator
     explicit = module_results.get("checkpoint")
     if isinstance(explicit, dict):
-        valid = {
-            kind: part
-            for kind, part in explicit.items()
-            if kind in ("single", "channels")
-            and _valid_checkpoint_part(part, kind)
-        }
+        valid = {}
+        if (single := _valid_single_part(explicit.get("single"))) is not None:
+            valid["single"] = single
+        channels = _valid_channels_part(explicit.get("channels"))
+        if channels is not None:
+            valid["channels"] = channels
         if valid:
+            if len(valid) < len(explicit.keys() & {"single", "channels"}):
+                logger.warning(
+                    "Checkpoint descriptor is only partially restorable "
+                    "(some files are missing); the resume planner checks "
+                    "whether the missing state is needed."
+                )
             return valid
     # 2) legacy channel keys (runs recorded before the explicit descriptor)
     if module_name in _LEGACY_CHANNEL_CHECKPOINT_MODULES:
-        fps = module_results.get("filepaths")
-        part = {"filepaths": fps}
-        if _valid_checkpoint_part(part, "channels"):
-            tags = module_results.get("tags")
-            if not isinstance(tags, list) or len(tags) != len(fps):
-                # files are named {tag}.hdf5 by _save_datasets_agg
-                tags = [
-                    os.path.splitext(os.path.basename(fp))[0] for fp in fps
-                ]
-            part["tags"] = tags
+        part = _valid_channels_part(
+            {
+                "filepaths": module_results.get("filepaths"),
+                "tags": module_results.get("tags"),
+            }
+        )
+        if part is not None:
             return {"channels": part}
     # 3) legacy single-locs key
     if module_name in _LEGACY_SINGLE_CHECKPOINT_MODULES:
         fp = module_results.get("filepath")
-        if isinstance(fp, str) and fp.endswith(".hdf5") and os.path.isfile(fp):
-            return {"single": {"filepath": fp}}
+        if isinstance(fp, str) and fp.endswith(".hdf5"):
+            resolved = _existing_file(fp)
+            if resolved is not None:
+                return {"single": {"filepath": resolved}}
     # 4) legacy module_decorator auto-save (save_locs / always_save)
     folder = module_results.get("folder")
     if isinstance(folder, str):
-        fp = os.path.join(folder, "locs.hdf5")
-        if os.path.isfile(fp):
+        fp = _existing_file(os.path.join(folder, "locs.hdf5"))
+        if fp is not None:
             return {"single": {"filepath": fp}}
     return None
 
 
-def _strip_originalnocmd(value):
-    """Reconstruct raw parameter commands from resolved parameters.
-
-    ``ParameterCommandExecutor`` resolves ``$``-command tuples in place but
-    keeps the raw command under a companion ``{key}_originalnocmd`` key.
-    For comparison against a fresh (unresolved) parameter set, substitute
-    the originals back and drop the companion keys, recursively.
+def _checkpoint_lost_capabilities(checkpoint: dict | None) -> frozenset[str]:
+    """The capabilities still lost after restoring a checkpoint.
 
     Parameters
     ----------
-    value : object
-        A (deep-copied) parameter structure; modified in place where dicts
-        are encountered.
+    checkpoint : dict or None
+        A checkpoint descriptor, or None for no restore at all.
 
     Returns
     -------
-    object
-        The structure with original commands restored.
+    frozenset[str]
+        Capability tokens the restart must not depend on: the memory-only
+        set plus whatever locs state the checkpoint does not cover.
     """
-    if isinstance(value, dict):
-        for key in [k for k in value if k.endswith("_originalnocmd")]:
-            value[key[: -len("_originalnocmd")]] = value.pop(key)
-        for key in value:
-            value[key] = _strip_originalnocmd(value[key])
-    elif isinstance(value, list):
-        return [_strip_originalnocmd(v) for v in value]
-    return value
+    restored: frozenset[str] = frozenset()
+    if checkpoint:
+        if "single" in checkpoint:
+            restored |= SINGLE_LOCS_CAPABILITIES
+        if "channels" in checkpoint:
+            restored |= CHANNEL_LOCS_CAPABILITIES
+    return MEMORY_ONLY_CAPABILITIES | (LOCS_STATE_CAPABILITIES - restored)
 
 
-def _module_parameters_changed(prev_params, new_params):
+def _module_parameters_changed(prev_params: dict, new_params: dict) -> bool:
     """Whether a module's parameters changed between two runs.
 
-    Both sides are normalized (raw commands reconstructed from
-    ``*_originalnocmd`` companions, then simple-typed the same way
-    ``WorkflowRunner.save`` serializes to yaml) so that command resolution
-    and tuple/list round-trips do not read as changes. A false positive
-    only costs a safe extra re-run.
+    Compares the previous run's *pristine* parameters (snapshotted before
+    any ``$``-command resolution or module write-back, see
+    ``WorkflowRunner.workflow_modules_pristine``) against the caller's.
+    Both sides are simple-typed the same way ``WorkflowRunner.save``
+    serializes to yaml, so numpy/tuple round-trips do not read as changes.
+    A false positive only costs a safe extra re-run.
 
     Parameters
     ----------
     prev_params : dict
-        The module's parameters from the previous run (yaml-loaded,
-        possibly with resolved commands).
+        The module's pristine parameters from the previous run.
     new_params : dict
         The module's parameters as configured now.
 
@@ -280,9 +337,74 @@ def _module_parameters_changed(prev_params, new_params):
     bool
     """
     typer = DictSimpleTyper(to_simple_type=True)
-    prev = typer.run(_strip_originalnocmd(copy.deepcopy(prev_params)))
-    new = typer.run(_strip_originalnocmd(copy.deepcopy(new_params)))
+    prev = typer.run(copy.deepcopy(prev_params))
+    new = typer.run(copy.deepcopy(new_params))
     return prev != new
+
+
+_RUNSTAMP_RE = re.compile(r"_(\d{6}-\d{4})$")
+
+
+def _strip_runstamp(report_name: str) -> str:
+    """Strip a trailing ``_%y%m%d-%H%M`` runstamp from a report name.
+
+    The coordinators stamp report names per launch; for finding a previous
+    run, the stable, stamp-free base name is what matters.
+
+    Parameters
+    ----------
+    report_name : str
+        The (possibly stamped) report name.
+
+    Returns
+    -------
+    str
+        The base name without a trailing runstamp.
+    """
+    return _RUNSTAMP_RE.sub("", report_name)
+
+
+def _find_previous_runner_postfix(folder: str, report_name: str) -> str | None:
+    """Find the postfix of the latest previous runner folder.
+
+    Runner folders are named ``{report_name}_{postfix}``, where the postfix
+    ends in a ``%y%m%d-%H%M`` timestamp and may carry a per-run token in
+    front of it (e.g. ``p1a2b3_240310-1130``, woven in by the
+    coordinators). The folder with the latest trailing timestamp wins.
+
+    Parameters
+    ----------
+    folder : str
+        The folder to look in.
+    report_name : str
+        The stable (stamp-free) base report name.
+
+    Returns
+    -------
+    str or None
+        The postfix of the latest previous runner, or None if none found.
+    """
+    try:
+        dirs = [
+            it
+            for it in os.listdir(folder)
+            if it.startswith(report_name + "_")
+            and os.path.isdir(os.path.join(folder, it))
+        ]
+    except FileNotFoundError:
+        return None
+    latest_datetime = None
+    latest_postfix = None
+    for d in dirs:
+        postfix = d[len(report_name) + 1 :]
+        try:
+            dt = datetime.strptime(postfix.rsplit("_", 1)[-1], "%y%m%d-%H%M")
+        except ValueError:
+            continue
+        if latest_datetime is None or latest_datetime < dt:
+            latest_datetime = dt
+            latest_postfix = postfix
+    return latest_postfix
 
 
 # logger = logging.getLogger(__name__)
@@ -399,24 +521,32 @@ class AggregationWorkflowRunner:
         if continue_previous_runner:
             folder = analysis_config["result_location"]
             report_name = reporter_config["report_name"]
-            # Use extracted postfix if available, otherwise
-            # check for previous runner
+            # Candidate postfixes: an explicitly passed/extracted one first
+            # (it may name the exact run to adopt), then the latest previous
+            # run found on disk. The extracted postfix may merely be THIS
+            # launch's timestamp (the coordinators stamp the report name per
+            # launch), in which case its folder does not exist and the
+            # discovery takes over.
+            candidates = []
             if extracted_postfix is not None:
-                postfix = extracted_postfix
-            else:
-                postfix = cls._check_previous_runner(folder, report_name)
-            logger.debug(f"Found postfix: {postfix}")
-            if postfix is not None:
-                report_name = report_name + "_" + postfix
-                runner_folder = os.path.join(folder, report_name)
+                candidates.append(extracted_postfix)
+            discovered = cls._check_previous_runner(folder, report_name)
+            if discovered is not None and discovered not in candidates:
+                candidates.append(discovered)
+            logger.debug(f"Previous-runner postfix candidates: {candidates}")
+            for candidate in candidates:
+                runner_folder = os.path.join(
+                    folder, report_name + "_" + candidate
+                )
                 try:
                     instance = cls.load(runner_folder)
-                    # take over the caller's (possibly fixed) parameters;
-                    # change detection happens per WorkflowRunner
-                    instance._adopt_aggregation_workflow(aggregation_workflow)
-                    return instance
                 except FileNotFoundError:
                     logger.debug(f"Could not load runner from {runner_folder}")
+                    continue
+                # take over the caller's (possibly fixed) parameters;
+                # change detection happens per WorkflowRunner
+                instance._adopt_aggregation_workflow(aggregation_workflow)
+                return instance
 
         # If we have an extracted postfix but aren't continuing, use it
         if extracted_postfix is not None and not continue_previous_runner:
@@ -529,27 +659,7 @@ class AggregationWorkflowRunner:
             The postfix of the latest previous runner in that location, or
             None if none are found.
         """
-        dirs = [
-            it
-            for it in os.listdir(folder)
-            if os.path.isdir(os.path.join(folder, it))
-        ]
-        dirs = [it for it in dirs if report_name in it]
-        # find the latest runner
-        latest_datetime = None
-        latest_postfix = None
-        for d in dirs:
-            try:
-                # cut out the postfix
-                postfix_start = len(report_name) + 1
-                postfix = d[postfix_start:]
-                dt = datetime.strptime(postfix, "%y%m%d-%H%M")
-            except Exception:
-                continue
-            if latest_datetime is None or latest_datetime < dt:
-                latest_datetime = dt
-                latest_postfix = postfix
-        return latest_postfix
+        return _find_previous_runner_postfix(folder, report_name)
 
     def _initialize_confluence_interface(
         self,
@@ -1397,7 +1507,9 @@ class AggregationWorkflowRunner:
         instance.continue_workflow = True
         return instance
 
-    def _adopt_aggregation_workflow(self, new_aggregation_workflow) -> None:
+    def _adopt_aggregation_workflow(
+        self, new_aggregation_workflow: dict
+    ) -> None:
         """Adopt an edited aggregation workflow on resume.
 
         Counterpart to :meth:`WorkflowRunner.adopt_workflow_modules` at the
@@ -1406,7 +1518,8 @@ class AggregationWorkflowRunner:
         runners, where the per-module change detection happens. Only adopted
         if the module-name sequences of both stages and the number of
         dataset tiles are unchanged; otherwise the previous run's workflow
-        is kept (warned).
+        is kept (warned). Best-effort: an error here must not break the
+        resume, only disable adoption.
 
         Parameters
         ----------
@@ -1415,6 +1528,18 @@ class AggregationWorkflowRunner:
             ``single_dataset_tileparameters``, ``single_dataset_modules``
             and ``aggregation_modules``).
         """
+        try:
+            self._do_adopt_aggregation_workflow(new_aggregation_workflow)
+        except Exception as e:
+            logger.warning(
+                f"Could not adopt the edited aggregation workflow on "
+                f"resume ({e!r}); keeping the previous run's workflow."
+            )
+
+    def _do_adopt_aggregation_workflow(
+        self, new_aggregation_workflow: dict
+    ) -> None:
+        """Implementation of :meth:`_adopt_aggregation_workflow`."""
         if not new_aggregation_workflow:
             return
 
@@ -1434,7 +1559,7 @@ class AggregationWorkflowRunner:
         tilepars = new_aggregation_workflow.get(
             "single_dataset_tileparameters"
         )
-        if tilepars is None:
+        if not tilepars:
             logger.warning(
                 "Not adopting the edited aggregation workflow on resume: "
                 "single_dataset_tileparameters missing."
@@ -1486,8 +1611,15 @@ class WorkflowRunner:
 
         self.parameter_command_executor = ParameterCommandExecutor(self)
         self.results = {}
-        # The previous run's modules (set by adopt_workflow_modules on
-        # resume); lets _plan_resume detect changed parameters.
+        # Pristine snapshot of the workflow modules as configured, taken
+        # before any $-command resolution or module write-back mutates the
+        # parameter dicts (both happen in place). Persisted to
+        # WorkflowRunner.yaml so a resume can compare the caller's
+        # parameters against what the previous run was configured with.
+        self.workflow_modules_pristine = None
+        # The previous run's pristine modules (set by
+        # adopt_workflow_modules on resume); lets _plan_resume detect
+        # changed parameters. Consumed by run().
         self._previous_workflow_modules = None
         # Progress tracking. ``progress`` is built lazily in run() (needs the
         # result folder and module list); ``_abort_requested`` supports a
@@ -1533,16 +1665,27 @@ class WorkflowRunner:
         """
         if continue_previous_runner:
             folder = analysis_config["result_location"]
-            report_name = reporter_config["report_name"]
-            postfix = cls._check_previous_runner(folder, report_name)
-            if postfix is not None:
-                report_name = report_name + "_" + postfix
-                runner_folder = os.path.join(folder, report_name)
-                instance = cls.load(runner_folder)
-                # take over the caller's (possibly fixed) parameters; the
-                # previous run's are kept for change detection on resume
-                instance.adopt_workflow_modules(workflow_modules)
-                return instance
+            # the coordinators stamp the report name per launch; a previous
+            # run is found by the stable, stamp-free base name
+            base_name = _strip_runstamp(reporter_config["report_name"])
+            found_postfix = cls._check_previous_runner(folder, base_name)
+            if found_postfix is not None:
+                runner_folder = os.path.join(
+                    folder, base_name + "_" + found_postfix
+                )
+                try:
+                    instance = cls.load(runner_folder)
+                except FileNotFoundError:
+                    # e.g. the previous run died before its first save():
+                    # the folder exists but holds no WorkflowRunner.yaml.
+                    # Fall through to creating a fresh runner.
+                    logger.debug(f"Could not load runner from {runner_folder}")
+                else:
+                    # take over the caller's (possibly fixed) parameters;
+                    # the previous run's pristine parameters are kept for
+                    # change detection on resume
+                    instance.adopt_workflow_modules(workflow_modules)
+                    return instance
 
         instance = cls(postfix)
         # set date and time to report name
@@ -1554,6 +1697,7 @@ class WorkflowRunner:
         instance._initialize_reporter(reporter_config)
         instance._initialize_analysis(analysis_config, report_name)
         instance.workflow_modules = workflow_modules
+        instance.workflow_modules_pristine = copy.deepcopy(workflow_modules)
         return instance
 
     @classmethod
@@ -1575,27 +1719,7 @@ class WorkflowRunner:
             The postfix of the latest previous runner in that location, or
             None if none are found.
         """
-        dirs = [
-            it
-            for it in os.listdir(folder)
-            if os.path.isdir(os.path.join(folder, it))
-        ]
-        dirs = [it for it in dirs if report_name in it]
-        # find the latest runner
-        latest_datetime = None
-        latest_postfix = None
-        for d in dirs:
-            try:
-                # cut out the postfix
-                postfix_start = len(report_name) + 1
-                postfix = d[postfix_start:]
-                dt = datetime.strptime(postfix, "%y%m%d-%H%M")
-            except Exception:
-                continue
-            if latest_datetime is None or latest_datetime < dt:
-                latest_datetime = dt
-                latest_postfix = postfix
-        return latest_postfix
+        return _find_previous_runner_postfix(folder, report_name)
 
     def _initialize_analysis(
         self, analysis_config: dict, report_name: str
@@ -1710,6 +1834,9 @@ class WorkflowRunner:
         # (see _plan_resume).
         plan = self._plan_resume()
         logger.info(f"Resume plan: {plan.description}")
+        # consume the previous-run diff: a second in-process run() must not
+        # re-fire a stale parameter-change frontier against post-run state
+        self._previous_workflow_modules = None
         if plan.checkpoint is not None:
             try:
                 self.autopicasso.load_checkpoint(plan.checkpoint)
@@ -1872,6 +1999,9 @@ class WorkflowRunner:
             "reporter_config": pce.run(self.reporter_config),
             "analysis_config": pce.run(self.analysis_config),
             "workflow_modules": pce.run(self.workflow_modules),
+            "workflow_modules_pristine": pce.run(
+                self.workflow_modules_pristine
+            ),
         }
         # logger.debug("saving data:")
         # logger.debug(str(data))
@@ -1901,6 +2031,10 @@ class WorkflowRunner:
         instance.analysis_config = data["analysis_config"]
         instance.analysis_config["result_location"] = os.path.join(dirn, "..")
         instance.workflow_modules = data["workflow_modules"]
+        # absent in yamls written before the pristine snapshot existed
+        instance.workflow_modules_pristine = data.get(
+            "workflow_modules_pristine"
+        )
         report_name = instance.reporter_config["report_name"]
         instance._initialize_analysis(instance.analysis_config, report_name)
         instance._initialize_reporter(instance.reporter_config)
@@ -1956,15 +2090,18 @@ class WorkflowRunner:
         )
         return self.results.get(module_id, {}).get("success", False)
 
-    def adopt_workflow_modules(self, new_modules) -> None:
+    def adopt_workflow_modules(self, new_modules: list) -> None:
         """Adopt an edited module list on resume, keeping the previous one.
 
         The typical resume scenario is "fix a parameter and re-run": the
-        caller's (edited) modules must replace the previous run's, which are
-        kept in ``self._previous_workflow_modules`` so that
-        :meth:`_plan_resume` can re-run from the first changed module. The
-        edited list is only adopted if its module-name sequence matches the
-        previous run's; otherwise the previous modules are kept (warned).
+        caller's (edited) modules must replace the previous run's, whose
+        *pristine* parameter snapshot (recorded before ``$``-command
+        resolution and module write-back mutated them) is kept in
+        ``self._previous_workflow_modules`` so that :meth:`_plan_resume`
+        can re-run from the first changed module. The edited list is only
+        adopted if its module-name sequence matches the previous run's;
+        otherwise the previous modules are kept (warned). Best-effort: an
+        error here must not break the resume, only disable adoption.
 
         Parameters
         ----------
@@ -1972,19 +2109,31 @@ class WorkflowRunner:
             The workflow modules as configured now, as
             ``(module_name, parameters)``.
         """
-        self._previous_workflow_modules = copy.deepcopy(self.workflow_modules)
-        if not new_modules:
-            return
-        prev_names = [name for name, _ in self.workflow_modules]
-        new_names = [name for name, _ in new_modules]
-        if prev_names != new_names:
+        try:
+            if not new_modules:
+                return
+            prev_pristine = self.workflow_modules_pristine
+            prev_names = [name for name, _ in self.workflow_modules]
+            new_names = [name for name, _ in new_modules]
+            if prev_names != new_names:
+                logger.warning(
+                    "Not adopting the edited workflow modules on resume: "
+                    f"the module sequence changed ({prev_names} -> "
+                    f"{new_names}); keeping the previous run's modules."
+                )
+                return
+            self.workflow_modules = new_modules
+            self.workflow_modules_pristine = copy.deepcopy(new_modules)
+            # Only a pristine snapshot supports parameter comparison: the
+            # yaml's workflow_modules carry resolved $-commands and module
+            # write-backs, which would read as changes. Old yamls (no
+            # snapshot) simply get no parameter-change detection.
+            self._previous_workflow_modules = prev_pristine
+        except Exception as e:
             logger.warning(
-                "Not adopting the edited workflow modules on resume: the "
-                f"module sequence changed ({prev_names} -> {new_names}); "
-                "keeping the previous run's modules."
+                f"Could not adopt the edited workflow modules on resume "
+                f"({e!r}); keeping the previous run's modules."
             )
-            return
-        self.workflow_modules = new_modules
 
     def _memory_is_warm(self) -> bool:
         """Whether the analysis worker still holds in-memory dataset state.
@@ -2005,6 +2154,38 @@ class WorkflowRunner:
             for attr in ("locs", "movie", "identifications", "channel_locs")
         )
 
+    def _restart_conflicts(
+        self, restart_index: int, checkpoint: dict | None
+    ) -> tuple[list, list]:
+        """Conflicts of restarting at ``restart_index`` after a restore.
+
+        Wraps :func:`~picasso_workflow.modulespec.restart_conflicts` with
+        the capabilities actually lost given the (possibly partial)
+        checkpoint, and never lets the best-effort annotation layer break
+        a run.
+
+        Parameters
+        ----------
+        restart_index : int
+            Index of the first module that would execute.
+        checkpoint : dict or None
+            The checkpoint that would be restored, or None.
+
+        Returns
+        -------
+        hard : list of str
+        soft : list of str
+        """
+        try:
+            return restart_conflicts(
+                self.workflow_modules,
+                restart_index,
+                lost_capabilities=_checkpoint_lost_capabilities(checkpoint),
+            )
+        except Exception as e:  # never let the spec layer break a run
+            logger.debug(f"restart_conflicts skipped ({e!r}).")
+            return [], []
+
     def _plan_resume(self) -> ResumePlan:
         """Decide where to start this run and what state to restore.
 
@@ -2012,12 +2193,16 @@ class WorkflowRunner:
         that did not previously succeed (per saved results + module folder),
         or the first one whose parameters changed since the previous run,
         whichever comes first. If in-memory state is still warm (live
-        re-run), execution skips straight to the frontier as before.
-        Otherwise the latest previously-succeeded module with a restorable
-        locs checkpoint on disk (that does not strand a memory-only
-        dependency, see :func:`~picasso_workflow.modulespec.restart_conflicts`)
-        determines the start: its locs are restored and the modules after it
-        re-run. With no such checkpoint, the run starts from scratch.
+        re-run with unchanged parameters), execution skips straight to the
+        frontier as before. Otherwise the latest previously-succeeded
+        module with a restorable locs checkpoint on disk (that does not
+        strand a needed in-memory dependency, see
+        :func:`~picasso_workflow.modulespec.restart_conflicts`) determines
+        the start: its locs are restored and the modules after it re-run.
+        With no checkpoint, execution still continues at the frontier if
+        the remaining modules need no lost in-memory state (file-mediated
+        workflows, e.g. after a manual step); otherwise it starts from
+        scratch.
 
         Returns
         -------
@@ -2025,13 +2210,25 @@ class WorkflowRunner:
         """
         n = len(self.workflow_modules)
         frontier = n
+        # one listdir instead of one per module: which module indices have
+        # a result folder ("previously analyzed")
+        try:
+            found_prefixes = {
+                d.split("_", 1)[0]
+                for d in os.listdir(self.result_folder)
+                if "_" in d
+                and os.path.isdir(os.path.join(self.result_folder, d))
+            }
+        except FileNotFoundError:
+            found_prefixes = set()
         for i, (module_name, _) in enumerate(self.workflow_modules):
             if not (
                 self.module_previously_succeeded(i, module_name)
-                and self.module_previously_analyzed(i)
+                and f"{i:02d}" in found_prefixes
             ):
                 frontier = i
                 break
+        params_changed = False
         if self._previous_workflow_modules is not None:
             for i, (module_name, module_parameters) in enumerate(
                 self.workflow_modules[:frontier]
@@ -2054,6 +2251,7 @@ class WorkflowRunner:
                         "there."
                     )
                     frontier = i
+                    params_changed = True
                     break
         if frontier == 0:
             return ResumePlan(
@@ -2071,7 +2269,11 @@ class WorkflowRunner:
                 f"all {n} modules previously succeeded (unchanged "
                 "parameters); skipping everything",
             )
-        if self._memory_is_warm():
+        # A live in-process re-run may continue on its warm state -- but
+        # not when a parameter change pulled the frontier back: the warm
+        # state then post-dates the module to re-run, so restore from a
+        # checkpoint (or re-run from scratch) instead.
+        if not params_changed and self._memory_is_warm():
             return ResumePlan(
                 frontier,
                 frontier,
@@ -2087,19 +2289,13 @@ class WorkflowRunner:
             )
             if checkpoint is None:
                 continue
-            try:
-                hard, soft = restart_conflicts(
-                    self.workflow_modules, k + 1, frontier
-                )
-            except Exception as e:  # never let the spec layer break a run
-                logger.debug(f"restart_conflicts skipped ({e!r}).")
-                hard, soft = [], []
-            for msg in soft:
-                logger.warning(f"Resume advisory: {msg}")
+            hard, soft = self._restart_conflicts(k + 1, checkpoint)
             if hard:
                 for msg in hard:
                     logger.info(f"Checkpoint at {module_id} not viable: {msg}")
                 continue
+            for msg in soft:
+                logger.warning(f"Resume advisory: {msg}")
             checkpoint = dict(checkpoint)
             checkpoint["module_index"] = k
             checkpoint["module_id"] = module_id
@@ -2110,6 +2306,24 @@ class WorkflowRunner:
                 f"restoring locs saved by {module_id}, re-running "
                 f"modules {k + 1} to {n - 1}",
             )
+        # No checkpoint. Continuing at the frontier without a restore is
+        # still valid when none of the remaining modules needs in-memory
+        # state from before it (file-mediated workflows) -- the behavior
+        # resumes relied on before checkpoints existed.
+        hard, soft = self._restart_conflicts(frontier, None)
+        if not hard:
+            for msg in soft:
+                logger.warning(f"Resume advisory: {msg}")
+            return ResumePlan(
+                frontier,
+                frontier,
+                None,
+                f"no locs checkpoint found, but modules {frontier} onward "
+                "need no in-memory state from before; continuing at "
+                f"module {frontier}",
+            )
+        for msg in hard:
+            logger.info(f"Continuing at module {frontier} not viable: {msg}")
         return ResumePlan(
             0,
             frontier,

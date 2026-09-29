@@ -209,7 +209,12 @@ decides where to restart:
 1. The **frontier** is the first module that must re-run: the first one
    that did not previously succeed, *or* the first one whose parameters you
    changed since the previous run (so fixing an argument of an
-   already-succeeded module re-runs it too).
+   already-succeeded module re-runs it too). Parameter changes are detected
+   against a pristine snapshot of the previous run's configuration
+   (recorded in `WorkflowRunner.yaml`), so `$`-command resolution and
+   values modules write back into their own parameters do not read as
+   edits. Runs recorded before this snapshot existed resume without
+   parameter-change detection.
 2. Walking back from the frontier, the latest module that saved
    localizations to disk becomes the **checkpoint**: its locs are loaded
    back into memory, everything up to it is skipped, and the modules after
@@ -217,9 +222,14 @@ decides where to restart:
    `load_dataset_localizations`, `load_datasets_to_aggregate`,
    `save_datasets_aggregated`, and by any module run with
    `save_locs: True` (or the *always save* option / `always_save` config).
-3. Without any checkpoint before the frontier, the workflow re-runs from
-   scratch — so consider adding `save_locs: True` to expensive modules
-   (localize, undrift, clustering) to keep resumes cheap.
+   Checkpoint paths are translated across machines via the `Drivepaths`
+   config, so a run can be resumed on a different machine.
+3. Without any checkpoint before the frontier, the workflow still
+   continues at the frontier if none of the remaining modules needs
+   in-memory state from before it (file-mediated workflows, e.g.
+   continuing after a `manual` step); otherwise it re-runs from scratch —
+   so consider adding `save_locs: True` to expensive modules (localize,
+   undrift, clustering) to keep resumes cheap.
 
 Some state only lives in memory and cannot be restored from saved locs:
 the raw movie, spot identifications, the drift trace and a loaded picasso

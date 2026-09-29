@@ -22,7 +22,9 @@ from picasso_workflow.workflow import (
     WorkflowRunner,
     AggregationWorkflowRunner,
     _checkpoint_from_module_results,
+    _find_previous_runner_postfix,
     _module_parameters_changed,
+    _strip_runstamp,
 )
 
 logger = logging.getLogger(__name__)
@@ -744,6 +746,81 @@ class Test_F_CheckpointResume(unittest.TestCase):
         finally:
             shutil.rmtree(wr.result_folder)
 
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_adopt_compares_against_pristine_parameters(self):
+        """Module write-backs into their parameters (persisted to yaml) must
+        not read as user edits: comparison uses the pristine snapshot."""
+        modules = [(name, dict(params)) for name, params in self.MODULES]
+        fresh = [(name, dict(params)) for name, params in self.MODULES]
+        wr = self._make_runner(modules, succeeded=0)
+        try:
+            # simulate a module writing back into its own parameters (e.g.
+            # identify storing the estimated min_gradient)
+            wr.workflow_modules[1][1]["added_by_module"] = 42
+            wr.adopt_workflow_modules(fresh)
+            self.assertNotIn(
+                "added_by_module", wr._previous_workflow_modules[1][1]
+            )
+            self.assertFalse(
+                any(
+                    _module_parameters_changed(prev[1], new[1])
+                    for prev, new in zip(wr._previous_workflow_modules, fresh)
+                )
+            )
+        finally:
+            shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_file_mediated_resume_continues_at_frontier(
+        self, mock_call_module
+    ):
+        """Without a checkpoint, a cold resume still continues at the
+        frontier when the remaining modules need no in-memory state (e.g.
+        continuation after a manual step)."""
+        mock_call_module.return_value = True
+        modules = [
+            ("manual", {"filename": "a.hdf5"}),
+            ("load_dataset_localizations", {"filename": "a.hdf5"}),
+            ("dbscan", {"radius": 2, "min_density": 10}),
+        ]
+        wr = self._make_runner(modules, succeeded=1)
+        try:
+            wr.run()
+            wr.autopicasso.load_checkpoint.assert_not_called()
+            ran = [c.args[1] for c in mock_call_module.call_args_list]
+            self.assertEqual([1, 2], ran)
+        finally:
+            shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_stale_param_diff_does_not_refire_on_second_run(
+        self, mock_call_module
+    ):
+        """run() consumes the previous-run diff so a second in-process run
+        does not re-run from a stale parameter-change frontier."""
+        mock_call_module.return_value = True
+        wr = self._make_runner(self.MODULES, succeeded=len(self.MODULES))
+        self._touch(
+            wr.results["00_load_dataset_localizations"]["folder"],
+            "locs.hdf5",
+        )
+        previous = [(name, dict(params)) for name, params in self.MODULES]
+        previous[1] = ("dbscan", {"radius": 5, "min_density": 10})
+        wr._previous_workflow_modules = previous
+        try:
+            wr.run()
+            self.assertIsNone(wr._previous_workflow_modules)
+        finally:
+            shutil.rmtree(wr.result_folder)
+
 
 def test_module_parameters_changed_detects_value_change():
     prev = {"radius": 2, "nested": {"a": [1, 2]}}
@@ -752,16 +829,10 @@ def test_module_parameters_changed_detects_value_change():
     assert _module_parameters_changed(prev, {**new, "radius": 3})
 
 
-def test_module_parameters_changed_ignores_command_resolution():
-    """A resolved command (+ its _originalnocmd companion) equals the raw
-    command it came from."""
-    prev = {
-        "filepath": "/resolved/path.hdf5",
-        "filepath_originalnocmd": (
-            "$get_prior_result",
-            "results, 00_load, filepath",
-        ),
-    }
+def test_module_parameters_changed_on_pristine_commands():
+    """Pristine snapshots hold raw commands on both sides, so identical
+    $-command parameters compare equal and a changed one is detected."""
+    prev = {"filepath": ("$get_prior_result", "results, 00_load, filepath")}
     new = {"filepath": ("$get_prior_result", "results, 00_load, filepath")}
     assert not _module_parameters_changed(prev, new)
     changed = {
@@ -819,6 +890,116 @@ def test_checkpoint_detection_folder_autosave(tmp_path):
     assert _checkpoint_from_module_results("dbscan", results) == {
         "single": {"filepath": str(folder / "locs.hdf5")}
     }
+
+
+def test_checkpoint_detection_tuple_tags_and_mismatch(tmp_path):
+    """Tuple tags (yaml python/tuple round-trip) are accepted; a
+    length-mismatched tags entry falls back to filename-derived tags."""
+    fps = []
+    for tag in ("ch_a", "ch_b"):
+        fp = tmp_path / f"{tag}.hdf5"
+        fp.write_text("x")
+        fps.append(str(fp))
+    results = {"filepaths": fps, "tags": ("t1", "t2")}
+    ckpt = _checkpoint_from_module_results(
+        "load_datasets_to_aggregate", results
+    )
+    assert ckpt["channels"]["tags"] == ["t1", "t2"]
+    results = {"filepaths": fps, "tags": ["only_one"]}
+    ckpt = _checkpoint_from_module_results(
+        "load_datasets_to_aggregate", results
+    )
+    assert ckpt["channels"]["tags"] == ["ch_a", "ch_b"]
+
+
+def test_strip_runstamp():
+    assert _strip_runstamp("myreport_260929-1015") == "myreport"
+    assert _strip_runstamp("myreport") == "myreport"
+    # only a trailing runstamp is stripped
+    assert (
+        _strip_runstamp("myreport_260929-1015_x") == "myreport_260929-1015_x"
+    )
+
+
+def test_find_previous_runner_postfix_handles_tokens(tmp_path):
+    """Folders may carry a per-run token between base name and runstamp;
+    the latest trailing runstamp wins and the full postfix is returned."""
+    (tmp_path / "tag_p1a2b3_240310-1130").mkdir()
+    (tmp_path / "tag_240311-0900").mkdir()
+    (tmp_path / "tag_notarun").mkdir()
+    (tmp_path / "othertag_240312-0900").mkdir()
+    assert _find_previous_runner_postfix(str(tmp_path), "tag") == "240311-0900"
+    # the token-bearing folder wins once it is the latest
+    (tmp_path / "tag_p9z8y7_240315-1000").mkdir()
+    assert (
+        _find_previous_runner_postfix(str(tmp_path), "tag")
+        == "p9z8y7_240315-1000"
+    )
+    assert _find_previous_runner_postfix(str(tmp_path), "nomatch") is None
+    assert _find_previous_runner_postfix(str(tmp_path / "gone"), "t") is None
+
+
+@patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+@patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+@patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+def test_resume_finds_previous_run_despite_fresh_runstamp(tmp_path):
+    """The coordinators stamp report names per launch; resume must still
+    find the earlier run's folder by the stamp-free base name."""
+    modules = [("dbscan", {"radius": 2})]
+    reporter_config = {"report_name": "myreport"}
+    analysis_config = {"result_location": str(tmp_path)}
+    wr = WorkflowRunner.config_from_dicts(
+        reporter_config, analysis_config, modules
+    )
+    wr.results = {"00_dbscan": {"success": True}}
+    wr.save(wr.result_folder)
+
+    edited = [("dbscan", {"radius": 3})]
+    wr2 = WorkflowRunner.config_from_dicts(
+        {"report_name": "myreport_991231-2359"},
+        {"result_location": str(tmp_path)},
+        edited,
+        continue_previous_runner=True,
+    )
+    assert wr2.results == {"00_dbscan": {"success": True}}
+    assert wr2.workflow_modules == edited
+    assert wr2._previous_workflow_modules == modules
+
+
+@patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+@patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+@patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+def test_resume_with_yamlless_folder_starts_fresh(tmp_path):
+    """A previous run killed before its first save leaves a folder without
+    WorkflowRunner.yaml; resume must start fresh instead of crashing."""
+    (tmp_path / "myreport_240310-1130").mkdir()
+    wr = WorkflowRunner.config_from_dicts(
+        {"report_name": "myreport"},
+        {"result_location": str(tmp_path)},
+        [("dbscan", {"radius": 2})],
+        continue_previous_runner=True,
+    )
+    assert wr.results == {}
+
+
+@patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+@patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+@patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+def test_pristine_modules_round_trip_save_load(tmp_path):
+    """The pristine parameter snapshot survives save/load untouched by
+    in-place mutations of the live workflow_modules."""
+    modules = [("dbscan", {"radius": 2})]
+    wr = WorkflowRunner.config_from_dicts(
+        {"report_name": "roundtrip"},
+        {"result_location": str(tmp_path)},
+        modules,
+    )
+    # simulate $-resolution / module write-back mutating the live params
+    wr.workflow_modules[0][1]["radius"] = 99
+    wr.workflow_modules[0][1]["added"] = "abc"
+    wr.save(wr.result_folder)
+    wr2 = WorkflowRunner.load(wr.result_folder)
+    assert wr2.workflow_modules_pristine == [("dbscan", {"radius": 2})]
 
 
 # --- dynamic single-dataset scheduling (atomic filesystem claims) -----------

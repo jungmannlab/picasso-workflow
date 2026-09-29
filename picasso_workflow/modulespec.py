@@ -109,6 +109,30 @@ MEMORY_ONLY_CAPABILITIES: frozenset[str] = frozenset(
     }
 )
 
+# Capabilities carried by the in-memory localization state. Unlike the
+# memory-only set above, these CAN be restored on resume -- by re-loading a
+# saved locs file into AutoPicasso.locs (single) or AutoPicasso.channel_locs
+# (channels). Which subset a given checkpoint restores depends on which
+# parts it saved.
+SINGLE_LOCS_CAPABILITIES: frozenset[str] = frozenset(
+    {"locs", "locs_z", "locs_undrifted"}
+)
+CHANNEL_LOCS_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "channel_locs",
+        "dataset_collection",
+        "pooled_locs",
+        "combined_locs",  # combine_channels stores into channel_locs
+        # in aggregation scope the base locs tokens ride on the channel
+        # state (cf. load_datasets_to_aggregate's provides)
+        "locs",
+        "locs_undrifted",
+    }
+)
+LOCS_STATE_CAPABILITIES: frozenset[str] = (
+    SINGLE_LOCS_CAPABILITIES | CHANNEL_LOCS_CAPABILITIES
+)
+
 
 @dataclass(frozen=True)
 class ModuleSpec:
@@ -926,43 +950,79 @@ def _validate_branch_step(i, params, scope, registry, available):
     return errors
 
 
-def restart_conflicts(steps, restart_index, frontier, registry=None):
-    """Check whether restarting a workflow mid-way loses memory-only state.
+def _branch_trunk_requires(params, registry) -> frozenset[str]:
+    """Capabilities a ``branch`` step's sub-workflows need from the trunk.
+
+    A nested module's requirement counts only if no earlier module of the
+    same sub-workflow provides it (mirroring how the branch executes its
+    sub-modules in order on the trunk state).
+
+    Parameters
+    ----------
+    params : dict
+        The branch step's parameters (``branch_modules``/``join_modules``).
+    registry : dict[str, ModuleSpec]
+        Registry to look nested modules up in.
+
+    Returns
+    -------
+    frozenset[str]
+        The capabilities required from outside the branch.
+    """
+    needed: set[str] = set()
+    for key in ("branch_modules", "join_modules"):
+        provided: set[str] = set()
+        for step in params.get(key) or []:
+            spec = registry.get(_step_name(step))
+            if spec is None:
+                continue
+            needed |= spec.requires - provided
+            provided |= spec.provides
+    return frozenset(needed)
+
+
+def restart_conflicts(
+    steps, restart_index: int, lost_capabilities=None, registry=None
+) -> tuple[list[str], list[str]]:
+    """Check whether restarting a workflow mid-way runs against lost state.
 
     Used by the checkpoint-aware resume: when a workflow is restarted at
-    ``restart_index`` with only the localizations restored from disk, any
-    module at or after the restart point that requires a capability from
-    :data:`MEMORY_ONLY_CAPABILITIES` produced *before* the restart point
-    would run against lost state.
+    ``restart_index``, every module from there to the end executes in the
+    resumed run. Any of them requiring a capability from
+    ``lost_capabilities`` that was produced *before* the restart point (and
+    is not re-produced within the re-run range) is guaranteed to run
+    against missing state.
 
     Parameters
     ----------
     steps : iterable
         Ordered workflow steps in any format accepted by
-        :func:`validate_workflow`.
+        :func:`validate_workflow`. ``branch`` steps are inspected
+        recursively: their sub-workflows' unmet requirements count as
+        requirements of the branch step itself.
     restart_index : int
         Index of the first module that will be executed; everything before
-        it is skipped, with only saved locs restored.
-    frontier : int
-        Index of the first module that failed (or was never run) in the
-        previous run. Modules in ``[restart_index, frontier]`` run
-        unconditionally on resume; conflicts there are certain crashes.
+        it is skipped.
+    lost_capabilities : frozenset[str], optional
+        The capabilities considered lost at the restart point. Defaults to
+        ``MEMORY_ONLY_CAPABILITIES | LOCS_STATE_CAPABILITIES`` (nothing
+        restored); a caller restoring a checkpoint passes the memory-only
+        set plus whatever locs state the checkpoint does not cover.
     registry : dict[str, ModuleSpec], optional
         Registry to check against. Defaults to :data:`MODULE_REGISTRY`.
 
     Returns
     -------
     hard : list[str]
-        Conflicts for modules in ``[restart_index, frontier]`` -- the
-        restart point is not viable and must move further back.
+        Required-capability conflicts -- the restart point is not viable.
     soft : list[str]
-        Advisory messages: conflicts beyond ``frontier`` (those modules only
-        run after the re-run reaches them, and a later resume self-heals by
-        making them the frontier), memory-only ``optional`` inputs, and
-        modules unknown to the registry (best-effort specs).
+        Advisory messages: lost ``optional`` inputs and modules unknown to
+        the registry (best-effort specs).
     """
     if registry is None:
         registry = MODULE_REGISTRY
+    if lost_capabilities is None:
+        lost_capabilities = MEMORY_ONLY_CAPABILITIES | LOCS_STATE_CAPABILITIES
     producers: dict[str, int] = {}
     hard: list[str] = []
     soft: list[str] = []
@@ -973,27 +1033,31 @@ def restart_conflicts(steps, restart_index, frontier, registry=None):
             if spec is None:
                 soft.append(
                     f"[{i}] unknown module '{name}': cannot verify "
-                    "memory-only requirements"
+                    "in-memory requirements"
                 )
             else:
-                for cap in sorted(spec.requires & MEMORY_ONLY_CAPABILITIES):
+                requires = spec.requires
+                if name == "branch":
+                    requires = requires | _branch_trunk_requires(
+                        _step_params(step), registry
+                    )
+                for cap in sorted(requires & lost_capabilities):
                     p = producers.get(cap)
                     if p is not None and p < restart_index:
-                        msg = (
-                            f"[{i}] {name} requires memory-only '{cap}' "
+                        hard.append(
+                            f"[{i}] {name} requires in-memory '{cap}' "
                             f"produced at [{p}], before the restart point "
                             f"[{restart_index}]"
                         )
-                        (hard if i <= frontier else soft).append(msg)
-                for cap in sorted(spec.optional & MEMORY_ONLY_CAPABILITIES):
+                for cap in sorted(spec.optional & lost_capabilities):
                     p = producers.get(cap)
                     if p is not None and p < restart_index:
                         soft.append(
-                            f"[{i}] {name} optionally uses memory-only "
+                            f"[{i}] {name} optionally uses in-memory "
                             f"'{cap}' produced at [{p}], before the restart "
                             f"point [{restart_index}]"
                         )
         if spec is not None:
-            for cap in spec.provides & MEMORY_ONLY_CAPABILITIES:
+            for cap in spec.provides:
                 producers[cap] = i
     return hard, soft

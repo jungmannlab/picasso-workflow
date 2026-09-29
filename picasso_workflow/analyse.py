@@ -10472,9 +10472,20 @@ class AutoPicasso(util.AbstractModuleCollection):
             hdf5 localization files, one per channel, in channel order.
         tags : list of str, optional
             The tags naming the channels. If None, the filenames are used.
+
+        Raises
+        ------
+        ValueError
+            If ``tags`` is given but does not match ``filepaths`` in length
+            (zip would silently drop channels).
         """
         if tags is None:
             tags = [os.path.split(fp)[1] for fp in filepaths]
+        elif len(tags) != len(filepaths):
+            raise ValueError(
+                f"Got {len(filepaths)} channel filepaths but {len(tags)} "
+                "tags."
+            )
         self.channel_locs = []
         self.channel_info = []
         self.channel_tags = []
