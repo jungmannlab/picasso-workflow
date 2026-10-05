@@ -108,6 +108,9 @@ from picasso_workflow import (
 from picasso_workflow import __version__ as picassoworkflowversion
 from picasso_workflow.module_runtime import module_decorator  # noqa: F401
 from picasso_workflow.outpost_modules import render
+from picasso_workflow.picasso_set.analyse_calibration import (
+    PicassoSetCalibrationMixin,
+)
 from picasso_workflow.picasso_set.analyse_core import PicassoSetCoreMixin
 from picasso_workflow.picasso_set.analyse_picks import PicassoSetPicksMixin
 from picasso_workflow.progress import PicassoProgressProxy
@@ -1126,6 +1129,7 @@ def profile_resource_usage(method):
 class AutoPicasso(
     PicassoSetCoreMixin,
     PicassoSetPicksMixin,
+    PicassoSetCalibrationMixin,
     util.AbstractModuleCollection,
 ):
     """Automatically evaluate datasets via the picasso pipeline.

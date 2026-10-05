@@ -12,6 +12,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **picasso-set tier 3: calibration & 3D (6 modules).** `picasso_zfit`
+  (astigmatic z fit on the current locs, GPU with CPU fallback),
+  `picasso_calibrate_z` (bead z-stack → z-calibration yaml),
+  `picasso_camera_calibrate` / `picasso_camera_validate` (sCMOS
+  offset/variance/gain maps and their validation, CLI parameter names),
+  `picasso_spline_calibrate` (full CLI surface incl. multichannel and
+  split-FOV dispatch) and `picasso_lateral_calibrate`
+  (astigmatism/chromatic x-y correction + diagnostic figure). These are
+  file-in/file-out; the produced calibration files feed `picasso_localize`
+  / `picasso_zfit` via result references.
+
 - **picasso-set tier 2: pick-based postprocessing (9 modules).** The picasso
   Render GUI's pick/mask operations as headless picasso-set modules with the
   library functions' parameter names and defaults: `picasso_picked_locs`,
@@ -76,6 +87,26 @@ This file was started after v0.5.6; earlier history is in the git log.
   into the generated `start_workflow.py` as `continue_previous_runners=True`.
 
 ### Changed
+
+- **GUI parameter forms: optional parameters without a default start as
+  "unset".** An optional parameter with no spec default (e.g.
+  `picasso_localize`'s camera parameters = "from loaded metadata/config",
+  `roi` = full FOV, `frame_bounds` = all frames) now starts in the greyed
+  use-default state and is omitted from the generated workflow, instead of
+  showing a spurious 0 in a number box that cannot express None. Clicking
+  the parameter label still switches to an explicit override. Optional
+  dict parameters keep their enable-checkbox behaviour.
+
+- **The picasso-set checkbox is now a set toggle.** Unchecked shows the
+  classic picasso-workflow modules, checked shows the native-picasso set
+  (`picasso_*`) plus the data loaders. Both sets can still be mixed in one
+  workflow by toggling while building it, and existing rows from the
+  hidden set remain visible and editable.
+
+- `load_dataset_movie`'s `filename` defaults to `("$$map", "filepath")`
+  and `save_single_dataset`'s `filename` to `("$$map", "#tags")` in the
+  GUI: command-tuple defaults pre-fill the input editable and are written
+  to the workflow (they are recommended arguments, not code defaults).
 
 - `summarize_branches` works as a zero-argument branch join module. When
   `values` is omitted, the `branch` module hands it the per-branch results

@@ -232,17 +232,27 @@ def test_picasso_set_hidden_by_default(window):
     assert "picasso_density" not in _palette_items(window)
 
 
-def test_picasso_set_checkbox_reveals_modules(window):
+def test_module_set_toggle_switches_palette(window):
     window.workflow_tabs.setCurrentIndex(0)
     window.single_workflow_modules.clear()
     window.single_workflow_list.clear()
     # toggling refreshes the palette via the connected signal
     window.show_picasso_set_checkbox.setChecked(True)
-    assert "picasso_density" in _palette_items(window)
+    items = _palette_items(window)
+    assert "picasso_density" in items
+    # classic modules are hidden in the picasso view ...
+    assert "undrift_rcc" not in items
+    assert "identify" not in items
+    # ... except the data loaders, without which no workflow can start
+    assert "load_dataset_movie" in items
+    assert "load_dataset_localizations" in items
     # requires locs_undrifted -> greyed out on an empty workflow
     assert not _item_enabled(window, "picasso_density")
+
     window.show_picasso_set_checkbox.setChecked(False)
-    assert "picasso_density" not in _palette_items(window)
+    items = _palette_items(window)
+    assert "picasso_density" not in items
+    assert "undrift_rcc" in items
 
 
 def test_picasso_set_form_populates_from_spec(window):
@@ -276,6 +286,65 @@ def test_editing_picasso_set_row_with_checkbox_off(window):
     window.show_picasso_set_checkbox.setChecked(False)
     window.single_workflow_list.setCurrentRow(1)
     assert window.module_combobox.currentText() == "picasso_density"
+
+
+def test_optional_param_without_default_starts_unset(window):
+    """Optional params with no spec default start greyed as "unset".
+
+    E.g. picasso_localize's camera parameters (None = from loaded
+    metadata/config) and roi (None = full FOV): they must start in the
+    use-default state and be omitted from the composed module parameters,
+    instead of showing a spurious 0 in a number widget.
+    """
+    window.workflow_tabs.setCurrentIndex(0)
+    window.single_workflow_modules.clear()
+    window.single_workflow_list.clear()
+    window.show_picasso_set_checkbox.setChecked(True)
+    _select_palette(window, "picasso_localize")
+    window.on_module_changed("picasso_localize")
+
+    pw = window.parameter_widgets
+    for name in ("baseline", "sensitivity", "gain", "roi", "frame_bounds"):
+        wi = pw[name]
+        assert wi.has_default, f"{name} should carry the default toggle"
+        assert wi.use_default, f"{name} should start in the unset state"
+        assert not wi.widget.isEnabled()
+        assert (
+            window._get_widget_value(wi.widget, wi.original_type, wi) is None
+        ), f"{name} must be omitted from the workflow while unset"
+    # a parameter with a real spec default still shows it
+    assert pw["gradient"].use_default
+    assert pw["gradient"].default_value == 5000
+
+
+def test_command_defaults_prefill_in_override_state(window):
+    """$$map defaults pre-fill editable and are written to the workflow."""
+    window.workflow_tabs.setCurrentIndex(0)
+    window.single_workflow_modules.clear()
+    window.single_workflow_list.clear()
+    window.show_picasso_set_checkbox.setChecked(False)
+    window._refresh_module_palette()
+
+    _select_palette(window, "load_dataset_movie")
+    window.on_module_changed("load_dataset_movie")
+    wi = window.parameter_widgets["filename"]
+    # a command default is a recommended argument, not a code default
+    assert not wi.has_default
+    assert wi.widget.text() == str(("$$map", "filepath"))
+    window.add_module()
+    name, params = window.single_workflow_modules[0]
+    assert name == "load_dataset_movie"
+    assert tuple(params["filename"]) == ("$$map", "filepath")
+
+    _select_palette(window, "save_single_dataset")
+    window.on_module_changed("save_single_dataset")
+    wi = window.parameter_widgets["filename"]
+    assert not wi.has_default
+    assert wi.widget.text() == str(("$$map", "#tags"))
+    window.add_module()
+    name, params = window.single_workflow_modules[1]
+    assert name == "save_single_dataset"
+    assert tuple(params["filename"]) == ("$$map", "#tags")
 
 
 def test_reference_remap_helper_updates_both_workflows(window):
