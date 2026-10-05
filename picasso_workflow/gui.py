@@ -11656,6 +11656,14 @@ class Window(QtWidgets.QMainWindow):
         self.single_workflow_list.currentRowChanged.connect(
             self._on_workflow_selection_changed
         )
+        self.single_workflow_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.single_workflow_list.customContextMenuRequested.connect(
+            lambda pos: self._show_workflow_context_menu(
+                self.single_workflow_list, "single", pos
+            )
+        )
         single_workflow_layout.addWidget(self.single_workflow_list)
 
         aggregation_workflow_tab = QtWidgets.QWidget()
@@ -11668,6 +11676,14 @@ class Window(QtWidgets.QMainWindow):
         self.aggregation_workflow_list = QtWidgets.QListWidget()
         self.aggregation_workflow_list.currentRowChanged.connect(
             self._on_workflow_selection_changed
+        )
+        self.aggregation_workflow_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.aggregation_workflow_list.customContextMenuRequested.connect(
+            lambda pos: self._show_workflow_context_menu(
+                self.aggregation_workflow_list, "aggregation", pos
+            )
         )
         aggregation_workflow_layout.addWidget(self.aggregation_workflow_list)
         # Add workflow tabs to the splitter below the current-module editor.
@@ -11736,6 +11752,32 @@ class Window(QtWidgets.QMainWindow):
             "checkpoint, and modules with changed parameters re-run."
         )
         self.addl_options_layout.addWidget(self.continue_previous)
+
+        # Stepwise development: run the workflow only up to a chosen module,
+        # inspect the results, adjust parameters, then step on. Each step is
+        # a normal (local or cluster) launch that resumes the previous one,
+        # so "Continue previous run" is forced on while stepping.
+        self.stepwise_enable = QtWidgets.QCheckBox("Run only up to module:")
+        self.stepwise_enable.setToolTip(
+            "Stepwise workflow development: stop cleanly after the chosen "
+            "module instead of running the whole pipeline. The boundary "
+            "module saves its localizations as a checkpoint; inspect the "
+            "results, adjust parameters, pick a later module and start "
+            "again (locally or on the cluster) to continue from there. "
+            "Modules whose parameters you changed re-run automatically.\n"
+            "Tip: right-click a module in the workflow list to run up to "
+            "it directly."
+        )
+        self.addl_options_layout.addWidget(self.stepwise_enable)
+        self.stepwise_target = QtWidgets.QComboBox()
+        self.stepwise_target.setEnabled(False)
+        self.stepwise_target.setToolTip(
+            "The last module to run in this step. Everything after it stays "
+            "pending until a later step."
+        )
+        self.addl_options_layout.addWidget(self.stepwise_target)
+        self.stepwise_enable.toggled.connect(self._on_stepwise_toggled)
+        self._refresh_stepwise_targets()
 
         # resize the widgets
         # Keep a sensible minimum width, but let the splitters drive height.
@@ -14601,6 +14643,8 @@ class Window(QtWidgets.QMainWindow):
                         pitem.setForeground(QtGui.QColor("gray"))
                         list_widget.addItem(pitem)
         list_widget.blockSignals(was_blocked)
+        # the stepwise target combo mirrors the workflow module lists
+        self._refresh_stepwise_targets()
 
     def _row_node(self, list_widget, row):
         """Return the node descriptor for a list row (or None)."""
@@ -15345,6 +15389,118 @@ class Window(QtWidgets.QMainWindow):
             self.workflow_tabs.setTabEnabled(1, True)  # Aggregation: enabled
             self.workflow_tabs.setTabEnabled(2, True)  # Investigation: enabled
 
+        self._refresh_stepwise_targets()
+
+    def _on_stepwise_toggled(self, checked):
+        """Enable/disable stepwise mode.
+
+        Stepping is a sequence of resumed runs, so "Continue previous run"
+        is forced on (and locked) while stepwise mode is active; its
+        previous state is restored when stepping is switched off.
+        """
+        self.stepwise_target.setEnabled(checked)
+        if checked:
+            self._continue_previous_before_stepwise = (
+                self.continue_previous.isChecked()
+            )
+            self.continue_previous.setChecked(True)
+            self.continue_previous.setEnabled(False)
+        else:
+            self.continue_previous.setEnabled(True)
+            self.continue_previous.setChecked(
+                getattr(self, "_continue_previous_before_stepwise", False)
+            )
+
+    def _refresh_stepwise_targets(self):
+        """Rebuild the stepwise target combo from the current workflows.
+
+        Entries carry ``(phase, index)`` as item data -- phase ``"single"``
+        or ``"aggregation"``, matching the runners' ``stop_after``
+        convention. For Investigation workflows (stepwise not supported)
+        the controls are disabled.
+        """
+        combo = getattr(self, "stepwise_target", None)
+        if combo is None:
+            return  # widgets not built yet (early _on_workflow_type_changed)
+        previous = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        type_index = self.workflow_type.currentIndex()
+        if type_index == 0:
+            for i, (name, _) in enumerate(self.single_workflow_modules):
+                combo.addItem(f"{i:02d}: {name}", ("single", i))
+        elif type_index == 1:
+            for i, (name, _) in enumerate(self.single_workflow_modules):
+                combo.addItem(f"single {i:02d}: {name}", ("single", i))
+            for i, (name, _) in enumerate(self.aggregation_workflow_modules):
+                combo.addItem(
+                    f"aggregation {i:02d}: {name}", ("aggregation", i)
+                )
+        # restore the previous target if it still exists
+        if previous is not None:
+            for row in range(combo.count()):
+                if combo.itemData(row) == previous:
+                    combo.setCurrentIndex(row)
+                    break
+        combo.blockSignals(False)
+        supported = type_index in (0, 1) and combo.count() > 0
+        self.stepwise_enable.setEnabled(supported)
+        if type_index == 2:
+            self.stepwise_enable.setToolTip(
+                "Stepwise runs are not supported for Investigation workflows."
+            )
+        if not supported and self.stepwise_enable.isChecked():
+            self.stepwise_enable.setChecked(False)
+
+    def _stepwise_stop_after(self):
+        """The configured stepwise boundary, or None when not stepping.
+
+        Returns
+        -------
+        tuple or None
+            ``(phase, index)`` with phase ``"single"`` or ``"aggregation"``.
+        """
+        if not getattr(self, "stepwise_enable", None):
+            return None
+        if not self.stepwise_enable.isChecked():
+            return None
+        return self.stepwise_target.currentData()
+
+    def _set_stepwise_target(self, phase, index):
+        """Point the stepwise controls at ``(phase, index)`` and enable them."""
+        self.stepwise_enable.setChecked(True)
+        combo = self.stepwise_target
+        for row in range(combo.count()):
+            if combo.itemData(row) == (phase, index):
+                combo.setCurrentIndex(row)
+                return
+
+    def _show_workflow_context_menu(self, list_widget, phase, pos):
+        """Context menu on a workflow module: run stepwise up to it."""
+        item = list_widget.itemAt(pos)
+        if item is None:
+            return
+        node = item.data(self._WF_NODE_ROLE)
+        if not node or node.get("kind") != "module":
+            return  # branch sub-modules are not stepwise targets
+        if not self.stepwise_enable.isEnabled():
+            return  # stepwise not supported (e.g. Investigation workflows)
+        menu = QtWidgets.QMenu(list_widget)
+        act_local = menu.addAction("Run up to this module locally")
+        act_cluster = menu.addAction("Run up to this module on cluster")
+        menu.addSeparator()
+        menu.addAction("Set as stepwise run target")
+        action = menu.exec(list_widget.mapToGlobal(pos))
+        if action is None:
+            return
+        # every action points the stepwise controls at this module; the run
+        # actions additionally launch ("set as target" only sets it)
+        self._set_stepwise_target(phase, node["top"])
+        if action == act_local:
+            self.start_locally()
+        elif action == act_cluster:
+            self.start_slurm()
+
     # def on_cluster_use_module_state_change(self, state):
     #     if not self.cluster_use_module.isChecked():
     #         QtWidgets.QMessageBox.warning(
@@ -16066,6 +16222,11 @@ class Window(QtWidgets.QMainWindow):
         continue_previous = self.continue_previous.isChecked()
         document_confluence = self.document_confluence_checkbox.isChecked()
         document_html = self.document_html_checkbox.isChecked()
+        # stepwise development boundary; stepping is a sequence of resumed
+        # runs, so it implies continue_previous (the UI enforces this too)
+        stop_after = self._stepwise_stop_after()
+        if stop_after is not None:
+            continue_previous = True
         if workflow_type_index == 0:  # Single Workflow
             # script_lines.extend([
             #     "    # Create single workflow runner",
@@ -16107,9 +16268,14 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator.run_analysis(",
                     "        workflow_modules_sgl,",
                     f"        continue_previous_runners={continue_previous},",
-                    "    )",
                 ]
             )
+            if stop_after is not None:
+                script_lines.append(
+                    f"        stop_after={stop_after[1]},"
+                    "  # stepwise run boundary"
+                )
+            script_lines.append("    )")
         elif workflow_type_index == 1:  # Aggregation Workflow
             script_lines.extend(
                 [
@@ -16130,9 +16296,14 @@ class Window(QtWidgets.QMainWindow):
                     "        workflow_modules_sgl,",
                     "        workflow_modules_agg,",
                     f"        continue_previous_runners={continue_previous},",
-                    "    )",
                 ]
             )
+            if stop_after is not None:
+                script_lines.append(
+                    f"        stop_after=({stop_after[0]!r}, "
+                    f"{stop_after[1]}),  # stepwise run boundary"
+                )
+            script_lines.append("    )")
         elif workflow_type_index == 2:  # Investigation Workflow
             script_lines.extend(
                 [
@@ -16559,6 +16730,7 @@ class Window(QtWidgets.QMainWindow):
         "failed": 2,
         "skipped": 3,
         "done": 3,
+        "paused": 3,
     }
 
     def _merged_aggregation_state(self, states):
@@ -16614,7 +16786,12 @@ class Window(QtWidgets.QMainWindow):
             return
         if self._monitor_local_folder:
             top = self._top_state(states)
-            if top and top.get("state") in ("done", "failed", "aborted"):
+            if top and top.get("state") in (
+                "done",
+                "failed",
+                "aborted",
+                "paused",
+            ):
                 # local process finished (no SLURM authority to consult)
                 if (
                     self._local_process is None
@@ -16647,6 +16824,14 @@ class Window(QtWidgets.QMainWindow):
                     extra.append(f"MaxRSS {details['max_rss']}")
                 if extra:
                     text += "  (" + ", ".join(extra) + ")"
+            elif (
+                status == "COMPLETED"
+                and top is not None
+                and top.get("state") == "paused"
+            ):
+                # intentional partial run: the stepwise boundary was reached
+                text = "Job state: COMPLETED (paused at stepwise boundary)"
+                color = "#1565c0"  # blue
             elif (
                 status == "COMPLETED"
                 and states
@@ -16877,7 +17062,9 @@ class Window(QtWidgets.QMainWindow):
         """Build the aggregation root with one child per stage."""
         datasets = agg.get("datasets") or []
         n_done = sum(
-            1 for d in datasets if d.get("state") in ("done", "skipped")
+            1
+            for d in datasets
+            if d.get("state") in ("done", "skipped", "paused")
         )
         root = QtWidgets.QTreeWidgetItem(
             [
@@ -16958,7 +17145,8 @@ class Window(QtWidgets.QMainWindow):
             st = d.get("state")
             if st in ("done", "skipped"):
                 single_sum += 1.0
-            elif st == "running" and d.get("i") in idx_map:
+            elif st in ("running", "paused") and d.get("i") in idx_map:
+                # paused (stepwise) datasets count their partial fraction
                 single_sum += pwprogress.overall_fraction(idx_map[d["i"]])
         agg_stage = next(
             (s for s in singles if pwprogress.is_aggregation_stage(s)), None

@@ -12,6 +12,22 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **Stepwise (module-by-module) workflow development.** A workflow can now be
+  run only up to a chosen module — locally or on the cluster — to set its
+  parameters, inspect the results, and then step on. New GUI controls
+  ("Run only up to module" checkbox + target selector, plus a right-click
+  "Run up to this module locally / on cluster" on the workflow lists) bake a
+  `stop_after` argument into the generated script; the coordinators and
+  runners (`WorkflowRunner.config_from_dicts(stop_after=...)`,
+  `AggregationWorkflowRunner.config_from_dicts(stop_after=("single"|
+  "aggregation", i))`) stop cleanly after the boundary module, which always
+  saves its localizations as a resume checkpoint. Each step is a resumed
+  run, so parameter edits re-run only the affected modules, and steps can
+  alternate between local and cluster execution. The progress monitor shows
+  such runs as a new `paused` state instead of done/failed. Stepwise runs
+  are not available for Investigation workflows. See README "Stepwise
+  (module-by-module) development runs".
+
 - **picasso-set tier 4: format converters (9 modules) + docs.**
   `picasso_csv2hdf` and `picasso_smap2hdf` import ThunderSTORM/SMAP files
   (written next to the input like the CLI) and load them as the current

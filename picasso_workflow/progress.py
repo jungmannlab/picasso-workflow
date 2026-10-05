@@ -58,6 +58,9 @@ DONE = "done"
 FAILED = "failed"
 SKIPPED = "skipped"
 ABORTED = "aborted"
+# a stepwise run that stopped cleanly at its stop-after boundary; remaining
+# modules are pending, not failed (see WorkflowRunner.stop_after)
+PAUSED = "paused"
 
 # canonical filenames written into a run's result folder
 PROGRESS_FILENAME = "progress.json"
@@ -454,7 +457,8 @@ class ProgressManager:
         self.emit()
 
     def finish(self, state: str) -> None:
-        """Set the overall run state (``done`` / ``failed`` / ``aborted``)."""
+        """Set the overall run state (``done`` / ``failed`` / ``aborted`` /
+        ``paused``)."""
         self._state["state"] = state
         self.emit()
 

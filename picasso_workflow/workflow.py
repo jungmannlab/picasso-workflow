@@ -62,6 +62,7 @@ from picasso_workflow.progress import (
     DONE,
     FAILED,
     ABORTED,
+    PAUSED,
 )
 
 
@@ -566,6 +567,12 @@ class AggregationWorkflowRunner:
             self.postfix = datetime.now().strftime("%y%m%d-%H%M")
         self.continue_workflow = False
         self.single_workflow_parallel = False
+        # Stepwise development runs: ``("single", i)`` stops every
+        # single-dataset workflow after module i and skips the aggregation;
+        # ``("aggregation", i)`` runs the single-dataset phase fully and
+        # stops the aggregation workflow after module i. A per-launch
+        # directive, not persisted to AggregationWorkflowRunner.yaml.
+        self.stop_after = None
         self.sgl_workflow_locations = []
         self.cpage_names = []
         self._html_reporting = False
@@ -586,6 +593,7 @@ class AggregationWorkflowRunner:
         single_workflow_parallel: bool = False,
         rank: int | None = None,
         size: int | None = None,
+        stop_after: tuple | None = None,
     ) -> "AggregationWorkflowRunner":
         """Build a configured runner from plain config dicts.
 
@@ -624,6 +632,10 @@ class AggregationWorkflowRunner:
         rank, size : int, optional
             SLURM task identity overriding the environment-derived values, used
             to control how single workflows are distributed across ranks.
+        stop_after : tuple, optional
+            Stepwise development boundary, as ``(phase, index)`` with phase
+            ``"single"`` or ``"aggregation"`` (see the ``stop_after``
+            attribute). Default is None (run everything).
 
         Returns
         -------
@@ -678,6 +690,7 @@ class AggregationWorkflowRunner:
                 # take over the caller's (possibly fixed) parameters;
                 # change detection happens per WorkflowRunner
                 instance._adopt_aggregation_workflow(aggregation_workflow)
+                instance.stop_after = stop_after
                 return instance
 
         # If we have an extracted postfix but aren't continuing, use it
@@ -699,6 +712,7 @@ class AggregationWorkflowRunner:
             instance.rank = rank
         if size is not None:
             instance.size = size
+        instance.stop_after = stop_after
         instance.single_workflow_parallel = single_workflow_parallel
         instance.parameter_tiler = ParameterTiler(instance, sgltilepars)
         instance.all_results = {
@@ -898,6 +912,9 @@ class AggregationWorkflowRunner:
         # result folder; rank 0 then waits for every marker, loads the results
         # produced by other ranks from disk, and runs the aggregation. With a
         # single task (off-cluster) every dataset runs here.
+        # stepwise development boundary, split into phase and module index
+        stop_phase, stop_index = self.stop_after or (None, None)
+
         claim_dir = self._claim_dir()
         if self.size > 1:
             os.makedirs(claim_dir, exist_ok=True)
@@ -940,7 +957,10 @@ class AggregationWorkflowRunner:
                 "leaving aggregation to rank 0."
             )
             rank_ok = all(owned) if owned else True
-            self.progress.finish(DONE if rank_ok else FAILED)
+            if rank_ok and stop_phase == "single":
+                self.progress.finish(PAUSED)
+            else:
+                self.progress.finish(DONE if rank_ok else FAILED)
             return rank_ok
 
         # Rank 0 (or a single-task run): wait for the single datasets handled
@@ -1004,6 +1024,16 @@ class AggregationWorkflowRunner:
             self._report_aggregation_abort(failures, n_sgl)
             raise WorkflowError(msg)
 
+        # Stepwise boundary in the single-dataset phase: every dataset
+        # stopped cleanly at its boundary, so skip the aggregation workflow.
+        if stop_phase == "single":
+            logger.info(
+                "Stepwise boundary in the single-dataset phase reached; "
+                "skipping the aggregation workflow."
+            )
+            self.progress.finish(PAUSED)
+            return None
+
         # Then, run the aggregation workflow
         pce = ParameterCommandExecutor(
             self,
@@ -1056,12 +1086,17 @@ class AggregationWorkflowRunner:
                 parameters,
                 postfix=self.postfix,
             )
+        if stop_phase == "aggregation":
+            wr.stop_after = stop_index
         self.cpage_names.append(wr.reporter_config["report_name"])
         self._agg_report_folder = wr.result_folder
         agg_success = wr.run()
         self.all_results["aggregation"] = wr.results
         self.save(self.result_folder)
-        self.progress.finish(DONE if agg_success else FAILED)
+        if agg_success and wr.paused:
+            self.progress.finish(PAUSED)
+        else:
+            self.progress.finish(DONE if agg_success else FAILED)
 
         # Refresh the HTML overview now that the aggregation report exists.
         self._write_html_overview(sgl_folders, self._agg_report_folder)
@@ -1325,6 +1360,10 @@ class AggregationWorkflowRunner:
                 parameter_set,
                 postfix=self.postfix,
             )
+        # stepwise development: a "single"-phase boundary applies to every
+        # per-dataset workflow (set here to also cover the loaded-runner path)
+        if self.stop_after is not None and self.stop_after[0] == "single":
+            wr.stop_after = self.stop_after[1]
         self.cpage_names.append(wr.reporter_config["report_name"])
         self.progress.dataset_update(i, RUNNING)
         # Never let an unhandled error escape before the completion marker is
@@ -1337,7 +1376,10 @@ class AggregationWorkflowRunner:
             logger.error(f"Single dataset {i} ({tag}) failed: {e}")
             logger.error(traceback.format_exc())
             success = False
-        self.progress.dataset_update(i, DONE if success else FAILED)
+        if success and wr.paused:
+            self.progress.dataset_update(i, PAUSED)
+        else:
+            self.progress.dataset_update(i, DONE if success else FAILED)
         sgl_dataset_success[i] = success
         self.all_results["single_dataset"][i] = getattr(wr, "results", None)
         if self.rank == 0:
@@ -1760,6 +1802,13 @@ class WorkflowRunner:
         # cooperative in-process stop, complementing the on-disk abort flag.
         self.progress = None
         self._abort_requested = False
+        # Stepwise development runs: stop cleanly after this module index
+        # (None = run to the end). A per-launch directive, not persisted to
+        # WorkflowRunner.yaml; the next step is a resume with a later (or no)
+        # boundary. ``paused`` records that the last run() stopped at the
+        # boundary rather than completing.
+        self.stop_after = None
+        self.paused = False
 
     @classmethod
     def config_from_dicts(
@@ -1769,6 +1818,7 @@ class WorkflowRunner:
         workflow_modules: list[tuple],
         postfix: str | None = None,
         continue_previous_runner: bool = False,
+        stop_after: int | None = None,
     ) -> "WorkflowRunner":
         """Build a configured runner from plain config dicts.
 
@@ -1791,6 +1841,12 @@ class WorkflowRunner:
             Continue a previous analysis that aborted (e.g. at a manual step).
             If no previous analysis exists in that folder, a new one is
             created. Default is False.
+        stop_after : int, optional
+            Stop cleanly after the module with this index (stepwise
+            development runs). The boundary module saves its localizations
+            as a checkpoint, so the next step (a resume with a later
+            boundary) continues from there. Default is None (run to the
+            end).
 
         Returns
         -------
@@ -1819,9 +1875,11 @@ class WorkflowRunner:
                     # the previous run's pristine parameters are kept for
                     # change detection on resume
                     instance.adopt_workflow_modules(workflow_modules)
+                    instance.stop_after = stop_after
                     return instance
 
         instance = cls(postfix)
+        instance.stop_after = stop_after
         # set date and time to report name
         report_name = reporter_config["report_name"] + "_" + instance.postfix
         reporter_config["report_name"] = report_name
@@ -1930,12 +1988,15 @@ class WorkflowRunner:
         """Run the analysis of the workflow modules in order.
 
         Already-succeeded modules from a previous run are skipped; execution
-        stops at the first module that fails.
+        stops at the first module that fails. With ``stop_after`` set
+        (stepwise development), execution also stops -- cleanly, with
+        ``paused`` set -- after that module.
 
         Returns
         -------
         bool
-            Whether all modules ran through successfully.
+            Whether all modules run so far succeeded (all of them, or, on a
+            stepwise run, all up to the ``stop_after`` boundary).
         """
         # pre-flight: validate dependencies/scope (warn-only, non-blocking)
         _log_workflow_validation(
@@ -1994,9 +2055,24 @@ class WorkflowRunner:
         # to leave this unbound and fail with UnboundLocalError below,
         # masking the real error.
         success = False
+        self.paused = False
         for i, (module_name, module_parameters) in enumerate(
             self.workflow_modules
         ):
+            # Stepwise development: stop cleanly at the stop-after boundary.
+            # Checked first so modules beyond the boundary are neither run
+            # nor marked skipped, whatever the resume plan says. Reaching
+            # this point means nothing before the boundary failed (a failure
+            # breaks the loop below), so the partial run counts as a success.
+            if self.stop_after is not None and i > self.stop_after:
+                logger.info(
+                    f"Stepwise boundary: stopping before module {i:02d} "
+                    f"({module_name}); modules up to {self.stop_after:02d} "
+                    "are complete."
+                )
+                success = True
+                self.paused = True
+                break
             if i < plan.start_index:
                 logger.debug(f"""Module {i}, {module_name} has been previously
                     analyzed. Skipping.""")
@@ -2038,6 +2114,14 @@ class WorkflowRunner:
                     module_parameters = self.parameter_command_executor.run(
                         module_parameters, curr_rootidx=i
                     )
+                # The boundary module of a stepwise run saves its locs as a
+                # checkpoint, so the next step resumes from here instead of
+                # re-running from the last incidental checkpoint. Injected
+                # into the runtime parameters only; the pristine snapshot is
+                # untouched, so this does not read as a parameter edit on the
+                # next resume.
+                if self.stop_after == i:
+                    module_parameters["save_locs"] = True
                 success = self.call_module(module_name, i, module_parameters)
             except AutoPicassoError:
                 success = False
@@ -2061,7 +2145,10 @@ class WorkflowRunner:
             success = True
 
         if progress.state["state"] == RUNNING:
-            progress.finish(DONE if success else FAILED)
+            if self.paused:
+                progress.finish(PAUSED)
+            else:
+                progress.finish(DONE if success else FAILED)
         return success
 
     def _ensure_progress(self) -> ProgressManager:

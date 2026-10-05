@@ -1223,3 +1223,166 @@ def test_wait_reclaims_orphaned_dataset(tmp_path):
         [f0, f1], reclaim=reclaim, poll=0, stale_grace=-1
     )
     assert reclaimed == [1]
+
+
+# ---------------------------------------------------------------------------
+# stepwise development runs (stop_after)
+# ---------------------------------------------------------------------------
+
+
+def _stepwise_runner(result_folder, stop_after=None):
+    """A WorkflowRunner with mocked analysis/reporting for stepwise tests."""
+    with (
+        patch("picasso_workflow.workflow.AutoPicasso", MagicMock),
+        patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock),
+    ):
+        wr = WorkflowRunner.config_from_dicts(
+            {"report_name": "stepwise"},
+            {"result_location": result_folder},
+            [
+                ("load_dataset_movie", {"b": 3}),
+                ("identify", {"min_gradient": 1}),
+                ("localize", {"a": 1}),
+            ],
+            stop_after=stop_after,
+        )
+    # parameters pass through unresolved, so save_locs injection is visible
+    wr.parameter_command_executor.run.side_effect = (
+        lambda p, curr_rootidx=None: p
+    )
+    return wr
+
+
+def _record_calls(wr):
+    """Replace call_module with a recorder of (name, i, parameters)."""
+    calls = []
+
+    def fake_call_module(name, i, parameters):
+        calls.append((name, i, dict(parameters)))
+        return True
+
+    wr.call_module = fake_call_module
+    return calls
+
+
+def test_stop_after_pauses_run(tmp_path):
+    """A stepwise run stops cleanly after the boundary module: the modules
+    beyond it stay pending, the run counts as a success, and the boundary
+    module is asked to save its locs as a checkpoint for the next step."""
+    from picasso_workflow import progress as pwprogress
+
+    wr = _stepwise_runner(str(tmp_path), stop_after=1)
+    calls = _record_calls(wr)
+
+    success = wr.run()
+
+    assert success is True
+    assert wr.paused is True
+    assert [c[0] for c in calls] == ["load_dataset_movie", "identify"]
+    # checkpoint at the boundary, and only there
+    assert calls[1][2]["save_locs"] is True
+    assert "save_locs" not in calls[0][2]
+    # the injection must not read as a parameter edit on the next resume
+    assert "save_locs" not in wr.workflow_modules_pristine[1][1]
+    state = pwprogress.read_progress(wr.result_folder)
+    assert state["state"] == "paused"
+    assert [m["status"] for m in state["modules"]] == [
+        "done",
+        "done",
+        "pending",
+    ]
+
+
+def test_stop_after_last_module_completes(tmp_path):
+    """A boundary at (or past) the last module is simply a full run."""
+    from picasso_workflow import progress as pwprogress
+
+    wr = _stepwise_runner(str(tmp_path), stop_after=2)
+    calls = _record_calls(wr)
+
+    success = wr.run()
+
+    assert success is True
+    assert wr.paused is False
+    assert len(calls) == 3
+    state = pwprogress.read_progress(wr.result_folder)
+    assert state["state"] == "done"
+
+
+def test_no_stop_after_runs_everything(tmp_path):
+    """Without a boundary the runner behaves as before (no pause)."""
+    wr = _stepwise_runner(str(tmp_path))
+    calls = _record_calls(wr)
+
+    assert wr.run() is True
+    assert wr.paused is False
+    assert len(calls) == 3
+
+
+def _agg_stepwise_config(result_folder):
+    return (
+        {"report_name": "aggstep"},
+        {"result_location": result_folder},
+        {
+            "single_dataset_tileparameters": {"#tags": ["ds0"]},
+            "single_dataset_modules": [("load_dataset_movie", {"b": 3})],
+            "aggregation_modules": [("load_datasets_to_aggregate", {})],
+        },
+    )
+
+
+@patch("picasso_workflow.workflow.WorkflowRunner")
+def test_awr_stop_after_single_skips_aggregation(mock_wr, tmp_path):
+    """A "single"-phase boundary reaches every per-dataset runner and the
+    aggregation stage is skipped; the overall state is paused."""
+    from picasso_workflow import progress as pwprogress
+
+    inner = MagicMock()
+    inner.run.return_value = True
+    inner.paused = True
+    inner.results = {}
+    inner.reporter_config = {"report_name": "sgl"}
+    mock_wr.config_from_dicts.return_value = inner
+
+    rc, ac, aw = _agg_stepwise_config(str(tmp_path))
+    awr = AggregationWorkflowRunner.config_from_dicts(
+        rc, ac, aw, stop_after=("single", 0)
+    )
+    result = awr.run()
+
+    assert result is None
+    assert inner.stop_after == 0  # boundary handed to the dataset runner
+    # only the per-dataset runner was built, no aggregation-stage runner
+    assert mock_wr.config_from_dicts.call_count == 1
+    state = pwprogress.read_progress(awr.result_folder)
+    assert state["state"] == "paused"
+
+
+@patch("picasso_workflow.workflow.WorkflowRunner")
+def test_awr_stop_after_aggregation_phase(mock_wr, tmp_path):
+    """An "aggregation"-phase boundary runs the single-dataset phase fully
+    and hands the boundary to the aggregation-stage runner."""
+    from picasso_workflow import progress as pwprogress
+
+    sgl = MagicMock()
+    sgl.run.return_value = True
+    sgl.paused = False
+    sgl.results = {}
+    sgl.reporter_config = {"report_name": "sgl"}
+    agg = MagicMock()
+    agg.run.return_value = True
+    agg.paused = True
+    agg.results = {}
+    agg.reporter_config = {"report_name": "agg"}
+    mock_wr.config_from_dicts.side_effect = [sgl, agg]
+
+    rc, ac, aw = _agg_stepwise_config(str(tmp_path))
+    awr = AggregationWorkflowRunner.config_from_dicts(
+        rc, ac, aw, stop_after=("aggregation", 0)
+    )
+    awr.run()
+
+    assert agg.stop_after == 0
+    assert mock_wr.config_from_dicts.call_count == 2
+    state = pwprogress.read_progress(awr.result_folder)
+    assert state["state"] == "paused"
