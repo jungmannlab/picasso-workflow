@@ -96,6 +96,37 @@ This file was started after v0.5.6; earlier history is in the git log.
 - The GUI exposes resume as a *Continue previous run (resume)* option, baked
   into the generated `start_workflow.py` as `continue_previous_runners=True`.
 
+### Fixed
+
+- **Code-review fixes across the picasso-set stack** (all confirmed by an
+  adversarial review): `("$$map", ...)` defaults no longer crash plain
+  single-dataset runs — the single-dataset command executor resolves a
+  per-channel `$$map`/`$$index` with a spec default (third tuple element,
+  now used by `save_single_dataset`'s `("$$map", "#tags", None)`) and
+  otherwise fails with an actionable message; optional-unset parameters no
+  longer break modules that require them (`find_similar` overrides fall
+  through to `picasso_outpost` defaults, `save_single_dataset` defaults to
+  `locs.hdf5`, and de-facto-required specs like
+  `load_datasets_to_aggregate.tags` and the dbscan_molint/create_mask/
+  ripleysk file parameters are now marked required); `picasso_localize`
+  resolves camera parameters through the `camera_info` property
+  (analysis-config or picasso-CONFIG camera derivation) instead of CLI
+  literals; the picasso-set modules use the `pixelsize` property
+  (metadata → channel metadata → camera config) for drift plots, pick-size
+  conversion and NeNA; `picasso_pick_similar` writes Square pick sizes
+  under `Side Length (nm)` (the bare legacy key reads back as camera
+  pixels — a 130× inflation); the generic picasso-set reporter no longer
+  pre-filters figure paths with `isfile`, so regenerating an HTML report
+  from a moved result folder keeps its figures; picasso-set module saves
+  register themselves as the resume checkpoint so `always_save` no longer
+  writes a second byte-identical locs copy per module; picasso-set file
+  parameters use the drag-and-drop path widget; `picasso_mask_locs`
+  accepts an explicit numeric threshold from the GUI; the module-set
+  toggle keeps the savers (`save_single_dataset`,
+  `save_datasets_aggregated`, new `role="saver"`) visible in the
+  native-picasso palette; `picasso_join` no longer reads its first input
+  file twice.
+
 ### Changed
 
 - **GUI parameter forms show units.** Parameter specs gained a structured

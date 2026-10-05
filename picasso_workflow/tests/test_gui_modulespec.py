@@ -243,9 +243,11 @@ def test_module_set_toggle_switches_palette(window):
     # classic modules are hidden in the picasso view ...
     assert "undrift_rcc" not in items
     assert "identify" not in items
-    # ... except the data loaders, without which no workflow can start
+    # ... except the data loaders and savers, without which no workflow
+    # can start or persist its results
     assert "load_dataset_movie" in items
     assert "load_dataset_localizations" in items
+    assert "save_single_dataset" in items
     # requires locs_undrifted -> greyed out on an empty workflow
     assert not _item_enabled(window, "picasso_density")
 
@@ -362,11 +364,13 @@ def test_command_defaults_prefill_in_override_state(window):
     window.on_module_changed("save_single_dataset")
     wi = window.parameter_widgets["filename"]
     assert not wi.has_default
-    assert wi.widget.text() == str(("$$map", "#tags"))
+    # 3-element form: the None default makes the command resolvable in
+    # single-dataset runs and tag-less aggregations
+    assert wi.widget.text() == str(("$$map", "#tags", None))
     window.add_module()
     name, params = window.single_workflow_modules[1]
     assert name == "save_single_dataset"
-    assert tuple(params["filename"]) == ("$$map", "#tags")
+    assert tuple(params["filename"]) == ("$$map", "#tags", None)
 
 
 def test_reference_remap_helper_updates_both_workflows(window):
