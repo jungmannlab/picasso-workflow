@@ -10402,13 +10402,16 @@ class AutoPicasso(
             Required keys:
 
             ``filename`` : str
-                The name of the dataset.
+                The name of the dataset. Optional; defaults to
+                ``locs.hdf5`` (e.g. when the per-channel
+                ``("$$map", "#tags", None)`` default resolves to None in
+                a tag-less run).
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         results["filepath"] = os.path.join(
-            results["folder"], parameters["filename"]
+            results["folder"], parameters.get("filename") or "locs"
         )
         root, ext = os.path.splitext(results["filepath"])
         if ext != ".hdf5":
@@ -14640,14 +14643,20 @@ class AutoPicasso(
         """
         logger.debug(f"# locs: {len(self.locs)}")
         # search for xy positions that look like gold ('pick similar')
-        diameter = parameters["diameter"]
+        # the override keys are optional: unset ones fall back to
+        # picasso_outpost.pick_similar's own defaults
         kwargs = {
-            "diameter": diameter,
-            "min_n_locs_per_frame": parameters["min_n_locs_per_frame"],
-            "max_n_locs_per_frame": parameters["max_n_locs_per_frame"],
-            "min_rmsd": parameters["min_rmsd"],
-            "max_rmsd": parameters["max_rmsd"],
+            key: parameters[key]
+            for key in (
+                "diameter",
+                "min_n_locs_per_frame",
+                "max_n_locs_per_frame",
+                "min_rmsd",
+                "max_rmsd",
+            )
+            if parameters.get(key) is not None
         }
+        diameter = kwargs.get("diameter", 2)
         # print(self.locs.dtype)
         picks, nlocs, rmsds, labels = picasso_outpost.pick_similar(
             self.locs, self.info, **kwargs

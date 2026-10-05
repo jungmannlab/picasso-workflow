@@ -46,7 +46,7 @@ class PicassoSetPicksMixin:
         ``picasso.io.load_picks``, using the dataset's pixel size for the
         nm-to-camera-pixel conversion of stored pick sizes.
         """
-        pixelsize = lib.get_from_metadata(self.info, "Pixelsize", None)
+        pixelsize = self._picasso_set_pixelsize()
         return io.load_picks(picks_file, pixelsize=pixelsize)
 
     def _picasso_set_save_picks(
@@ -55,8 +55,9 @@ class PicassoSetPicksMixin:
         """Save picks as a pick-region yaml loadable by ``io.load_picks``.
 
         Sizes are written in camera pixels using the legacy keys
-        (``Diameter``/``Width``); square picks, whose ``Side Length`` key
-        is always nm, are converted back via the dataset's pixel size.
+        (``Diameter``/``Width``); square picks, whose size is only ever
+        stored in nm (the ``Side Length (nm)`` key), are converted back
+        via the dataset's pixel size.
         """
         picks_list = [np.asarray(pick).tolist() for pick in picks]
         data = {"Shape": pick_shape}
@@ -67,9 +68,11 @@ class PicassoSetPicksMixin:
             data["Center-Axis-Points"] = picks_list
             data["Width"] = float(pick_size)
         elif pick_shape == "Square":
-            pixelsize = lib.get_from_metadata(self.info, "Pixelsize", 1.0)
+            pixelsize = self._picasso_set_pixelsize(1.0)
             data["Centers"] = picks_list
-            data["Side Length"] = float(pick_size * pixelsize)
+            # the bare "Side Length" key would be read back as camera
+            # pixels; the nm value belongs under "Side Length (nm)"
+            data["Side Length (nm)"] = float(pick_size * pixelsize)
         elif pick_shape == "Box":
             data["Corners"] = picks_list
         else:
@@ -439,6 +442,13 @@ class PicassoSetPicksMixin:
         disp_px_size = parameters["disp_px_size"]
         blur = parameters["blur"]
         method = parameters.get("method", "otsu")
+        if isinstance(method, str):
+            # an explicit threshold may arrive as text (e.g. from a
+            # hand-edited workflow yaml); mask_image expects a float then
+            try:
+                method = float(method)
+            except ValueError:
+                pass
 
         image = masking.generate_image(
             self.locs, self.info, disp_px_size, blur
@@ -499,7 +509,7 @@ class PicassoSetPicksMixin:
         """
         _result, s = postprocess.nena(self.locs, self.info)
         results["nena_px"] = float(s)
-        pixelsize = lib.get_from_metadata(self.info, "Pixelsize", None)
+        pixelsize = self._picasso_set_pixelsize()
         if pixelsize is not None:
             results["nena_nm"] = float(s) * pixelsize
         return parameters, results

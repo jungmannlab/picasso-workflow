@@ -84,8 +84,15 @@ def module_decorator(method):
                 "always_save"
             ):
                 # record what was written as a restore point ("checkpoint")
-                # for resumed runs
-                if hasattr(self, "locs") and self.locs is not None:
+                # for resumed runs. A module that already saved its locs and
+                # recorded them as a checkpoint (e.g. the picasso-set
+                # modules, save_single_dataset) is not saved again: the
+                # second write would be byte-identical.
+                if (
+                    hasattr(self, "locs")
+                    and self.locs is not None
+                    and results.get("checkpoint", {}).get("single") is None
+                ):
                     fp = os.path.join(results["folder"], "locs.hdf5")
                     self._save_locs(fp)
                     results.setdefault("checkpoint", {})["single"] = {

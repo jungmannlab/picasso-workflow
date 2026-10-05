@@ -2968,9 +2968,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": (
                     "Custom filename for saved data. Defaults to the "
-                    "dataset's tag from the tile parameters"
+                    "dataset's tag from the tile parameters; the third "
+                    "tuple element is the fallback for single-dataset "
+                    "runs and tag-less aggregations (None = the "
+                    "module's locs.hdf5 default)"
                 ),
-                "default": ("$$map", "#tags"),
+                "default": ("$$map", "#tags", None),
                 "required": False,
             }
         }
@@ -3032,7 +3035,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "list",
                 "description": "Custom tags for each dataset",
                 "element_type": "str",
-                "required": False,
+                # the module zips filepaths with tags, so this is
+                # de-facto required
+                "required": True,
             },
         }
 
@@ -3366,6 +3371,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "The column name for the IDs to the different \
                     datasets. Allows back-tracking locs to their origin.",
+                "default": "combine_id",
                 "required": False,
             },
         }
@@ -4024,6 +4030,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 # Hint: type appears to be float
             },
             "fp_combined_locs": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: filepath to the combined locs of all channel_locs
                 # Hint: type appears to be str
@@ -4725,12 +4732,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
             },
             "fp_channel_map": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: filepath to the map from 'combine_channels' module, which is a dict from channel name to ID int in the locs['combine_id']
                 # Hint: type appears to be str
                 # Hint: required = True
             },
             "fp_combined_locs": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: filepath to the locs combined in 'combine_channels' module
                 # Hint: type appears to be str
@@ -4761,6 +4770,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 # Hint: required = True
             },
             "combine_col": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: the name of the combine column, e.g. 'combine_id' or 'protein'. Same as used in 'combine_channels' module
                 # Hint: type appears to be str
@@ -5186,42 +5196,49 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
             },
             "fp_channel_map": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: filepath to the map from 'combine_channels' module, which is a dict from channel name to ID int in the locs['combine_id']
                 # Hint: type appears to be str
                 # Hint: required = True
             },
             "epsilon_nm": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: dbscan epsilon in nm
                 # Hint: type appears to be float
                 # Hint: required = True
             },
             "minpts": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: minimum number of points
                 # Hint: type appears to be int
                 # Hint: required = True
             },
             "sigma_linker": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: ... in nm
                 # Hint: type appears to be float
                 # Hint: required = True
             },
             "fp_merge_mask": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: filepath to the merge mask (generated in module
                 # Hint: type appears to be str
                 # Hint: required = True
             },
             "thresh_type": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: ...
                 # Hint: type appears to be str
                 # Hint: required = True
             },
             "cell_name": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: the name of the cell currently analyzed
                 # Hint: type appears to be str
@@ -11516,7 +11533,7 @@ class Window(QtWidgets.QMainWindow):
 
         # Toggle between the two module sets: unchecked = classic
         # picasso-workflow modules, checked = the native-picasso set
-        # (picasso_* names) plus the data loaders.
+        # (picasso_* names) plus the data loaders and savers.
         self.show_picasso_set_checkbox = QtWidgets.QCheckBox(
             "Native-picasso (picasso_*) module set"
         )
@@ -11524,8 +11541,9 @@ class Window(QtWidgets.QMainWindow):
             "Toggle the module palette between the classic picasso-workflow "
             "modules and the native-picasso set, which mirrors the picasso "
             "CLI/library operations with the exact picasso parameter names "
-            "and defaults (shown together with the data loaders). The sets "
-            "can be mixed in one workflow by toggling while building it."
+            "and defaults (shown together with the data loaders and "
+            "savers). The sets can be mixed in one workflow by toggling "
+            "while building it."
         )
         self.show_picasso_set_checkbox.setChecked(False)
         self.show_picasso_set_checkbox.toggled.connect(
@@ -14442,10 +14460,10 @@ class Window(QtWidgets.QMainWindow):
 
         The checkbox toggles the palette between the two module sets:
         unchecked shows the classic picasso-workflow modules, checked shows
-        the native-picasso set (``picasso_*``) plus the data loaders
-        (``role == "loader"``), without which a picasso-set workflow could
-        not start. Both sets can still be mixed in one workflow by toggling
-        while building it.
+        the native-picasso set (``picasso_*``) plus the data loaders and
+        savers (``role`` in loader/saver), without which a picasso-set
+        workflow could neither start nor persist its results. Both sets can
+        still be mixed in one workflow by toggling while building it.
 
         Parameters
         ----------
@@ -14458,7 +14476,10 @@ class Window(QtWidgets.QMainWindow):
         if show_picasso_set:
             if spec is None:
                 return True  # unregistered names belong to the classic set
-            return spec.module_set != "picasso" and spec.role != "loader"
+            return spec.module_set != "picasso" and spec.role not in (
+                "loader",
+                "saver",
+            )
         return spec is not None and spec.module_set == "picasso"
 
     def _module_palette_index(self, module_name):

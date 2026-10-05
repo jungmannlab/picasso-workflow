@@ -2466,6 +2466,26 @@ class ParameterCommandExecutor(DictSimpleTyper):
             else:
                 cmd = t[0]
                 aritexp = None
+            doubled = self.command_sign * 2
+            if len(self.command_sign) == 1 and cmd[:2] == doubled:
+                # A per-channel command ("$$...") reached the single-dataset
+                # executor; only the aggregation ParameterTiler (command
+                # sign "$$") resolves these. A spec-level default (third
+                # element of $$map / $$index) lets a reusable spec also run
+                # standalone; without one, fail with an actionable message
+                # instead of the generic undefined-command error.
+                if cmd in (f"{doubled}map", f"{doubled}index") and len(t) > 2:
+                    return {
+                        "parsed": t[2],
+                        "original": tuple([t[0][2:], *t[1:]]),
+                    }
+                raise ValueError(
+                    f"The parameter command {t} maps per-channel values "
+                    "and is only resolved by an aggregation workflow's "
+                    "tile parameters. For a single-dataset workflow, "
+                    "replace it with a concrete value (or add a default "
+                    "as the third tuple element)."
+                )
             if cmd == f"{self.command_sign}get_prior_result":
                 logger.debug(f"Getting prior result from {t[1]}.")
                 res = self.get_prior_result(t[1])

@@ -393,7 +393,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
                 "required": False,
             },
             "spline_calibration": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "Spline PSF calibration .hdf5, required for spline "
                     "methods (CLI: --spline-calibration)"
@@ -409,7 +409,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
                 "required": False,
             },
             "camera_calibration": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "sCMOS camera calibration .hdf5 "
                     "(CLI: --camera-calibration)"
@@ -417,7 +417,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
                 "required": False,
             },
             "zc": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "3D z-calibration file, required for -3d methods "
                     "(CLI: --zc)"
@@ -478,7 +478,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
                 "required": False,
             },
             "fromfile": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "Apply drift from this drift .txt file instead of "
                     "computing it (CLI: --fromfile)"
@@ -786,7 +786,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_nneighbor": (
         {
             "files": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "The hdf5 cluster file (e.g. the cluster-centers "
                     "output of a picasso-set clusterer, via "
@@ -814,7 +814,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_clusterfilter": (
         {
             "clusterfile": {
-                "type": "file",
+                "type": "path",
                 "description": "A hdf5 clusterfile (CLI: --clusterfile)",
                 "required": True,
             },
@@ -921,7 +921,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
                 "required": False,
             },
             "calibration": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "Astigmatism calibration file; required only for "
                     "astigmatism 3D data (CLI: --calibration)"
@@ -1123,7 +1123,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_picked_locs": (
         {
             "picks_file": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "Picasso pick-region .yaml file (e.g. from "
                     "picasso_pick_similar via $get_prior_result)"
@@ -1150,7 +1150,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_pick_similar": (
         {
             "picks_file": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "Picasso pick-region .yaml file with the seed picks "
                     "(Circle, Rectangle, Square or Box)"
@@ -1184,7 +1184,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_remove_locs_in_picks": (
         {
             "picks_file": {
-                "type": "file",
+                "type": "path",
                 "description": "Picasso pick-region .yaml file",
                 "required": True,
             },
@@ -1199,7 +1199,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_pick_properties": (
         {
             "picks_file": {
-                "type": "file",
+                "type": "path",
                 "description": "Picasso pick-region .yaml file",
                 "required": True,
             },
@@ -1233,7 +1233,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_pick_kinetics": (
         {
             "picks_file": {
-                "type": "file",
+                "type": "path",
                 "description": "Picasso pick-region .yaml file",
                 "required": True,
             },
@@ -1275,12 +1275,12 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_fret": (
         {
             "acc_locs_file": {
-                "type": "file",
+                "type": "path",
                 "description": "The acceptor localizations hdf5 file",
                 "required": True,
             },
             "don_locs_file": {
-                "type": "file",
+                "type": "path",
                 "description": "The donor localizations hdf5 file",
                 "required": True,
             },
@@ -1319,22 +1319,14 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
                 "required": True,
             },
             "method": {
+                # free text (not an options list) so an explicit numeric
+                # threshold can be entered besides the method names
                 "type": "str",
                 "description": (
-                    "Thresholding method or an explicit threshold in " "(0, 1)"
+                    "Thresholding method (isodata, li, mean, minimum, "
+                    "otsu, triangle, yen, local_gaussian, local_mean, "
+                    "local_median) or an explicit threshold in (0, 1)"
                 ),
-                "options": [
-                    "isodata",
-                    "li",
-                    "mean",
-                    "minimum",
-                    "otsu",
-                    "triangle",
-                    "yen",
-                    "local_gaussian",
-                    "local_mean",
-                    "local_median",
-                ],
                 "default": "otsu",
                 "required": False,
             },
@@ -1403,7 +1395,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_zfit": (
         {
             "calibration": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "z-calibration .yaml file (e.g. from "
                     "picasso_calibrate_z via $get_prior_result)"
@@ -1432,7 +1424,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
                 "required": False,
             },
             "lateral_transforms": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "Calibration file with lateral corrections applied "
                     "after the z fit"
@@ -1507,7 +1499,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_camera_calibrate": (
         {
             "dark": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "Dark movie: frames recorded with no light on the "
                     "sensor (CLI: dark)"
@@ -1563,12 +1555,12 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_camera_validate": (
         {
             "calibration": {
-                "type": "file",
+                "type": "path",
                 "description": "Camera calibration (.hdf5)",
                 "required": True,
             },
             "movie": {
-                "type": "file",
+                "type": "path",
                 "description": ("Short fresh dark movie (about 1,000 frames)"),
                 "required": True,
             },
@@ -1748,7 +1740,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
     "picasso_lateral_calibrate": (
         {
             "reference": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "Reference bead image (without the cylindrical lens, "
                     "or the reference color channel)"
@@ -1756,7 +1748,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
                 "required": True,
             },
             "target": {
-                "type": "file",
+                "type": "path",
                 "description": ("Bead image to be mapped onto the reference"),
                 "required": True,
             },
@@ -1781,7 +1773,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
                 "required": False,
             },
             "calibration": {
-                "type": "file",
+                "type": "path",
                 "description": (
                     "Existing calibration (.yaml/.hdf5) to append to "
                     "(CLI: --calibration)"
@@ -1842,7 +1834,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
 # exporters another (optional explicit input instead of the current locs).
 _IMPORTER_PARAMS: dict = {
     "files": {
-        "type": "file",
+        "type": "path",
         "description": "The localization file to import (CLI: files)",
         "required": True,
     },
@@ -1855,7 +1847,7 @@ _IMPORTER_PARAMS: dict = {
 }
 _EXPORTER_PARAMS: dict = {
     "files": {
-        "type": "file",
+        "type": "path",
         "description": (
             "An hdf5 localizations file to convert instead of the "
             "current dataset"

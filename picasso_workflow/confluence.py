@@ -655,14 +655,17 @@ class ConfluenceReporter(AbstractModuleCollection):
         """
 
         # collect figures: image paths in the results dict, then any images
-        # in the result folder not already referenced there
+        # in the result folder not already referenced there. The stored
+        # (possibly stale) paths are handed to upload_attachment unchecked,
+        # like the hand-written reporters do: the HTML interface re-resolves
+        # moved result folders by basename (see HTMLInterface._resolve_source),
+        # which an os.path.isfile pre-check here would defeat.
         figures = [
             v
             for v in results.values()
-            if isinstance(v, str)
-            and v.lower().endswith(_IMAGE_SUFFIXES)
-            and os.path.isfile(v)
+            if isinstance(v, str) and v.lower().endswith(_IMAGE_SUFFIXES)
         ]
+        figure_names = {os.path.basename(fp) for fp in figures}
         folder = results.get("folder")
         other_files = []
         if folder and os.path.isdir(folder):
@@ -671,14 +674,15 @@ class ConfluenceReporter(AbstractModuleCollection):
                 if not os.path.isfile(fp):
                     continue
                 if fn.lower().endswith(_IMAGE_SUFFIXES):
-                    if fp not in figures:
+                    if fn not in figure_names:
                         figures.append(fp)
+                        figure_names.add(fn)
                 else:
                     other_files.append(fn)
         for fp in figures:
             try:
                 self.ci.upload_attachment(self.report_page_id, fp)
-            except ConfluenceInterfaceError:
+            except (ConfluenceInterfaceError, OSError):
                 pass
             _, fn = os.path.split(fp)
             text += (
