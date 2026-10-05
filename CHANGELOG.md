@@ -77,6 +77,26 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **GUI parameter forms: optional parameters without a default start as
+  "unset".** An optional parameter with no spec default (e.g.
+  `picasso_localize`'s camera parameters = "from loaded metadata/config",
+  `roi` = full FOV, `frame_bounds` = all frames) now starts in the greyed
+  use-default state and is omitted from the generated workflow, instead of
+  showing a spurious 0 in a number box that cannot express None. Clicking
+  the parameter label still switches to an explicit override. Optional
+  dict parameters keep their enable-checkbox behaviour.
+
+- **The picasso-set checkbox is now a set toggle.** Unchecked shows the
+  classic picasso-workflow modules, checked shows the native-picasso set
+  (`picasso_*`) plus the data loaders. Both sets can still be mixed in one
+  workflow by toggling while building it, and existing rows from the
+  hidden set remain visible and editable.
+
+- `load_dataset_movie`'s `filename` defaults to `("$$map", "filepath")`
+  and `save_single_dataset`'s `filename` to `("$$map", "#tags")` in the
+  GUI: command-tuple defaults pre-fill the input editable and are written
+  to the workflow (they are recommended arguments, not code defaults).
+
 - `summarize_branches` works as a zero-argument branch join module. When
   `values` is omitted, the `branch` module hands it the per-branch results
   list and it auto-summarizes every numeric per-branch metric (one

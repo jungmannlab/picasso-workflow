@@ -671,8 +671,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "filename": {
                 "type": "path",
-                "description": "Path to the movie file to load",
+                "description": (
+                    "Path to the movie file to load. Defaults to the "
+                    "per-channel 'filepath' column of the tile parameters"
+                ),
                 "extensions": [".raw", ".tif", ".tiff", ".ome.tif"],
+                "default": ("$$map", "filepath"),
                 "required": True,
             },
             "sample_movie": {
@@ -2946,7 +2950,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "filename": {
                 "type": "str",
-                "description": "Custom filename for saved data",
+                "description": (
+                    "Custom filename for saved data. Defaults to the "
+                    "dataset's tag from the tile parameters"
+                ),
+                "default": ("$$map", "#tags"),
                 "required": False,
             }
         }
@@ -11441,27 +11449,30 @@ class Window(QtWidgets.QMainWindow):
 
         self.module_combobox = QtWidgets.QComboBox()
         self.module_combobox.addItem("Select module")
-        # picasso-set modules start hidden (checkbox below is unchecked);
-        # _refresh_module_palette re-adds them when it is toggled on
+        # the set toggle (checkbox below) starts on the classic set;
+        # _refresh_module_palette rebuilds the palette when it is toggled
         self.module_combobox.addItems(
             [
                 name
                 for name in self.module_descriptor.get_module_names()
-                if not self._is_hidden_picasso_set_module(name, False)
+                if not self._is_hidden_by_module_set(name, False)
             ]
         )
         self.module_combobox.currentTextChanged.connect(self.on_module_changed)
         current_layout.addWidget(self.module_combobox)
 
-        # Toggle for the picasso-set: modules recapitulating native picasso
-        # 1:1 (picasso_* names). Hidden from the palette by default.
+        # Toggle between the two module sets: unchecked = classic
+        # picasso-workflow modules, checked = the native-picasso set
+        # (picasso_* names) plus the data loaders.
         self.show_picasso_set_checkbox = QtWidgets.QCheckBox(
-            "Show native-picasso (picasso_*) modules"
+            "Native-picasso (picasso_*) module set"
         )
         self.show_picasso_set_checkbox.setToolTip(
-            "Also offer the picasso-set modules, which mirror the picasso "
+            "Toggle the module palette between the classic picasso-workflow "
+            "modules and the native-picasso set, which mirrors the picasso "
             "CLI/library operations with the exact picasso parameter names "
-            "and defaults. They can be mixed freely with the classic modules."
+            "and defaults (shown together with the data loaders). The sets "
+            "can be mixed in one workflow by toggling while building it."
         )
         self.show_picasso_set_checkbox.setChecked(False)
         self.show_picasso_set_checkbox.toggled.connect(
@@ -14352,9 +14363,9 @@ class Window(QtWidgets.QMainWindow):
                 spec = MODULE_REGISTRY.get(name)
                 if spec is not None and scope not in spec.scopes:
                     continue  # hide scope-inappropriate modules
-                # keep the current selection visible even when the
-                # picasso-set is toggled off (e.g. editing an existing row)
-                if name != previous and self._is_hidden_picasso_set_module(
+                # keep the current selection visible even when its module
+                # set is toggled off (e.g. editing an existing row)
+                if name != previous and self._is_hidden_by_module_set(
                     name, show_picasso_set
                 ):
                     continue
@@ -14373,34 +14384,42 @@ class Window(QtWidgets.QMainWindow):
             self.module_combobox.blockSignals(False)
 
     @staticmethod
-    def _is_hidden_picasso_set_module(name, show_picasso_set):
-        """True when ``name`` is a picasso-set module currently toggled off.
+    def _is_hidden_by_module_set(name, show_picasso_set):
+        """True when the set toggle currently hides module ``name``.
+
+        The checkbox toggles the palette between the two module sets:
+        unchecked shows the classic picasso-workflow modules, checked shows
+        the native-picasso set (``picasso_*``) plus the data loaders
+        (``role == "loader"``), without which a picasso-set workflow could
+        not start. Both sets can still be mixed in one workflow by toggling
+        while building it.
 
         Parameters
         ----------
         name : str
             A module name from the palette.
         show_picasso_set : bool
-            Current state of the picasso-set checkbox.
+            Current state of the picasso-set toggle.
         """
-        if show_picasso_set:
-            return False
         spec = MODULE_REGISTRY.get(name)
+        if show_picasso_set:
+            if spec is None:
+                return True  # unregistered names belong to the classic set
+            return spec.module_set != "picasso" and spec.role != "loader"
         return spec is not None and spec.module_set == "picasso"
 
     def _module_palette_index(self, module_name):
         """Return the palette index of ``module_name``, inserting if hidden.
 
-        A picasso-set module may be absent from the palette (checkbox off);
-        insert it so an existing workflow row using it can still be
-        displayed and edited. Returns -1 for genuinely unknown names.
+        A module may be absent from the palette because the set toggle
+        currently hides its module set; insert it so an existing workflow
+        row using it can still be displayed and edited. Returns -1 for
+        genuinely unknown names.
         """
         index = self.module_combobox.findText(module_name)
-        if index < 0:
-            spec = MODULE_REGISTRY.get(module_name)
-            if spec is not None and spec.module_set == "picasso":
-                self.module_combobox.addItem(module_name)
-                index = self.module_combobox.count() - 1
+        if index < 0 and module_name in MODULE_REGISTRY:
+            self.module_combobox.addItem(module_name)
+            index = self.module_combobox.count() - 1
         return index
 
     def _editing_existing_module(self):
@@ -14963,9 +14982,15 @@ class Window(QtWidgets.QMainWindow):
                 # the label to just the name and put the hint in the tooltip
                 lbl.setText(name)
                 lbl.setStyleSheet("color: gray; font-style: italic;")
-                lbl.setToolTip(
-                    f"Using the code default ({dv}). Click to override."
-                )
+                if dv is None:
+                    lbl.setToolTip(
+                        "Unset - the module's own fallback applies. "
+                        "Click to set a value."
+                    )
+                else:
+                    lbl.setToolTip(
+                        f"Using the code default ({dv}). Click to override."
+                    )
         else:
             w.setEnabled(True)
             if cmd is not None:
@@ -17593,6 +17618,15 @@ class Window(QtWidgets.QMainWindow):
                         )
             # If value_data is None or not a dict, leave dict parameter unchecked/empty
 
+        elif value_data is None:
+            # "unset" (implicit None default of an optional parameter):
+            # clear text inputs; number widgets keep their display and are
+            # greyed/disabled by the default state
+            if isinstance(widget, QtWidgets.QLineEdit):
+                widget.setText("")
+            elif isinstance(widget, QtWidgets.QCheckBox):
+                widget.setChecked(False)
+
         elif isinstance(widget, QtWidgets.QLineEdit):
             widget.setText(str(value_data))
         elif isinstance(widget, QtWidgets.QComboBox):
@@ -18066,16 +18100,26 @@ class Window(QtWidgets.QMainWindow):
             per_branch_checkbox.setVisible(False)
             row_layout.addWidget(per_branch_checkbox, stretch=0)
 
-            # A top-level parameter with a spec default (and not required)
-            # gets a clickable label toggling default<->override (see
-            # _apply_param_default_state). Nested dict sub-parameters are
-            # excluded: a module reads its dict sub-schema as a whole (e.g.
-            # load_dataset_movie's sample_movie["filename"]), so omitting a
-            # defaulted sub-key would leave an incomplete dict and crash.
+            # A top-level optional parameter gets a clickable label toggling
+            # default<->override (see _apply_param_default_state). This
+            # includes optional parameters WITHOUT a spec default: their
+            # implicit default is None ("unset" - omitted from the workflow
+            # so the module's own fallback applies), which number widgets
+            # could not express otherwise. Excluded from the toggle:
+            # command-tuple defaults (e.g. ("$$map", "filepath")) are
+            # recommended arguments rather than code defaults - they
+            # pre-fill in override state and are written to the workflow;
+            # optional dict parameters keep their own enable-checkbox;
+            # nested dict sub-parameters, because a module reads its dict
+            # sub-schema as a whole (e.g. load_dataset_movie's
+            # sample_movie["filename"]), so omitting a defaulted sub-key
+            # would leave an incomplete dict and crash.
+            _default = param_metadata.get("default")
             has_default = (
                 indent_level == 0
-                and param_metadata.get("default") is not None
                 and not param_metadata.get("required", False)
+                and not self._is_command_value(_default)
+                and (_default is not None or original_type != "dict")
             )
             widget_info = ParameterWidgetInfo(
                 widget=widget,
