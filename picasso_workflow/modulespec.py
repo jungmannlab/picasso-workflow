@@ -93,6 +93,64 @@ CAPABILITIES: frozenset[str] = frozenset(
 )
 
 
+# ---------------------------------------------------------------------------
+# Capabilities that live only in process memory. Everything else is either
+# encoded in the localizations themselves (and thus restored when a saved
+# locs file is re-loaded on resume) or exchanged between modules via file
+# paths recorded in the results dict, which survive in WorkflowRunner.yaml.
+# These do not: restarting from a saved-locs checkpoint cannot restore them.
+# ---------------------------------------------------------------------------
+MEMORY_ONLY_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "raw_movie",  # AutoPicasso.movie: the loaded image stack
+        "identifications",  # AutoPicasso.identifications: pre-fit spots
+        "drift",  # AutoPicasso.drift: estimated drift trace
+        "picasso_config",  # process-global picasso CONFIG set at load time
+    }
+)
+
+# Capabilities carried by the in-memory localization state. Unlike the
+# memory-only set above, these CAN be restored on resume -- by re-loading a
+# saved locs file into AutoPicasso.locs (single) or AutoPicasso.channel_locs
+# (channels). Which subset a given checkpoint restores depends on which
+# parts it saved.
+SINGLE_LOCS_CAPABILITIES: frozenset[str] = frozenset(
+    {"locs", "locs_z", "locs_undrifted"}
+)
+CHANNEL_LOCS_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "channel_locs",
+        "dataset_collection",
+        "pooled_locs",
+        "combined_locs",  # combine_channels stores into channel_locs
+        # in aggregation scope the base locs tokens ride on the channel
+        # state (cf. load_datasets_to_aggregate's provides)
+        "locs",
+        "locs_undrifted",
+    }
+)
+LOCS_STATE_CAPABILITIES: frozenset[str] = (
+    SINGLE_LOCS_CAPABILITIES | CHANNEL_LOCS_CAPABILITIES
+)
+
+# Parameter keys (dotted paths for nested dicts) that modules overwrite in
+# their own parameter dict at run time (estimates, resolved output paths,
+# defaults). Needed only when resuming runs recorded before the pristine
+# parameter snapshot existed: those yamls persisted the overwritten values,
+# which must not read as user edits. Runs recorded since compare against
+# the exact snapshot and never consult this map.
+RUNTIME_PARAMETER_WRITE_BACKS: dict[str, frozenset[str]] = {
+    "load_dataset_movie": frozenset({"sample_movie.filename"}),
+    "identify": frozenset({"min_gradient", "auto_netgrad.filename"}),
+    "undrift_rcc": frozenset({"segmentation", "dimensions"}),
+    "smlm_clusterer": frozenset({"basic_fa", "radius_z"}),
+    "align_channels": frozenset({"align_pars.plot_dir"}),
+    "labeling_efficiency_analysis": frozenset(
+        {"nn_nth", "pair_distance", "labeling_uncertainty"}
+    ),
+}
+
+
 @dataclass(frozen=True)
 class ModuleSpec:
     """Declarative metadata for one analysis module.
@@ -924,3 +982,116 @@ def _validate_branch_step(i, params, scope, registry, available):
     errors.extend(e.replace("[", f"[{i}.join.", 1) for e in join_errors)
 
     return errors
+
+
+def _branch_trunk_requires(params, registry) -> frozenset[str]:
+    """Capabilities a ``branch`` step's sub-workflows need from the trunk.
+
+    A nested module's requirement counts only if no earlier module of the
+    same sub-workflow provides it (mirroring how the branch executes its
+    sub-modules in order on the trunk state).
+
+    Parameters
+    ----------
+    params : dict
+        The branch step's parameters (``branch_modules``/``join_modules``).
+    registry : dict[str, ModuleSpec]
+        Registry to look nested modules up in.
+
+    Returns
+    -------
+    frozenset[str]
+        The capabilities required from outside the branch.
+    """
+    needed: set[str] = set()
+    for key in ("branch_modules", "join_modules"):
+        provided: set[str] = set()
+        for step in params.get(key) or []:
+            spec = registry.get(_step_name(step))
+            if spec is None:
+                continue
+            needed |= spec.requires - provided
+            provided |= spec.provides
+    return frozenset(needed)
+
+
+def restart_conflicts(
+    steps, restart_index: int, lost_capabilities=None, registry=None
+) -> tuple[list[str], list[str]]:
+    """Check whether restarting a workflow mid-way runs against lost state.
+
+    Used by the checkpoint-aware resume: when a workflow is restarted at
+    ``restart_index``, every module from there to the end executes in the
+    resumed run. Any of them requiring a capability from
+    ``lost_capabilities`` that was produced *before* the restart point (and
+    is not re-produced within the re-run range) is guaranteed to run
+    against missing state.
+
+    Parameters
+    ----------
+    steps : iterable
+        Ordered workflow steps in any format accepted by
+        :func:`validate_workflow`. ``branch`` steps are inspected
+        recursively: their sub-workflows' unmet requirements count as
+        requirements of the branch step itself.
+    restart_index : int
+        Index of the first module that will be executed; everything before
+        it is skipped.
+    lost_capabilities : frozenset[str], optional
+        The capabilities considered lost at the restart point. Defaults to
+        ``MEMORY_ONLY_CAPABILITIES | LOCS_STATE_CAPABILITIES`` (nothing
+        restored); a caller restoring a checkpoint passes the memory-only
+        set plus whatever locs state the checkpoint does not cover.
+    registry : dict[str, ModuleSpec], optional
+        Registry to check against. Defaults to :data:`MODULE_REGISTRY`.
+
+    Returns
+    -------
+    hard : list[str]
+        Required-capability conflicts -- the restart point is not viable.
+    soft : list[str]
+        Advisory messages: lost ``optional`` inputs and modules unknown to
+        the registry (best-effort specs).
+    """
+    if registry is None:
+        registry = MODULE_REGISTRY
+    if lost_capabilities is None:
+        lost_capabilities = MEMORY_ONLY_CAPABILITIES | LOCS_STATE_CAPABILITIES
+    producers: dict[str, int] = {}
+    hard: list[str] = []
+    soft: list[str] = []
+    for i, step in enumerate(steps):
+        name = _step_name(step)
+        spec = registry.get(name)
+        if i >= restart_index:
+            if spec is None:
+                soft.append(
+                    f"[{i}] unknown module '{name}': cannot verify "
+                    "in-memory requirements"
+                )
+            else:
+                requires = spec.requires
+                if name == "branch":
+                    requires = requires | _branch_trunk_requires(
+                        _step_params(step), registry
+                    )
+                for cap in sorted(requires & lost_capabilities):
+                    p = producers.get(cap)
+                    if p is not None and p < restart_index:
+                        hard.append(
+                            f"[{i}] {name} requires in-memory '{cap}' "
+                            f"produced at [{p}], before the restart point "
+                            f"[{restart_index}]"
+                        )
+                for cap in sorted(spec.optional & lost_capabilities):
+                    p = producers.get(cap)
+                    if p is not None and p < restart_index:
+                        soft.append(
+                            f"[{i}] {name} optionally uses in-memory "
+                            f"'{cap}' produced at [{p}], before the restart "
+                            f"point [{restart_index}]"
+                        )
+        if spec is not None:
+            for cap in spec.provides:
+                producers[cap] = i
+    return hard, soft

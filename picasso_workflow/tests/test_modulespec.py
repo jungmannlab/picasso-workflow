@@ -12,10 +12,15 @@ import unittest
 
 from picasso_workflow.modulespec import (
     CAPABILITIES,
+    LOCS_STATE_CAPABILITIES,
+    MEMORY_ONLY_CAPABILITIES,
     MODULE_REGISTRY,
     ModuleSpec,
     PicassoRelation,
+    RUNTIME_PARAMETER_WRITE_BACKS,
     Scope,
+    SINGLE_LOCS_CAPABILITIES,
+    restart_conflicts,
     validate_workflow,
 )
 from picasso_workflow.util import AbstractModuleCollection
@@ -278,6 +283,112 @@ class TestValidateWorkflow(unittest.TestCase):
                 f"{spec.name}: unsatisfiable requires "
                 f"{sorted(spec.requires)}",
             )
+
+
+class TestRestartConflicts(unittest.TestCase):
+    """restart_conflicts: in-memory state lost by a mid-workflow restart."""
+
+    STEPS = [
+        ("load_dataset_movie", {}),
+        ("identify", {}),
+        ("localize", {}),
+        ("undrift_rcc", {}),
+    ]
+
+    def test_capability_sets_are_subsets_of_vocabulary(self):
+        self.assertEqual(set(), MEMORY_ONLY_CAPABILITIES - CAPABILITIES)
+        self.assertEqual(set(), LOCS_STATE_CAPABILITIES - CAPABILITIES)
+
+    def test_write_back_map_names_registered_modules(self):
+        self.assertEqual(
+            set(),
+            set(RUNTIME_PARAMETER_WRITE_BACKS) - set(MODULE_REGISTRY),
+        )
+
+    def test_restart_at_zero_never_conflicts(self):
+        hard, soft = restart_conflicts(self.STEPS, 0)
+        self.assertEqual([], hard)
+        self.assertEqual([], soft)
+
+    def test_memory_only_conflict_is_hard(self):
+        # restarting at localize: identifications (from identify at [1]) and
+        # raw_movie (from load at [0]) are memory-only and lost.
+        hard, soft = restart_conflicts(self.STEPS, 2)
+        self.assertTrue(any("identifications" in msg for msg in hard))
+        self.assertTrue(any("raw_movie" in msg for msg in hard))
+
+    def test_conflicts_after_restart_module_are_also_hard(self):
+        # restarting at identify: localize (later in the re-run) also misses
+        # raw_movie -- it WILL execute in this run, so it is hard too.
+        hard, soft = restart_conflicts(self.STEPS, 1)
+        self.assertTrue(any("[1] identify" in msg for msg in hard))
+        self.assertTrue(any("[2] localize" in msg for msg in hard))
+
+    def test_producer_inside_rerun_range_is_fine(self):
+        # restarting at identify: identifications for localize are
+        # re-produced by identify inside the re-run range.
+        hard, soft = restart_conflicts(self.STEPS, 1)
+        self.assertFalse(any("identifications" in msg for msg in hard + soft))
+
+    def test_lost_locs_state_is_hard_unless_restored(self):
+        # undrift_rcc requires 'locs' produced by localize at [2]. Without a
+        # restore, restarting at [3] is not viable; with the single-locs
+        # state restored (checkpoint), it is.
+        hard, _ = restart_conflicts(self.STEPS, 3)
+        self.assertTrue(any("'locs'" in msg for msg in hard))
+        hard, _ = restart_conflicts(
+            self.STEPS,
+            3,
+            lost_capabilities=(
+                MEMORY_ONLY_CAPABILITIES
+                | (LOCS_STATE_CAPABILITIES - SINGLE_LOCS_CAPABILITIES)
+            ),
+        )
+        self.assertEqual([], hard)
+
+    def test_unknown_module_is_soft(self):
+        steps = self.STEPS + [("not_a_module", {})]
+        hard, soft = restart_conflicts(steps, 4)
+        self.assertEqual([], hard)
+        self.assertTrue(any("cannot verify" in msg for msg in soft))
+
+    def test_optional_memory_only_is_soft(self):
+        steps = [
+            ("load_picassoconfig", {}),
+            ("load_dataset_movie", {}),
+            ("identify", {}),
+        ]
+        # restart at load_dataset_movie: identify's optional picasso_config
+        # (from [0]) is lost, but only advisory; raw_movie is re-produced.
+        hard, soft = restart_conflicts(steps, 1)
+        self.assertEqual([], hard)
+        self.assertTrue(any("picasso_config" in msg for msg in soft))
+
+    def test_branch_submodule_requirements_are_seen(self):
+        # the branch step itself requires nothing memory-only, but its
+        # sub-workflow contains localize, which needs raw_movie and
+        # identifications from the trunk -- lost at the restart point.
+        steps = [
+            ("load_dataset_movie", {}),
+            ("identify", {}),
+            ("localize", {}),
+            ("save_single_dataset", {}),
+            (
+                "branch",
+                {"branch_modules": [("localize", {})]},
+            ),
+        ]
+        hard, soft = restart_conflicts(steps, 4)
+        self.assertTrue(any("[4] branch" in msg for msg in hard))
+        self.assertTrue(any("raw_movie" in msg for msg in hard))
+        # a branch whose sub-modules are self-sufficient is fine
+        steps[4] = ("branch", {"branch_modules": [("dummy_module", {})]})
+        hard, soft = restart_conflicts(
+            steps,
+            4,
+            lost_capabilities=MEMORY_ONLY_CAPABILITIES,
+        )
+        self.assertEqual([], hard)
 
 
 if __name__ == "__main__":

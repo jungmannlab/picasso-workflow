@@ -851,6 +851,9 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.save_single_dataset(0, parameters)
 
         assert results["res_a"] == 7
+        assert results["checkpoint"] == {
+            "single": {"filepath": results["filepath"]}
+        }
 
         # clean up
         shutil.rmtree(
@@ -864,6 +867,11 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_tags = []
         parameters, results = self.ap.save_datasets_aggregated(0, parameters)
 
+        assert results["tags"] == []
+        assert results["checkpoint"] == {
+            "channels": {"filepaths": [], "tags": []}
+        }
+
         # clean up
         shutil.rmtree(
             os.path.join(self.results_folder, "00_save_datasets_aggregated")
@@ -876,6 +884,8 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.load_dataset_localizations(0, parameters)
 
         assert "picasso version" in results.keys()
+        assert results["filepath"] == "locs.hdf5"
+        assert results["checkpoint"] == {"single": {"filepath": "locs.hdf5"}}
 
         # clean up
         shutil.rmtree(
@@ -908,6 +918,12 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.load_datasets_to_aggregate(0, parameters)
 
         assert "filepaths" in results.keys()
+        assert results["checkpoint"] == {
+            "channels": {
+                "filepaths": parameters["filepaths"],
+                "tags": ["1", "2"],
+            }
+        }
 
         # clean up
         shutil.rmtree(
@@ -1275,6 +1291,44 @@ class TestAnalyseModules(unittest.TestCase):
             self.assertIsNone(self.ap._save_state_on_error(folder))
         finally:
             shutil.rmtree(folder, ignore_errors=True)
+
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_load_checkpoint_single(self, mock_load):
+        """load_checkpoint restores self.locs/self.info from a single part."""
+        locs = pd.DataFrame({"x": [1.0, 2.0]})
+        mock_load.return_value = (locs, [{"info": 1}])
+        self.ap.load_checkpoint({"single": {"filepath": "/some/locs.hdf5"}})
+        mock_load.assert_called_once_with("/some/locs.hdf5")
+        self.assertEqual(2, len(self.ap.locs))
+        self.assertEqual([{"info": 1}], self.ap.info)
+
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_load_checkpoint_channels(self, mock_load):
+        """load_checkpoint restores channel state, honoring tags and
+        stamping the channel column."""
+        locs = pd.DataFrame({"x": [1.0, 2.0, 3.0]})
+        mock_load.side_effect = lambda fp: (locs.copy(), [{"info": 1}])
+        self.ap.load_checkpoint(
+            {
+                "channels": {
+                    "filepaths": ["/a/t1.hdf5", "/b/t2.hdf5"],
+                    "tags": ["t1", "t2"],
+                }
+            }
+        )
+        self.assertEqual(["t1", "t2"], self.ap.channel_tags)
+        self.assertEqual(2, len(self.ap.channel_locs))
+        self.assertEqual([1, 1, 1], list(self.ap.channel_locs[1]["channel"]))
+
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_load_checkpoint_channels_derives_tags(self, mock_load):
+        """Without tags in the descriptor, filenames are used as tags."""
+        locs = pd.DataFrame({"x": [1.0]})
+        mock_load.side_effect = lambda fp: (locs.copy(), [{"info": 1}])
+        self.ap.load_checkpoint(
+            {"channels": {"filepaths": ["/a/t1.hdf5", "/b/t2.hdf5"]}}
+        )
+        self.assertEqual(["t1.hdf5", "t2.hdf5"], self.ap.channel_tags)
 
     @patch("picasso_workflow.analyse.distance.cdist")
     def nneighbor(self, mock_cdist):
@@ -3710,6 +3764,46 @@ class TestAnalyse(unittest.TestCase):
         )
 
         shutil.rmtree(os.path.join(self.results_folder, "00_my_method"))
+
+    def test_01b_module_decorator_records_checkpoint(self):
+        """The auto-save path records a checkpoint descriptor for resume."""
+
+        class TestClass:
+            results_folder = self.results_folder
+            analysis_config = {"always_save": True}
+            locs = "sentinel-locs"
+            channel_locs = ["a", "b"]
+            channel_tags = ["t1", "t2"]
+
+            def _save_locs(self, fp):
+                pass
+
+            def _save_datasets_agg(self, folder):
+                return [
+                    os.path.join(folder, t + ".hdf5")
+                    for t in self.channel_tags
+                ]
+
+            @analyse.module_decorator
+            def my_method(self, i, parameters, results):
+                return parameters, results
+
+        tc = TestClass()
+        parameters, results = tc.my_method(0, {})
+        folder = results["folder"]
+        try:
+            assert results["checkpoint"]["single"] == {
+                "filepath": os.path.join(folder, "locs.hdf5")
+            }
+            assert results["checkpoint"]["channels"] == {
+                "filepaths": [
+                    os.path.join(folder, "t1.hdf5"),
+                    os.path.join(folder, "t2.hdf5"),
+                ],
+                "tags": ["t1", "t2"],
+            }
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
     def test_02_AutoPicasso_create_sample_movie(self):
         self.ap.movie = np.random.randint(

@@ -10,6 +10,25 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- **Checkpoint-aware resume.** Resuming a run (`continue_previous_runner=True`)
+  now works even when the in-memory localizations are gone: modules that save
+  or load locs (`save_single_dataset`, `load_dataset_localizations`,
+  `load_datasets_to_aggregate`, `save_datasets_aggregated`, and any module run
+  with `save_locs: True` / `always_save`) record a `checkpoint` descriptor in
+  their results, and on resume the runner restores the latest checkpoint
+  before the re-run frontier and re-runs everything after it. Checkpoints
+  that would strand memory-only state (raw movie, identifications, drift,
+  picasso config — per the new `modulespec.restart_conflicts` check) are
+  rejected in favour of an earlier restart point; without any checkpoint the
+  run falls back to scratch (the previous behaviour). Note resume may now
+  re-run previously-succeeded modules between the checkpoint and the failure
+  point, since their in-memory effects cannot be restored otherwise.
+
+- The GUI exposes resume as a *Continue previous run (resume)* option, baked
+  into the generated `start_workflow.py` as `continue_previous_runners=True`.
+
 ### Changed
 
 - `summarize_branches` works as a zero-argument branch join module. When
@@ -107,6 +126,39 @@ This file was started after v0.5.6; earlier history is in the git log.
   Command (`$$map`) and per-branch values always count as overrides.
 
 ### Fixed
+
+- Resuming no longer silently discards the caller's edited workflow modules:
+  `config_from_dicts(continue_previous_runner=True)` (and the aggregation
+  resume paths) now adopt the passed parameters when the module-name sequence
+  matches the previous run's, so "fix a parameter and re-run" actually applies
+  the fix. A changed argument on a previously-succeeded module moves the
+  re-run frontier up to that module, instead of keeping its stale result.
+  Change detection compares against a pristine parameter snapshot recorded in
+  `WorkflowRunner.yaml`, so `$`-command resolution and module write-backs do
+  not read as user edits. Runs recorded before the snapshot existed fall back
+  to a conservative comparison against the persisted (mutated) parameters,
+  so an edited argument still forces a re-run there too; keys the modules
+  overwrite at run time (estimated `min_gradient`, resolved output paths --
+  see `modulespec.RUNTIME_PARAMETER_WRITE_BACKS`) are ignored so they do not
+  masquerade as edits.
+
+- Resume now actually finds the previous run: the coordinators stamp report
+  names per launch, which made `_check_previous_runner` search for a folder
+  containing the *current* timestamp (never matching an earlier launch) and
+  the aggregation runner prefer the fresh stamp over discovery. Previous
+  runs are now discovered by the stable, stamp-free base name, and folders
+  carrying a per-run token before the runstamp are matched too. A previous
+  run killed before its first save (folder without `WorkflowRunner.yaml`)
+  falls back to a fresh run instead of crashing.
+
+- Resume no longer accepts a restart point that would strand needed state:
+  every module from the restart point onward is checked (branch
+  sub-workflows included) against what the checkpoint actually restores —
+  a partially-restorable checkpoint or one stranding movie/identifications
+  is rejected in favour of an earlier restart point or scratch. Conversely,
+  file-mediated workflows (e.g. continuation after a `manual` step) resume
+  directly at the frontier again instead of degrading to a scratch re-run,
+  and checkpoint paths are translated across machines via `Drivepaths`.
 
 - `pick_origami` accepted-structure renders now pass only that structure's
   localizations (`sel`) to the renderer instead of the full multi-group set,
