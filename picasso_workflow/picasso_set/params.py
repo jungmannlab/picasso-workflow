@@ -45,6 +45,12 @@ _RESULTS_COMMON: dict = {
     },
 }
 
+_NLOCS_RESULT: dict = {
+    "type": "int",
+    "description": "Number of localizations after the module",
+    "min": 0,
+}
+
 
 def _results(**extra) -> dict:
     """Return a results_spec: the common decorator keys plus ``extra``."""
@@ -53,15 +59,434 @@ def _results(**extra) -> dict:
     return spec
 
 
+def _fp(description) -> dict:
+    """A file-path result leaf."""
+    return {"type": "str", "description": description}
+
+
+# The CLI's fit-method choices (picasso/__main__.py localize parser).
+_FIT_METHOD_CHOICES = [
+    "mle",
+    "mle-gpu",
+    "mle-spherical",
+    "mle-spherical-gpu",
+    "mle-rotated",
+    "mle-rotated-gpu",
+    "mle-3d",
+    "lq",
+    "lq-spherical",
+    "lq-spherical-gpu",
+    "lq-rotated",
+    "lq-rotated-gpu",
+    "lq-3d",
+    "lq-gpu",
+    "lq-gpu-3d",
+    "spline",
+    "spline-mle",
+    "spline-gpu",
+    "spline-mle-gpu",
+    "avg",
+]
+
+
 PICASSO_SET_SUMMARIES: dict[str, str] = {
+    "picasso_localize": (
+        "Identify and fit single-molecule spots "
+        "(native picasso CLI: localize)."
+    ),
+    "picasso_undrift_rcc": (
+        "Correct localization coordinates for drift using RCC "
+        "(native picasso CLI: undrift)."
+    ),
+    "picasso_undrift_aim": (
+        "Correct localization coordinates for drift with AIM "
+        "(native picasso CLI: aim)."
+    ),
+    "picasso_undrift_fiducials": (
+        "Correct localization coordinates for drift with fiducials "
+        "(native picasso CLI: undrift_fiducials)."
+    ),
+    "picasso_link": (
+        "Link localizations in consecutive frames "
+        "(native picasso CLI: link)."
+    ),
+    "picasso_dark": (
+        "Compute the dark time for grouped localizations "
+        "(native picasso CLI: dark)."
+    ),
+    "picasso_groupprops": (
+        "Calculate kinetics and properties of localization groups "
+        "(native picasso CLI: groupprops)."
+    ),
     "picasso_density": (
         "Compute the local localization density "
         "(native picasso CLI: density)."
+    ),
+    "picasso_pair_correlation": (
+        "Calculate the pair-correlation of localizations "
+        "(native picasso CLI: pc)."
+    ),
+    "picasso_dbscan": (
+        "Cluster localizations with the DBSCAN algorithm "
+        "(native picasso CLI: dbscan)."
+    ),
+    "picasso_hdbscan": (
+        "Cluster localizations with the HDBSCAN algorithm "
+        "(native picasso CLI: hdbscan)."
+    ),
+    "picasso_smlm_cluster": (
+        "Cluster localizations with the custom SMLM clustering algorithm "
+        "(native picasso CLI: smlm_cluster)."
+    ),
+    "picasso_nneighbor": (
+        "Calculate nearest neighbor distances of a clustered dataset "
+        "(native picasso CLI: nneighbor)."
+    ),
+    "picasso_clusterfilter": (
+        "Filter localizations by properties of their clusters "
+        "(native picasso CLI: clusterfilter)."
+    ),
+    "picasso_cluster_combine": (
+        "Combine localizations in each cluster "
+        "(native picasso CLI: cluster_combine)."
+    ),
+    "picasso_cluster_combine_dist": (
+        "Calculate the nearest-neighbor distance for combined clusters "
+        "(native picasso CLI: cluster_combine_dist)."
+    ),
+    "picasso_g5m": (
+        "Gaussian Mixture Modeling for Molecular Mapping of clustered "
+        "localizations (native picasso CLI: g5m)."
+    ),
+    "picasso_render": (
+        "Render a localization-based image " "(native picasso CLI: render)."
+    ),
+    "picasso_align": (
+        "Align one localization file to another "
+        "(native picasso CLI: align)."
+    ),
+    "picasso_join": (
+        "Join hdf5 localization lists with frame reindexing "
+        "(native picasso CLI: join)."
     ),
 }
 
 
 PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
+    "picasso_localize": (
+        {
+            "fit_method": {
+                "type": "str",
+                "description": "Fit method (CLI: --fit-method)",
+                "options": _FIT_METHOD_CHOICES,
+                "default": "mle",
+                "required": False,
+            },
+            "box_side_length": {
+                "type": "int",
+                "description": (
+                    "Side length of the fit box " "(CLI: --box-side-length)"
+                ),
+                "default": 7,
+                "required": False,
+            },
+            "gradient": {
+                "type": "float",
+                "description": (
+                    "Minimum net gradient for spot detection "
+                    "(CLI: --gradient)"
+                ),
+                "default": 5000,
+                "required": False,
+            },
+            "roi": {
+                "type": "list",
+                "description": (
+                    "Region of interest [y_min, x_min, y_max, x_max] "
+                    "(CLI: --roi; one region)"
+                ),
+                "required": False,
+            },
+            "frame_bounds": {
+                "type": "list",
+                "description": (
+                    "[start_frame, end_frame] segment(s), 0-indexed "
+                    "inclusive (CLI: --frame-bounds)"
+                ),
+                "required": False,
+            },
+            "temporal_median": {
+                "type": "int",
+                "description": (
+                    "Rolling temporal median background filter window "
+                    "(CLI: --temporal-median; 0 = off)"
+                ),
+                "default": 0,
+                "required": False,
+            },
+            "gaussian_filter": {
+                "type": "float",
+                "description": (
+                    "Spatial Gaussian pre-filter sigma "
+                    "(CLI: --gaussian-filter; 0 = off)"
+                ),
+                "default": 0.0,
+                "required": False,
+            },
+            "convergence": {
+                "type": "float",
+                "description": (
+                    "Fit tolerance; 0 = the fit method's own default "
+                    "(CLI: --convergence)"
+                ),
+                "default": 0,
+                "required": False,
+            },
+            "max_iterations": {
+                "type": "int",
+                "description": (
+                    "Max iterations per spot; 0 = the method's own "
+                    "default (CLI: --max-iterations)"
+                ),
+                "default": 0,
+                "required": False,
+            },
+            "baseline": {
+                "type": "float",
+                "description": (
+                    "Camera baseline (CLI: --baseline, literal 0; here "
+                    "None = from loaded metadata/config)"
+                ),
+                "required": False,
+            },
+            "sensitivity": {
+                "type": "float",
+                "description": (
+                    "Camera sensitivity (CLI: --sensitivity, literal 1; "
+                    "here None = from loaded metadata/config)"
+                ),
+                "required": False,
+            },
+            "gain": {
+                "type": "float",
+                "description": (
+                    "Camera gain (CLI: --gain, literal 1; here None = "
+                    "from loaded metadata/config)"
+                ),
+                "required": False,
+            },
+            "qe": {
+                "type": "float",
+                "description": (
+                    "Quantum efficiency (CLI: --qe, literal 1; here "
+                    "None = from loaded metadata/config)"
+                ),
+                "required": False,
+            },
+            "pixelsize": {
+                "type": "float",
+                "description": (
+                    "Camera pixel size in nm (CLI: --pixelsize, literal "
+                    "130; here None = from loaded metadata/config)"
+                ),
+                "required": False,
+            },
+            "spline_calibration": {
+                "type": "file",
+                "description": (
+                    "Spline PSF calibration .hdf5, required for spline "
+                    "methods (CLI: --spline-calibration)"
+                ),
+                "required": False,
+            },
+            "affine_calibration": {
+                "type": "list",
+                "description": (
+                    "Lateral-correction calibration file(s) "
+                    "(CLI: --affine-calibration)"
+                ),
+                "required": False,
+            },
+            "camera_calibration": {
+                "type": "file",
+                "description": (
+                    "sCMOS camera calibration .hdf5 "
+                    "(CLI: --camera-calibration)"
+                ),
+                "required": False,
+            },
+            "zc": {
+                "type": "file",
+                "description": (
+                    "3D z-calibration file, required for -3d methods "
+                    "(CLI: --zc)"
+                ),
+                "required": False,
+            },
+            "mf": {
+                "type": "float",
+                "description": (
+                    "Magnification factor, required for -3d methods "
+                    "(CLI: --mf)"
+                ),
+                "required": False,
+            },
+            "fit_z_gpu": {
+                "type": "bool",
+                "description": (
+                    "Fit z on the GPU; falls back to CPU if unavailable "
+                    "(CLI: --fit-z-gpu)"
+                ),
+                "default": False,
+                "required": False,
+            },
+            "drift": {
+                "type": "int",
+                "description": (
+                    "RCC segmentation for post-fit undrift; 0 = off "
+                    "(CLI: --drift, default 1000 - deviation: the "
+                    "workflow has dedicated undrift modules)"
+                ),
+                "default": 0,
+                "required": False,
+            },
+            "suffix": {
+                "type": "str",
+                "description": (
+                    "Inserted into the output file name (CLI: --suffix)"
+                ),
+                "required": False,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            filepath_locs=_fp("Fitted localizations hdf5"),
+        ),
+    ),
+    "picasso_undrift_rcc": (
+        {
+            "segmentation": {
+                "type": "float",
+                "description": (
+                    "Number of frames combined for one temporal segment "
+                    "(CLI: --segmentation)"
+                ),
+                "default": 1000,
+                "required": False,
+            },
+            "fromfile": {
+                "type": "file",
+                "description": (
+                    "Apply drift from this drift .txt file instead of "
+                    "computing it (CLI: --fromfile)"
+                ),
+                "required": False,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            filepath_locs_undrift=_fp("Undrifted localizations hdf5"),
+            filepath_driftfile=_fp("Drift table text file"),
+            fp_fig_drift=_fp("Drift plot figure"),
+        ),
+    ),
+    "picasso_undrift_aim": (
+        {
+            "segmentation": {
+                "type": "float",
+                "description": (
+                    "Number of frames combined for one temporal segment "
+                    "(CLI: --segmentation)"
+                ),
+                "default": 100,
+                "required": False,
+            },
+            "intersectdist": {
+                "type": "float",
+                "description": (
+                    "Max. distance (camera pixels) between localizations "
+                    "in consecutive segments to be considered intersecting "
+                    "(CLI: --intersectdist)"
+                ),
+                "default": 20 / 130,
+                "required": False,
+            },
+            "roiradius": {
+                "type": "float",
+                "description": (
+                    "Max. drift (camera pixels) between two consecutive "
+                    "segments (CLI: --roiradius)"
+                ),
+                "default": 60 / 130,
+                "required": False,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            filepath_locs_aim=_fp("Undrifted localizations hdf5"),
+            filepath_driftfile=_fp("Drift table text file"),
+            fp_fig_drift=_fp("Drift plot figure"),
+        ),
+    ),
+    "picasso_undrift_fiducials": (
+        {},
+        _results(
+            nlocs=_NLOCS_RESULT,
+            filepath_locs_undrift_fiducials=_fp(
+                "Undrifted localizations hdf5"
+            ),
+            filepath_driftfile=_fp("Drift table text file"),
+            fp_fig_drift=_fp("Drift plot figure"),
+        ),
+    ),
+    "picasso_link": (
+        {
+            "distance": {
+                "type": "float",
+                "description": (
+                    "Maximum distance (camera pixels) between "
+                    "localizations to consider them the same binding "
+                    "event (CLI: --distance)"
+                ),
+                "default": 1.0,
+                "required": False,
+            },
+            "tolerance": {
+                "type": "int",
+                "description": (
+                    "Maximum dark time between localizations to still "
+                    "consider them the same binding event "
+                    "(CLI: --tolerance)"
+                ),
+                "default": 1,
+                "required": False,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            filepath_locs_link=_fp("Linked localizations hdf5"),
+        ),
+    ),
+    "picasso_dark": (
+        {},
+        _results(
+            nlocs=_NLOCS_RESULT,
+            filepath_locs_dark=_fp("Localizations with dark times hdf5"),
+        ),
+    ),
+    "picasso_groupprops": (
+        {},
+        _results(
+            n_groups={
+                "type": "int",
+                "description": "Number of localization groups",
+                "min": 0,
+            },
+            filepath_locs_groupprops=_fp(
+                "Locs + group properties hdf5 (io.save_datasets)"
+            ),
+        ),
+    ),
     "picasso_density": (
         {
             "radius": {
@@ -75,18 +500,504 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
         },
         _results(
-            nlocs={
+            nlocs=_NLOCS_RESULT,
+            filepath_locs_density=_fp(
+                "Saved density-annotated localizations "
+                "(mirrors the CLI's _density.hdf5 output)"
+            ),
+        ),
+    ),
+    "picasso_pair_correlation": (
+        {
+            "binsize": {
+                "type": "float",
+                "description": "The bin size in camera pixels (CLI: -b)",
+                "default": 0.1,
+                "required": False,
+            },
+            "rmax": {
+                "type": "float",
+                "description": (
+                    "The maximum distance for the pair-correlation "
+                    "(CLI: -r)"
+                ),
+                "default": 10,
+                "required": False,
+            },
+        },
+        _results(
+            fp_fig_pair_correlation=_fp("Pair-correlation curve figure"),
+            filepath_pair_correlation=_fp("Pair-correlation curve data"),
+        ),
+    ),
+    "picasso_dbscan": (
+        {
+            "radius": {
+                "type": "float",
+                "description": (
+                    "Maximal distance (camera pixels) between two "
+                    "localizations to be considered local (CLI: radius)"
+                ),
+                "required": True,
+            },
+            "density": {
                 "type": "int",
-                "description": "Number of localizations processed",
+                "description": (
+                    "Minimum local density for localizations to be "
+                    "assigned to a cluster (CLI: density)"
+                ),
+                "required": True,
+            },
+            "pixelsize": {
+                "type": "int",
+                "description": (
+                    "Camera pixel size in nm (required for 3D "
+                    "localizations only)"
+                ),
+                "required": False,
+            },
+            "radius_z": {
+                "type": "float",
+                "description": (
+                    "DBSCAN epsilon in z (camera pixels); enables "
+                    "anisotropic 3D clustering (CLI: --radius_z)"
+                ),
+                "required": False,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            nclusters={
+                "type": "int",
+                "description": "Number of clusters found",
                 "min": 0,
             },
-            filepath_locs_density={
+            filepath_locs_dbscan=_fp("Clustered localizations hdf5"),
+            filepath_locs_dbclusters=_fp("Cluster centers hdf5"),
+        ),
+    ),
+    "picasso_hdbscan": (
+        {
+            "min_cluster": {
+                "type": "int",
+                "description": (
+                    "Smallest size grouping considered a cluster "
+                    "(CLI: min_cluster)"
+                ),
+                "required": True,
+            },
+            "min_samples": {
+                "type": "int",
+                "description": (
+                    "The higher, the more points are considered noise "
+                    "(CLI: min_samples)"
+                ),
+                "required": True,
+            },
+            "pixelsize": {
+                "type": "int",
+                "description": (
+                    "Camera pixel size in nm (required for 3D "
+                    "localizations only)"
+                ),
+                "required": False,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            nclusters={
+                "type": "int",
+                "description": "Number of clusters found",
+                "min": 0,
+            },
+            filepath_locs_hdbscan=_fp("Clustered localizations hdf5"),
+            filepath_locs_hdbclusters=_fp("Cluster centers hdf5"),
+        ),
+    ),
+    "picasso_smlm_cluster": (
+        {
+            "radius": {
+                "type": "float",
+                "description": "Clustering radius in camera pixels",
+                "required": True,
+            },
+            "min_locs": {
+                "type": "int",
+                "description": (
+                    "Minimum number of localizations in a cluster"
+                ),
+                "required": True,
+            },
+            "pixelsize": {
+                "type": "int",
+                "description": (
+                    "Camera pixel size in nm (required for 3D "
+                    "localizations only)"
+                ),
+                "required": False,
+            },
+            "basic_fa": {
+                "type": "bool",
+                "description": (
+                    "Whether to perform basic frame analysis (sticking "
+                    "event removal)"
+                ),
+                "default": False,
+                "required": False,
+            },
+            "radius_z": {
+                "type": "float",
+                "description": (
+                    "Clustering radius in axial direction (must be set "
+                    "for 3D)"
+                ),
+                "required": False,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            nclusters={
+                "type": "int",
+                "description": "Number of clusters found",
+                "min": 0,
+            },
+            filepath_locs_clusters=_fp("Clustered localizations hdf5"),
+            filepath_locs_cluster_centers=_fp("Cluster centers hdf5"),
+        ),
+    ),
+    "picasso_nneighbor": (
+        {
+            "files": {
+                "type": "file",
+                "description": (
+                    "The hdf5 cluster file (e.g. the cluster-centers "
+                    "output of a picasso-set clusterer, via "
+                    "$get_prior_result)"
+                ),
+                "required": True,
+            },
+        },
+        _results(
+            filepath_minval=_fp(
+                "Nearest-neighbor distances text file "
+                "(the CLI's _minval.txt)"
+            ),
+            n_points={
+                "type": "int",
+                "description": "Number of cluster centers",
+                "min": 0,
+            },
+            nn_mean={
+                "type": "float",
+                "description": "Mean nearest-neighbor distance",
+            },
+        ),
+    ),
+    "picasso_clusterfilter": (
+        {
+            "clusterfile": {
+                "type": "file",
+                "description": "A hdf5 clusterfile (CLI: --clusterfile)",
+                "required": True,
+            },
+            "parameter": {
                 "type": "str",
                 "description": (
-                    "Saved density-annotated localizations "
-                    "(mirrors the CLI's _density.hdf5 output)"
+                    "Cluster parameter to be filtered (CLI: --parameter)"
                 ),
+                "required": True,
             },
+            "minval": {
+                "type": "float",
+                "description": "Lower boundary (CLI: --minval)",
+                "required": True,
+            },
+            "maxval": {
+                "type": "float",
+                "description": "Upper boundary (CLI: --maxval)",
+                "required": True,
+            },
+        },
+        _results(
+            filepath_locs_filter_in=_fp("In-range localizations hdf5"),
+            filepath_locs_filter_out=_fp("Out-of-range localizations hdf5"),
+            nlocs_in={
+                "type": "int",
+                "description": "Number of in-range localizations",
+                "min": 0,
+            },
+            nlocs_out={
+                "type": "int",
+                "description": "Number of out-of-range localizations",
+                "min": 0,
+            },
+        ),
+    ),
+    "picasso_cluster_combine": (
+        {},
+        _results(
+            nlocs=_NLOCS_RESULT,
+            filepath_locs_comb=_fp("Combined localizations hdf5"),
+        ),
+    ),
+    "picasso_cluster_combine_dist": (
+        {},
+        _results(
+            nlocs=_NLOCS_RESULT,
+            filepath_locs_cdist=_fp(
+                "Combined localizations with distances hdf5"
+            ),
+        ),
+    ),
+    "picasso_g5m": (
+        {
+            "min_locs": {
+                "type": "int",
+                "description": (
+                    "Min. number of locs per molecule (CLI: --min-locs)"
+                ),
+                "default": 10,
+                "required": False,
+            },
+            "loc_prec_handle": {
+                "type": "str",
+                "description": (
+                    "Localization precision handle " "(CLI: --loc-prec-handle)"
+                ),
+                "options": ["local", "abs"],
+                "default": "local",
+                "required": False,
+            },
+            "min_sigma": {
+                "type": "float",
+                "description": (
+                    "Minimum sigma factor/value (CLI: --min-sigma)"
+                ),
+                "default": 0.8,
+                "required": False,
+            },
+            "max_sigma": {
+                "type": "float",
+                "description": (
+                    "Maximum sigma factor/value (CLI: --max-sigma)"
+                ),
+                "default": 1.5,
+                "required": False,
+            },
+            "max_rounds": {
+                "type": "int",
+                "description": (
+                    "Max. rounds without BIC improvement to terminate "
+                    "(CLI: --max-rounds)"
+                ),
+                "default": 3,
+                "required": False,
+            },
+            "bootstrap_sem": {
+                "type": "bool",
+                "description": (
+                    "Bootstrap to estimate SEM of molecule positions "
+                    "(CLI: --bootstrap-sem)"
+                ),
+                "default": False,
+                "required": False,
+            },
+            "calibration": {
+                "type": "file",
+                "description": (
+                    "Astigmatism calibration file; required only for "
+                    "astigmatism 3D data (CLI: --calibration)"
+                ),
+                "required": False,
+            },
+            "mode": {
+                "type": "str",
+                "description": (
+                    "3D fitting mode of the input localizations "
+                    "(CLI: --mode)"
+                ),
+                "options": ["astigmatism", "spline"],
+                "default": "astigmatism",
+                "required": False,
+            },
+            "covariance_type": {
+                "type": "str",
+                "description": (
+                    "Shape of the G5M components (CLI: --covariance-type)"
+                ),
+                "options": ["auto", "spherical", "diagonal", "rotated"],
+                "default": "auto",
+                "required": False,
+            },
+            "postprocess": {
+                "type": "bool",
+                "description": (
+                    "Postprocess results to remove sticking events and "
+                    "low-quality fits (CLI: -p disables)"
+                ),
+                "default": True,
+                "required": False,
+            },
+            "max_locs": {
+                "type": "int",
+                "description": (
+                    "Maximum number of localizations per cluster "
+                    "(CLI: --max-locs)"
+                ),
+                "default": 100000,
+                "required": False,
+            },
+            "asynch": {
+                "type": "bool",
+                "description": (
+                    "Fit asynchronously via multiprocessing "
+                    "(CLI: -a disables)"
+                ),
+                "default": True,
+                "required": False,
+            },
+            "group_column": {
+                "type": "str",
+                "description": (
+                    "Column used to group localizations into clusters "
+                    "(CLI: --group-column)"
+                ),
+                "options": ["group", "group_input"],
+                "default": "group",
+                "required": False,
+            },
+        },
+        _results(
+            n_molecules={
+                "type": "int",
+                "description": "Number of molecules in the molecule map",
+                "min": 0,
+            },
+            filepath_locs_molmap=_fp(
+                "Molecule map hdf5 (the CLI's _molmap.hdf5)"
+            ),
+        ),
+    ),
+    "picasso_render": (
+        {
+            "disp_px_size": {
+                "type": "float",
+                "description": (
+                    "The size of the rendered pixel in nm "
+                    "(CLI: --disp-px-size)"
+                ),
+                "default": 10.0,
+                "required": False,
+            },
+            "blur_method": {
+                "type": "str",
+                "description": "Blur method (CLI: --blur-method)",
+                "options": ["none", "convolve", "gaussian"],
+                "default": "convolve",
+                "required": False,
+            },
+            "min_blur_width": {
+                "type": "float",
+                "description": (
+                    "Minimum blur width if blur is applied "
+                    "(CLI: --min-blur-width)"
+                ),
+                "default": 0.0,
+                "required": False,
+            },
+            "vmin": {
+                "type": "float",
+                "description": (
+                    "Minimum colormap level in range 0-100 or absolute "
+                    "value (CLI: --vmin)"
+                ),
+                "default": 0.0,
+                "required": False,
+            },
+            "vmax": {
+                "type": "float",
+                "description": (
+                    "Maximum colormap level in range 0-100 or absolute "
+                    "value (CLI: --vmax)"
+                ),
+                "default": 20.0,
+                "required": False,
+            },
+            "scaling": {
+                "type": "str",
+                "description": (
+                    "If 'yes', vmin/vmax are relative in the range 0-100 "
+                    "(CLI: --scaling)"
+                ),
+                "options": ["yes", "no"],
+                "default": "yes",
+                "required": False,
+            },
+            "cmap": {
+                "type": "str",
+                "description": (
+                    "The colormap to be applied (CLI: --cmap; the CLI "
+                    "default comes from user settings, here: viridis)"
+                ),
+                "options": [
+                    "viridis",
+                    "inferno",
+                    "plasma",
+                    "magma",
+                    "hot",
+                    "gray",
+                ],
+                "default": "viridis",
+                "required": False,
+            },
+        },
+        _results(
+            fp_fig_render=_fp("Rendered image PNG"),
+            n_rendered={
+                "type": "int",
+                "description": "Number of localizations rendered",
+                "min": 0,
+            },
+        ),
+    ),
+    "picasso_align": (
+        {
+            "files": {
+                "type": "list",
+                "description": (
+                    "The hdf5 localization files to align (CLI: file)"
+                ),
+                "required": True,
+            },
+        },
+        _results(
+            filepaths_aligned={
+                "type": "list",
+                "description": "The aligned localization files",
+            },
+        ),
+    ),
+    "picasso_join": (
+        {
+            "files": {
+                "type": "list",
+                "description": (
+                    "The hdf5 localization files to be joined (CLI: file)"
+                ),
+                "required": True,
+            },
+            "keepindex": {
+                "type": "bool",
+                "description": (
+                    "Do not change frame numbers (CLI: --keepindex)"
+                ),
+                "default": False,
+                "required": False,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            filepath_locs_join=_fp("Joined localizations hdf5"),
         ),
     ),
 }
