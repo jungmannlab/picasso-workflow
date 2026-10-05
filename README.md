@@ -213,8 +213,10 @@ decides where to restart:
    against a pristine snapshot of the previous run's configuration
    (recorded in `WorkflowRunner.yaml`), so `$`-command resolution and
    values modules write back into their own parameters do not read as
-   edits. Runs recorded before this snapshot existed resume without
-   parameter-change detection.
+   edits. Runs recorded before this snapshot existed are compared
+   best-effort against the persisted (mutated) parameters: edits are
+   detected, but module-estimated values may trigger extra (safe)
+   re-runs, and *removing* a parameter is not noticed.
 2. Walking back from the frontier, the latest module that saved
    localizations to disk becomes the **checkpoint**: its locs are loaded
    back into memory, everything up to it is skipped, and the modules after

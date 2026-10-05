@@ -342,6 +342,121 @@ def _module_parameters_changed(prev_params: dict, new_params: dict) -> bool:
     return prev != new
 
 
+_ORIGINALNOCMD_SUFFIX = "_originalnocmd"
+
+
+def _substitute_companions(params: dict) -> None:
+    """Replace resolved command values by their ``*_originalnocmd`` originals.
+
+    ``ParameterCommandExecutor`` resolves command tuples in place but keeps
+    the raw command (sign-stripped, truncated to two elements) under a
+    companion key. Substituting the originals back, on both sides of a
+    comparison, makes resolved and unresolved parameter sets comparable.
+
+    Parameters
+    ----------
+    params : dict
+        A (deep-copied) parameter dict; modified in place.
+    """
+    for key in [
+        k
+        for k in params
+        if isinstance(k, str) and k.endswith(_ORIGINALNOCMD_SUFFIX)
+    ]:
+        params[key[: -len(_ORIGINALNOCMD_SUFFIX)]] = params.pop(key)
+
+
+def _normalize_command(value):
+    """Normalize a raw ``$``-command tuple to the companion-key form.
+
+    The ``*_originalnocmd`` companions store commands sign-stripped and
+    truncated to two elements; normalize raw commands the same way so the
+    two forms compare equal.
+
+    Parameters
+    ----------
+    value : object
+        A parameter value.
+
+    Returns
+    -------
+    object
+        The normalized value (unchanged for non-command values).
+    """
+    if (
+        isinstance(value, tuple)
+        and value
+        and isinstance(value[0], str)
+        and value[0].startswith("$")
+    ):
+        return (value[0].lstrip("$"),) + tuple(value[1:2])
+    return value
+
+
+def _legacy_values_differ(prev_value, new_value) -> bool:
+    """Conservatively compare a legacy parameter value against a new one.
+
+    Parameters
+    ----------
+    prev_value : object
+        Value from a legacy yaml (resolved commands, module write-backs).
+    new_value : object
+        Value as configured now.
+
+    Returns
+    -------
+    bool
+        Whether the new value differs from the previous one. Keys present
+        only on the previous side are ignored (module write-backs).
+    """
+    if isinstance(new_value, dict) and isinstance(prev_value, dict):
+        _substitute_companions(prev_value)
+        _substitute_companions(new_value)
+        return any(
+            key not in prev_value
+            or _legacy_values_differ(prev_value[key], value)
+            for key, value in new_value.items()
+        )
+    if isinstance(new_value, list) and isinstance(prev_value, list):
+        if len(new_value) != len(prev_value):
+            return True
+        return any(
+            _legacy_values_differ(p, n) for p, n in zip(prev_value, new_value)
+        )
+    return _normalize_command(new_value) != _normalize_command(prev_value)
+
+
+def _module_parameters_changed_legacy(
+    prev_params: dict, new_params: dict
+) -> bool:
+    """Best-effort parameter comparison against a pre-snapshot yaml.
+
+    Runs recorded before the pristine snapshot existed only persisted the
+    *mutated* parameters (``$``-commands resolved in place, values written
+    back by the modules themselves). Comparison is therefore conservative:
+    commands are normalized to the ``*_originalnocmd`` companion form, and
+    only keys present in the new parameters are compared -- so a module
+    write-back does not read as a user edit, but values a module
+    overwrites in place (e.g. an auto-estimated ``min_gradient``) may
+    cause a safe extra re-run, and *removing* a parameter is not detected.
+
+    Parameters
+    ----------
+    prev_params : dict
+        The module's parameters from the legacy yaml.
+    new_params : dict
+        The module's parameters as configured now.
+
+    Returns
+    -------
+    bool
+    """
+    typer = DictSimpleTyper(to_simple_type=True)
+    prev = typer.run(copy.deepcopy(prev_params))
+    new = typer.run(copy.deepcopy(new_params))
+    return _legacy_values_differ(prev, new)
+
+
 _RUNSTAMP_RE = re.compile(r"_(\d{6}-\d{4})$")
 
 
@@ -1617,10 +1732,12 @@ class WorkflowRunner:
         # WorkflowRunner.yaml so a resume can compare the caller's
         # parameters against what the previous run was configured with.
         self.workflow_modules_pristine = None
-        # The previous run's pristine modules (set by
-        # adopt_workflow_modules on resume); lets _plan_resume detect
-        # changed parameters. Consumed by run().
+        # The previous run's modules (set by adopt_workflow_modules on
+        # resume); lets _plan_resume detect changed parameters. Consumed
+        # by run(). The legacy flag marks pre-snapshot yamls, whose
+        # mutated parameters need the conservative legacy comparison.
         self._previous_workflow_modules = None
+        self._previous_modules_are_legacy = False
         # Progress tracking. ``progress`` is built lazily in run() (needs the
         # result folder and module list); ``_abort_requested`` supports a
         # cooperative in-process stop, complementing the on-disk abort flag.
@@ -2122,13 +2239,27 @@ class WorkflowRunner:
                     f"{new_names}); keeping the previous run's modules."
                 )
                 return
+            prev_modules = self.workflow_modules
             self.workflow_modules = new_modules
             self.workflow_modules_pristine = copy.deepcopy(new_modules)
-            # Only a pristine snapshot supports parameter comparison: the
-            # yaml's workflow_modules carry resolved $-commands and module
-            # write-backs, which would read as changes. Old yamls (no
-            # snapshot) simply get no parameter-change detection.
-            self._previous_workflow_modules = prev_pristine
+            if prev_pristine is not None:
+                # exact comparison against the pristine snapshot
+                self._previous_workflow_modules = prev_pristine
+                self._previous_modules_are_legacy = False
+            else:
+                # yamls recorded before the pristine snapshot existed only
+                # hold the mutated parameters (resolved $-commands, module
+                # write-backs); fall back to the conservative legacy
+                # comparison against those
+                logger.info(
+                    "The previous run has no pristine parameter snapshot "
+                    "(recorded by an older version); using a best-effort "
+                    "comparison -- module-estimated values may trigger "
+                    "extra re-runs, and a removed parameter is not "
+                    "detected."
+                )
+                self._previous_workflow_modules = prev_modules
+                self._previous_modules_are_legacy = True
         except Exception as e:
             logger.warning(
                 f"Could not adopt the edited workflow modules on resume "
@@ -2230,11 +2361,16 @@ class WorkflowRunner:
                 break
         params_changed = False
         if self._previous_workflow_modules is not None:
+            compare = (
+                _module_parameters_changed_legacy
+                if self._previous_modules_are_legacy
+                else _module_parameters_changed
+            )
             for i, (module_name, module_parameters) in enumerate(
                 self.workflow_modules[:frontier]
             ):
                 try:
-                    changed = _module_parameters_changed(
+                    changed = compare(
                         self._previous_workflow_modules[i][1],
                         module_parameters,
                     )

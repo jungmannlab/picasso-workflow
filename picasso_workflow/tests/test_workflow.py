@@ -24,6 +24,7 @@ from picasso_workflow.workflow import (
     _checkpoint_from_module_results,
     _find_previous_runner_postfix,
     _module_parameters_changed,
+    _module_parameters_changed_legacy,
     _strip_runstamp,
 )
 
@@ -827,6 +828,73 @@ def test_module_parameters_changed_detects_value_change():
     new = {"radius": 2, "nested": {"a": [1, 2]}}
     assert not _module_parameters_changed(prev, new)
     assert _module_parameters_changed(prev, {**new, "radius": 3})
+
+
+def test_module_parameters_changed_legacy():
+    """Legacy yamls (no pristine snapshot) hold mutated parameters: module
+    write-backs are ignored, resolved commands compare equal to their raw
+    form, and a real user edit is still detected."""
+    prev = {
+        "n_plot_structures": 20,
+        "dimensions": ["x", "y"],  # written back by the module, not a user key
+        "filepath": "/resolved/file.hdf5",
+        "filepath_originalnocmd": (
+            "get_prior_result",  # stored sign-stripped by the PCE
+            "results, 00_x, filepath",
+        ),
+        "nested": {"a": 1, "added_by_module": 2},
+    }
+    new_same = {
+        "n_plot_structures": 20,
+        "filepath": ("$get_prior_result", "results, 00_x, filepath"),
+        "nested": {"a": 1},
+    }
+    assert not _module_parameters_changed_legacy(prev, new_same)
+    assert _module_parameters_changed_legacy(
+        prev, {**new_same, "n_plot_structures": 21}
+    )
+    assert _module_parameters_changed_legacy(
+        prev, {**new_same, "brand_new_key": 1}
+    )
+    changed_cmd = dict(new_same)
+    changed_cmd["filepath"] = (
+        "$get_prior_result",
+        "results, 01_other, filepath",
+    )
+    assert _module_parameters_changed_legacy(prev, changed_cmd)
+
+
+@patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+@patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+@patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+def test_resume_from_pre_snapshot_yaml_detects_changed_param(tmp_path):
+    """Resuming a run recorded before the pristine snapshot existed falls
+    back to the legacy comparison and still detects an edited argument."""
+    modules = [("pick_origami", {"n_plot_structures": 20})]
+    wr = WorkflowRunner.config_from_dicts(
+        {"report_name": "rep"}, {"result_location": str(tmp_path)}, modules
+    )
+    wr.save(wr.result_folder)
+    # strip the snapshot, as a yaml written by an older version
+    fp = os.path.join(wr.result_folder, "WorkflowRunner.yaml")
+    with open(fp) as f:
+        data = yaml.safe_load(f)
+    del data["workflow_modules_pristine"]
+    with open(fp, "w") as f:
+        yaml.dump(data, f)
+
+    edited = [("pick_origami", {"n_plot_structures": 21})]
+    wr2 = WorkflowRunner.config_from_dicts(
+        {"report_name": "rep_991231-2359"},
+        {"result_location": str(tmp_path)},
+        edited,
+        continue_previous_runner=True,
+    )
+    assert wr2._previous_modules_are_legacy
+    assert wr2.workflow_modules == edited
+    assert _module_parameters_changed_legacy(
+        wr2._previous_workflow_modules[0][1], edited[0][1]
+    )
 
 
 def test_module_parameters_changed_on_pristine_commands():
