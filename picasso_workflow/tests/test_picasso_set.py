@@ -701,6 +701,91 @@ class TestPicassoSetModules(unittest.TestCase):
         mock_plot.assert_called_once()
         mock_sac.assert_called_once()
 
+    # --- tier 4: format converters --------------------------------------
+
+    @patch("picasso_workflow.picasso_set.analyse_io.io.import_ts")
+    def test_picasso_csv2hdf(self, mock_its):
+        mock_its.return_value = (self.ap.locs, [{"Frames": 10}])
+        parameters, results = self.ap.picasso_csv2hdf(
+            0, {"files": "/data/ts.csv", "pixelsize": 130}
+        )
+        mock_its.assert_called_once_with("/data/ts.csv", 130)
+        # import_ts writes <base>_locs.hdf5 next to the input (CLI)
+        self.assertEqual("/data/ts_locs.hdf5", results["filepath_converted"])
+        self.assertEqual([{"Frames": 10}], self.ap.info)
+
+    @patch("picasso_workflow.picasso_set.analyse_io.io.save_locs")
+    @patch("picasso_workflow.picasso_set.analyse_io.io.import_smap")
+    def test_picasso_smap2hdf(self, mock_ism, mock_sl):
+        mock_ism.return_value = (self.ap.locs, [{"Frames": 10}])
+        parameters, results = self.ap.picasso_smap2hdf(
+            0, {"files": "/data/x_sml.mat", "pixelsize": 130}
+        )
+        self.assertEqual(
+            "/data/x_sml_locs.hdf5", results["filepath_converted"]
+        )
+        mock_sl.assert_called_once()
+
+    def _assert_export(self, module, suffix, results):
+        self.assertTrue(
+            results["filepath_converted"].endswith("locs" + suffix),
+            f"{module}: unexpected output {results['filepath_converted']}",
+        )
+        self.assertEqual(len(self.ap.locs), results["nlocs"])
+
+    def test_picasso_hdf2csv(self):
+        parameters, results = self.ap.picasso_hdf2csv(0, {})
+        self._assert_export("picasso_hdf2csv", ".csv", results)
+        self.assertTrue(os.path.isfile(results["filepath_converted"]))
+
+    @patch("picasso_workflow.picasso_set.analyse_io.io.export_thunderstorm")
+    def test_picasso_hdf2ts(self, mock_exp):
+        parameters, results = self.ap.picasso_hdf2ts(0, {})
+        self._assert_export("picasso_hdf2ts", ".csv", results)
+        mock_exp.assert_called_once()
+
+    @patch("picasso_workflow.picasso_set.analyse_io.io.export_txt_imagej")
+    def test_picasso_hdf2imagej(self, mock_exp):
+        parameters, results = self.ap.picasso_hdf2imagej(0, {})
+        self._assert_export("picasso_hdf2imagej", ".txt", results)
+        mock_exp.assert_called_once()
+
+    @patch("picasso_workflow.picasso_set.analyse_io.io.export_txt_nis")
+    def test_picasso_hdf2nis(self, mock_exp):
+        parameters, results = self.ap.picasso_hdf2nis(0, {})
+        self._assert_export("picasso_hdf2nis", ".nis.txt", results)
+        mock_exp.assert_called_once()
+
+    @patch("picasso_workflow.picasso_set.analyse_io.io.export_xyz_chimera")
+    def test_picasso_hdf2chimera(self, mock_exp):
+        parameters, results = self.ap.picasso_hdf2chimera(0, {})
+        self._assert_export("picasso_hdf2chimera", ".chi.xyz", results)
+        mock_exp.assert_called_once()
+
+    @patch("picasso_workflow.picasso_set.analyse_io.io.export_3d_visp")
+    def test_picasso_hdf2visp(self, mock_exp):
+        parameters, results = self.ap.picasso_hdf2visp(0, {})
+        self._assert_export("picasso_hdf2visp", ".visp.3d", results)
+        mock_exp.assert_called_once()
+
+    @patch("picasso_workflow.picasso_set.analyse_io.io.export_smap")
+    def test_picasso_hdf2smap(self, mock_exp):
+        parameters, results = self.ap.picasso_hdf2smap(0, {})
+        self._assert_export("picasso_hdf2smap", "_sml.mat", results)
+        mock_exp.assert_called_once()
+
+    @patch("picasso_workflow.picasso_set.analyse_io.io.export_smap")
+    @patch("picasso_workflow.picasso_set.analyse_io.io.load_locs")
+    def test_picasso_export_explicit_file(self, mock_ll, mock_exp):
+        """Exporters accept an explicit files path instead (CLI parity)."""
+        mock_ll.return_value = (self.ap.locs, [{}])
+        parameters, results = self.ap.picasso_hdf2smap(
+            0, {"files": "/data/other_locs.hdf5"}
+        )
+        self.assertTrue(
+            results["filepath_converted"].endswith("other_locs_sml.mat")
+        )
+
     # --- tier 2: picks/postprocessing ---------------------------------
 
     _PICKS = ([[1.0, 2.0], [3.0, 4.0]], "Circle", 1.5)

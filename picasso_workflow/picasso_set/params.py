@@ -229,6 +229,42 @@ PICASSO_SET_SUMMARIES: dict[str, str] = {
         "Fit a lateral (astigmatism/chromatic) x-y correction from two "
         "bead images (native picasso CLI: lateral-calibrate)."
     ),
+    "picasso_csv2hdf": (
+        "Convert a ThunderSTORM CSV file to picasso hdf5 "
+        "(native picasso CLI: csv2hdf)."
+    ),
+    "picasso_smap2hdf": (
+        "Convert a SMAP _sml.mat file to picasso hdf5 "
+        "(native picasso CLI: smap2hdf)."
+    ),
+    "picasso_hdf2csv": (
+        "Export localizations to plain CSV, columns unchanged "
+        "(native picasso CLI: hdf2csv)."
+    ),
+    "picasso_hdf2ts": (
+        "Export localizations to ThunderSTORM CSV "
+        "(native picasso CLI: hdf2ts)."
+    ),
+    "picasso_hdf2imagej": (
+        "Export localizations to ImageJ txt (frame, x, y) "
+        "(native picasso CLI: hdf2imagej)."
+    ),
+    "picasso_hdf2nis": (
+        "Export localizations to NIS txt format "
+        "(native picasso CLI: hdf2nis)."
+    ),
+    "picasso_hdf2chimera": (
+        "Export localizations to Chimera .xyz for 3D visualization "
+        "(native picasso CLI: hdf2chimera)."
+    ),
+    "picasso_hdf2visp": (
+        "Export localizations to VISP format "
+        "(native picasso CLI: hdf2visp)."
+    ),
+    "picasso_hdf2smap": (
+        "Export localizations to SMAP _sml.mat "
+        "(native picasso CLI: hdf2smap)."
+    ),
 }
 
 
@@ -244,6 +280,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "box_side_length": {
                 "type": "int",
+                "unit": "px",
                 "description": (
                     "Side length of the fit box " "(CLI: --box-side-length)"
                 ),
@@ -261,6 +298,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "roi": {
                 "type": "list",
+                "unit": "px",
                 "description": (
                     "Region of interest [y_min, x_min, y_max, x_max] "
                     "(CLI: --roi; one region)"
@@ -269,6 +307,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "frame_bounds": {
                 "type": "list",
+                "unit": "frames",
                 "description": (
                     "[start_frame, end_frame] segment(s), 0-indexed "
                     "inclusive (CLI: --frame-bounds)"
@@ -277,6 +316,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "temporal_median": {
                 "type": "int",
+                "unit": "frames",
                 "description": (
                     "Rolling temporal median background filter window "
                     "(CLI: --temporal-median; 0 = off)"
@@ -345,6 +385,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "pixelsize": {
                 "type": "float",
+                "unit": "nm",
                 "description": (
                     "Camera pixel size in nm (CLI: --pixelsize, literal "
                     "130; here None = from loaded metadata/config)"
@@ -402,6 +443,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "drift": {
                 "type": "int",
+                "unit": "frames",
                 "description": (
                     "RCC segmentation for post-fit undrift; 0 = off "
                     "(CLI: --drift, default 1000 - deviation: the "
@@ -427,6 +469,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "segmentation": {
                 "type": "float",
+                "unit": "frames",
                 "description": (
                     "Number of frames combined for one temporal segment "
                     "(CLI: --segmentation)"
@@ -454,6 +497,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "segmentation": {
                 "type": "float",
+                "unit": "frames",
                 "description": (
                     "Number of frames combined for one temporal segment "
                     "(CLI: --segmentation)"
@@ -463,6 +507,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "intersectdist": {
                 "type": "float",
+                "unit": "px",
                 "description": (
                     "Max. distance (camera pixels) between localizations "
                     "in consecutive segments to be considered intersecting "
@@ -473,6 +518,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "roiradius": {
                 "type": "float",
+                "unit": "px",
                 "description": (
                     "Max. drift (camera pixels) between two consecutive "
                     "segments (CLI: --roiradius)"
@@ -503,6 +549,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "distance": {
                 "type": "float",
+                "unit": "px",
                 "description": (
                     "Maximum distance (camera pixels) between "
                     "localizations to consider them the same binding "
@@ -513,6 +560,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "tolerance": {
                 "type": "int",
+                "unit": "frames",
                 "description": (
                     "Maximum dark time between localizations to still "
                     "consider them the same binding event "
@@ -551,6 +599,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "radius": {
                 "type": "float",
+                "unit": "px",
                 "description": (
                     "Maximum distance (camera pixels) for localizations "
                     "to count as local (CLI: radius)"
@@ -571,12 +620,14 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "binsize": {
                 "type": "float",
+                "unit": "px",
                 "description": "The bin size in camera pixels (CLI: -b)",
                 "default": 0.1,
                 "required": False,
             },
             "rmax": {
                 "type": "float",
+                "unit": "px",
                 "description": (
                     "The maximum distance for the pair-correlation "
                     "(CLI: -r)"
@@ -594,6 +645,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "radius": {
                 "type": "float",
+                "unit": "px",
                 "description": (
                     "Maximal distance (camera pixels) between two "
                     "localizations to be considered local (CLI: radius)"
@@ -610,6 +662,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "pixelsize": {
                 "type": "int",
+                "unit": "nm",
                 "description": (
                     "Camera pixel size in nm (required for 3D "
                     "localizations only)"
@@ -618,6 +671,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "radius_z": {
                 "type": "float",
+                "unit": "px",
                 "description": (
                     "DBSCAN epsilon in z (camera pixels); enables "
                     "anisotropic 3D clustering (CLI: --radius_z)"
@@ -656,6 +710,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "pixelsize": {
                 "type": "int",
+                "unit": "nm",
                 "description": (
                     "Camera pixel size in nm (required for 3D "
                     "localizations only)"
@@ -678,6 +733,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "radius": {
                 "type": "float",
+                "unit": "px",
                 "description": "Clustering radius in camera pixels",
                 "required": True,
             },
@@ -690,6 +746,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "pixelsize": {
                 "type": "int",
+                "unit": "nm",
                 "description": (
                     "Camera pixel size in nm (required for 3D "
                     "localizations only)"
@@ -707,6 +764,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "radius_z": {
                 "type": "float",
+                "unit": "px",
                 "description": (
                     "Clustering radius in axial direction (must be set "
                     "for 3D)"
@@ -942,6 +1000,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "disp_px_size": {
                 "type": "float",
+                "unit": "nm",
                 "description": (
                     "The size of the rendered pixel in nm "
                     "(CLI: --disp-px-size)"
@@ -958,6 +1017,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "min_blur_width": {
                 "type": "float",
+                "unit": "px",
                 "description": (
                     "Minimum blur width if blur is applied "
                     "(CLI: --min-blur-width)"
@@ -1145,6 +1205,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "max_dark_time": {
                 "type": "int",
+                "unit": "frames",
                 "description": (
                     "Maximum dark time for linking binding events"
                 ),
@@ -1178,6 +1239,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "max_dark_time": {
                 "type": "int",
+                "unit": "frames",
                 "description": (
                     "Maximum dark time for linking binding events"
                 ),
@@ -1243,11 +1305,13 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "disp_px_size": {
                 "type": "float",
+                "unit": "nm",
                 "description": ("Size of the rendered mask pixel in nm"),
                 "required": True,
             },
             "blur": {
                 "type": "float",
+                "unit": "px",
                 "description": (
                     "Gaussian blur sigma applied to the rendered image "
                     "(display pixels)"
@@ -1399,6 +1463,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "d": {
                 "type": "float",
+                "unit": "nm",
                 "description": (
                     "z step size in nm between consecutive stage " "positions"
                 ),
@@ -1533,6 +1598,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "step": {
                 "type": "float",
+                "unit": "nm",
                 "description": (
                     "z step size in nm between consecutive stage "
                     "positions (CLI: --step)"
@@ -1541,6 +1607,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "box_side_length": {
                 "type": "int",
+                "unit": "px",
                 "description": "Box side length (CLI: --box-side-length)",
                 "default": 13,
                 "required": False,
@@ -1661,6 +1728,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "pixelsize": {
                 "type": "int",
+                "unit": "nm",
                 "description": "Pixel size in nm (CLI literal)",
                 "default": 130,
                 "required": False,
@@ -1731,6 +1799,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "box_side_length": {
                 "type": "int",
+                "unit": "px",
                 "description": "Box side length (CLI: --box-side-length)",
                 "default": 7,
                 "required": False,
@@ -1746,6 +1815,7 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "pixelsize": {
                 "type": "float",
+                "unit": "nm",
                 "description": (
                     "Camera pixel size in nm, for the reported shift "
                     "in nm (CLI: --pixelsize)"
@@ -1766,6 +1836,50 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         ),
     ),
 }
+
+
+# The importers share one schema (required input file + pixel size), the
+# exporters another (optional explicit input instead of the current locs).
+_IMPORTER_PARAMS: dict = {
+    "files": {
+        "type": "file",
+        "description": "The localization file to import (CLI: files)",
+        "required": True,
+    },
+    "pixelsize": {
+        "type": "float",
+        "unit": "nm",
+        "description": "Camera pixel size in nm (CLI: --pixelsize)",
+        "required": True,
+    },
+}
+_EXPORTER_PARAMS: dict = {
+    "files": {
+        "type": "file",
+        "description": (
+            "An hdf5 localizations file to convert instead of the "
+            "current dataset"
+        ),
+        "required": False,
+    },
+}
+_CONVERTED_RESULTS: dict = _results(
+    nlocs=_NLOCS_RESULT,
+    filepath_converted=_fp("The converted output file"),
+)
+for _name in ("picasso_csv2hdf", "picasso_smap2hdf"):
+    PICASSO_SET_PARAMS[_name] = (dict(_IMPORTER_PARAMS), _CONVERTED_RESULTS)
+for _name in (
+    "picasso_hdf2csv",
+    "picasso_hdf2ts",
+    "picasso_hdf2imagej",
+    "picasso_hdf2nis",
+    "picasso_hdf2chimera",
+    "picasso_hdf2visp",
+    "picasso_hdf2smap",
+):
+    PICASSO_SET_PARAMS[_name] = (dict(_EXPORTER_PARAMS), _CONVERTED_RESULTS)
+del _name
 
 
 def docstring(name: str) -> str:
@@ -1794,7 +1908,9 @@ def docstring(name: str) -> str:
         required = "required" if pspec.get("required") else "optional"
         default = pspec.get("default")
         default_txt = "" if default is None else f", default: {default!r}"
-        lines.append(f"{pname} : {pspec.get('type', 'any')}")
+        unit = pspec.get("unit")
+        unit_txt = f" [{unit}]" if unit else ""
+        lines.append(f"{pname} : {pspec.get('type', 'any')}{unit_txt}")
         lines.append(f"    {pspec.get('description', '')}")
         lines.append(f"    ({required}{default_txt})")
     return "\n".join(lines)

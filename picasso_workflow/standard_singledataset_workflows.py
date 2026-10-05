@@ -82,3 +82,52 @@ def minimal(filepath, box_size=7):
         ),
     ]
     return workflow_modules
+
+
+def picasso_native(filepath, fit_method="mle", gradient=5000):
+    """Provide the modules for a native-picasso single-dataset workflow.
+
+    Uses the picasso-set modules, which mirror the picasso CLI with its
+    exact parameter names and defaults: ``load_dataset_movie`` →
+    ``picasso_localize`` → ``picasso_undrift_rcc`` → ``picasso_render`` →
+    ``save_single_dataset``.
+
+    Parameters
+    ----------
+    filepath : str
+        The name of the file to analyze.
+    fit_method : str
+        The picasso CLI fit method (default "mle").
+    gradient : float
+        Minimum net gradient for spot detection (default 5000).
+    """
+    workflow_modules = [
+        (
+            "load_dataset_movie",
+            {
+                "filename": filepath,
+            },
+        ),
+        (
+            "picasso_localize",
+            {
+                "fit_method": fit_method,
+                "gradient": gradient,
+            },
+        ),
+        (
+            "picasso_undrift_rcc",
+            {},
+        ),
+        (
+            "picasso_render",
+            {},
+        ),
+        (
+            "save_single_dataset",
+            {
+                "filename": "locs.hdf5",
+            },
+        ),
+    ]
+    return workflow_modules

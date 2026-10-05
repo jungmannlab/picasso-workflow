@@ -12,6 +12,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **picasso-set tier 4: format converters (9 modules) + docs.**
+  `picasso_csv2hdf` and `picasso_smap2hdf` import ThunderSTORM/SMAP files
+  (written next to the input like the CLI) and load them as the current
+  dataset; `picasso_hdf2csv`/`ts`/`imagej`/`nis`/`chimera`/`visp`/`smap`
+  export the current localizations (or an explicit file) with the
+  CLI-identical output suffixes. Plus the predefined recipe
+  `standard_singledataset_workflows.picasso_native()` (load →
+  picasso_localize → picasso_undrift_rcc → picasso_render → save) and a
+  README section documenting the picasso-set.
+
 - **picasso-set tier 3: calibration & 3D (6 modules).** `picasso_zfit`
   (astigmatic z fit on the current locs, GPU with CPU fallback),
   `picasso_calibrate_z` (bead z-stack → z-calibration yaml),
@@ -87,6 +97,17 @@ This file was started after v0.5.6; earlier history is in the git log.
   into the generated `start_workflow.py` as `continue_previous_runners=True`.
 
 ### Changed
+
+- **GUI parameter forms show units.** Parameter specs gained a structured
+  `unit` key, rendered in the parameter label (e.g. `intersectdist [px]`,
+  `radius [nm]`) and in the module help text. All picasso-set parameters
+  with unambiguous units are annotated (36: camera px / nm / frames, per
+  the CLI docs — e.g. `picasso_undrift_aim`'s `intersectdist`/`roiradius`
+  are camera pixels, the CLI default 20/130 being 20 nm at a 130 nm
+  pixel), plus 49 classic-module parameters whose descriptions explicitly
+  state the unit (notably the classic `undrift_aim` takes `intersect_d`
+  in nm and converts to px internally — the labels now surface that the
+  two sets differ here).
 
 - **GUI parameter forms: optional parameters without a default start as
   "unset".** An optional parameter with no spec default (e.g.

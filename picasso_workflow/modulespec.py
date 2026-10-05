@@ -1251,6 +1251,55 @@ _SPECS = [
         module_set="picasso",
         params=PICASSO_SET_PARAMS["picasso_lateral_calibrate"],
     ),
+    # --- picasso-set tier 4: format converters -------------------------------
+    # Importers load a foreign-format file as the current dataset (like
+    # load_dataset_localizations, an imported file is a finished product);
+    # exporters convert the current locs (or an explicit file) to a foreign
+    # format.
+    _s(
+        "picasso_csv2hdf",
+        provides=["locs", "locs_undrifted", "converted_file"],
+        role="loader",
+        relation=W,
+        picasso_symbol="picasso.io.import_ts",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_csv2hdf"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_csv2hdf"],
+    ),
+    _s(
+        "picasso_smap2hdf",
+        provides=["locs", "locs_undrifted", "converted_file"],
+        role="loader",
+        relation=W,
+        picasso_symbol="picasso.io.import_smap",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_smap2hdf"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_smap2hdf"],
+    ),
+]
+_SPECS += [
+    _s(
+        _name,
+        requires=["locs"],
+        provides=["converted_file"],
+        relation=W,
+        picasso_symbol=_symbol,
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES[_name],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS[_name],
+    )
+    for _name, _symbol in [
+        ("picasso_hdf2csv", "picasso.__main__._hdf2csv"),
+        ("picasso_hdf2ts", "picasso.io.export_thunderstorm"),
+        ("picasso_hdf2imagej", "picasso.io.export_txt_imagej"),
+        ("picasso_hdf2nis", "picasso.io.export_txt_nis"),
+        ("picasso_hdf2chimera", "picasso.io.export_xyz_chimera"),
+        ("picasso_hdf2visp", "picasso.io.export_3d_visp"),
+        ("picasso_hdf2smap", "picasso.io.export_smap"),
+    ]
 ]
 
 MODULE_REGISTRY: dict[str, ModuleSpec] = {}
