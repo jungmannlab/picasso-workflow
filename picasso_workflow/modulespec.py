@@ -879,15 +879,32 @@ def _validate_branch_step(i, params, scope, registry, available):
     ``branch_modules`` are validated starting from the trunk's current
     capabilities (so they can see the shared prefix); their ``provides`` are
     kept branch-local and do not leak back to the trunk. ``join_modules`` are
-    then validated with ``branches`` added. A runtime (mask-component) split
-    requires a ``mask`` capability from an earlier module.
+    then validated with ``branches`` added. A runtime branch requires a
+    ``branch_over`` value/command (its resolved length sets the branch count).
     """
     errors = []
 
-    if params.get("branch_type") == "runtime" and "mask" not in available:
+    branch_type = params.get("branch_type")
+    if branch_type not in ("explicit", "runtime"):
+        # Missing or unknown (e.g. the removed "screen"): AutoPicasso.branch
+        # would KeyError / ValueError at run time after the prefix ran, so
+        # reject it here instead.
         errors.append(
-            f"[{i}.branch] runtime split requires a 'mask' from an earlier "
-            "module (e.g. create_mask2)"
+            f"[{i}.branch] branch_type must be 'explicit' or 'runtime' "
+            f"(got {branch_type!r})"
+        )
+    elif branch_type == "runtime" and params.get("branch_over") is None:
+        errors.append(
+            f"[{i}.branch] runtime branch requires 'branch_over' (a value or "
+            "command that resolves to a list; its length sets the branch count)"
+        )
+    elif branch_type == "explicit" and (
+        params.get("n_branches") is None
+        and params.get("branch_labels") is None
+    ):
+        errors.append(
+            f"[{i}.branch] explicit branch requires 'n_branches' or "
+            "'branch_labels'"
         )
 
     # branch_modules see the shared-prefix capabilities (available); their

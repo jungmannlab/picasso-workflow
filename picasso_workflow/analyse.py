@@ -1634,34 +1634,35 @@ class AutoPicasso(util.AbstractModuleCollection):
         """Fan out into per-branch sub-workflows, then optionally re-join.
 
         See :meth:`picasso_workflow.util.AbstractModuleCollection.branch` for
-        the full parameter contract. Supports two ``branch_type``s:
-        ``"runtime"`` (one branch per connected component of a prior mask) and
-        ``"screen"`` (one branch per row of a config-time parameter grid).
+        the full parameter contract. Two ``branch_type``s: ``"explicit"`` (a
+        fixed ``n_branches`` with per-branch ``("$branch", [...])`` overrides)
+        and ``"runtime"`` (the branch count *and* per-branch item come from a
+        ``branch_over`` value/command that resolves to a list at run time; each
+        branch's sub-modules read their item via the ``("$branch_item", ...)``
+        token). A branch whose sub-module raises :class:`SkipBranch` (e.g. the
+        requested cell does not exist) is dropped: the join and the overall
+        pipeline proceed with the remaining branches.
         """
         pce = parameters.get("parameter_command_executor", None)
         branch_type = parameters["branch_type"]
         branch_modules = parameters["branch_modules"]
         join_modules = parameters.get("join_modules") or []
 
-        # 1. Determine the branches: a list of (label, tile_map, branch_state).
-        #    tile_map is the per-branch $$map dict for screens (else None);
-        #    branch_state is the per-branch analyzer state for runtime splits
-        #    (else None).
+        # 1. Determine the branches: a list of (label, branch_item). The item
+        #    is None for an explicit branch (per-branch differences come from
+        #    ("$branch", [...]) overrides) and this branch's element of the
+        #    resolved branch_over list for a runtime branch.
         if branch_type == "explicit":
             splits = self._make_explicit_branches(parameters)
-        elif branch_type == "screen":
-            splits = self._make_screen_branches(parameters)
         elif branch_type == "runtime":
             splits = self._make_runtime_branches(i, parameters, pce)
         else:
             raise ValueError(
                 f"Unknown branch_type '{branch_type}'. "
-                "Expected 'explicit', 'runtime' or 'screen'."
+                "Expected 'explicit' or 'runtime'."
             )
 
-        labels = [branch_label for branch_label, _, _ in splits]
         results["branch_type"] = branch_type
-        results["labels"] = labels
         if not splits:
             logger.warning(
                 f"branch (module {i:02d}): no branches produced "
@@ -1687,7 +1688,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if nested:
             groups = [
                 (label, "branch", [name for name, _ in branch_modules])
-                for label, _, _ in splits
+                for label, _ in splits
             ]
             if join_modules:
                 groups.append(
@@ -1750,13 +1751,9 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         branch_results = []
         topology_branches = []
-        for branch_id, (branch_label, tile_map, branch_state) in enumerate(
-            splits
-        ):
+        skipped = []
+        for branch_id, (branch_label, branch_item) in enumerate(splits):
             util.BranchStateManager.restore(self, prefix_snapshot)
-            if branch_state is not None:
-                for attr, value in branch_state.items():
-                    setattr(self, attr, value)
 
             branch_dir = os.path.join(results["folder"], branch_label)
             os.makedirs(branch_dir, exist_ok=True)
@@ -1783,6 +1780,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # $get_previous_module_result / $get_prior_result.
             branch_local = {}
             executed = []
+            skip_reason = None
             for sub_idx, (module_name, module_parameters) in enumerate(
                 branch_modules
             ):
@@ -1791,7 +1789,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     module_parameters,
                     pce,
                     sub_idx,
-                    tile_map,
+                    branch_item,
                     branch_local,
                     branch_id,
                 )
@@ -1799,6 +1797,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                     sub_results = self._run_branch_submodule(
                         module_name, sub_idx, sub_params, branch_dir
                     )
+                except SkipBranch as e:
+                    # This branch has no data to analyse (e.g. the requested
+                    # cell does not exist). Drop it and let the join / overall
+                    # pipeline continue with the remaining branches. Advance
+                    # the remaining sub-module units so progress still finishes.
+                    skip_reason = str(e) or module_name
+                    _branch_step_end(branch_id, sub_idx, "skipped")
+                    for rem in range(sub_idx + 1, len(branch_modules)):
+                        if nested:
+                            progress_mgr.branch_submodule_end(
+                                module_index, branch_id, rem, "skipped"
+                            )
+                        done_units[0] += 1
+                    break
                 except BaseException:
                     _branch_step_end(branch_id, sub_idx, "failed")
                     raise
@@ -1821,12 +1833,23 @@ class AutoPicasso(util.AbstractModuleCollection):
                             f"live branch report: {key} failed: {e}"
                         )
                 _branch_step_end(branch_id, sub_idx, "done")
+            if skip_reason is not None:
+                skipped.append({"label": branch_label, "reason": skip_reason})
+                logger.info(
+                    f"branch (module {i:02d}): skipped branch "
+                    f"'{branch_label}' ({skip_reason})."
+                )
+                continue
             branch_results.append(one_branch)
             topology_branches.append(
                 {"label": branch_label, "modules": executed}
             )
 
         results["branches"] = branch_results
+        # labels / skipped reflect only the branches that actually produced
+        # results, so the join's ("$all") pooling never sees a dropped branch.
+        results["labels"] = [b["label"] for b in branch_results]
+        results["skipped"] = skipped
 
         # 3. Restore the prefix state, then run the join/fan-in modules with
         #    the per-branch results pooled back together.
@@ -1850,6 +1873,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # pool the per-branch results, so they resolve against the
                 # trunk runner's results (which now include this branch step).
                 jp = copy.deepcopy(module_parameters)
+                # A summarize_branches join with no explicit values defaults to
+                # auto-summarizing this branch's per-branch results: hand it the
+                # branches list (it flattens the numeric metrics) and the branch
+                # labels. This is what makes it a zero-config default join.
+                if module_name == "summarize_branches" and "values" not in jp:
+                    jp["values"] = results["branches"]
+                    jp.setdefault("labels", results["labels"])
                 if pce is not None:
                     original_rootidx = getattr(pce, "curr_rootidx", None)
                     pce.curr_rootidx = i
@@ -1859,6 +1889,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                     sub_results = self._run_branch_submodule(
                         module_name, sub_idx, jp, join_dir
                     )
+                except SkipBranch as e:
+                    # A join module with no data (e.g. all branches skipped)
+                    # is dropped rather than failing the run, mirroring the
+                    # per-branch skip contract.
+                    logger.info(
+                        f"branch (module {i:02d}): skipped join module "
+                        f"'{module_name}' ({e})."
+                    )
+                    _branch_step_end(join_group, sub_idx, "skipped")
+                    continue
                 except BaseException:
                     _branch_step_end(join_group, sub_idx, "failed")
                     raise
@@ -1875,10 +1915,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["topology"] = {
             "type": branch_type,
             "prefix_index": i,
-            "labels": labels,
+            "labels": results["labels"],
             "branch_modules": [name for name, _ in branch_modules],
             "join_modules": [name for name, _ in join_modules],
             "branches": topology_branches,
+            "skipped": [s["label"] for s in skipped],
         }
 
         logger.info(
@@ -1887,72 +1928,47 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         return parameters, results
 
-    def _make_screen_branches(self, parameters):
-        """Build config-time screen branches from a parameter grid.
-
-        Returns a list of ``(label, tile_map, None)``; ``tile_map`` is the
-        per-branch ``$$map`` lookup dict (one row of the grid).
-        """
-        screen = parameters["screen"]
-        tags = screen.get("#tags")
-        columns = [v for k, v in screen.items()]
-        if not columns:
-            return []
-        ntiles = len(columns[0])
-        splits = []
-        for j in range(ntiles):
-            tile_map = {k: v[j] for k, v in screen.items()}
-            branch_label = (
-                str(tags[j]) if tags is not None else f"screen{j:02d}"
-            )
-            splits.append((branch_label, tile_map, None))
-        return splits
-
     def _make_runtime_branches(self, i, parameters, pce):
-        """Build runtime branches by splitting a prior mask into components.
+        """Build runtime branches from a list resolved at run time.
 
-        Returns a list of ``(label, None, branch_state)``; ``branch_state``
-        injects the per-cell ``channel_locs`` (prefix locs filtered to the
-        component).
+        ``branch_over`` is a value (or ``$``/``$$map`` command) that resolves
+        to a list ``L``; there is one branch per element, and each branch's
+        sub-modules read their element ``L[branch_id]`` via the
+        ``("$branch_item", ...)`` token. Labels come from ``branch_labels``,
+        else ``label_template`` (``{n}`` / ``{item}``), else ``branch{n:02d}``.
+
+        Returns a list of ``(label, item)``.
         """
-        split = parameters["split"]
-        method = split.get("method", "mask_components")
-        if method != "mask_components":
-            raise NotImplementedError(
-                f"branch split method '{method}' is not supported "
-                "(only 'mask_components')."
-            )
-
-        fp_mask = split["mask"]
-        if pce is not None and isinstance(fp_mask, (tuple, list)):
-            fp_mask = pce.run(
-                {"mask": copy.deepcopy(fp_mask)}, curr_rootidx=i
-            )["mask"]
-
-        cell_mask = outpost_modules.mask.CellMask.load(fp_mask)
-        components = cell_mask.component_masks(
-            min_area_um2=split.get("min_area_um2", 0.0)
-        )
-        if (max_branches := split.get("max_branches")) is not None:
-            components = components[:max_branches]
-
-        label_template = split.get("label_template", "cell{n:02d}")
-        prefix_channel_locs = self.channel_locs
-        if prefix_channel_locs is None:
+        over = parameters.get("branch_over")
+        if over is None:
             raise AutoPicassoError(
-                "branch runtime split requires channel_locs; run "
-                "aggregation/mask modules before branching."
+                "branch_type 'runtime' needs 'branch_over' (a value or "
+                "command resolving to a list)."
+            )
+        if pce is not None:
+            over = pce.run(
+                {"branch_over": copy.deepcopy(over)}, curr_rootidx=i
+            )["branch_over"]
+        if not isinstance(over, (list, tuple)):
+            raise AutoPicassoError(
+                "branch_type 'runtime': 'branch_over' resolved to "
+                f"{type(over).__name__}, expected a list."
             )
 
+        labels = parameters.get("branch_labels")
+        label_template = parameters.get("label_template")
         splits = []
-        for n, component_mask in enumerate(components):
-            branch_label = label_template.format(n=n)
-            branch_channel_locs = [
-                component_mask.apply_to_locs(locs)
-                for locs in prefix_channel_locs
-            ]
-            branch_state = {"channel_locs": branch_channel_locs}
-            splits.append((branch_label, None, branch_state))
+        for n, item in enumerate(over):
+            if labels is not None and n < len(labels):
+                label = str(labels[n])
+            elif label_template is not None:
+                try:
+                    label = label_template.format(n=n, item=item)
+                except (KeyError, IndexError, ValueError):
+                    label = f"branch{n:02d}"
+            else:
+                label = f"branch{n:02d}"
+            splits.append((label, item))
         return splits
 
     def _make_explicit_branches(self, parameters):
@@ -1962,8 +1978,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         ``branch_labels``); each branch runs the same modules and differs only
         through ``("$branch", [v0, v1, ...])`` per-branch parameter overrides
         (e.g. ``create_mask2`` selecting the ``branch_id``-th largest cell).
-        Returns a list of ``(label, None, None)`` -- each branch starts from
-        the shared-prefix state.
+        Returns a list of ``(label, None)`` -- each branch starts from the
+        shared-prefix state and carries no runtime item.
         """
         labels = parameters.get("branch_labels")
         n = parameters.get("n_branches")
@@ -1980,27 +1996,50 @@ class AutoPicasso(util.AbstractModuleCollection):
             label = (
                 str(labels[j])
                 if labels is not None and j < len(labels)
-                else f"cell{j:02d}"
+                else f"branch{j:02d}"
             )
-            splits.append((label, None, None))
+            splits.append((label, None))
         return splits
 
     @staticmethod
-    def _resolve_branch_overrides(obj, branch_id):
-        """Replace ``("$branch", [v0, v1, ...])`` with ``values[branch_id]``.
+    def _resolve_branch_overrides(obj, branch_id, branch_item=None):
+        """Resolve per-branch markers to this branch's value.
 
-        Walks a (possibly nested) parameter structure and resolves per-branch
-        override markers to this branch's value. If the branch index is past
-        the end of the list, the last value is reused. Runs *before* the ``$``
-        command resolution so the resolved value is a plain value (or a further
-        ``$``/``$$`` command to resolve next).
+        Two markers are handled while walking a (possibly nested) parameter
+        structure:
+
+        - ``("$branch", [v0, v1, ...])`` -> ``values[branch_id]`` (the last
+          value is reused if ``branch_id`` is past the end); used by explicit
+          branches.
+        - ``("$branch_item",)`` -> this branch's runtime item; ``("$branch_item",
+          key)`` -> ``item[key]``; the bare string ``"$branch_item"`` is also
+          accepted. Used by runtime branches to read their element of the
+          resolved ``branch_over`` list.
+
+        Runs *before* the ``$`` command resolution so the result is a plain
+        value (or a further ``$``/``$$`` command to resolve next).
         """
+        if isinstance(obj, str) and obj == "$branch_item":
+            return branch_item
         if isinstance(obj, dict):
             return {
-                k: AutoPicasso._resolve_branch_overrides(v, branch_id)
+                k: AutoPicasso._resolve_branch_overrides(
+                    v, branch_id, branch_item
+                )
                 for k, v in obj.items()
             }
         if isinstance(obj, (tuple, list)):
+            if (
+                isinstance(obj, tuple)
+                and len(obj) >= 1
+                and obj[0] == "$branch_item"
+            ):
+                if len(obj) >= 2 and branch_item is not None:
+                    try:
+                        return branch_item[obj[1]]
+                    except (KeyError, IndexError, TypeError):
+                        return branch_item
+                return branch_item
             if (
                 isinstance(obj, tuple)
                 and len(obj) >= 2
@@ -2012,7 +2051,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 idx = branch_id if branch_id < len(values) else -1
                 return values[idx]
             resolved = [
-                AutoPicasso._resolve_branch_overrides(v, branch_id)
+                AutoPicasso._resolve_branch_overrides(
+                    v, branch_id, branch_item
+                )
                 for v in obj
             ]
             return tuple(resolved) if isinstance(obj, tuple) else resolved
@@ -2023,21 +2064,19 @@ class AutoPicasso(util.AbstractModuleCollection):
         module_parameters,
         pce,
         sub_idx,
-        tile_map,
+        branch_item,
         branch_local,
         branch_id,
     ):
         """Resolve a branch sub-module's parameters.
 
-        Resolution happens in up to three passes:
+        Resolution happens in two passes:
 
-        1. Per-branch overrides: ``("$branch", [...])`` -> this branch's value
-           (see :meth:`_resolve_branch_overrides`). Run first so the result is
-           a plain value or a further command.
-        2. For screens, resolve ``$$map`` commands from the branch's row of the
-           grid (``tile_map``). (In aggregation workflows the ``$$`` commands
-           are already resolved one level up, so ``tile_map`` is ``None``.)
-        3. Resolve ordinary ``$`` commands against a *branch-local* results
+        1. Per-branch markers: ``("$branch", [...])`` -> this branch's value
+           and ``("$branch_item", ...)`` -> this branch's runtime item (see
+           :meth:`_resolve_branch_overrides`). Run first so the result is a
+           plain value or a further command.
+        2. Resolve ordinary ``$`` commands against a *branch-local* results
            view: ``branch_local`` (this branch's completed sub-modules, keyed
            ``NN_name``) shadowing the trunk runner's results. ``curr_rootidx``
            is the sub-module index, so ``$get_previous_module_result`` refers
@@ -2045,13 +2084,7 @@ class AutoPicasso(util.AbstractModuleCollection):
            ``$get_prior_result`` keys can still reach shared-prefix modules.
         """
         params = copy.deepcopy(module_parameters)
-        params = self._resolve_branch_overrides(params, branch_id)
-        if tile_map is not None:
-            parent = pce.parent_object if pce is not None else None
-            tiler_pce = util.ParameterCommandExecutor(
-                parent, dict(tile_map), command_sign="$$"
-            )
-            params = tiler_pce.run(params)
+        params = self._resolve_branch_overrides(params, branch_id, branch_item)
         if pce is not None:
             trunk_results = getattr(pce.parent_object, "results", {})
             proxy = util.ResultsProxy.merged(branch_local, trunk_results)
@@ -2086,7 +2119,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         metric across branches (``"replicates"`` mode) or the metric against a
         per-branch argument (``"screen"`` mode), and records summary stats.
         """
-        raw_values = parameters["values"]
+        raw_values = parameters.get("values")
+        labels = parameters.get("labels")
+        x_values = parameters.get("x")
+        ylabel = parameters.get("ylabel", "value")
+        title = parameters.get("title", "branch summary")
+        plot_type = parameters.get("plot_type", "box")
 
         def _num_list(seq):
             """Coerce a sequence to floats, skipping non-numeric entries.
@@ -2107,7 +2145,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                     )
             return out
 
-        if isinstance(raw_values, dict):
+        # Build the series to plot: metric-name -> list of per-branch values.
+        # For the autodetected path, series_labels[metric] holds the branch
+        # label for each *kept* value, so a metric missing in some branch stays
+        # correctly labelled (see _autodetect_branch_metrics).
+        autodetected = False
+        series_labels = {}
+        if self._is_branch_result_list(raw_values):
+            # A branch module's raw per-branch results list: flatten each
+            # branch to its numeric scalar metrics and pivot into one series
+            # per metric. This is what a zero-argument summarize_branches join
+            # receives.
+            series, series_labels = self._autodetect_branch_metrics(raw_values)
+            autodetected = True
+        elif isinstance(raw_values, dict):
             series = {
                 str(name): _num_list(vals) for name, vals in raw_values.items()
             }
@@ -2116,7 +2167,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             and raw_values
             and all(isinstance(v, dict) for v in raw_values)
         ):
-            # One dict per branch (e.g. labeling_efficiency is
+            # One flat dict per branch (e.g. labeling_efficiency is
             # {target: .., reference: ..}) -> pivot into one series per key.
             keys = []
             for per_branch in raw_values:
@@ -2128,20 +2179,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 for key in keys
             }
         else:
-            series = {
-                str(parameters.get("ylabel", "value")): _num_list(raw_values)
-            }
-        labels = parameters.get("labels")
-        x_values = parameters.get("x")
+            series = {str(ylabel): _num_list(raw_values)}
+
         mode = parameters.get("mode", "auto")
         if mode == "auto":
             mode = "screen" if x_values is not None else "replicates"
-        ylabel = parameters.get("ylabel", "value")
-        title = parameters.get("title", "branch summary")
 
-        fig, ax = plt.subplots()
         has_data = any(len(v) for v in series.values())
+        nonempty_metrics = [k for k, v in series.items() if v]
         if not has_data:
+            fig, ax = plt.subplots()
             ax.text(
                 0.5,
                 0.5,
@@ -2151,17 +2198,38 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             ax.set_axis_off()
         elif mode == "screen" and x_values is not None:
+            fig, ax = plt.subplots()
             xv = [float(x) for x in x_values]
             for name, vals in series.items():
                 n = min(len(xv), len(vals))
                 ax.plot(xv[:n], vals[:n], marker="o", label=name)
             ax.set_xlabel(parameters.get("xlabel", "argument"))
+            ax.set_ylabel(ylabel)
             if len(series) > 1:
                 ax.legend()
+            ax.set_title(title)
+        elif autodetected:
+            # Autodetected metrics can have very different scales, so give each
+            # its own subplot (small multiples) rather than mixing them on one
+            # y-axis. Each metric is drawn with its own kept-branch labels so a
+            # metric missing in some branch stays correctly labelled.
+            fig, axes = plt.subplots(
+                len(nonempty_metrics),
+                1,
+                figsize=(6.4, max(2.2, 2.0 * len(nonempty_metrics))),
+                squeeze=False,
+            )
+            for ax, name in zip(axes[:, 0], nonempty_metrics):
+                self._draw_replicates_axis(
+                    ax, series[name], series_labels.get(name), plot_type
+                )
+                ax.set_ylabel(name)
+            axes[-1, 0].set_xlabel(parameters.get("xlabel", "branch"))
+            fig.suptitle(title)
         else:  # replicates: distribution of the metric across branches
+            fig, ax = plt.subplots()
             names = list(series.keys())
             data = [series[name] for name in names]
-            plot_type = parameters.get("plot_type", "box")
             nonempty = [(k, d) for k, d in enumerate(data) if d]
             positions = [k for k, _ in nonempty]
             datasets = [d for _, d in nonempty]
@@ -2212,8 +2280,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                         xytext=(6, 0),
                         fontsize=8,
                     )
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
         fig.tight_layout()
         results["fp_fig"] = os.path.join(
             results["folder"], parameters.get("filename", "branch_summary.png")
@@ -2237,6 +2305,146 @@ class AutoPicasso(util.AbstractModuleCollection):
                 stats[name] = {"n": 0}
         results["stats"] = stats
         return parameters, results
+
+    # bookkeeping keys present in every module's results -- never plotted as a
+    # branch metric when auto-summarizing.
+    _BRANCH_METRIC_SKIP = {
+        "duration",
+        "start time",
+        "end time",
+        "folder",
+        "label",
+        "success",
+    }
+
+    @staticmethod
+    def _is_branch_result_list(value):
+        """Whether ``value`` looks like a branch module's per-branch results.
+
+        That is, a non-empty list of dicts that each carry a ``"label"`` key
+        (which the branch module always stamps on a per-branch result). This is
+        what a zero-argument ``summarize_branches`` join is handed; it is
+        distinguished from a plain list of flat scalar dicts (e.g. one
+        ``{target, reference}`` per branch), which keeps the flat-pivot path.
+        """
+        if not (isinstance(value, (list, tuple)) and value):
+            return False
+        if not all(isinstance(v, dict) for v in value):
+            return False
+        # A branch module always stamps each per-branch dict with a "label"
+        # key; a plain list of flat metric dicts (e.g. one {target, reference}
+        # per branch) never does. Require it so explicitly-supplied values are
+        # not misrouted into the auto-summary path.
+        return all("label" in pb for pb in value)
+
+    @classmethod
+    def _autodetect_branch_metrics(cls, branches):
+        """Flatten per-branch results into one series per numeric metric.
+
+        Each branch dict is ``{"label": .., "NN_module": {..results..}, ..}``;
+        every numeric scalar leaf (skipping bookkeeping keys and booleans)
+        becomes a metric named ``"NN_module: key"`` (or ``"key"`` for a
+        top-level scalar), pivoted across branches. Metric order follows first
+        appearance.
+
+        Returns ``(series, series_labels)`` where ``series[metric]`` is the list
+        of numeric values (branches lacking the metric are omitted) and
+        ``series_labels[metric]`` is the matching branch label for each kept
+        value, so a metric present in only some branches stays correctly
+        labelled.
+        """
+
+        def flat(pb):
+            out = {}
+            for k, v in pb.items():
+                if k in cls._BRANCH_METRIC_SKIP:
+                    continue
+                if isinstance(v, dict):
+                    for kk, vv in v.items():
+                        if kk in cls._BRANCH_METRIC_SKIP:
+                            continue
+                        if isinstance(vv, bool):
+                            continue
+                        if isinstance(vv, (int, float)):
+                            out[f"{k}: {kk}"] = vv
+                elif isinstance(v, bool):
+                    continue
+                elif isinstance(v, (int, float)):
+                    out[k] = v
+            return out
+
+        flats = [flat(pb) for pb in branches]
+        branch_labels = [
+            str(pb.get("label", k)) for k, pb in enumerate(branches)
+        ]
+        metrics = []
+        for fb in flats:
+            for k in fb:
+                if k not in metrics:
+                    metrics.append(k)
+        series = {}
+        series_labels = {}
+        for m in metrics:
+            vals = []
+            labs = []
+            for fb, lab in zip(flats, branch_labels):
+                if m not in fb:
+                    continue
+                try:
+                    vals.append(float(fb[m]))
+                    labs.append(lab)
+                except (TypeError, ValueError):
+                    continue
+            series[m] = vals
+            series_labels[m] = labs
+        return series, series_labels
+
+    @staticmethod
+    def _draw_replicates_axis(ax, vals, labels, plot_type="box"):
+        """Draw one metric's per-branch values as a box/violin + labeled strip.
+
+        Used for the small-multiples layout when several metrics are
+        auto-summarized: each branch contributes one point, annotated with its
+        branch label.
+        """
+        if not vals:
+            ax.text(0.5, 0.5, "no data", ha="center", va="center")
+            ax.set_axis_off()
+            return
+        drawn = False
+        if plot_type == "violin" and len(vals) >= 2 and len(set(vals)) > 1:
+            try:
+                parts = ax.violinplot(
+                    [vals],
+                    positions=[0],
+                    widths=0.6,
+                    showmeans=True,
+                    showextrema=True,
+                )
+                for body in parts["bodies"]:
+                    body.set_alpha(0.4)
+                drawn = True
+            except (ValueError, np.linalg.LinAlgError):
+                pass
+        if not drawn:
+            ax.boxplot([vals], positions=[0], widths=0.5)
+        jitter = (np.random.rand(len(vals)) - 0.5) * 0.15
+        ax.scatter(jitter, vals, color="k", alpha=0.7, zorder=3)
+        ax.set_xticks([0])
+        ax.set_xticklabels([""])
+        for k, val in enumerate(vals):
+            lbl = (
+                str(labels[k])
+                if labels is not None and k < len(labels)
+                else str(k)
+            )
+            ax.annotate(
+                lbl,
+                (0, val),
+                textcoords="offset points",
+                xytext=(6, 0),
+                fontsize=8,
+            )
 
     ##########################################################################
     # Single dataset modules
@@ -13111,6 +13319,16 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             Optional keys:
 
+            ``nth_largest_cell`` : int
+                With ``select_cell``, keep the ``nth`` largest connected
+                component (1 = largest). Default keeps the largest.
+            ``skip_if_missing_cell`` : bool
+                With ``select_cell`` + ``nth_largest_cell``, raise
+                :class:`SkipBranch` when the requested cell does not exist
+                (fewer components than ``nth_largest_cell``) instead of reusing
+                the smallest. Lets a ``branch`` over-request cells and drop the
+                empty branches. Default False.
+
             ``fp_combined_locs`` : str
                 Filepath to the locs combined in the ``combine_channels``
                 module. If None or ``''``, the loaded ``channel_locs`` is used.
@@ -13185,7 +13403,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # nth_largest_cell is 1-based (1 = largest); filter_mask
                 # uses a 0-based rank internally.
                 kwargs["nth_largest"] = nth - 1
-            cell_mask.filter_mask(**kwargs)
+            if parameters.get("skip_if_missing_cell"):
+                # Used inside a ``branch``: turn "requested cell absent" into a
+                # SkipBranch so this branch is dropped instead of failing (or
+                # silently reusing another cell).
+                kwargs["raise_if_missing"] = True
+                try:
+                    cell_mask.filter_mask(**kwargs)
+                except IndexError as e:
+                    raise SkipBranch(f"create_mask2: {e}")
+            else:
+                cell_mask.filter_mask(**kwargs)
         if dilate_nm := parameters.get("dilate_nm"):
             cell_mask.dilate(dilate_nm)
         if parameters.get("apply_to_locs"):
@@ -16330,3 +16558,16 @@ class ManualInputLackingError(AutoPicassoError):
 
 class PicassoConfigError(AutoPicassoError):
     """Raised when the picasso configuration is missing or invalid."""
+
+
+class SkipBranch(Exception):
+    """Signal that the current ``branch`` sub-workflow has no data to run.
+
+    A branch sub-module raises this (rather than a hard error) when the branch
+    is legitimately empty -- e.g. ``create_mask2`` was asked for a cell that
+    does not exist. The :meth:`AutoPicasso.branch` module catches it, drops the
+    branch (so the join and the overall pipeline proceed with the remaining
+    branches) and records it under ``results["skipped"]``. It deliberately does
+    *not* subclass :class:`AutoPicassoError`, so genuine analysis errors are
+    never mistaken for an empty branch.
+    """

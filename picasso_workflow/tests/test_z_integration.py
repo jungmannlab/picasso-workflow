@@ -203,14 +203,16 @@ class Test_A_PicassoIntegration(unittest.TestCase):
             )
             awr.run()
 
-    def test_04_branch_screen(self):
-        """load → identify → localize → branch(screen) on the bundled stack.
+    def test_04_branch_runtime(self):
+        """load → identify → localize → branch(runtime) on the bundled stack.
 
-        A config-time parameter screen: the branch re-runs identify+localize
-        for two ``min_gradient`` values on the shared movie, then a join step
-        pools the per-branch identification counts. Exercises the real
-        WorkflowRunner + branch module (state snapshot/restore, per-branch
-        folders, $$map screen expansion, $all fan-in) end-to-end.
+        A runtime branch whose count and per-branch value come from a
+        ``branch_over`` list: the branch re-runs identify+localize for two
+        ``min_gradient`` values on the shared movie (each read via
+        ``("$branch_item",)``), then a join step pools the per-branch
+        identification counts. Exercises the real WorkflowRunner + branch
+        module (state snapshot/restore, per-branch folders, $branch_item
+        resolution, $all fan-in) end-to-end.
         """
         filepath = os.path.join(
             _DATA_DIR,
@@ -230,16 +232,14 @@ class Test_A_PicassoIntegration(unittest.TestCase):
             (
                 "branch",
                 {
-                    "branch_type": "screen",
-                    "screen": {
-                        "min_gradient": [400, 800],
-                        "#tags": ["g400", "g800"],
-                    },
+                    "branch_type": "runtime",
+                    "branch_over": [400, 800],
+                    "branch_labels": ["g400", "g800"],
                     "branch_modules": [
                         (
                             "identify",
                             {
-                                "min_gradient": ("$$map", "min_gradient"),
+                                "min_gradient": ("$branch_item",),
                                 "box_size": 7,
                             },
                         ),
@@ -275,7 +275,7 @@ class Test_A_PicassoIntegration(unittest.TestCase):
 
         with patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock):
             wr = WorkflowRunner.config_from_dicts(
-                _dummy_reporter_config("test_a04_branch_screen"),
+                _dummy_reporter_config("test_a04_branch_runtime"),
                 _analysis_config(_RESULTS_DIR),
                 workflow_modules,
             )
@@ -298,7 +298,7 @@ class Test_A_PicassoIntegration(unittest.TestCase):
         # join ran (its $all fan-in over the per-branch identify counts
         # resolved without error) and the topology was recorded
         assert "00_dummy_module" in branch_results["join"]
-        assert branch_results["topology"]["type"] == "screen"
+        assert branch_results["topology"]["type"] == "runtime"
 
     def test_05_branch_explicit(self):
         """load → identify → localize → branch(explicit) on the bundled stack.
