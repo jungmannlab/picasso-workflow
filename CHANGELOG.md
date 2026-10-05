@@ -12,6 +12,35 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **picasso-set tier 2: pick-based postprocessing (9 modules).** The picasso
+  Render GUI's pick/mask operations as headless picasso-set modules with the
+  library functions' parameter names and defaults: `picasso_picked_locs`,
+  `picasso_pick_similar` (writes a pick-region yaml for downstream modules),
+  `picasso_remove_locs_in_picks`, `picasso_pick_properties`,
+  `picasso_pick_kinetics`, `picasso_fret` (donor/acceptor file parameters),
+  `picasso_mask_locs` (generate image → threshold → split, continues with
+  the in-mask localizations), `picasso_nena` and `picasso_frc` (full-FOV,
+  curve figure + data saved). Picks are exchanged as pick-region `.yaml`
+  file paths (`picks_file` parameter, `io.load_picks` format), so they can
+  come from the GUI, from disk, or from a prior module via
+  `$get_prior_result`.
+
+- **picasso-set tier 1: core pipeline (20 modules).** The full native-picasso
+  core pipeline as picasso-set modules with CLI-exact parameter names and
+  defaults: `picasso_localize` (identify + fit in one step, all CLI fit
+  methods incl. spline/GPU, calibration files, temporal-median/Gaussian
+  pre-filters; deviations: `drift` defaults to 0 and camera parameters
+  default to the loaded metadata/config instead of the CLI literals),
+  `picasso_undrift_rcc` / `picasso_undrift_aim` /
+  `picasso_undrift_fiducials`, `picasso_link`, `picasso_dark`,
+  `picasso_groupprops`, `picasso_pair_correlation`, `picasso_dbscan` /
+  `picasso_hdbscan` / `picasso_smlm_cluster` (each also saving cluster
+  centers like the CLI), `picasso_nneighbor`, `picasso_clusterfilter`,
+  `picasso_cluster_combine`, `picasso_cluster_combine_dist`,
+  `picasso_g5m`, `picasso_render`, `picasso_align` and `picasso_join`.
+  The CLI's `--regions-separately`, `--concat` and `--database` localize
+  conveniences are out of scope.
+
 - **picasso-set module layer (infrastructure + pilot).** A second module set
   that recapitulates native picasso 1:1 (same operation granularity, exact
   picasso CLI/library parameter names and defaults), with `picasso_`-prefixed

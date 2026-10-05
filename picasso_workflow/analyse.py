@@ -109,6 +109,7 @@ from picasso_workflow import __version__ as picassoworkflowversion
 from picasso_workflow.module_runtime import module_decorator  # noqa: F401
 from picasso_workflow.outpost_modules import render
 from picasso_workflow.picasso_set.analyse_core import PicassoSetCoreMixin
+from picasso_workflow.picasso_set.analyse_picks import PicassoSetPicksMixin
 from picasso_workflow.progress import PicassoProgressProxy
 from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
@@ -1122,7 +1123,11 @@ def profile_resource_usage(method):
 # here to keep `analyse.module_decorator` importable.
 
 
-class AutoPicasso(PicassoSetCoreMixin, util.AbstractModuleCollection):
+class AutoPicasso(
+    PicassoSetCoreMixin,
+    PicassoSetPicksMixin,
+    util.AbstractModuleCollection,
+):
     """Automatically evaluate datasets via the picasso pipeline.
 
     Implements every module of the
