@@ -197,6 +197,60 @@ class TestValidateWorkflow(unittest.TestCase):
         errors = validate_workflow([("export_brightfield", {})], Scope.SINGLE)
         self.assertEqual([], errors)
 
+    def test_branch_type_missing_or_unknown_rejected(self):
+        # Missing branch_type is rejected (would KeyError at run time).
+        errors = validate_workflow(
+            [("branch", {"n_branches": 2, "branch_modules": []})],
+            Scope.AGGREGATION,
+        )
+        self.assertTrue(any("branch_type must be" in e for e in errors))
+        # An unknown/removed branch_type (e.g. "screen") is rejected.
+        errors = validate_workflow(
+            [("branch", {"branch_type": "screen", "branch_modules": []})],
+            Scope.AGGREGATION,
+        )
+        self.assertTrue(any("branch_type must be" in e for e in errors))
+
+    def test_branch_runtime_requires_branch_over(self):
+        errors = validate_workflow(
+            [("branch", {"branch_type": "runtime", "branch_modules": []})],
+            Scope.AGGREGATION,
+        )
+        self.assertTrue(any("requires 'branch_over'" in e for e in errors))
+        # With branch_over present it validates (no branch_type error).
+        errors = validate_workflow(
+            [
+                (
+                    "branch",
+                    {
+                        "branch_type": "runtime",
+                        "branch_over": [1, 2],
+                        "branch_modules": [],
+                    },
+                )
+            ],
+            Scope.AGGREGATION,
+        )
+        self.assertFalse(any("branch" in e for e in errors))
+
+    def test_branch_explicit_accepts_zero_n_branches(self):
+        # n_branches=0 is present (not None), so it must not trip the
+        # "requires n_branches" error (truthiness bug guard).
+        errors = validate_workflow(
+            [
+                (
+                    "branch",
+                    {
+                        "branch_type": "explicit",
+                        "n_branches": 0,
+                        "branch_modules": [],
+                    },
+                )
+            ],
+            Scope.AGGREGATION,
+        )
+        self.assertFalse(any("explicit branch requires" in e for e in errors))
+
     def test_every_module_validates_alone_in_one_of_its_scopes(self):
         # Sanity check that the registry's own requires/provides are internally
         # consistent: each module preceded by producers of all its requires

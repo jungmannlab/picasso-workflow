@@ -31,6 +31,50 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- `summarize_branches` works as a zero-argument branch join module. When
+  `values` is omitted, the `branch` module hands it the per-branch results
+  list and it auto-summarizes every numeric per-branch metric (one
+  small-multiple subplot per metric, to avoid mixing scales), with `labels`
+  defaulting to the branch labels. The GUI seeds a `summarize_branches` join
+  when you add a branch (visible as an indented join row, editable/deletable),
+  so a branch produces an overview figure with no configuration. `values` is
+  now optional.
+
+- The `branch` module is simplified to two `branch_type`s: **`explicit`**
+  (unchanged: a fixed `n_branches` with per-branch `("$branch", [...])`
+  overrides) and **`runtime`**, which replaces both the old mask-component
+  `runtime` and the `screen` grid. A runtime branch takes a `branch_over`
+  value/command that resolves to a list `L` at run time; the branch count is
+  `len(L)` and each branch's sub-modules read their element `L[branch_id]` via
+  the new `("$branch_item",)` token (`("$branch_item", key)` indexes into the
+  element). The `screen`/`$$map`-grid and `split`/`mask_components` paths are
+  removed — express the same thing with `branch_over` + `$branch_item`. In the
+  GUI, `branch_type` is a dropdown, `branch_over`/`label_template` show only for
+  runtime and `n_branches`/`branch_labels` only for explicit, and the parameter
+  cmd dialog gains a **Branch item** command type.
+
+- A `branch` sub-module can now raise `analyse.SkipBranch` to drop its branch
+  (e.g. the requested cell does not exist): the branch is excluded from
+  `results["branches"]`/`labels` (so the join's `("$all")` pooling never sees
+  it) and recorded under `results["skipped"]`, and the overall pipeline is not
+  failed. `create_mask2` gains an opt-in `skip_if_missing_cell` that raises it
+  when `nth_largest_cell` exceeds the number of cells (via a new
+  `filter_mask(raise_if_missing=...)`), so an explicit/runtime branch can
+  over-request cells and drop the empty ones.
+
+- The GUI `branch` module editor no longer exposes `branch_modules` /
+  `join_modules` (and the runner-injected `parameter_command_executor`) as
+  raw argument text. Sub-workflows are now built entirely through the indented
+  workflow-list rows: an empty branch or join section renders a subdued
+  `+ add ... module` placeholder row that, when selected, lets you add the
+  first sub-module exactly like a top-level module. The parameter form shows a
+  hint pointing at the inline rows. This makes a freshly added branch usable
+  without hand-typing nested module tuples (previously the indented editing
+  only worked once a branch already had sub-modules). `branch_type` renders as
+  a dropdown, and the type-specific parameters are only shown for the matching
+  type: `n_branches` / `branch_labels` for `explicit`, `branch_over` /
+  `label_template` for `runtime` (see the branch simplification entry above).
+
 - `pick_origami` now re-centres every accepted pick on its localizations'
   centre of mass right after identification and re-picks once around the new
   centre. `pick_similar` returns grid positions offset from the structure by
