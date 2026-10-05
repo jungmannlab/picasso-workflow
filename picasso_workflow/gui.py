@@ -692,6 +692,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "n_sample": {
                         "type": "int",
                         "description": "Number of frames to sample",
+                        "unit": "frames",
                         "min": 1,
                         "default": 40,
                     },
@@ -898,6 +899,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "box_size": {
                 "type": "int",
                 "description": "Size of the detection box in pixels",
+                "unit": "px",
                 "min": 3,
                 "max": 21,
                 "step": 2,
@@ -987,6 +989,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "median background filter applied before spot detection. "
                 "0 (or 1) disables it; >= 2 to filter. Re-tune min_gradient "
                 "when enabling.",
+                "unit": "frames",
                 "min": 0,
                 "required": False,
             },
@@ -994,6 +997,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "int",
                 "description": "Stride (frames) for the temporal-median "
                 "filter. Only used when the window is >= 2.",
+                "unit": "frames",
                 "min": 0,
                 "required": False,
             },
@@ -1547,6 +1551,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "Field of view of the zoom in rendering around \
                     the center of mass in nm",
+                "unit": "nm",
                 "min": 0,
                 "default": 10000,
                 "required": False,
@@ -1555,6 +1560,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The rendered pixel size [nm] of the full FOV \
                     rendering",
+                "unit": "nm",
                 "min": 0,
                 "default": 130,
                 "required": False,
@@ -1563,6 +1569,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The rendered pixel size [nm] of the zoom in \
                     rendering around the center of mass",
+                "unit": "nm",
                 "min": 0,
                 "default": 100,
                 "required": False,
@@ -1690,6 +1697,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "segmentation": {
                 "type": "int",
                 "description": "the number of frames segmented for RCC",
+                "unit": "frames",
                 "min": 2,
                 "max": 1000,
                 "default": 50,
@@ -1795,6 +1803,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "segmentation": {
                 "type": "int",
                 "description": "the number of frames segmented",
+                "unit": "frames",
                 "min": 2,
                 "max": 1000,
                 "default": 50,
@@ -1803,6 +1812,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "intersect_d": {
                 "type": "float",
                 "description": "Intersect distance in nanometers.",
+                "unit": "nm",
                 "min": 0,
                 "required": True,
             },
@@ -1811,6 +1821,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Radius of the local search region in \
                 nanometers. Should be larger than the maximum expected drift \
                 wihtin segmentation.",
+                "unit": "nm",
                 "min": 0,
                 "required": True,
             },
@@ -2092,6 +2103,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius": {
                 "type": "float",
                 "description": "Radius for local density calculation in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 1000.0,
                 "default": 50.0,
@@ -2191,6 +2203,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius": {
                 "type": "float",
                 "description": "The DBSCAN radius parameter in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 1000.0,
                 "default": 50.0,
@@ -2368,6 +2381,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius": {
                 "type": "float",
                 "description": "Clustering radius in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 1000.0,
                 "default": 20.0,
@@ -2450,6 +2464,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius": {
                 "type": "float",
                 "description": "Clustering radius parameter [nm]",
+                "unit": "nm",
                 "min": 0.0,
                 "max": 1000.0,
                 "default": 50.0,
@@ -2469,6 +2484,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius_z": {
                 "type": "float",
                 "description": "The smlm radius_z [nm]",
+                "unit": "nm",
                 "default": None,
                 "required": False,
             },
@@ -3653,6 +3669,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "targets (good value is e.g. 5). Used when "
                     "'labeling_uncertainty_screen' below is unchecked."
                 ),
+                "unit": "nm",
                 "default": 5.0,
                 "required": True,
             },
@@ -3669,12 +3686,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Range start [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 2.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Range end [nm] (inclusive)",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 12.0,
                     },
@@ -3683,6 +3702,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 2.0,
                     },
@@ -3704,12 +3724,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Smallest separation [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 5.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Largest separation [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 40.0,
                     },
@@ -3718,6 +3740,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 5.0,
                     },
@@ -3967,6 +3990,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radii": {
                 "type": "list",
                 "description": "List of analysis radii in nm",
+                "unit": "nm",
                 "element_type": "float",
                 "min": 1.0,
                 "max": 1000.0,
@@ -4103,6 +4127,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radii": {
                 "type": "list",
                 "description": "List of analysis radii in nm",
+                "unit": "nm",
                 "element_type": "float",
                 "min": 1.0,
                 "max": 1000.0,
@@ -4490,6 +4515,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "interaction_radius": {
                 "type": "float",
                 "description": "Maximum interaction distance in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 500.0,
                 "default": 50.0,
@@ -4837,6 +4863,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "binsize": {
                 "type": "float",
                 "description": "The bin size in nanometers.",
+                "unit": "nm",
                 "default": 20,
                 "min": 0,
                 "required": True,
@@ -4844,6 +4871,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "blursize": {
                 "type": "float",
                 "description": "The gaussian blur to apply in nanometers.",
+                "unit": "nm",
                 "min": 0,
                 "default": 400,
                 "required": True,
@@ -4852,6 +4880,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The pixelsize of the final mask, in \
                     nanometers.",
+                "unit": "nm",
                 "min": 0,
                 "required": True,
             },
@@ -4902,6 +4931,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The nanometers to dilate the mask (useful \
                     if a large threshold has been used)",
+                "unit": "nm",
                 "required": True,
             },
             "apply_to_locs": {
@@ -5067,6 +5097,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "The distance in nanometers to dilate and erode\
                     the mask. This can be useful to remove excessive holes and\
                     ragging in the mask due to the density thre...",
+                "unit": "nm",
                 "required": False,
             },
         }
@@ -5294,6 +5325,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "epsilon_nm": {
                 "type": "float",
                 "description": "dbscan epsilon in nm",
+                "unit": "nm",
                 "required": True,
             },
             "minpts": {
@@ -5304,6 +5336,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "sigma_linker": {
                 "type": "float",
                 "description": "... in nm",
+                "unit": "nm",
                 "required": True,
             },
             "fp_merge_mask": {
@@ -5729,6 +5762,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "frame_window": {
                 "type": "int",
                 "description": "Frame window for kinetics analysis",
+                "unit": "frames",
                 "min": 10,
                 "max": 1000,
                 "default": 100,
@@ -6090,11 +6124,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "min_rmsd": {
                 "type": "float",
                 "description": "Override the simulated min RMSD (camera px)",
+                "unit": "px",
                 "required": False,
             },
             "max_rmsd": {
                 "type": "float",
                 "description": "Override the simulated max RMSD (camera px)",
+                "unit": "px",
                 "required": False,
             },
             "allow_mirror": {
@@ -6112,6 +6148,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "display_pixelsize": {
                 "type": "float",
                 "description": "Pixel size for display in nm, default: 1",
+                "unit": "nm",
                 "min": 0.0,
                 "default": 1.0,
                 "required": False,
@@ -6667,6 +6704,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "max_distance": {
                 "type": "float",
                 "description": "Maximum linking distance in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 1000.0,
                 "default": 100.0,
@@ -6675,6 +6713,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "max_frame_gap": {
                 "type": "int",
                 "description": "Maximum frame gap for linking",
+                "unit": "frames",
                 "min": 1,
                 "max": 100,
                 "default": 5,
@@ -7037,6 +7076,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "pair_distance": {
                 "type": "int",
                 "description": "Target-Reference pair distance [nm]",
+                "unit": "nm",
                 "default": 10,
                 "required": True,
             },
@@ -7052,12 +7092,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Smallest distance [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 5.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Largest distance [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 20.0,
                     },
@@ -7066,6 +7108,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 2.5,
                     },
@@ -7075,6 +7118,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "dict",
                 "description": "Dictionary mapping from target/reference (tag) "
                 "to labeling uncertainty [nm]",
+                "unit": "nm",
                 # "default": 5,
                 "required": True,
             },
@@ -7091,12 +7135,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Range start [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 2.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Range end [nm] (inclusive)",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 12.0,
                     },
@@ -7105,6 +7151,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 2.0,
                     },
@@ -7144,12 +7191,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "NND_bin": {
                 "type": "int",
                 "description": "Bin size (nm). Auto-calculated if None or 0",
+                "unit": "nm",
                 "default": 0,
                 "required": False,
             },
             "NND_maxdist": {
                 "type": "int",
                 "description": "Maximum distance in histogram (nm). Auto-calculated if None or 0.",
+                "unit": "nm",
                 "default": 0,
                 "required": False,
             },
@@ -9337,6 +9386,7 @@ class ParameterWidgetInfo:
         param_name=None,
         has_default=False,
         default_value=None,
+        display_name=None,
     ):
         """Initialize parameter widget info.
 
@@ -9376,6 +9426,9 @@ class ParameterWidgetInfo:
         self.param_name = param_name
         self.has_default = has_default
         self.default_value = default_value
+        # Label text: the parameter name plus its unit when the spec
+        # declares one (e.g. "radius [px]").
+        self.display_name = display_name or param_name
         self.use_default = has_default
 
 
@@ -14959,7 +15012,11 @@ class Window(QtWidgets.QMainWindow):
         widget_info.use_default = bool(use_default)
         w = widget_info.widget
         lbl = getattr(widget_info, "label", None)
-        name = getattr(widget_info, "param_name", "") or ""
+        name = (
+            getattr(widget_info, "display_name", None)
+            or getattr(widget_info, "param_name", "")
+            or ""
+        )
         dv = widget_info.default_value
         cmd = getattr(widget_info, "cmd_button", None)
         pbc = getattr(widget_info, "per_branch_checkbox", None)
@@ -17962,8 +18019,11 @@ class Window(QtWidgets.QMainWindow):
         # needs the field row, not the outer layout.
         row_widget.field_layout = row_layout
 
-        # Create label
-        label = QtWidgets.QLabel(param_name)
+        # Create label; a spec-declared unit becomes part of it,
+        # e.g. "radius [px]"
+        unit = param_metadata.get("unit")
+        display_name = f"{param_name} [{unit}]" if unit else param_name
+        label = QtWidgets.QLabel(display_name)
         if param_metadata.get("required", False):
             font = label.font()
             font.setBold(True)
@@ -18133,6 +18193,7 @@ class Window(QtWidgets.QMainWindow):
                 param_name=param_name,
                 has_default=has_default,
                 default_value=param_metadata.get("default"),
+                display_name=display_name,
             )
 
             # Capture the widget info itself, not just the name: nested

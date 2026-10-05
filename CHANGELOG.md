@@ -98,6 +98,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **GUI parameter forms show units.** Parameter specs gained a structured
+  `unit` key, rendered in the parameter label (e.g. `intersectdist [px]`,
+  `radius [nm]`) and in the module help text. All picasso-set parameters
+  with unambiguous units are annotated (36: camera px / nm / frames, per
+  the CLI docs — e.g. `picasso_undrift_aim`'s `intersectdist`/`roiradius`
+  are camera pixels, the CLI default 20/130 being 20 nm at a 130 nm
+  pixel), plus 49 classic-module parameters whose descriptions explicitly
+  state the unit (notably the classic `undrift_aim` takes `intersect_d`
+  in nm and converts to px internally — the labels now surface that the
+  two sets differ here).
+
 - **GUI parameter forms: optional parameters without a default start as
   "unset".** An optional parameter with no spec default (e.g.
   `picasso_localize`'s camera parameters = "from loaded metadata/config",

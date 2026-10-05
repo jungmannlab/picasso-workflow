@@ -317,6 +317,28 @@ def test_optional_param_without_default_starts_unset(window):
     assert pw["gradient"].default_value == 5000
 
 
+def test_parameter_labels_show_units(window):
+    """A spec-declared unit renders in the parameter label, e.g.
+    "intersectdist [px]", and survives the use-default label refresh."""
+    window.workflow_tabs.setCurrentIndex(0)
+    window.single_workflow_modules.clear()
+    window.single_workflow_list.clear()
+    window.show_picasso_set_checkbox.setChecked(True)
+    _select_palette(window, "picasso_undrift_aim")
+    window.on_module_changed("picasso_undrift_aim")
+
+    pw = window.parameter_widgets
+    assert pw["intersectdist"].label.text() == "intersectdist [px]"
+    assert pw["roiradius"].label.text() == "roiradius [px]"
+    assert pw["segmentation"].label.text() == "segmentation [frames]"
+    # toggling default<->override keeps the unit in the label
+    wi = pw["intersectdist"]
+    window._apply_param_default_state(wi, False, persist=False)
+    assert wi.label.text() == "intersectdist [px]"
+    window._apply_param_default_state(wi, True, persist=False)
+    assert wi.label.text() == "intersectdist [px]"
+
+
 def test_command_defaults_prefill_in_override_state(window):
     """$$map defaults pre-fill editable and are written to the workflow."""
     window.workflow_tabs.setCurrentIndex(0)
