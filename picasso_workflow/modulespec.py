@@ -34,6 +34,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from picasso_workflow.picasso_set.params import (
+    PICASSO_SET_PARAMS,
+    PICASSO_SET_SUMMARIES,
+)
+
 
 class Scope(str, Enum):
     """A workflow type a module may be valid in."""
@@ -79,6 +84,11 @@ CAPABILITIES: frozenset[str] = frozenset(
         "labeling_efficiency",  # labeling-efficiency estimate
         "render_image",  # rendered super-resolution image
         "brightfield_image",  # processed brightfield/overview image
+        "fret_results",  # FRET efficiency results
+        "z_calibration",  # 3D (astigmatism) z-calibration file
+        "camera_calibration",  # sCMOS camera calibration file
+        "spline_calibration",  # cubic-spline PSF calibration file
+        "converted_file",  # localizations exported to a foreign format
         "dataset_summary",  # per-dataset summary statistics
         "report_items",  # items appended to the report (side-effect output)
         "saved_dataset",  # persisted result on disk
@@ -181,9 +191,15 @@ class ModuleSpec:
         Non-empty set of workflow scopes the module is valid in.
     summary : str
         One-line human description (mirrors the contract docstring).
+    module_set : str
+        Which module set the module belongs to: ``"native"`` for the classic
+        picasso-workflow modules, ``"picasso"`` for the picasso-set modules
+        that recapitulate native picasso 1:1 (``picasso_*`` names).
     params : object | None
-        Reserved for the future per-module parameter schema (see proposal
-        Sec. 10); ``None`` until that follow-up lands.
+        Per-module parameter schema. For picasso-set modules this is the
+        ``(parameters_spec, results_spec)`` tuple from
+        :mod:`picasso_workflow.picasso_set.params`, consumed by the GUI;
+        ``None`` for native modules until the schema follow-up lands.
     """
 
     name: str
@@ -201,7 +217,9 @@ class ModuleSpec:
     scopes: frozenset[Scope] = frozenset({Scope.SINGLE})
     # --- docs ---
     summary: str = ""
-    # --- reserved for the parameter-schema follow-up (proposal Sec. 10) ---
+    # --- module set ---
+    module_set: str = "native"
+    # --- per-module parameter schema (filled for the picasso-set) ---
     params: object | None = None
 
     def __post_init__(self):
@@ -216,6 +234,21 @@ class ModuleSpec:
             )
         if self.relation is PicassoRelation.WRAPS and not self.picasso_symbol:
             raise ValueError(f"{self.name}: WRAPS requires a picasso_symbol")
+        if self.module_set not in ("native", "picasso"):
+            raise ValueError(
+                f"{self.name}: unknown module_set {self.module_set!r}"
+            )
+        if self.module_set == "picasso":
+            if not self.name.startswith("picasso_"):
+                raise ValueError(
+                    f"{self.name}: picasso-set modules must be named "
+                    "'picasso_*'"
+                )
+            if self.relation is not PicassoRelation.WRAPS:
+                raise ValueError(
+                    f"{self.name}: picasso-set modules must WRAP a picasso "
+                    "symbol"
+                )
 
 
 def _s(
@@ -231,6 +264,8 @@ def _s(
     outpost=False,
     scopes=(Scope.SINGLE,),
     summary="",
+    module_set="native",
+    params=None,
 ):
     """Terse constructor: accepts iterables, freezes them into a ModuleSpec."""
     return ModuleSpec(
@@ -245,6 +280,8 @@ def _s(
         outpost=outpost,
         scopes=frozenset(scopes),
         summary=summary,
+        module_set=module_set,
+        params=params,
     )
 
 
@@ -257,7 +294,9 @@ N = PicassoRelation.NATIVE
 
 
 # ---------------------------------------------------------------------------
-# The registry. One entry per module in AbstractModuleCollection (59 total).
+# The registry. One entry per module in AbstractModuleCollection (59 total),
+# plus the picasso-set modules (module_set="picasso", implemented in
+# picasso_workflow/picasso_set/).
 # ---------------------------------------------------------------------------
 _SPECS = [
     # --- plumbing / control flow -------------------------------------------
@@ -806,6 +845,22 @@ _SPECS = [
         relation=N,
         scopes=_AGG,
         summary="Save data of all single-dataset workflows in an aggregation.",
+    ),
+    # --- picasso-set: 1:1 recapitulation of native picasso ------------------
+    # These modules mirror picasso CLI commands / library calls with the
+    # exact picasso parameter names and defaults. They are implemented in
+    # picasso_workflow/picasso_set/ (not in AbstractModuleCollection) and
+    # carry their GUI parameter schema in `params`.
+    _s(
+        "picasso_density",
+        requires=["locs_undrifted"],
+        provides=["density"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.compute_local_density",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_density"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_density"],
     ),
 ]
 

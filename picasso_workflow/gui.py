@@ -11,6 +11,9 @@ from __future__ import annotations
 from picasso_workflow import util, CONFIG
 from picasso_workflow import progress as pwprogress
 from picasso_workflow.modulespec import MODULE_REGISTRY, Scope
+from picasso_workflow.picasso_set.params import (
+    docstring as picasso_set_docstring,
+)
 from picasso_workflow import workflow_references as wfref
 from loguru import logger
 import subprocess
@@ -369,6 +372,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             if not method.startswith("_") and method not in excluded_methods
         ]
 
+        # picasso-set modules are registry-backed (resolved via __getattr__),
+        # not methods of this class
+        module_methods += [
+            name
+            for name, spec in MODULE_REGISTRY.items()
+            if spec.module_set == "picasso"
+        ]
+
         # Sort alphabetically for consistent ordering
         return sorted(module_methods)
 
@@ -376,6 +387,31 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """Reads and returns the docstring of a module"""
         fun = getattr(self, module)
         return fun.__doc__
+
+    def __getattr__(self, name):
+        """Resolve picasso-set module names to their registry-backed specs.
+
+        The picasso-set modules have no hand-written descriptor methods;
+        their ``(parameters_spec, results_spec)`` tuples live in
+        ``ModuleSpec.params``. Any registry-listed picasso-set name resolves
+        to a zero-argument callable returning that tuple (with the GUI
+        docstring attached), exactly like the descriptor methods. Everything
+        else raises ``AttributeError`` as usual (``__getattr__`` is only
+        consulted after normal lookup fails).
+        """
+        if not name.startswith("_"):
+            spec = MODULE_REGISTRY.get(name)
+            if spec is not None and spec.module_set == "picasso":
+
+                def describe():
+                    return spec.params
+
+                describe.__name__ = name
+                describe.__doc__ = picasso_set_docstring(name)
+                return describe
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
 
     def dummy_module(self):
         """A module that does nothing, for quickly removing
@@ -11405,11 +11441,33 @@ class Window(QtWidgets.QMainWindow):
 
         self.module_combobox = QtWidgets.QComboBox()
         self.module_combobox.addItem("Select module")
+        # picasso-set modules start hidden (checkbox below is unchecked);
+        # _refresh_module_palette re-adds them when it is toggled on
         self.module_combobox.addItems(
-            self.module_descriptor.get_module_names()
+            [
+                name
+                for name in self.module_descriptor.get_module_names()
+                if not self._is_hidden_picasso_set_module(name, False)
+            ]
         )
         self.module_combobox.currentTextChanged.connect(self.on_module_changed)
         current_layout.addWidget(self.module_combobox)
+
+        # Toggle for the picasso-set: modules recapitulating native picasso
+        # 1:1 (picasso_* names). Hidden from the palette by default.
+        self.show_picasso_set_checkbox = QtWidgets.QCheckBox(
+            "Show native-picasso (picasso_*) modules"
+        )
+        self.show_picasso_set_checkbox.setToolTip(
+            "Also offer the picasso-set modules, which mirror the picasso "
+            "CLI/library operations with the exact picasso parameter names "
+            "and defaults. They can be mixed freely with the classic modules."
+        )
+        self.show_picasso_set_checkbox.setChecked(False)
+        self.show_picasso_set_checkbox.toggled.connect(
+            lambda _checked: self._refresh_module_palette()
+        )
+        current_layout.addWidget(self.show_picasso_set_checkbox)
 
         # Branch-id selector: shown only when a branch sub-module is selected,
         # to choose which branch's per-branch ("$branch", [...]) parameter
@@ -14289,10 +14347,17 @@ class Window(QtWidgets.QMainWindow):
             self.module_combobox.clear()
             self.module_combobox.addItem("Select module")
             model = self.module_combobox.model()
+            show_picasso_set = self.show_picasso_set_checkbox.isChecked()
             for name in self.module_descriptor.get_module_names():
                 spec = MODULE_REGISTRY.get(name)
                 if spec is not None and scope not in spec.scopes:
                     continue  # hide scope-inappropriate modules
+                # keep the current selection visible even when the
+                # picasso-set is toggled off (e.g. editing an existing row)
+                if name != previous and self._is_hidden_picasso_set_module(
+                    name, show_picasso_set
+                ):
+                    continue
                 self.module_combobox.addItem(name)
                 if spec is not None and not spec.requires <= available:
                     item = model.item(self.module_combobox.count() - 1)
@@ -14306,6 +14371,37 @@ class Window(QtWidgets.QMainWindow):
             self.module_combobox.setCurrentIndex(idx if idx >= 0 else 0)
         finally:
             self.module_combobox.blockSignals(False)
+
+    @staticmethod
+    def _is_hidden_picasso_set_module(name, show_picasso_set):
+        """True when ``name`` is a picasso-set module currently toggled off.
+
+        Parameters
+        ----------
+        name : str
+            A module name from the palette.
+        show_picasso_set : bool
+            Current state of the picasso-set checkbox.
+        """
+        if show_picasso_set:
+            return False
+        spec = MODULE_REGISTRY.get(name)
+        return spec is not None and spec.module_set == "picasso"
+
+    def _module_palette_index(self, module_name):
+        """Return the palette index of ``module_name``, inserting if hidden.
+
+        A picasso-set module may be absent from the palette (checkbox off);
+        insert it so an existing workflow row using it can still be
+        displayed and edited. Returns -1 for genuinely unknown names.
+        """
+        index = self.module_combobox.findText(module_name)
+        if index < 0:
+            spec = MODULE_REGISTRY.get(module_name)
+            if spec is not None and spec.module_set == "picasso":
+                self.module_combobox.addItem(module_name)
+                index = self.module_combobox.count() - 1
+        return index
 
     def _editing_existing_module(self):
         """True when an existing workflow item is selected for editing."""
@@ -14543,7 +14639,7 @@ class Window(QtWidgets.QMainWindow):
         self._setup_branch_context(modules, node, top_index)
 
         # Update module combobox to show this module
-        index = self.module_combobox.findText(module_name)
+        index = self._module_palette_index(module_name)
         if index >= 0:
             # Block signals to prevent on_module_changed from firing
             self.module_combobox.blockSignals(True)
@@ -15031,7 +15127,7 @@ class Window(QtWidgets.QMainWindow):
                 module_name, param_values = self.single_workflow_modules[
                     current_row
                 ]
-                index = self.module_combobox.findText(module_name)
+                index = self._module_palette_index(module_name)
                 if index >= 0:
                     # Block signals to prevent on_module_changed from firing
                     self.module_combobox.blockSignals(True)
@@ -15060,7 +15156,7 @@ class Window(QtWidgets.QMainWindow):
                 module_name, param_values = self.aggregation_workflow_modules[
                     current_row
                 ]
-                index = self.module_combobox.findText(module_name)
+                index = self._module_palette_index(module_name)
                 if index >= 0:
                     # Block signals to prevent on_module_changed from firing
                     self.module_combobox.blockSignals(True)

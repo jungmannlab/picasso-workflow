@@ -12,6 +12,23 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **picasso-set module layer (infrastructure + pilot).** A second module set
+  that recapitulates native picasso 1:1 (same operation granularity, exact
+  picasso CLI/library parameter names and defaults), with `picasso_`-prefixed
+  module names so both sets mix freely in one workflow. Modules live in the
+  new `picasso_workflow/picasso_set/` package (mixins on `AutoPicasso`), are
+  registered via a new `ModuleSpec.module_set` field (their GUI parameter
+  schemas ride in `ModuleSpec.params`), and are documented by a single
+  generic Confluence/HTML reporter fallback instead of per-module reporter
+  methods. The GUI gains a *Show native-picasso (picasso_\*) modules*
+  checkbox (default off) that filters the module palette; existing workflow
+  rows using a hidden picasso-set module stay editable. Ships with the pilot
+  module `picasso_density` (wraps
+  `picasso.postprocess.compute_local_density`); the remaining tiers (core
+  pipeline, picks, calibration, I/O converters) follow in separate PRs.
+  `module_decorator` moved to the new `picasso_workflow/module_runtime.py`
+  (still importable as `analyse.module_decorator`).
+
 - **Checkpoint-aware resume.** Resuming a run (`continue_previous_runner=True`)
   now works even when the in-memory localizations are gone: modules that save
   or load locs (`save_single_dataset`, `load_dataset_localizations`,

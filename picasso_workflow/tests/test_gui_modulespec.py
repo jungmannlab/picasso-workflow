@@ -225,6 +225,59 @@ def test_selecting_existing_row_enters_save_mode(window):
     assert window.add_module_button.text() == "Save module"
 
 
+def test_picasso_set_hidden_by_default(window):
+    window.workflow_tabs.setCurrentIndex(0)
+    window._refresh_module_palette()
+    assert not window.show_picasso_set_checkbox.isChecked()
+    assert "picasso_density" not in _palette_items(window)
+
+
+def test_picasso_set_checkbox_reveals_modules(window):
+    window.workflow_tabs.setCurrentIndex(0)
+    window.single_workflow_modules.clear()
+    window.single_workflow_list.clear()
+    # toggling refreshes the palette via the connected signal
+    window.show_picasso_set_checkbox.setChecked(True)
+    assert "picasso_density" in _palette_items(window)
+    # requires locs_undrifted -> greyed out on an empty workflow
+    assert not _item_enabled(window, "picasso_density")
+    window.show_picasso_set_checkbox.setChecked(False)
+    assert "picasso_density" not in _palette_items(window)
+
+
+def test_picasso_set_form_populates_from_spec(window):
+    window.workflow_tabs.setCurrentIndex(0)
+    window.single_workflow_modules.clear()
+    window.single_workflow_list.clear()
+    window.show_picasso_set_checkbox.setChecked(True)
+    _select_palette(window, "picasso_density")
+    window.on_module_changed("picasso_density")
+    assert "radius" in window.parameter_widgets
+
+
+def test_editing_picasso_set_row_with_checkbox_off(window):
+    """A workflow row using a hidden picasso-set module stays editable."""
+    window.workflow_tabs.setCurrentIndex(0)
+    window.single_workflow_modules.clear()
+    window.single_workflow_list.clear()
+    window.show_picasso_set_checkbox.setChecked(True)
+
+    _select_palette(window, "load_dataset_localizations")
+    window.add_module()
+    window.single_workflow_list.setCurrentRow(0)
+    _select_palette(window, "picasso_density")
+    window.add_module()
+    assert [m[0] for m in window.single_workflow_modules] == [
+        "load_dataset_localizations",
+        "picasso_density",
+    ]
+
+    # Hide the set again; the existing row must still display its module.
+    window.show_picasso_set_checkbox.setChecked(False)
+    window.single_workflow_list.setCurrentRow(1)
+    assert window.module_combobox.currentText() == "picasso_density"
+
+
 def test_reference_remap_helper_updates_both_workflows(window):
     """_remap_references_after_change rewrites cross-workflow refs in place."""
     from picasso_workflow import workflow_references as wfref
