@@ -12,6 +12,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **picasso-set tier 3: calibration & 3D (6 modules).** `picasso_zfit`
+  (astigmatic z fit on the current locs, GPU with CPU fallback),
+  `picasso_calibrate_z` (bead z-stack → z-calibration yaml),
+  `picasso_camera_calibrate` / `picasso_camera_validate` (sCMOS
+  offset/variance/gain maps and their validation, CLI parameter names),
+  `picasso_spline_calibrate` (full CLI surface incl. multichannel and
+  split-FOV dispatch) and `picasso_lateral_calibrate`
+  (astigmatism/chromatic x-y correction + diagnostic figure). These are
+  file-in/file-out; the produced calibration files feed `picasso_localize`
+  / `picasso_zfit` via result references.
+
 - **picasso-set tier 2: pick-based postprocessing (9 modules).** The picasso
   Render GUI's pick/mask operations as headless picasso-set modules with the
   library functions' parameter names and defaults: `picasso_picked_locs`,

@@ -205,6 +205,30 @@ PICASSO_SET_SUMMARIES: dict[str, str] = {
         "Estimate the image resolution via Fourier Ring Correlation "
         "(native picasso Render: FRC)."
     ),
+    "picasso_zfit": (
+        "Fit z coordinates to 3D (astigmatism) localizations "
+        "(native picasso library: zfit.zfit)."
+    ),
+    "picasso_calibrate_z": (
+        "Build a 3D (astigmatism) z calibration from a fitted bead "
+        "z-stack (native picasso library: zfit.calibrate_z)."
+    ),
+    "picasso_camera_calibrate": (
+        "Characterize an sCMOS camera: offset, variance and optional "
+        "gain maps (native picasso CLI: camera-calibrate)."
+    ),
+    "picasso_camera_validate": (
+        "Check an sCMOS calibration against a fresh dark movie "
+        "(native picasso CLI: camera-validate)."
+    ),
+    "picasso_spline_calibrate": (
+        "Build a cubic-spline PSF calibration from bead z-stack(s) "
+        "(native picasso CLI: spline-calibrate)."
+    ),
+    "picasso_lateral_calibrate": (
+        "Fit a lateral (astigmatism/chromatic) x-y correction from two "
+        "bead images (native picasso CLI: lateral-calibrate)."
+    ),
 }
 
 
@@ -1310,6 +1334,435 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             fp_fig_frc=_fp("FRC curve figure"),
             filepath_frc=_fp("FRC curve data"),
+        ),
+    ),
+    "picasso_zfit": (
+        {
+            "calibration": {
+                "type": "file",
+                "description": (
+                    "z-calibration .yaml file (e.g. from "
+                    "picasso_calibrate_z via $get_prior_result)"
+                ),
+                "required": True,
+            },
+            "magnification_factor": {
+                "type": "float",
+                "description": (
+                    "Refractive-index magnification factor; unset = from "
+                    "the calibration"
+                ),
+                "required": False,
+            },
+            "fitting_method": {
+                "type": "str",
+                "description": "Noise model of the z fit",
+                "options": ["gausslq", "gaussmle"],
+                "default": "gausslq",
+                "required": False,
+            },
+            "filter": {
+                "type": "int",
+                "description": "Filter level applied to the z fits",
+                "default": 2,
+                "required": False,
+            },
+            "lateral_transforms": {
+                "type": "file",
+                "description": (
+                    "Calibration file with lateral corrections applied "
+                    "after the z fit"
+                ),
+                "required": False,
+            },
+            "multiprocess": {
+                "type": "bool",
+                "description": "Fit with multiprocessing",
+                "default": False,
+                "required": False,
+            },
+            "gpu": {
+                "type": "bool",
+                "description": (
+                    "Fit on the GPU (falls back to CPU if unavailable)"
+                ),
+                "default": False,
+                "required": False,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            filepath_locs_zfit=_fp("z-fitted localizations hdf5"),
+        ),
+    ),
+    "picasso_calibrate_z": (
+        {
+            "d": {
+                "type": "float",
+                "description": (
+                    "z step size in nm between consecutive stage " "positions"
+                ),
+                "required": True,
+            },
+            "magnification_factor": {
+                "type": "float",
+                "description": "Refractive-index magnification factor",
+                "required": True,
+            },
+            "frame_bounds": {
+                "type": "list",
+                "description": (
+                    "[start_frame, end_frame] restriction of the stack"
+                ),
+                "required": False,
+            },
+            "frames_per_step": {
+                "type": "int",
+                "description": ("Frames acquired per z position (multi-FOV)"),
+                "default": 1,
+                "required": False,
+            },
+            "frame_order": {
+                "type": "str",
+                "description": ("Acquisition order when frames_per_step > 1"),
+                "options": ["fov", "z"],
+                "default": "fov",
+                "required": False,
+            },
+        },
+        _results(
+            filepath_z_calibration=_fp("z-calibration yaml"),
+            num_frames={
+                "type": "int",
+                "description": "Number of frames in the calibration",
+                "required": False,
+            },
+        ),
+    ),
+    "picasso_camera_calibrate": (
+        {
+            "dark": {
+                "type": "file",
+                "description": (
+                    "Dark movie: frames recorded with no light on the "
+                    "sensor (CLI: dark)"
+                ),
+                "required": True,
+            },
+            "light": {
+                "type": "list",
+                "description": (
+                    "Movies at quasi-uniform illumination levels, one "
+                    "per level; omit for offset/variance only "
+                    "(CLI: --light)"
+                ),
+                "required": False,
+            },
+            "power": {
+                "type": "list",
+                "description": (
+                    "Illumination level of each light movie, same order "
+                    "(CLI: --power)"
+                ),
+                "required": False,
+            },
+            "power_unit": {
+                "type": "str",
+                "description": (
+                    "Unit of power, for the diagnostic plot axis "
+                    "(CLI: --power-unit)"
+                ),
+                "default": "mW",
+                "required": False,
+            },
+        },
+        _results(
+            filepath_camera_calibration=_fp("sCMOS camera calibration hdf5"),
+            frames_used={
+                "type": "int",
+                "description": "Dark frames used",
+                "required": False,
+            },
+            offset_median_adu={
+                "type": "float",
+                "description": "Median per-pixel offset (ADU)",
+                "required": False,
+            },
+            hot_pixels={
+                "type": "int",
+                "description": "Number of hot pixels",
+                "required": False,
+            },
+        ),
+    ),
+    "picasso_camera_validate": (
+        {
+            "calibration": {
+                "type": "file",
+                "description": "Camera calibration (.hdf5)",
+                "required": True,
+            },
+            "movie": {
+                "type": "file",
+                "description": ("Short fresh dark movie (about 1,000 frames)"),
+                "required": True,
+            },
+        },
+        _results(
+            valid={
+                "type": "bool",
+                "description": (
+                    "Whether the calibration still describes the camera"
+                ),
+            },
+            mean_p_value={
+                "type": "float",
+                "description": "Mean p-value (want 0.5 +- 0.1)",
+            },
+        ),
+    ),
+    "picasso_spline_calibrate": (
+        {
+            "files": {
+                "type": "list",
+                "description": (
+                    "Bead z-stack movie file(s); several = one per "
+                    "channel (CLI: files)"
+                ),
+                "required": True,
+            },
+            "step": {
+                "type": "float",
+                "description": (
+                    "z step size in nm between consecutive stage "
+                    "positions (CLI: --step)"
+                ),
+                "required": True,
+            },
+            "box_side_length": {
+                "type": "int",
+                "description": "Box side length (CLI: --box-side-length)",
+                "default": 13,
+                "required": False,
+            },
+            "gradient": {
+                "type": "int",
+                "description": (
+                    "Minimum net gradient for bead detection "
+                    "(CLI: --gradient)"
+                ),
+                "default": 5000,
+                "required": False,
+            },
+            "frames_per_step": {
+                "type": "int",
+                "description": (
+                    "Frames acquired per z position "
+                    "(CLI: --frames-per-step)"
+                ),
+                "default": 1,
+                "required": False,
+            },
+            "frame_order": {
+                "type": "str",
+                "description": (
+                    "Acquisition order when frames_per_step > 1 "
+                    "(CLI: --frame-order)"
+                ),
+                "options": ["fov", "z"],
+                "default": "fov",
+                "required": False,
+            },
+            "registration_model": {
+                "type": "str",
+                "description": (
+                    "Channel registration transform for multichannel / "
+                    "split-FOV (CLI: --registration-model)"
+                ),
+                "options": [
+                    "translation",
+                    "affine",
+                    "projective",
+                    "polynomial2",
+                    "polynomial3",
+                ],
+                "default": "affine",
+                "required": False,
+            },
+            "model": {
+                "type": "str",
+                "description": (
+                    "3D (z-recovering) or 2D (single-plane) spline PSF "
+                    "(CLI: --model)"
+                ),
+                "options": ["spline-3d", "spline-2d"],
+                "default": "spline-3d",
+                "required": False,
+            },
+            "magnification_factor": {
+                "type": "float",
+                "description": (
+                    "Refractive-index magnification factor "
+                    "(CLI: --magnification-factor)"
+                ),
+                "default": 0.79,
+                "required": False,
+            },
+            "correct_z_bias": {
+                "type": "bool",
+                "description": (
+                    "Define z=0 at the axial intensity peak "
+                    "(CLI: --correct-z-bias)"
+                ),
+                "default": False,
+                "required": False,
+            },
+            "photon_ratios": {
+                "type": "str",
+                "description": (
+                    "Ratiometric candidates, e.g. '0.7,0.3;0.4,0.6' "
+                    "(CLI: --photon-ratios)"
+                ),
+                "required": False,
+            },
+            "split_fov": {
+                "type": "str",
+                "description": (
+                    "Single-movie multichannel regions, e.g. "
+                    "'0,0,512,256;0,256,512,512' (CLI: --split-fov)"
+                ),
+                "required": False,
+            },
+            "reference": {
+                "type": "int",
+                "description": (
+                    "Split-FOV reference region index (CLI: --reference)"
+                ),
+                "default": 0,
+                "required": False,
+            },
+            "baseline": {
+                "type": "float",
+                "description": "Camera baseline (CLI literal)",
+                "default": 0,
+                "required": False,
+            },
+            "sensitivity": {
+                "type": "float",
+                "description": "Camera sensitivity (CLI literal)",
+                "default": 1,
+                "required": False,
+            },
+            "gain": {
+                "type": "int",
+                "description": "Camera gain (CLI literal)",
+                "default": 1,
+                "required": False,
+            },
+            "pixelsize": {
+                "type": "int",
+                "description": "Pixel size in nm (CLI literal)",
+                "default": 130,
+                "required": False,
+            },
+        },
+        _results(
+            filepath_spline_calibration=_fp(
+                "Cubic-spline PSF calibration hdf5"
+            ),
+            spline_model={
+                "type": "str",
+                "description": "The calibration's spline model",
+                "required": False,
+            },
+        ),
+    ),
+    "picasso_lateral_calibrate": (
+        {
+            "reference": {
+                "type": "file",
+                "description": (
+                    "Reference bead image (without the cylindrical lens, "
+                    "or the reference color channel)"
+                ),
+                "required": True,
+            },
+            "target": {
+                "type": "file",
+                "description": ("Bead image to be mapped onto the reference"),
+                "required": True,
+            },
+            "type": {
+                "type": "str",
+                "description": "What the transform corrects (CLI: --type)",
+                "options": ["astigmatism", "chromatic"],
+                "default": "astigmatism",
+                "required": False,
+            },
+            "model": {
+                "type": "str",
+                "description": "Transform model (CLI: --model)",
+                "options": [
+                    "translation",
+                    "affine",
+                    "projective",
+                    "polynomial2",
+                    "polynomial3",
+                ],
+                "default": "affine",
+                "required": False,
+            },
+            "calibration": {
+                "type": "file",
+                "description": (
+                    "Existing calibration (.yaml/.hdf5) to append to "
+                    "(CLI: --calibration)"
+                ),
+                "required": False,
+            },
+            "output": {
+                "type": "str",
+                "description": (
+                    "Where to write the calibration; unset = the "
+                    "'calibration' file, else the module folder "
+                    "(CLI: --output)"
+                ),
+                "required": False,
+            },
+            "box_side_length": {
+                "type": "int",
+                "description": "Box side length (CLI: --box-side-length)",
+                "default": 7,
+                "required": False,
+            },
+            "gradient": {
+                "type": "int",
+                "description": (
+                    "Minimum net gradient for bead detection "
+                    "(CLI: --gradient)"
+                ),
+                "default": 5000,
+                "required": False,
+            },
+            "pixelsize": {
+                "type": "float",
+                "description": (
+                    "Camera pixel size in nm, for the reported shift "
+                    "in nm (CLI: --pixelsize)"
+                ),
+                "required": False,
+            },
+        },
+        _results(
+            filepath_lateral_calibration=_fp(
+                "Calibration file with the fitted lateral correction"
+            ),
+            fp_fig_lateral_calibration=_fp("Diagnostic figure"),
+            n_bead_pairs={
+                "type": "int",
+                "description": "Bead pairs the fit used",
+                "required": False,
+            },
         ),
     ),
 }
