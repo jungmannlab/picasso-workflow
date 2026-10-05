@@ -12,6 +12,19 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **picasso-set tier 2: pick-based postprocessing (9 modules).** The picasso
+  Render GUI's pick/mask operations as headless picasso-set modules with the
+  library functions' parameter names and defaults: `picasso_picked_locs`,
+  `picasso_pick_similar` (writes a pick-region yaml for downstream modules),
+  `picasso_remove_locs_in_picks`, `picasso_pick_properties`,
+  `picasso_pick_kinetics`, `picasso_fret` (donor/acceptor file parameters),
+  `picasso_mask_locs` (generate image → threshold → split, continues with
+  the in-mask localizations), `picasso_nena` and `picasso_frc` (full-FOV,
+  curve figure + data saved). Picks are exchanged as pick-region `.yaml`
+  file paths (`picks_file` parameter, `io.load_picks` format), so they can
+  come from the GUI, from disk, or from a prior module via
+  `$get_prior_result`.
+
 - **picasso-set tier 1: core pipeline (20 modules).** The full native-picasso
   core pipeline as picasso-set modules with CLI-exact parameter names and
   defaults: `picasso_localize` (identify + fit in one step, all CLI fit

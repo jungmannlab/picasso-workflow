@@ -169,6 +169,42 @@ PICASSO_SET_SUMMARIES: dict[str, str] = {
         "Join hdf5 localization lists with frame reindexing "
         "(native picasso CLI: join)."
     ),
+    "picasso_picked_locs": (
+        "Keep only the localizations inside the given picks "
+        "(native picasso Render: picked locs)."
+    ),
+    "picasso_pick_similar": (
+        "Find regions similar to the given picks "
+        "(native picasso Render: pick similar)."
+    ),
+    "picasso_remove_locs_in_picks": (
+        "Remove the localizations inside the given picks "
+        "(native picasso Render: remove picked locs)."
+    ),
+    "picasso_pick_properties": (
+        "Calculate statistical properties per pick "
+        "(native picasso Render: save pick properties)."
+    ),
+    "picasso_pick_kinetics": (
+        "Estimate binding kinetics per pick "
+        "(native picasso Render: pick kinetics)."
+    ),
+    "picasso_fret": (
+        "Calculate FRET efficiencies from a donor and an acceptor "
+        "dataset (native picasso Render: calculate FRET)."
+    ),
+    "picasso_mask_locs": (
+        "Split localizations by a density mask "
+        "(native picasso Render: mask image)."
+    ),
+    "picasso_nena": (
+        "Estimate the localization precision via NeNA "
+        "(native picasso Render: NeNA)."
+    ),
+    "picasso_frc": (
+        "Estimate the image resolution via Fourier Ring Correlation "
+        "(native picasso Render: FRC)."
+    ),
 }
 
 
@@ -998,6 +1034,282 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         _results(
             nlocs=_NLOCS_RESULT,
             filepath_locs_join=_fp("Joined localizations hdf5"),
+        ),
+    ),
+    "picasso_picked_locs": (
+        {
+            "picks_file": {
+                "type": "file",
+                "description": (
+                    "Picasso pick-region .yaml file (e.g. from "
+                    "picasso_pick_similar via $get_prior_result)"
+                ),
+                "required": True,
+            },
+            "add_group": {
+                "type": "bool",
+                "description": "Add a group column indexing the picks",
+                "default": True,
+                "required": False,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            n_picks={
+                "type": "int",
+                "description": "Number of picks",
+                "min": 0,
+            },
+            filepath_locs_picked=_fp("Picked localizations hdf5"),
+        ),
+    ),
+    "picasso_pick_similar": (
+        {
+            "picks_file": {
+                "type": "file",
+                "description": (
+                    "Picasso pick-region .yaml file with the seed picks "
+                    "(Circle, Rectangle, Square or Box)"
+                ),
+                "required": True,
+            },
+            "std_range": {
+                "type": "float",
+                "description": (
+                    "Allowed deviation (in standard deviations) of locs "
+                    "count and RMSD from the seed picks' mean"
+                ),
+                "default": 2.0,
+                "required": False,
+            },
+        },
+        _results(
+            n_picks_input={
+                "type": "int",
+                "description": "Number of seed picks",
+                "min": 0,
+            },
+            n_picks_similar={
+                "type": "int",
+                "description": "Number of similar picks found",
+                "min": 0,
+            },
+            filepath_picks=_fp("Pick-region yaml with the found picks"),
+        ),
+    ),
+    "picasso_remove_locs_in_picks": (
+        {
+            "picks_file": {
+                "type": "file",
+                "description": "Picasso pick-region .yaml file",
+                "required": True,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            filepath_locs_picks_removed=_fp(
+                "Localizations outside the picks hdf5"
+            ),
+        ),
+    ),
+    "picasso_pick_properties": (
+        {
+            "picks_file": {
+                "type": "file",
+                "description": "Picasso pick-region .yaml file",
+                "required": True,
+            },
+            "max_dark_time": {
+                "type": "int",
+                "description": (
+                    "Maximum dark time for linking binding events"
+                ),
+                "default": 3,
+                "required": False,
+            },
+            "influx_rate": {
+                "type": "float",
+                "description": "Influx rate for qPAINT unit calibration",
+                "default": 0.03,
+                "required": False,
+            },
+        },
+        _results(
+            n_picks={
+                "type": "int",
+                "description": "Number of picks",
+                "min": 0,
+            },
+            filepath_pick_properties=_fp(
+                "Per-pick property table hdf5 (io.save_datasets)"
+            ),
+        ),
+    ),
+    "picasso_pick_kinetics": (
+        {
+            "picks_file": {
+                "type": "file",
+                "description": "Picasso pick-region .yaml file",
+                "required": True,
+            },
+            "max_dark_time": {
+                "type": "int",
+                "description": (
+                    "Maximum dark time for linking binding events"
+                ),
+                "default": 3,
+                "required": False,
+            },
+        },
+        _results(
+            nlocs=_NLOCS_RESULT,
+            n_picks={
+                "type": "int",
+                "description": "Number of picks",
+                "min": 0,
+            },
+            n_picks_kept={
+                "type": "int",
+                "description": "Picks with estimable kinetics",
+                "min": 0,
+            },
+            mean_length_frames={
+                "type": "float",
+                "description": "Mean binding-event length (frames)",
+            },
+            mean_dark_frames={
+                "type": "float",
+                "description": "Mean dark time (frames)",
+            },
+            filepath_locs_pick_kinetics=_fp(
+                "Picked localizations with kinetics columns hdf5"
+            ),
+        ),
+    ),
+    "picasso_fret": (
+        {
+            "acc_locs_file": {
+                "type": "file",
+                "description": "The acceptor localizations hdf5 file",
+                "required": True,
+            },
+            "don_locs_file": {
+                "type": "file",
+                "description": "The donor localizations hdf5 file",
+                "required": True,
+            },
+        },
+        _results(
+            n_fret_events={
+                "type": "int",
+                "description": "Number of FRET events",
+                "min": 0,
+            },
+            mean_fret={
+                "type": "float",
+                "description": "Mean FRET efficiency",
+            },
+            filepath_locs_fret=_fp("FRET localizations hdf5"),
+            filepath_fret_events=_fp(
+                "FRET events text file (frame, efficiency)"
+            ),
+        ),
+    ),
+    "picasso_mask_locs": (
+        {
+            "disp_px_size": {
+                "type": "float",
+                "description": ("Size of the rendered mask pixel in nm"),
+                "required": True,
+            },
+            "blur": {
+                "type": "float",
+                "description": (
+                    "Gaussian blur sigma applied to the rendered image "
+                    "(display pixels)"
+                ),
+                "required": True,
+            },
+            "method": {
+                "type": "str",
+                "description": (
+                    "Thresholding method or an explicit threshold in " "(0, 1)"
+                ),
+                "options": [
+                    "isodata",
+                    "li",
+                    "mean",
+                    "minimum",
+                    "otsu",
+                    "triangle",
+                    "yen",
+                    "local_gaussian",
+                    "local_mean",
+                    "local_median",
+                ],
+                "default": "otsu",
+                "required": False,
+            },
+        },
+        _results(
+            nlocs_in={
+                "type": "int",
+                "description": "Localizations inside the mask",
+                "min": 0,
+            },
+            nlocs_out={
+                "type": "int",
+                "description": "Localizations outside the mask",
+                "min": 0,
+            },
+            threshold={
+                "type": "float",
+                "description": "Applied threshold (scalar methods only)",
+                "required": False,
+            },
+            filepath_mask=_fp("Binary mask .npy"),
+            fp_fig_mask=_fp("Mask image PNG"),
+            filepath_locs_mask_in=_fp("In-mask localizations hdf5"),
+            filepath_locs_mask_out=_fp("Out-of-mask localizations hdf5"),
+        ),
+    ),
+    "picasso_nena": (
+        {},
+        _results(
+            nena_px={
+                "type": "float",
+                "description": (
+                    "Estimated localization precision (camera pixels)"
+                ),
+            },
+            nena_nm={
+                "type": "float",
+                "description": (
+                    "Estimated localization precision (nm, if the pixel "
+                    "size is known)"
+                ),
+                "required": False,
+            },
+        ),
+    ),
+    "picasso_frc": (
+        {
+            "random_seed": {
+                "type": "int",
+                "description": (
+                    "Seed for the random split of the localizations"
+                ),
+                "default": 42,
+                "required": False,
+            },
+        },
+        _results(
+            resolution_nm={
+                "type": "float",
+                "description": "Estimated FRC resolution (nm)",
+            },
+            fp_fig_frc=_fp("FRC curve figure"),
+            filepath_frc=_fp("FRC curve data"),
         ),
     ),
 }

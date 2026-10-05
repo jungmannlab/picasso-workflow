@@ -192,6 +192,16 @@ class TestValidateWorkflow(unittest.TestCase):
         ]
         self.assertEqual([], validate_workflow(steps, Scope.SINGLE))
 
+    def test_golden_picasso_set_picks_workflow_passes(self):
+        steps = [
+            ("load_dataset_localizations", {}),
+            ("picasso_pick_similar", {"picks_file": "seed_picks.yaml"}),
+            ("picasso_picked_locs", {"picks_file": "picks.yaml"}),
+            ("picasso_pick_properties", {"picks_file": "picks.yaml"}),
+            ("picasso_nena", {}),
+        ]
+        self.assertEqual([], validate_workflow(steps, Scope.SINGLE))
+
     def test_golden_picasso_set_pipeline_passes(self):
         # the full picasso-set core chain validates end-to-end
         steps = [
