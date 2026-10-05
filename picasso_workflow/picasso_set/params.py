@@ -229,6 +229,42 @@ PICASSO_SET_SUMMARIES: dict[str, str] = {
         "Fit a lateral (astigmatism/chromatic) x-y correction from two "
         "bead images (native picasso CLI: lateral-calibrate)."
     ),
+    "picasso_csv2hdf": (
+        "Convert a ThunderSTORM CSV file to picasso hdf5 "
+        "(native picasso CLI: csv2hdf)."
+    ),
+    "picasso_smap2hdf": (
+        "Convert a SMAP _sml.mat file to picasso hdf5 "
+        "(native picasso CLI: smap2hdf)."
+    ),
+    "picasso_hdf2csv": (
+        "Export localizations to plain CSV, columns unchanged "
+        "(native picasso CLI: hdf2csv)."
+    ),
+    "picasso_hdf2ts": (
+        "Export localizations to ThunderSTORM CSV "
+        "(native picasso CLI: hdf2ts)."
+    ),
+    "picasso_hdf2imagej": (
+        "Export localizations to ImageJ txt (frame, x, y) "
+        "(native picasso CLI: hdf2imagej)."
+    ),
+    "picasso_hdf2nis": (
+        "Export localizations to NIS txt format "
+        "(native picasso CLI: hdf2nis)."
+    ),
+    "picasso_hdf2chimera": (
+        "Export localizations to Chimera .xyz for 3D visualization "
+        "(native picasso CLI: hdf2chimera)."
+    ),
+    "picasso_hdf2visp": (
+        "Export localizations to VISP format "
+        "(native picasso CLI: hdf2visp)."
+    ),
+    "picasso_hdf2smap": (
+        "Export localizations to SMAP _sml.mat "
+        "(native picasso CLI: hdf2smap)."
+    ),
 }
 
 
@@ -1766,6 +1802,49 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         ),
     ),
 }
+
+
+# The importers share one schema (required input file + pixel size), the
+# exporters another (optional explicit input instead of the current locs).
+_IMPORTER_PARAMS: dict = {
+    "files": {
+        "type": "file",
+        "description": "The localization file to import (CLI: files)",
+        "required": True,
+    },
+    "pixelsize": {
+        "type": "float",
+        "description": "Camera pixel size in nm (CLI: --pixelsize)",
+        "required": True,
+    },
+}
+_EXPORTER_PARAMS: dict = {
+    "files": {
+        "type": "file",
+        "description": (
+            "An hdf5 localizations file to convert instead of the "
+            "current dataset"
+        ),
+        "required": False,
+    },
+}
+_CONVERTED_RESULTS: dict = _results(
+    nlocs=_NLOCS_RESULT,
+    filepath_converted=_fp("The converted output file"),
+)
+for _name in ("picasso_csv2hdf", "picasso_smap2hdf"):
+    PICASSO_SET_PARAMS[_name] = (dict(_IMPORTER_PARAMS), _CONVERTED_RESULTS)
+for _name in (
+    "picasso_hdf2csv",
+    "picasso_hdf2ts",
+    "picasso_hdf2imagej",
+    "picasso_hdf2nis",
+    "picasso_hdf2chimera",
+    "picasso_hdf2visp",
+    "picasso_hdf2smap",
+):
+    PICASSO_SET_PARAMS[_name] = (dict(_EXPORTER_PARAMS), _CONVERTED_RESULTS)
+del _name
 
 
 def docstring(name: str) -> str:

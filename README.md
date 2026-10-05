@@ -36,6 +36,58 @@ via picassosr.
 	- Aggregation workflow: multiple datasets undergo a single-dataset
 	workflow and are then aggregated.
 
+## The picasso-set modules
+
+Besides the classic picasso-workflow modules, there is a second module set
+that recapitulates **native picasso 1:1**: every `picasso_*` module mirrors
+one picasso CLI command (or Render-GUI/library operation where no CLI
+exists) with the **exact picasso parameter names and defaults**, so anyone
+who knows `picasso localize ...` can build the same pipeline as a workflow
+with zero learning curve. The set covers four tiers:
+
+- **Core pipeline** — `picasso_localize` (all CLI fit methods incl.
+  spline/GPU/3D and the calibration files), `picasso_undrift_rcc` /
+  `picasso_undrift_aim` / `picasso_undrift_fiducials`, `picasso_link`,
+  `picasso_dark`, `picasso_groupprops`, `picasso_density`,
+  `picasso_pair_correlation`, `picasso_dbscan` / `picasso_hdbscan` /
+  `picasso_smlm_cluster`, `picasso_nneighbor`, `picasso_clusterfilter`,
+  `picasso_cluster_combine`(`_dist`), `picasso_g5m`, `picasso_render`,
+  `picasso_align`, `picasso_join`.
+- **Pick-based postprocessing** — `picasso_picked_locs`,
+  `picasso_pick_similar`, `picasso_remove_locs_in_picks`,
+  `picasso_pick_properties`, `picasso_pick_kinetics`, `picasso_fret`,
+  `picasso_mask_locs`, `picasso_nena`, `picasso_frc`. Picks travel as
+  pick-region `.yaml` file paths (`picks_file` parameter, the
+  `io.load_picks` format), so they can come from GUI-exported files or
+  from `picasso_pick_similar` via `$get_prior_result`.
+- **Calibration & 3D** — `picasso_zfit`, `picasso_calibrate_z`,
+  `picasso_camera_calibrate` / `picasso_camera_validate`,
+  `picasso_spline_calibrate`, `picasso_lateral_calibrate`; their
+  calibration files feed `picasso_localize` / `picasso_zfit` via result
+  references.
+- **Format converters** — `picasso_csv2hdf`, `picasso_smap2hdf` (load the
+  imported file as the current dataset) and `picasso_hdf2csv`/`ts`/
+  `imagej`/`nis`/`chimera`/`visp`/`smap` (export the current locs, or an
+  explicit file, with the CLI-identical output suffixes).
+
+Documented deviations from the CLI are called out per module docstring; the
+notable ones: `picasso_localize` defaults `drift=0` (the CLI's default 1000
+would also undrift — the workflow has dedicated undrift modules) and its
+camera parameters default to "from the loaded movie metadata / camera
+config" instead of the CLI literals; interactive displays become saved
+figures in the module's result folder.
+
+In the GUI, a checkbox in the *Current Module* box toggles the palette
+between the classic modules and the picasso-set (shown together with the
+data loaders); both sets mix freely in one workflow — module names are
+globally unique. Reporting (Confluence/HTML) is automatic via a generic
+spec-driven reporter; the predefined recipe
+`standard_singledataset_workflows.picasso_native()` shows a minimal
+native-picasso pipeline. The implementation lives in
+`picasso_workflow/picasso_set/` with its GUI parameter schemas in
+`picasso_set/params.py` and registry entries (`module_set="picasso"`) in
+`modulespec.py`.
+
 ## Per-channel parameters
 
 In an aggregation (or investigation) workflow, every channel is analyzed by

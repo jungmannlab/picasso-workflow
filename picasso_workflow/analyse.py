@@ -112,6 +112,7 @@ from picasso_workflow.picasso_set.analyse_calibration import (
     PicassoSetCalibrationMixin,
 )
 from picasso_workflow.picasso_set.analyse_core import PicassoSetCoreMixin
+from picasso_workflow.picasso_set.analyse_io import PicassoSetIOMixin
 from picasso_workflow.picasso_set.analyse_picks import PicassoSetPicksMixin
 from picasso_workflow.progress import PicassoProgressProxy
 from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
@@ -1130,6 +1131,7 @@ class AutoPicasso(
     PicassoSetCoreMixin,
     PicassoSetPicksMixin,
     PicassoSetCalibrationMixin,
+    PicassoSetIOMixin,
     util.AbstractModuleCollection,
 ):
     """Automatically evaluate datasets via the picasso pipeline.

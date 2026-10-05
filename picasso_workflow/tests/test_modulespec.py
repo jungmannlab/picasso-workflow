@@ -192,6 +192,12 @@ class TestValidateWorkflow(unittest.TestCase):
         ]
         self.assertEqual([], validate_workflow(steps, Scope.SINGLE))
 
+    def test_picasso_native_template_validates(self):
+        from picasso_workflow import standard_singledataset_workflows as ssw
+
+        steps = ssw.picasso_native("movie.tif")
+        self.assertEqual([], validate_workflow(steps, Scope.SINGLE))
+
     def test_golden_picasso_set_picks_workflow_passes(self):
         steps = [
             ("load_dataset_localizations", {}),

@@ -12,6 +12,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **picasso-set tier 4: format converters (9 modules) + docs.**
+  `picasso_csv2hdf` and `picasso_smap2hdf` import ThunderSTORM/SMAP files
+  (written next to the input like the CLI) and load them as the current
+  dataset; `picasso_hdf2csv`/`ts`/`imagej`/`nis`/`chimera`/`visp`/`smap`
+  export the current localizations (or an explicit file) with the
+  CLI-identical output suffixes. Plus the predefined recipe
+  `standard_singledataset_workflows.picasso_native()` (load →
+  picasso_localize → picasso_undrift_rcc → picasso_render → save) and a
+  README section documenting the picasso-set.
+
 - **picasso-set tier 3: calibration & 3D (6 modules).** `picasso_zfit`
   (astigmatic z fit on the current locs, GPU with CPU fallback),
   `picasso_calibrate_z` (bead z-stack → z-calibration yaml),
