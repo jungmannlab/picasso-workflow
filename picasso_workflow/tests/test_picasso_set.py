@@ -547,6 +547,24 @@ class TestPicassoSetModules(unittest.TestCase):
         self.assertEqual(1, cam["Gain"])
 
     @patch("picasso_workflow.picasso_set.analyse_core.localize.localize")
+    def test_picasso_localize_explicit_none_camera_info(self, mock_localize):
+        """An explicit camera_info: None in the analysis config (as the
+        generated start_workflow templates write it) must not crash
+        (regression: cluster run 6065761, 'NoneType' has no attribute
+        'get') but resolve like an absent entry."""
+        self.ap.analysis_config = {
+            "camera_info": None,
+            "gpufit_installed": False,
+        }
+        self.ap.movie = np.zeros((2, 8, 8), dtype=np.uint16)
+        mock_localize.return_value = (self.ap.locs, self.ap.info + [{}])
+        with patch.object(self.ap, "_save_locs"):
+            self.ap.picasso_localize(0, {})
+        cam = mock_localize.call_args[1]["camera_info"]
+        self.assertEqual(0, cam["Baseline"])
+        self.assertEqual(130, cam["Pixelsize"])
+
+    @patch("picasso_workflow.picasso_set.analyse_core.localize.localize")
     def test_picasso_localize_camera_info_property_failure(
         self, mock_localize
     ):
