@@ -41,6 +41,7 @@ from picasso_workflow.modulespec import (
     CHANNEL_LOCS_CAPABILITIES,
     LOCS_STATE_CAPABILITIES,
     MEMORY_ONLY_CAPABILITIES,
+    RUNTIME_PARAMETER_WRITE_BACKS,
     SINGLE_LOCS_CAPABILITIES,
     Scope,
     restart_conflicts,
@@ -393,7 +394,9 @@ def _normalize_command(value):
     return value
 
 
-def _legacy_values_differ(prev_value, new_value) -> bool:
+def _legacy_values_differ(
+    prev_value, new_value, ignore: frozenset = frozenset(), path: str = ""
+) -> bool:
     """Conservatively compare a legacy parameter value against a new one.
 
     Parameters
@@ -402,6 +405,10 @@ def _legacy_values_differ(prev_value, new_value) -> bool:
         Value from a legacy yaml (resolved commands, module write-backs).
     new_value : object
         Value as configured now.
+    ignore : frozenset[str], optional
+        Dotted key paths to skip (keys the module overwrites at run time).
+    path : str, optional
+        The dotted path of the value being compared (for ``ignore``).
 
     Returns
     -------
@@ -412,33 +419,39 @@ def _legacy_values_differ(prev_value, new_value) -> bool:
     if isinstance(new_value, dict) and isinstance(prev_value, dict):
         _substitute_companions(prev_value)
         _substitute_companions(new_value)
-        return any(
-            key not in prev_value
-            or _legacy_values_differ(prev_value[key], value)
-            for key, value in new_value.items()
-        )
+        for key, value in new_value.items():
+            key_path = f"{path}.{key}" if path else str(key)
+            if key_path in ignore:
+                continue
+            if key not in prev_value or _legacy_values_differ(
+                prev_value[key], value, ignore, key_path
+            ):
+                return True
+        return False
     if isinstance(new_value, list) and isinstance(prev_value, list):
         if len(new_value) != len(prev_value):
             return True
         return any(
-            _legacy_values_differ(p, n) for p, n in zip(prev_value, new_value)
+            _legacy_values_differ(p, n, ignore, path)
+            for p, n in zip(prev_value, new_value)
         )
     return _normalize_command(new_value) != _normalize_command(prev_value)
 
 
 def _module_parameters_changed_legacy(
-    prev_params: dict, new_params: dict
+    prev_params: dict, new_params: dict, module_name: str = ""
 ) -> bool:
     """Best-effort parameter comparison against a pre-snapshot yaml.
 
     Runs recorded before the pristine snapshot existed only persisted the
     *mutated* parameters (``$``-commands resolved in place, values written
     back by the modules themselves). Comparison is therefore conservative:
-    commands are normalized to the ``*_originalnocmd`` companion form, and
-    only keys present in the new parameters are compared -- so a module
-    write-back does not read as a user edit, but values a module
-    overwrites in place (e.g. an auto-estimated ``min_gradient``) may
-    cause a safe extra re-run, and *removing* a parameter is not detected.
+    commands are normalized to the ``*_originalnocmd`` companion form,
+    only keys present in the new parameters are compared, and keys the
+    module is known to overwrite at run time
+    (:data:`~picasso_workflow.modulespec.RUNTIME_PARAMETER_WRITE_BACKS`,
+    e.g. the auto-estimated ``min_gradient``) are skipped. Remaining
+    limitation: *removing* a parameter is not detected.
 
     Parameters
     ----------
@@ -446,6 +459,8 @@ def _module_parameters_changed_legacy(
         The module's parameters from the legacy yaml.
     new_params : dict
         The module's parameters as configured now.
+    module_name : str, optional
+        The module's name, to look up its run-time write-back keys.
 
     Returns
     -------
@@ -454,7 +469,8 @@ def _module_parameters_changed_legacy(
     typer = DictSimpleTyper(to_simple_type=True)
     prev = typer.run(copy.deepcopy(prev_params))
     new = typer.run(copy.deepcopy(new_params))
-    return _legacy_values_differ(prev, new)
+    ignore = RUNTIME_PARAMETER_WRITE_BACKS.get(module_name, frozenset())
+    return _legacy_values_differ(prev, new, ignore)
 
 
 _RUNSTAMP_RE = re.compile(r"_(\d{6}-\d{4})$")
@@ -2361,19 +2377,21 @@ class WorkflowRunner:
                 break
         params_changed = False
         if self._previous_workflow_modules is not None:
-            compare = (
-                _module_parameters_changed_legacy
-                if self._previous_modules_are_legacy
-                else _module_parameters_changed
-            )
             for i, (module_name, module_parameters) in enumerate(
                 self.workflow_modules[:frontier]
             ):
                 try:
-                    changed = compare(
-                        self._previous_workflow_modules[i][1],
-                        module_parameters,
-                    )
+                    if self._previous_modules_are_legacy:
+                        changed = _module_parameters_changed_legacy(
+                            self._previous_workflow_modules[i][1],
+                            module_parameters,
+                            module_name,
+                        )
+                    else:
+                        changed = _module_parameters_changed(
+                            self._previous_workflow_modules[i][1],
+                            module_parameters,
+                        )
                 except Exception as e:
                     logger.debug(
                         f"Parameter comparison failed for module {i} "

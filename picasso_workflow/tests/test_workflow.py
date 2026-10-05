@@ -864,6 +864,42 @@ def test_module_parameters_changed_legacy():
     assert _module_parameters_changed_legacy(prev, changed_cmd)
 
 
+def test_module_parameters_changed_legacy_ignores_write_backs():
+    """Values a module overwrites in place (registered in
+    RUNTIME_PARAMETER_WRITE_BACKS) must not read as user edits -- here
+    identify's estimated min_gradient and the absolutized auto_netgrad
+    filename -- while a real edit in the same dicts is still detected."""
+    prev = {
+        "box_size": 7,
+        "min_gradient": 4123.7,  # overwritten with the estimate
+        "auto_netgrad": {
+            # overwritten with the absolute result-folder path
+            "filename": "/results/01_identify/auto_identification.png",
+            "frame_numbers": [0, 10],
+        },
+    }
+    new_same = {
+        "box_size": 7,
+        "min_gradient": 5000,
+        "auto_netgrad": {
+            "filename": "auto_identification.png",
+            "frame_numbers": [0, 10],
+        },
+    }
+    assert not _module_parameters_changed_legacy(prev, new_same, "identify")
+    # without the module's ignore list, the write-backs would be flagged
+    assert _module_parameters_changed_legacy(prev, new_same)
+    # a genuine edit next to the ignored keys is still detected
+    edited = {
+        **new_same,
+        "auto_netgrad": {**new_same["auto_netgrad"], "frame_numbers": [0, 5]},
+    }
+    assert _module_parameters_changed_legacy(prev, edited, "identify")
+    assert _module_parameters_changed_legacy(
+        prev, {**new_same, "box_size": 9}, "identify"
+    )
+
+
 @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
 @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
 @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)

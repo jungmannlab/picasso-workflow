@@ -215,8 +215,9 @@ decides where to restart:
    values modules write back into their own parameters do not read as
    edits. Runs recorded before this snapshot existed are compared
    best-effort against the persisted (mutated) parameters: edits are
-   detected, but module-estimated values may trigger extra (safe)
-   re-runs, and *removing* a parameter is not noticed.
+   detected, known module write-backs (estimated `min_gradient`, resolved
+   output paths, defaults) are ignored, but *removing* a parameter is not
+   noticed.
 2. Walking back from the frontier, the latest module that saved
    localizations to disk becomes the **checkpoint**: its locs are loaded
    back into memory, everything up to it is skipped, and the modules after

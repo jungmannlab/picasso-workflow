@@ -93,7 +93,10 @@ This file was started after v0.5.6; earlier history is in the git log.
   `WorkflowRunner.yaml`, so `$`-command resolution and module write-backs do
   not read as user edits. Runs recorded before the snapshot existed fall back
   to a conservative comparison against the persisted (mutated) parameters,
-  so an edited argument still forces a re-run there too.
+  so an edited argument still forces a re-run there too; keys the modules
+  overwrite at run time (estimated `min_gradient`, resolved output paths --
+  see `modulespec.RUNTIME_PARAMETER_WRITE_BACKS`) are ignored so they do not
+  masquerade as edits.
 
 - Resume now actually finds the previous run: the coordinators stamp report
   names per launch, which made `_check_previous_runner` search for a folder

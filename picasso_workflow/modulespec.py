@@ -133,6 +133,23 @@ LOCS_STATE_CAPABILITIES: frozenset[str] = (
     SINGLE_LOCS_CAPABILITIES | CHANNEL_LOCS_CAPABILITIES
 )
 
+# Parameter keys (dotted paths for nested dicts) that modules overwrite in
+# their own parameter dict at run time (estimates, resolved output paths,
+# defaults). Needed only when resuming runs recorded before the pristine
+# parameter snapshot existed: those yamls persisted the overwritten values,
+# which must not read as user edits. Runs recorded since compare against
+# the exact snapshot and never consult this map.
+RUNTIME_PARAMETER_WRITE_BACKS: dict[str, frozenset[str]] = {
+    "load_dataset_movie": frozenset({"sample_movie.filename"}),
+    "identify": frozenset({"min_gradient", "auto_netgrad.filename"}),
+    "undrift_rcc": frozenset({"segmentation", "dimensions"}),
+    "smlm_clusterer": frozenset({"basic_fa", "radius_z"}),
+    "align_channels": frozenset({"align_pars.plot_dir"}),
+    "labeling_efficiency_analysis": frozenset(
+        {"nn_nth", "pair_distance", "labeling_uncertainty"}
+    ),
+}
+
 
 @dataclass(frozen=True)
 class ModuleSpec:

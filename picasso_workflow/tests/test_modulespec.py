@@ -17,6 +17,7 @@ from picasso_workflow.modulespec import (
     MODULE_REGISTRY,
     ModuleSpec,
     PicassoRelation,
+    RUNTIME_PARAMETER_WRITE_BACKS,
     Scope,
     SINGLE_LOCS_CAPABILITIES,
     restart_conflicts,
@@ -243,6 +244,12 @@ class TestRestartConflicts(unittest.TestCase):
     def test_capability_sets_are_subsets_of_vocabulary(self):
         self.assertEqual(set(), MEMORY_ONLY_CAPABILITIES - CAPABILITIES)
         self.assertEqual(set(), LOCS_STATE_CAPABILITIES - CAPABILITIES)
+
+    def test_write_back_map_names_registered_modules(self):
+        self.assertEqual(
+            set(),
+            set(RUNTIME_PARAMETER_WRITE_BACKS) - set(MODULE_REGISTRY),
+        )
 
     def test_restart_at_zero_never_conflicts(self):
         hard, soft = restart_conflicts(self.STEPS, 0)
