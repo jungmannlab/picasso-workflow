@@ -22,12 +22,14 @@ import os
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 import numpy as np
 import yaml
 from atlassian import Confluence as con
 from requests.exceptions import ConnectionError, HTTPError
 
+from picasso_workflow.modulespec import MODULE_REGISTRY
 from picasso_workflow.util import AbstractModuleCollection
 
 # logger = logging.getLogger(__name__)
@@ -60,6 +62,9 @@ def _yaml_safe(value):
 # Parameter keys that must never be rendered or serialized: the workflow
 # runner injects a live ParameterCommandExecutor under this name.
 _PARAM_BLACKLIST = ("parameter_command_executor",)
+
+# File suffixes the generic picasso-set reporter embeds as images.
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg")
 
 
 def _format_val(v):
@@ -588,6 +593,110 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
         return None
+
+    def __getattr__(self, name):
+        """Resolve picasso-set module names to the generic reporter.
+
+        The picasso-set modules have no hand-written reporter methods; any
+        registry-listed ``picasso_*`` module name resolves to
+        :meth:`_report_picasso_set_module` bound to that name, so the
+        name-based reporter dispatch (``getattr(reporter, module_name)``)
+        works unchanged. Everything else -- in particular underscore names
+        probed by copy/pickle/abc machinery -- raises ``AttributeError`` as
+        usual (``__getattr__`` is only consulted after normal lookup fails).
+        """
+        if not name.startswith("_"):
+            spec = MODULE_REGISTRY.get(name)
+            if spec is not None and spec.module_set == "picasso":
+                return partial(self._report_picasso_set_module, name)
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
+
+    def _report_picasso_set_module(
+        self, module_name, i, parameters, results, postpone_report=False
+    ):
+        """Generic report for a picasso-set module.
+
+        Documents the module's summary, wrapped picasso symbol, parameters
+        and results, embeds every image found in the results (paths in the
+        ``results`` dict plus images inside the module's result folder), and
+        lists the other output files by name.
+
+        Parameters
+        ----------
+        module_name : str
+            The picasso-set module name (bound via :meth:`__getattr__`).
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
+        """
+        logger.debug(f"Reporting {module_name} (generic picasso-set report).")
+        spec = MODULE_REGISTRY[module_name]
+        parameter_text = _expand_macro(
+            "Parameters", parameters, skip_keys=_PARAM_BLACKLIST
+        )
+        result_text = _expand_macro("Results", results)
+        duration = results.get("duration") or 0
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: {html.escape(module_name)}</strong></p>
+        <p>{html.escape(spec.summary)}</p>
+        <ul>
+        <li>Native picasso: {html.escape(str(spec.picasso_symbol))}</li>
+        <li>Duration: {duration // 60:.0f} min {(duration % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        # collect figures: image paths in the results dict, then any images
+        # in the result folder not already referenced there
+        figures = [
+            v
+            for v in results.values()
+            if isinstance(v, str)
+            and v.lower().endswith(_IMAGE_SUFFIXES)
+            and os.path.isfile(v)
+        ]
+        folder = results.get("folder")
+        other_files = []
+        if folder and os.path.isdir(folder):
+            for fn in sorted(os.listdir(folder)):
+                fp = os.path.join(folder, fn)
+                if not os.path.isfile(fp):
+                    continue
+                if fn.lower().endswith(_IMAGE_SUFFIXES):
+                    if fp not in figures:
+                        figures.append(fp)
+                else:
+                    other_files.append(fn)
+        for fp in figures:
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp)
+            except ConfluenceInterfaceError:
+                pass
+            _, fn = os.path.split(fp)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fn}" />'
+                + "</ac:image></ul>"
+            )
+        if other_files:
+            text += (
+                "<p>Output files:</p><ul>"
+                + "".join(f"<li>{html.escape(fn)}</li>" for fn in other_files)
+                + "</ul>"
+            )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        return self._emit(text, postpone_report)
 
     def report_error(
         self,

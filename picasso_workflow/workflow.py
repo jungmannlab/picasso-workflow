@@ -41,6 +41,7 @@ from picasso_workflow.modulespec import (
     CHANNEL_LOCS_CAPABILITIES,
     LOCS_STATE_CAPABILITIES,
     MEMORY_ONLY_CAPABILITIES,
+    MODULE_REGISTRY,
     RUNTIME_PARAMETER_WRITE_BACKS,
     SINGLE_LOCS_CAPABILITIES,
     Scope,
@@ -1950,6 +1951,13 @@ class WorkflowRunner:
         ]
         available_modules = [
             name for name in available_modules if name != "__init__"
+        ]
+        # picasso-set modules are not part of the AbstractModuleCollection
+        # contract; they are registered via modulespec instead.
+        available_modules += [
+            name
+            for name, spec in MODULE_REGISTRY.items()
+            if spec.module_set == "picasso"
         ]
         logger.debug(f"Available modules: {str(available_modules)}")
         for module_name, module_parameters in self.workflow_modules:

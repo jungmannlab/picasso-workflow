@@ -207,6 +207,30 @@ class TestWorkflow(unittest.TestCase):
     @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
     @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
     @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
+    def test_a05d_run_accepts_picasso_set_modules(self, mock_call_module):
+        """picasso-set modules pass the runner's available-modules check."""
+        mock_call_module.return_value = True
+        reporter_config = {"report_name": "picassosetreport"}
+        analysis_config = {"result_location": self.results_folder}
+        workflow_modules = [
+            ("load_dataset_localizations", {"filename": "a.hdf5"}),
+            ("picasso_density", {"radius": 1.5}),
+        ]
+        wr = WorkflowRunner.config_from_dicts(
+            reporter_config, analysis_config, workflow_modules
+        )
+        wr.run()
+
+        self.assertEqual(2, mock_call_module.call_count)
+        self.assertEqual(
+            "picasso_density", mock_call_module.call_args_list[1][0][0]
+        )
+        shutil.rmtree(wr.result_folder)
+
+    @patch("picasso_workflow.workflow.WorkflowRunner.call_module")
+    @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
+    @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
+    @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)
     def test_a05c_abort_flag_stops_run(self, mock_call_module):
         """An abort flag stops the run before the next module, state aborted."""
         from picasso_workflow import progress as pwprogress

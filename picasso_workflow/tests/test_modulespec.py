@@ -44,7 +44,14 @@ def _contract_module_names():
 class TestModuleSpecRegistry(unittest.TestCase):
     def test_every_module_has_a_spec_and_no_orphans(self):
         contract = _contract_module_names()
-        specced = set(MODULE_REGISTRY)
+        # picasso-set modules live outside the AbstractModuleCollection
+        # contract (they are reconciled against the mixins in
+        # test_picasso_set.py), so the no-orphans check covers natives only.
+        specced = {
+            name
+            for name, spec in MODULE_REGISTRY.items()
+            if spec.module_set == "native"
+        }
         missing = contract - specced  # contract module without a ModuleSpec
         orphan = specced - contract  # spec for a non-existent module
         self.assertEqual(
@@ -96,6 +103,62 @@ class TestModuleSpecValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             ModuleSpec(name="x", relation=PicassoRelation.WRAPS)
 
+    def test_unknown_module_set_rejected(self):
+        with self.assertRaises(ValueError):
+            ModuleSpec(name="x", module_set="other")
+
+    def test_picasso_set_requires_prefix(self):
+        with self.assertRaises(ValueError):
+            ModuleSpec(
+                name="density",
+                module_set="picasso",
+                relation=PicassoRelation.WRAPS,
+                picasso_symbol="picasso.postprocess.compute_local_density",
+            )
+
+    def test_picasso_set_requires_wraps(self):
+        with self.assertRaises(ValueError):
+            ModuleSpec(name="picasso_density", module_set="picasso")
+
+
+class TestPicassoSetSpecs(unittest.TestCase):
+    """Registry-level invariants of the picasso-set entries."""
+
+    def _picasso_specs(self):
+        return [
+            spec
+            for spec in MODULE_REGISTRY.values()
+            if spec.module_set == "picasso"
+        ]
+
+    def test_picasso_set_present(self):
+        self.assertTrue(self._picasso_specs())
+
+    def test_names_prefixed_and_wrapping(self):
+        for spec in self._picasso_specs():
+            self.assertTrue(spec.name.startswith("picasso_"), spec.name)
+            self.assertIs(spec.relation, PicassoRelation.WRAPS, spec.name)
+            self.assertTrue(spec.picasso_symbol, spec.name)
+
+    def test_params_schema_shape(self):
+        # params carries the GUI (parameters_spec, results_spec) pair; every
+        # leaf must at least name its widget type.
+        for spec in self._picasso_specs():
+            self.assertIsInstance(spec.params, tuple, spec.name)
+            self.assertEqual(2, len(spec.params), spec.name)
+            parameters_spec, results_spec = spec.params
+            for section in (parameters_spec, results_spec):
+                self.assertIsInstance(section, dict, spec.name)
+                for key, leaf in section.items():
+                    self.assertIn(
+                        "type", leaf, f"{spec.name}.{key}: missing type"
+                    )
+
+    def test_native_specs_unaffected(self):
+        for spec in MODULE_REGISTRY.values():
+            if spec.module_set == "native":
+                self.assertFalse(spec.name.startswith("picasso_"), spec.name)
+
 
 class TestValidateWorkflow(unittest.TestCase):
     def test_golden_single_workflow_passes(self):
@@ -120,6 +183,14 @@ class TestValidateWorkflow(unittest.TestCase):
     def test_accepts_scope_as_string(self):
         steps = [("load_dataset_movie", {}), ("identify", {})]
         self.assertEqual([], validate_workflow(steps, "single"))
+
+    def test_golden_picasso_set_workflow_passes(self):
+        # picasso-set modules validate like natives and can mix with them.
+        steps = [
+            ("load_dataset_localizations", {}),
+            ("picasso_density", {"radius": 1.5}),
+        ]
+        self.assertEqual([], validate_workflow(steps, Scope.SINGLE))
 
     def test_unknown_module_reported(self):
         errors = validate_workflow([("not_a_module", {})], Scope.SINGLE)
