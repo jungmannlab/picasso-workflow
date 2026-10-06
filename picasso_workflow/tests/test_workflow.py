@@ -1386,3 +1386,49 @@ def test_awr_stop_after_aggregation_phase(mock_wr, tmp_path):
     assert mock_wr.config_from_dicts.call_count == 2
     state = pwprogress.read_progress(awr.result_folder)
     assert state["state"] == "paused"
+
+
+def test_failed_module_records_error_in_progress(tmp_path):
+    """A failing module's traceback is recorded with its progress entry,
+    so the GUI monitor can show it without reading yaml or logs."""
+    from picasso_workflow import progress as pwprogress
+
+    wr = _stepwise_runner(str(tmp_path))
+
+    def failing_call_module(name, i, parameters):
+        if i == 1:
+            raise AutoPicassoError("kaboom in identify")
+        return True
+
+    wr.call_module = failing_call_module
+    success = wr.run()
+
+    assert success is False
+    state = pwprogress.read_progress(wr.result_folder)
+    assert state["state"] == "failed"
+    failed = state["modules"][1]
+    assert failed["status"] == "failed"
+    assert "AutoPicassoError: kaboom in identify" in failed["error"]
+    assert "Traceback" in failed["error"]
+
+
+def test_unexpected_module_error_recorded_in_progress(tmp_path):
+    """A non-AutoPicassoError escapes run() as before, but its traceback
+    still reaches the module's progress entry first."""
+    from picasso_workflow import progress as pwprogress
+
+    wr = _stepwise_runner(str(tmp_path))
+
+    def failing_call_module(name, i, parameters):
+        raise RuntimeError("unexpected kaboom")
+
+    wr.call_module = failing_call_module
+    try:
+        wr.run()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("RuntimeError should propagate from run()")
+
+    state = pwprogress.read_progress(wr.result_folder)
+    assert "RuntimeError: unexpected kaboom" in state["modules"][0]["error"]

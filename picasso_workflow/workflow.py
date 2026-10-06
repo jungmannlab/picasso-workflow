@@ -1752,6 +1752,33 @@ class AggregationWorkflowRunner:
         self.parameter_tiler = new_tiler
 
 
+def _progress_error_text(e: BaseException) -> str:
+    """Compact "type: message" plus traceback for a progress entry.
+
+    Trimmed to fit :meth:`ProgressManager.module_end`'s 2000-character cap,
+    keeping the traceback *tail* (where the raised error is) when the full
+    text is too long.
+
+    Parameters
+    ----------
+    e : BaseException
+        The exception that failed the module.
+
+    Returns
+    -------
+    str
+    """
+    header = f"{type(e).__name__}: {e}"
+    if e.__traceback__ is not None:
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+    else:
+        tb = traceback.format_exc()
+    budget = 2000 - len(header) - 10
+    if budget > 0 and len(tb) > budget:
+        tb = "...\n" + tb[-budget:]
+    return f"{header}\n{tb}"
+
+
 class WorkflowError(Exception):
     """Raised when a workflow cannot complete (e.g. a failed dataset)."""
 
@@ -2123,15 +2150,18 @@ class WorkflowRunner:
                 if self.stop_after == i:
                     module_parameters["save_locs"] = True
                 success = self.call_module(module_name, i, module_parameters)
-            except AutoPicassoError:
+            except AutoPicassoError as e:
                 success = False
-                progress.module_end(i, FAILED)
-            except Exception:
+                # record the error with the progress entry, so the monitor
+                # (local or over SSH) can show the traceback without access
+                # to WorkflowRunner.yaml or the logs
+                progress.module_end(i, FAILED, error=_progress_error_text(e))
+            except Exception as e:
                 # Any other exception used to escape before save(), so the
                 # failing module never reached WorkflowRunner.yaml. Record
                 # it, then let it propagate as before.
                 success = False
-                progress.module_end(i, FAILED)
+                progress.module_end(i, FAILED, error=_progress_error_text(e))
                 progress.finish(FAILED)
                 self.save(self.result_folder)
                 raise

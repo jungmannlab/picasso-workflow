@@ -11372,11 +11372,32 @@ class Window(QtWidgets.QMainWindow):
         shared_run_layout = QtWidgets.QVBoxLayout(shared_run_widget)
         shared_run_layout.setContentsMargins(0, 0, 0, 0)
         self._build_progress_monitor(shared_run_layout)
-        shared_run_layout.addWidget(QtWidgets.QLabel("Run information:"))
+        info_row = QtWidgets.QHBoxLayout()
+        info_col = QtWidgets.QVBoxLayout()
+        info_col.addWidget(QtWidgets.QLabel("Run information:"))
         self.job_info_display = QtWidgets.QTextEdit()
         self.job_info_display.setReadOnly(True)
         self.job_info_display.setMaximumHeight(200)
-        shared_run_layout.addWidget(self.job_info_display)
+        info_col.addWidget(self.job_info_display)
+        info_row.addLayout(info_col, 1)
+        # error details: failed modules' tracebacks, filled by the monitor
+        error_col = QtWidgets.QVBoxLayout()
+        error_col.addWidget(QtWidgets.QLabel("Error details:"))
+        self.error_details_display = QtWidgets.QTextEdit()
+        self.error_details_display.setReadOnly(True)
+        self.error_details_display.setMaximumHeight(200)
+        self.error_details_display.setLineWrapMode(
+            QtWidgets.QTextEdit.LineWrapMode.NoWrap
+        )
+        mono = QtGui.QFont("Monospace")
+        mono.setStyleHint(QtGui.QFont.StyleHint.TypeWriter)
+        self.error_details_display.setFont(mono)
+        self.error_details_display.setPlaceholderText(
+            "Tracebacks of failed modules appear here."
+        )
+        error_col.addWidget(self.error_details_display)
+        info_row.addLayout(error_col, 1)
+        shared_run_layout.addLayout(info_row)
         run_layout.addWidget(shared_run_widget, 3, 0, 1, 4)
 
         # Results tab: browse a run folder, (re)generate its HTML report
@@ -16928,6 +16949,110 @@ class Window(QtWidgets.QMainWindow):
                 self.module_tree.addTopLevelItem(self._build_stage_item(s))
         self._apply_tree_expansion(prev_expansion)
 
+        # --- error details ---
+        self._update_error_details(states)
+
+    def _update_error_details(self, states):
+        """Fill the error-details pane with failed modules' tracebacks.
+
+        Error text comes from the progress states (recorded by the runner
+        for local and cluster runs alike). For local runs, a failed module
+        without a recorded error (runs from before the error was propagated
+        into ``progress.json``) falls back to the traceback recorded in the
+        run's ``WorkflowRunner.yaml``, and a run that died without any
+        recorded module failure (import error, config error, ...) falls
+        back to the tail of ``local_run.log``.
+        """
+        texts = []
+        for s in states or []:
+            label = self._stage_label(s)
+            report_name = s.get("report_name") or ""
+            for m in s.get("modules") or []:
+                # include branch sub-modules (nested one level)
+                sub_modules = [
+                    x
+                    for g in m.get("subgroups") or []
+                    for x in g.get("modules") or []
+                ]
+                for sub in [m] + sub_modules:
+                    if sub.get("status") != "failed":
+                        continue
+                    header = (
+                        f"[{label}] module {sub.get('i')}: "
+                        f"{sub.get('name', '')}"
+                    )
+                    err = sub.get("error")
+                    if not err and self._monitor_local_folder:
+                        err = self._local_yaml_error(
+                            report_name, sub.get("i"), sub.get("name")
+                        )
+                    if err:
+                        texts.append(f"{header}\n{err}")
+                    else:
+                        texts.append(f"{header} (no error details recorded)")
+        if not texts and self._monitor_local_folder:
+            proc = getattr(self, "_local_process", None)
+            died = proc is not None and proc.poll() not in (None, 0)
+            top_failed = bool(states) and (
+                (self._top_state(states) or {}).get("state") == "failed"
+            )
+            if died or top_failed:
+                tail = self._read_log_tail(self._monitor_local_folder)
+                if tail:
+                    texts.append(
+                        "The run failed without a recorded module error; "
+                        "tail of local_run.log:\n" + tail
+                    )
+        text = "\n\n".join(texts)
+        # only rewrite on change, so the user's scroll position survives
+        # the 15 s refreshes
+        if text != self.error_details_display.toPlainText():
+            self.error_details_display.setPlainText(text)
+
+    def _local_yaml_error(self, report_name, module_index, module_name):
+        """A failed module's recorded error from a local WorkflowRunner.yaml.
+
+        Locates the run folder by its report name under the monitored
+        results folder (nested aggregation singles included) and returns the
+        recorded traceback (or ``type: message``), or None.
+        """
+        if module_index is None or not report_name:
+            return None
+        root = self._monitor_local_folder
+        run_dir = os.path.join(root, report_name)
+        if not os.path.isdir(run_dir):
+            run_dir = None
+            for parent, dirs, _files in os.walk(root):
+                if report_name in dirs:
+                    run_dir = os.path.join(parent, report_name)
+                    break
+        if run_dir is None:
+            return None
+        fp = os.path.join(run_dir, "WorkflowRunner.yaml")
+        try:
+            with open(fp) as f:
+                data = yaml.safe_load(f)
+            entry = data["results"][f"{module_index:02d}_{module_name}"]
+            err = entry.get("error") or {}
+        except Exception as e:
+            logger.debug(f"Could not read error details from {fp}: {e}")
+            return None
+        if not err:
+            return None
+        return err.get("traceback") or (
+            f"{err.get('type', 'Error')}: {err.get('message', '')}"
+        )
+
+    def _read_log_tail(self, folder, n_lines=40):
+        """The last ``n_lines`` of ``local_run.log`` in ``folder``, or None."""
+        log_path = os.path.join(folder, "local_run.log")
+        try:
+            with open(log_path, "r", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            return None
+        return "".join(lines[-n_lines:]).rstrip()
+
     # -- tree builders ------------------------------------------------------
 
     def _collect_tree_expansion(self):
@@ -17400,6 +17525,7 @@ class Window(QtWidgets.QMainWindow):
         # Store and display job ID
         if result["success"] and result["job_id"]:
             self.job_id_input.setText(str(result["job_id"]))
+            self.error_details_display.clear()
             self.job_info_display.append(
                 f"Job submitted successfully!\nJob ID: {result['job_id']}"
             )
@@ -17497,6 +17623,7 @@ class Window(QtWidgets.QMainWindow):
             logger.error(traceback.format_exc())
             return
 
+        self.error_details_display.clear()
         self.job_info_display.append(
             f"Started local workflow (PID {self._local_process.pid}).\n"
             f"Logging to {log_path}"
@@ -17548,14 +17675,13 @@ class Window(QtWidgets.QMainWindow):
             self.job_info_display.append("No results folder set.")
             return
         log_path = os.path.join(folder, "local_run.log")
-        try:
-            with open(log_path, "r", errors="replace") as f:
-                lines = f.readlines()
-        except OSError as e:
-            self.job_info_display.append(f"Could not read {log_path}: {e}")
+        tail = self._read_log_tail(folder)
+        if tail is None:
+            self.job_info_display.append(f"Could not read {log_path}")
             return
-        tail = "".join(lines[-40:]).rstrip() or "(log is empty)"
-        self.job_info_display.append(f"--- tail of {log_path} ---\n{tail}")
+        self.job_info_display.append(
+            f"--- tail of {log_path} ---\n{tail or '(log is empty)'}"
+        )
 
     def on_cancel_job(self):
         """Cancel the current run (graceful abort, then hard cancel).

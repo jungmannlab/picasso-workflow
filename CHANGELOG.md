@@ -12,6 +12,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **Error details in the Run tab.** Failed modules' tracebacks now surface
+  directly in the GUI: a new *Error details* pane (right of *Run
+  information*) is filled by the live monitor. The runner records each
+  module failure's `type: message` + traceback with its `progress.json`
+  entry (capped, traceback tail kept), so this works for local and cluster
+  runs alike; for local runs the pane additionally falls back to the full
+  traceback in the run's `WorkflowRunner.yaml` (covers runs recorded before
+  this change) and, when a run dies without any recorded module failure
+  (e.g. an import error), to the tail of `local_run.log`.
+
 - **"Run locally" tab enabled and implemented.** The previously disabled
   ("in development") tab in the Run section is now functional: it starts the
   generated `start_workflow.py` on the local machine (in the GUI's Python

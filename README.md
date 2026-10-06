@@ -302,7 +302,10 @@ to `local_run.log` in the results folder. The live progress monitor and
 the run information display (below the run sub-tabs) serve both run
 modes. *Stop after current module* requests a graceful stop at the next
 module boundary — the run stays resumable — while *Kill local run*
-terminates the process immediately.
+terminates the process immediately. When a module fails, its traceback
+appears in the *Error details* pane next to the run information (for
+local and cluster runs; local runs also fall back to the traceback
+recorded in `WorkflowRunner.yaml` and to the `local_run.log` tail).
 
 ### Stepwise (module-by-module) development runs
 
